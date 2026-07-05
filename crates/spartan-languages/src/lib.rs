@@ -255,4 +255,73 @@ mod tests {
         let err = LanguageRegistry::from_toml_str("this is not valid toml [[[").unwrap_err();
         assert!(matches!(err, RegistryError::Parse(_)));
     }
+
+    #[test]
+    fn registry_missing_a_required_field_returns_parse_error_not_panic() {
+        // `tree_sitter_grammar` has no `#[serde(default)]`, unlike
+        // `marker_files`/`build_systems` -- omitting it must surface as a
+        // parse error, not panic partway through building the registry.
+        let toml_str = r#"
+            [[language]]
+            id = "zig"
+            file_globs = ["*.zig"]
+        "#;
+        let err = LanguageRegistry::from_toml_str(toml_str).unwrap_err();
+        assert!(matches!(err, RegistryError::Parse(_)));
+    }
+
+    #[test]
+    fn profile_by_id_returns_none_for_unknown_id() {
+        let registry = LanguageRegistry::curated_default();
+        assert!(registry.profile_by_id("cobol").is_none());
+    }
+
+    #[test]
+    fn profile_for_file_with_no_file_name_component_returns_none_not_a_panic() {
+        let registry = LanguageRegistry::curated_default();
+        // `Path::file_name()` is `None` for a path ending in `..` (and for
+        // `/`) -- both must fail closed, not panic on the `?` inside
+        // `profile_for_file`.
+        assert!(registry.profile_for_file(Path::new("..")).is_none());
+        assert!(registry.profile_for_file(Path::new("/")).is_none());
+    }
+
+    #[test]
+    fn glob_matches_only_the_final_extension_of_a_multi_dot_file() {
+        let registry = LanguageRegistry::curated_default();
+        // "component.test.rs" is a real Rust file (the crate's own multi-
+        // extension test naming convention, in fact); `glob_matches` must
+        // key off the last extension, not the first or a substring match.
+        let profile = registry
+            .profile_for_file(Path::new("component.test.rs"))
+            .unwrap();
+        assert_eq!(profile.id, "rust");
+    }
+
+    #[test]
+    fn glob_matches_returns_none_for_a_file_with_no_extension() {
+        let registry = LanguageRegistry::curated_default();
+        assert!(registry.profile_for_file(Path::new("Makefile")).is_none());
+    }
+
+    #[test]
+    fn detect_project_languages_on_a_nonexistent_root_returns_empty_not_panic() {
+        let registry = LanguageRegistry::curated_default();
+        let detected = registry
+            .detect_project_languages(Path::new("this-directory-truly-does-not-exist-xyz123"));
+        assert!(detected.is_empty());
+    }
+
+    #[test]
+    fn command_spec_args_default_to_empty_when_omitted() {
+        // The bundled registry's `rust-analyzer` entry has no `args =` key
+        // at all -- `#[serde(default)]` must produce an empty `Vec`, not a
+        // parse failure or a `None`.
+        let registry = LanguageRegistry::curated_default();
+        let rust = registry.profile_by_id("rust").unwrap();
+        assert_eq!(
+            rust.lsp_command.as_ref().unwrap().args,
+            Vec::<String>::new()
+        );
+    }
 }

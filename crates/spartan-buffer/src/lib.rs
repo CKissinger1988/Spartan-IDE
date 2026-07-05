@@ -252,16 +252,45 @@ impl Document {
     /// already carries exactly this as part of its rope structure, so
     /// this wraps it rather than hand-building a second one that would
     /// just have to reproduce the same invariant.
-    pub fn char_to_line(&self, char_idx: usize) -> usize {
-        self.current.char_to_line(char_idx)
+    ///
+    /// Bounds-checked and fallible, like every other public method here —
+    /// `ropey`'s own equivalents panic on an out-of-range index, which
+    /// would have made this the one corner of the API that breaks this
+    /// crate's own "out of bounds is an error, not a panic" rule found by
+    /// actually calling these with a bad index rather than assuming a thin
+    /// wrapper inherits safe behavior for free. `char_idx == len_chars()`
+    /// and `line_idx == len_lines()` are both valid (they name the
+    /// position/line right at the end of the document, e.g. an empty final
+    /// line after a trailing newline) — confirmed against `ropey`'s actual
+    /// behavior, not assumed.
+    pub fn char_to_line(&self, char_idx: usize) -> Result<usize, BufferError> {
+        if char_idx > self.current.len_chars() {
+            return Err(BufferError::OutOfBounds {
+                index: char_idx,
+                len: self.current.len_chars(),
+            });
+        }
+        Ok(self.current.char_to_line(char_idx))
     }
 
-    pub fn line_to_char(&self, line_idx: usize) -> usize {
-        self.current.line_to_char(line_idx)
+    pub fn line_to_char(&self, line_idx: usize) -> Result<usize, BufferError> {
+        if line_idx > self.current.len_lines() {
+            return Err(BufferError::OutOfBounds {
+                index: line_idx,
+                len: self.current.len_lines(),
+            });
+        }
+        Ok(self.current.line_to_char(line_idx))
     }
 
-    pub fn line(&self, line_idx: usize) -> String {
-        self.current.line(line_idx).to_string()
+    pub fn line(&self, line_idx: usize) -> Result<String, BufferError> {
+        if line_idx >= self.current.len_lines() {
+            return Err(BufferError::OutOfBounds {
+                index: line_idx,
+                len: self.current.len_lines(),
+            });
+        }
+        Ok(self.current.line(line_idx).to_string())
     }
 }
 
@@ -381,9 +410,50 @@ mod tests {
     fn line_and_char_conversions_round_trip() {
         let doc = Document::new("line one\nline two\nline three");
         assert_eq!(doc.len_lines(), 3);
-        let start_of_line_1 = doc.line_to_char(1);
-        assert_eq!(doc.char_to_line(start_of_line_1), 1);
-        assert_eq!(doc.line(1), "line two\n");
+        let start_of_line_1 = doc.line_to_char(1).unwrap();
+        assert_eq!(doc.char_to_line(start_of_line_1).unwrap(), 1);
+        assert_eq!(doc.line(1).unwrap(), "line two\n");
+    }
+
+    /// `char_idx == len_chars()` and `line_idx == len_lines()` are the
+    /// position/line right at the end of the document, not off the end of
+    /// it — both must succeed, not error, the same way `ropey` itself
+    /// treats them as valid one-past-the-last-character queries.
+    #[test]
+    fn line_conversions_accept_the_end_of_document_boundary() {
+        let doc = Document::new("line one\nline two\n");
+        assert_eq!(doc.char_to_line(doc.len_chars()).unwrap(), 2);
+        assert_eq!(doc.line_to_char(doc.len_lines()).unwrap(), doc.len_chars());
+        // `line()` has no such one-past-the-end case: len_lines() itself
+        // names no real line, only line indices strictly less than it do.
+        assert_eq!(doc.line(doc.len_lines() - 1).unwrap(), "");
+    }
+
+    #[test]
+    fn char_to_line_past_end_of_document_returns_error_not_panic() {
+        let doc = Document::new("hello");
+        let err = doc.char_to_line(99).unwrap_err();
+        assert_eq!(err, BufferError::OutOfBounds { index: 99, len: 5 });
+    }
+
+    #[test]
+    fn line_to_char_past_end_of_document_returns_error_not_panic() {
+        let doc = Document::new("line one\nline two\n");
+        let err = doc.line_to_char(99).unwrap_err();
+        assert_eq!(err, BufferError::OutOfBounds { index: 99, len: 3 });
+    }
+
+    #[test]
+    fn line_index_at_or_past_line_count_returns_error_not_panic() {
+        let doc = Document::new("line one\nline two\n");
+        // len_lines() itself is one past the last real line -- unlike
+        // char_to_line/line_to_char, line() has no valid one-past-the-end
+        // case, so this boundary is an error here too, not just far out of
+        // range.
+        let err = doc.line(doc.len_lines()).unwrap_err();
+        assert_eq!(err, BufferError::OutOfBounds { index: 3, len: 3 });
+        let err = doc.line(99).unwrap_err();
+        assert_eq!(err, BufferError::OutOfBounds { index: 99, len: 3 });
     }
 
     /// A purely linear editing session — no branching at all — is the

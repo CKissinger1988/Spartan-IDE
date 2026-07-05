@@ -51,16 +51,20 @@ fn write_fixture_crate(dir: &std::path::Path) -> (String, String) {
     .unwrap();
     let main_path = src_dir.join("main.rs");
     std::fs::write(&main_path, MAIN_RS).unwrap();
-    (
-        format!("file://{}", dir.display()),
-        format!("file://{}", main_path.display()),
-    )
+    (path_to_file_uri(dir), path_to_file_uri(&main_path))
 }
 
 fn work_dir(name: &str) -> PathBuf {
-    let base = std::env::var("CARGO_TARGET_TMPDIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir());
+    // Deliberately the system temp dir, not `CARGO_TARGET_TMPDIR`: that var
+    // resolves under this workspace's own `target/`, which is still inside
+    // the enclosing `[workspace]` tree. rust-analyzer runs `cargo metadata`
+    // against the fixture's Cargo.toml, and cargo refuses any manifest that
+    // is a descendant of a workspace root but not a declared member ("believes
+    // it's in a workspace when it's not") — found by running this for real,
+    // where every wait on real diagnostics silently timed out instead of
+    // erroring. System temp is genuinely outside the workspace, so no such
+    // collision is possible.
+    let base = std::env::temp_dir();
     let dir = base.join(name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

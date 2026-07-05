@@ -9,8 +9,27 @@
 use dap_spike::DapClient;
 use std::path::PathBuf;
 
-fn debugpy_available() -> bool {
-    std::process::Command::new("python3")
+/// Windows' official python.org installer creates only `python.exe` — no
+/// `python3` alias, unlike most Unix distros where `python3` is the name
+/// guaranteed to exist instead. Try the more portable name first, then fall
+/// back to the Windows-only one, rather than assuming either unconditionally
+/// — found by running this for real on Windows, where a hardcoded `python3`
+/// made every check here silently report "not available" even with a
+/// working Python + debugpy install on `PATH`.
+fn python_bin() -> Option<&'static str> {
+    ["python3", "python"].into_iter().find(|candidate| {
+        std::process::Command::new(candidate)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
+}
+
+fn debugpy_available(python: &str) -> bool {
+    std::process::Command::new(python)
         .args(["-c", "import debugpy"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -41,15 +60,12 @@ fn work_dir() -> PathBuf {
 
 #[test]
 fn same_dap_client_hits_a_real_breakpoint_in_a_real_python_program() {
-    let Ok(python) = std::process::Command::new("python3")
-        .arg("--version")
-        .output()
-    else {
-        eprintln!("SKIP: no python3 on this machine");
+    let Some(python) = python_bin() else {
+        eprintln!("SKIP: no python3/python on this machine");
         return;
     };
-    if !python.status.success() || !debugpy_available() {
-        eprintln!("SKIP: python3 or the debugpy package isn't available on this machine");
+    if !debugpy_available(python) {
+        eprintln!("SKIP: python3/python or the debugpy package isn't available on this machine");
         return;
     }
 
@@ -60,7 +76,7 @@ fn same_dap_client_hits_a_real_breakpoint_in_a_real_python_program() {
     // The *exact same* client code path used for lldb-dap in dap_integration.rs
     // — spawned against a different adapter binary and a different target
     // language, nothing else changed.
-    let mut client = spawn_debugpy_adapter().expect("spawn debugpy adapter");
+    let mut client = spawn_debugpy_adapter(python).expect("spawn debugpy adapter");
 
     let result = client.launch_and_break(
         src_path.to_str().unwrap(),
@@ -113,23 +129,37 @@ fn same_dap_client_hits_a_real_breakpoint_in_a_real_python_program() {
 /// piece of glue code this cross-language check actually needed — everything
 /// downstream (`launch_and_break`, `stack_trace`, `scopes`, `variables`,
 /// `shutdown`) is the identical, unmodified client used against `lldb-dap`.
-fn spawn_debugpy_adapter() -> std::io::Result<DapClient> {
+fn spawn_debugpy_adapter(python: &str) -> std::io::Result<DapClient> {
     // `DapClient::spawn` takes a single command string and executes it
-    // directly (no shell), so `python3 -m debugpy.adapter` needs a tiny
+    // directly (no shell), so `<python> -m debugpy.adapter` needs a tiny
     // wrapper script on $PATH-independent grounds: write one to the tmp dir.
+    // A `#!/bin/sh` script has no interpreter on Windows (no shebang
+    // support), so the wrapper format is platform-specific — found by
+    // running this for real on Windows, where the original Unix-only
+    // wrapper could never actually launch.
     let dir = work_dir();
-    let wrapper = dir.join("run-debugpy-adapter.sh");
-    std::fs::write(
-        &wrapper,
-        "#!/bin/sh\nexec python3 -m debugpy.adapter \"$@\"\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
+    #[cfg(windows)]
     {
+        let wrapper = dir.join("run-debugpy-adapter.cmd");
+        std::fs::write(
+            &wrapper,
+            format!("@echo off\r\n{python} -m debugpy.adapter %*\r\n"),
+        )
+        .unwrap();
+        DapClient::spawn(wrapper.to_str().unwrap())
+    }
+    #[cfg(not(windows))]
+    {
+        let wrapper = dir.join("run-debugpy-adapter.sh");
+        std::fs::write(
+            &wrapper,
+            format!("#!/bin/sh\nexec {python} -m debugpy.adapter \"$@\"\n"),
+        )
+        .unwrap();
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(&wrapper).unwrap().permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&wrapper, perms).unwrap();
+        DapClient::spawn(wrapper.to_str().unwrap())
     }
-    DapClient::spawn(wrapper.to_str().unwrap())
 }

@@ -11,6 +11,52 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// Converts a filesystem path to a `file://` URI per RFC 8089. Plain
+/// `format!("file://{}", path.display())` is correct on Unix (an absolute
+/// path already starts with `/`, giving the right triple slash) but wrong on
+/// Windows in two independent ways, both found by running these tests for
+/// real on Windows (every wait on real diagnostics silently timed out
+/// instead of erroring loudly):
+///
+/// 1. `path.display()` yields backslashes and a bare drive letter
+///    (`C:\Users\x`), producing `file://C:\Users\x` — missing the leading
+///    `/` before the drive letter and using the wrong slash direction.
+/// 2. Even once corrected to `file:///C:/Users/x`, rust-analyzer echoes the
+///    drive letter lowercased in every URI it sends back (`file:///c:/...`).
+///    Callers that correlate a `publishDiagnostics`/response URI back to the
+///    file they opened via exact string equality — as this client's
+///    `wait_notification` does — never match an uppercase-drive-letter
+///    request, independent of whether real diagnostics ever arrive. VS
+///    Code's own LSP client lowercases the drive letter for the same
+///    reason; matching that convention here avoids the mismatch instead of
+///    just hiding it.
+pub fn path_to_file_uri(path: &std::path::Path) -> String {
+    let mut normalized = path.display().to_string().replace('\\', "/");
+    if let Some(first) = normalized.chars().next() {
+        if first.is_ascii_alphabetic() && normalized.as_bytes().get(1) == Some(&b':') {
+            normalized = format!("{}{}", first.to_ascii_lowercase(), &normalized[1..]);
+        }
+    }
+    if normalized.starts_with('/') {
+        format!("file://{normalized}")
+    } else {
+        format!("file:///{normalized}")
+    }
+}
+
+/// Compares two `file://` URIs for referring to the same path, tolerant of
+/// the one escaping difference actually observed between real servers:
+/// pyright percent-encodes a drive-letter colon (`%3A`) where rust-analyzer
+/// leaves it literal. Not a general URI-equivalence algorithm — just enough
+/// to stop this client's own request/response matching from being silently
+/// wrong about a colon it put there itself.
+fn same_file_uri(a: &str, b: &str) -> bool {
+    fn decode_colon(s: &str) -> String {
+        s.replace("%3A", ":").replace("%3a", ":")
+    }
+    decode_colon(a) == decode_colon(b)
+}
+
 fn read_message<R: BufRead>(reader: &mut R) -> std::io::Result<Option<Value>> {
     let mut content_length: Option<usize> = None;
     loop {
@@ -237,6 +283,14 @@ impl LspClient {
     /// Waits for the first `publishDiagnostics` notification that actually
     /// carries diagnostics (rust-analyzer publishes an empty set immediately
     /// on open, then real ones once indexing/analysis finishes).
+    ///
+    /// The `uri` on that notification is compared via `same_file_uri`, not
+    /// raw string equality: real servers don't agree on how to spell the
+    /// same Windows path. rust-analyzer echoes `file:///c:/...` (colon
+    /// unencoded); pyright echoes `file:///c%3A/...` (colon percent-encoded,
+    /// per RFC 3986). Both were observed by actually running this client
+    /// against both servers — a naive `==` silently never matches on
+    /// Windows against whichever server's convention wasn't guessed right.
     pub fn wait_real_diagnostics(
         &mut self,
         file_uri: &str,
@@ -245,7 +299,10 @@ impl LspClient {
         let msg = self.wait_notification(
             "textDocument/publishDiagnostics",
             |params| {
-                params.get("uri").and_then(Value::as_str) == Some(file_uri)
+                params
+                    .get("uri")
+                    .and_then(Value::as_str)
+                    .is_some_and(|u| same_file_uri(u, file_uri))
                     && params
                         .get("diagnostics")
                         .and_then(Value::as_array)

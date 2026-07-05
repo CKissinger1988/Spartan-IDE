@@ -10,6 +10,18 @@
 use lsp_spike::*;
 use std::path::PathBuf;
 
+/// npm installs its global CLI shims as `<name>.cmd` on Windows (plus a
+/// same-named extensionless POSIX shell script, unusable there) rather than
+/// a native `.exe`. `std::process::Command` does not emulate a shell's
+/// `PATHEXT` search, so spawning the bare name fails with `NotFound` even
+/// when the shim is really on `PATH` — found by running this for real on
+/// Windows, where `pyright_available()` correctly found the extensionless
+/// file but the subsequent spawn still failed.
+#[cfg(windows)]
+const PYRIGHT_BIN: &str = "pyright-langserver.cmd";
+#[cfg(not(windows))]
+const PYRIGHT_BIN: &str = "pyright-langserver";
+
 /// `pyright-langserver` has no side-effect-free flag to probe with — every
 /// argument except `--stdio`/`--node-ipc`/`--socket=N` makes it print a
 /// connection error and exit 1 (found by trying `--version`/`--help` first;
@@ -21,7 +33,7 @@ fn pyright_available() -> bool {
         return false;
     };
     std::env::split_paths(&path_var).any(|dir| {
-        let candidate = dir.join("pyright-langserver");
+        let candidate = dir.join(PYRIGHT_BIN);
         candidate.is_file()
     })
 }
@@ -59,13 +71,13 @@ fn same_lsp_client_gets_real_diagnostics_completion_and_hover_from_pyright() {
     let dir = work_dir("lsp-python-cross-lang");
     let file_path = dir.join("main.py");
     std::fs::write(&file_path, MAIN_PY).unwrap();
-    let root_uri = format!("file://{}", dir.display());
-    let file_uri = format!("file://{}", file_path.display());
+    let root_uri = path_to_file_uri(&dir);
+    let file_uri = path_to_file_uri(&file_path);
 
     // The exact same client used against rust-analyzer in lsp_integration.rs,
     // spawned with the one argv flag pyright-langserver needs.
-    let mut client = LspClient::spawn_with_args("pyright-langserver", &["--stdio"])
-        .expect("spawn pyright-langserver");
+    let mut client =
+        LspClient::spawn_with_args(PYRIGHT_BIN, &["--stdio"]).expect("spawn pyright-langserver");
     client
         .open_project(&root_uri, &file_uri, MAIN_PY)
         .expect("initialize/didOpen sequence");
