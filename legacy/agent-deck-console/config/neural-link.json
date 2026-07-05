@@ -1,0 +1,26 @@
+{
+  "name": "Spartan_IDE Neural Link",
+  "mode": "local-defensive-analysis",
+  "hub_root": "/mnt/c/GitHub/Spartan_Hub_Master",
+  "jarvis_module": "backend/core/CognitiveCore/jarvis.py",
+  "brain_bridge_module": "backend/core/brain_bridge.py",
+  "ai_assimilation_module": "backend/core/ai_assimilation.py",
+  "queue_path": "data/neural_link/brainbridge_queue.jsonl",
+  "reports_dir": "data/neural_link/reports",
+  "brainbridge_db_path": "/mnt/c/GitHub/Spartan_Hub_Master/vector_db",
+  "brainbridge_collection": "nexus_brain",
+  "default_model": "gemini-cli",
+  "default_cli": "gemini",
+  "allowed_roots": [
+    "/mnt/c/Users/ckiss/OneDrive/Documentos/Spartan_IDE",
+    "/mnt/c/GitHub/Spartan_Hub_Master",
+    "/mnt/c/GitHub/Spartan_Security_Suite"
+  ],
+  "disabled_capabilities": [
+    "network_scan",
+    "credential_harvest",
+    "prompt_injection",
+    "lateral_movement",
+    "autonomous_assimilation_loop"
+  ]
+}

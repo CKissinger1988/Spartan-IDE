@@ -1,0 +1,95 @@
+# Curated default LanguageProfile registry (§20.1).
+#
+# Seeded with exactly the Tier 1 (v1) launch set per §35.4 — "Launch with
+# 5-6 fully-wrapped profiles (Rust, TS/JS, Python, Kotlin, Java, Go) rather
+# than all ~40 - registry architecture supports the rest being added
+# post-launch without redesign." Growing this list is a data change to
+# this file, not a code change — that's the whole point of the registry
+# pattern, and this file is the proof it actually works that way.
+
+[[language]]
+id = "rust"
+file_globs = ["*.rs"]
+marker_files = ["Cargo.toml"]
+tree_sitter_grammar = "tree-sitter-rust"
+build_systems = ["cargo"]
+
+  [language.lsp_command]
+  program = "rust-analyzer"
+
+  [language.dap_command]
+  program = "lldb-dap"
+
+  [language.formatter]
+  program = "rustfmt"
+
+[[language]]
+id = "typescript"
+file_globs = ["*.ts", "*.tsx", "*.js", "*.jsx"]
+marker_files = ["package.json", "tsconfig.json"]
+tree_sitter_grammar = "tree-sitter-typescript"
+build_systems = ["npm"]
+
+  [language.lsp_command]
+  program = "typescript-language-server"
+  args = ["--stdio"]
+
+  [language.formatter]
+  program = "prettier"
+
+[[language]]
+id = "python"
+file_globs = ["*.py"]
+marker_files = ["pyproject.toml", "setup.py", "requirements.txt"]
+tree_sitter_grammar = "tree-sitter-python"
+build_systems = ["poetry", "pip"]
+
+  [language.lsp_command]
+  program = "pyright-langserver"
+  args = ["--stdio"]
+
+  [language.dap_command]
+  program = "debugpy"
+
+  [language.formatter]
+  program = "black"
+
+[[language]]
+id = "kotlin"
+file_globs = ["*.kt", "*.kts"]
+marker_files = ["build.gradle.kts"]
+tree_sitter_grammar = "tree-sitter-kotlin"
+build_systems = ["gradle"]
+
+  [language.lsp_command]
+  program = "kotlin-language-server"
+
+  [language.formatter]
+  program = "ktlint"
+
+[[language]]
+id = "java"
+file_globs = ["*.java"]
+marker_files = ["pom.xml", "build.gradle"]
+tree_sitter_grammar = "tree-sitter-java"
+build_systems = ["maven", "gradle"]
+
+  [language.lsp_command]
+  program = "jdtls"
+
+[[language]]
+id = "go"
+file_globs = ["*.go"]
+marker_files = ["go.mod"]
+tree_sitter_grammar = "tree-sitter-go"
+build_systems = ["go"]
+
+  [language.lsp_command]
+  program = "gopls"
+
+  [language.dap_command]
+  program = "dlv"
+  args = ["dap"]
+
+  [language.formatter]
+  program = "gofmt"

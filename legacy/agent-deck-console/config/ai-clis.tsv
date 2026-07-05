@@ -1,0 +1,19 @@
+# id	label	command	group	accent	notes
+gemini	Google Gemini	gemini	Spartan/core	amber	Default Spartan engine.
+gemma	Google Gemma	gemma	Spartan/models	violet	Local LLM via Ollama or custom CLI.
+agy	Antigravity CLI	agy	Spartan/core	cyan	The local Antigravity AI companion.
+codex	OpenAI Codex	codex	Spartan/core	emerald	Detected in this workspace via the Codex WSL shim.
+vibe	Vibe AI	vibe	Spartan/pairing	pink	Experimental vibe-coding engine.
+copilot	GitHub Copilot	copilot	Spartan/pairing	blue	Custom Agent Deck command.
+openai	OpenAI CLI	openai	Spartan/api	cyan	Direct OpenAI API control.
+chatgpt	ChatGPT CLI	chatgpt	Spartan/core	green	Standard ChatGPT interface.
+claude	Claude Code	claude	Spartan/core	cyan	First-class Agent Deck tool when installed.
+opencode	OpenCode	opencode	Spartan/core	violet	Open-source coding assistant.
+aider	Aider	aider	Spartan/pairing	green	Advanced pairing tool.
+cursor	Cursor Agent	cursor-agent	Spartan/editors	cyan	Cursor-based automation.
+qwen	Qwen Code	qwen	Spartan/models	red	Qwen-based reasoning.
+amp	Amp	amp	Spartan/pairing	pink	High-velocity coding bridge.
+goose	Goose	goose	Spartan/ops	orange	Block-based agentic workflows.
+crush	Crush	crush	Spartan/ops	red	Code crushing agent.
+continue	Continue CLI	continue	Spartan/editors	blue	IDE companion CLI.
+openhands	OpenHands	openhands	Spartan/ops	emerald	Agentic software engineer.

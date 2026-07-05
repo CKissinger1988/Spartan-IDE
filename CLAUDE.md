@@ -1,0 +1,160 @@
+# Spartan IDE
+
+From-scratch, agent-first desktop IDE. No VS Code/Monaco/CodeMirror — this is a locked
+architectural decision, not an open question. Custom Rust rope + wgpu rendering engine,
+`ropey` as the buffer foundation, tree-sitter for syntax, in-house LSP/DAP clients.
+
+**Source of truth:** `docs/architecture-spec.md` (75 sections). This file is an index and a
+behavioral contract, not a summary — read the relevant section before implementing anything,
+don't guess from the section title.
+
+This repository previously shipped a different product — an Electron-based "Agent Deck Console"
+terminal launcher for third-party AI CLIs. That product was replaced by this from-scratch
+architecture. Its real, working code is preserved at `legacy/agent-deck-console/` for reference
+and is not on the build path for the new architecture; §55 is the traceability matrix mapping
+its features into the new design. Don't delete `legacy/agent-deck-console/` without checking §55
+first — it's the parity reference until each row there is actually reimplemented natively.
+
+## Where things live
+
+| Need to know about... | Read |
+|---|---|
+| Core engine (rope, renderer, LSP/DAP) | §2, §20 |
+| Leo agent core, ModelProvider, LiteLLM, Ollama/HF | §3, §4, §41, §44 |
+| Android, ADB, debugging | §21, §32, §33 |
+| GUI builder (Design View, Open Design integration) | §6, §34, §38 |
+| Engineering studio views (Test/Ops/Data/Manage) | §22–§26, §30 (Project Graph) |
+| Security/trust hardening — READ BEFORE TOUCHING AUTH, SANDBOXING, OR APPROVAL FLOWS | §9, §36 |
+| Settings taxonomy | §42 |
+| Vibe Mode, CLI | §45, §46 |
+| Prioritized roadmap (what's actually Tier 1 vs. later) | §35 |
+| What's real vs. reference-only right now | §47, §48, §51 |
+| External CLI fleet orchestration (replaces legacy Agent Deck console) | §52 |
+| Neural Link workspace analysis bridge | §53 |
+| Ops Cockpit web dashboard companion | §54 |
+| Legacy feature parity matrix | §55 |
+| Git & GitHub integration — Source Control panel | §56 |
+| LM Studio — second local runtime | §57 |
+| API Keys & Credentials settings | §58 |
+| Terminal panel (fills a gap left open since §14) | §59 |
+| Developer Mode — READ BEFORE ASSUMING IT DISABLES ANY §9/§36 INVARIANT | §60 |
+| WSL & WSA integration | §61 |
+| Slash commands, panel visibility | §62 |
+| Skills — lightweight agent capability packages | §63 |
+| MCP Server Management Panel | §64 |
+| Playwright — live testing & visual debugging | §65 |
+| CPU render fallback (no-GPU path) | §66 |
+| High-contrast Antigravity-aesthetic theme, Antigravity 2.0 feature parity matrix | §50.3, §67 |
+| Antigravity/VS Code extension manifest import (not a VS Code fork — READ §68 BEFORE ASSUMING EXTENSION COMPATIBILITY) | §68 |
+| Spartan Mobile IDE — design (§69.1–§69.5) plus real implementation in `mobile/`, this repo (§69.6) | §69 |
+| Import & Migration — projects/preferences from Cursor, Windsurf, Copilot, etc. | §70 |
+| Leo chat — Antigravity parity (inline chat, Walkthrough artifact) | §71 |
+| IoT & embedded development (boards, serial monitor, flashing, MQTT) | §72 |
+| Security & Exploit Auditor — READ §73.2 BEFORE ASSUMING IT CAN TARGET ANYTHING BUT THE OPEN PROJECT | §73 |
+| Open source decompilers (Ghidra, radare2, JADX, ILSpy, CFR/Fernflower) — untrusted-content posture in §74.7 | §74 |
+| Real Tier 1 implementation begun (core buffer + language registry), what it does/doesn't mean | §75 |
+
+## Current status (check this before assuming anything is built)
+
+- **Real, working code — Tier 0 spikes**: `spikes/rope-spike`, `spikes/fallback-parser-spike`,
+  `spikes/dap-spike`, `spikes/lsp-spike` — Rust, tested, run repeatedly on real (if modest)
+  hardware. `dap-spike` drives real `lldb-dap` and `debugpy` subprocesses; `lsp-spike` drives
+  real `rust-analyzer` and `pyright-langserver` subprocesses — both crates now proven against
+  two independent adapters/languages each, not just one, closing the "registry replication"
+  risk §47.6 flagged as open (fixing one real deadlock found only by testing the second adapter
+  — see §47.7). No mocked adapter/server anywhere in either crate. Together they are the full
+  DAP+LSP execution of Tier 0 Spike 0.2 (§39.2), documented in §47.5–§47.7. Not the actual
+  product, just Tier 0 risk-gate spikes. Also `legacy/agent-deck-console/` — a real,
+  previously-shipped Electron/Node app, kept as a parity reference (§55), not part of the new
+  architecture's build.
+- **Real, working code — Tier 1 implementation begun (§75)**: `crates/spartan-buffer` (the real
+  §2.1 document/buffer model — branching undo tree, bounded checkpoint ring, char-indexed edits
+  safe against the multi-byte-boundary bug class §48 found once already) and
+  `crates/spartan-languages` (the real §20.1 `LanguageProfile` registry — curated
+  `languages.toml` seeded with exactly Tier 1's six languages per §35.4, marker-file project
+  detection, extension-glob file matching). 15 and 10 tests respectively, all passing, clippy
+  and fmt clean — real product code in `crates/`, deliberately not under `spikes/`, since these
+  aren't go/no-go risk-gate experiments. Two real bugs were found and fixed only by running the
+  tests, not by inspection (§75.2). This is the start of Tier 1's core-engine/language-registry
+  work, not the IDE — no GPU rendering, no LSP/DAP wiring into the registry, no tree-sitter, no
+  Leo, no UI. See §75.3 before assuming more is done than is.
+- **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
+  the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
+  design-only amendments written to fold the legacy console's features into this architecture;
+  they have not been implemented against real third-party CLIs.
+- **Spartan Mobile IDE (§69) is real, built in `mobile/`, this repo, this branch** — an
+  Expo/React Native TypeScript app (five screens, §69.1's full v1 list and §69.5's full v1+v2
+  list built, at three explicitly different confidence levels — see §69.6 and `mobile/README.md`
+  for exactly what's Expo-Go-verified vs. custom-dev-client-only vs. a deliberate stub). It
+  briefly lived in its own local repository before an explicit decision moved it into this one as
+  a `mobile/` subdirectory via `git subtree`, preserving its real commit history rather than
+  squashing it. No backend exists yet; never run on a device/emulator/simulator (none reachable
+  in this environment). See §69.6 for the full history of this decision.
+- Spike 0.4 and the GPU half of spike 0.1 have never run — no display/GPU in either environment
+  this was built in. Don't assume either is validated. Spike 0.2 (both LSP and DAP halves) and
+  spike 0.1's CPU/data-structure half are the only spikes with real execution behind them so
+  far; spike 0.3's real-model fidelity test (§39.3) is still unexecuted (no reachable model
+  backend in either environment). See §39 for what the remaining spikes need, §47.5–§47.6 for
+  exactly what was and wasn't run for 0.2.
+
+## Build & test
+
+```bash
+cargo test --workspace --release   # 4 spikes + 2 real crates (spartan-buffer, spartan-languages)
+# dap-spike needs `lldb-dap` (or `lldb-dap-18`) + `rustc`; lsp-spike needs `rust-analyzer` + `rustc`.
+# Both self-skip with a printed message if their tool isn't found on $PATH.
+cargo build --release --workspace
+```
+
+No other build system exists yet. If you're about to run `npm`/`pnpm`/anything else against
+the `.jsx` prototypes, stop — they're standalone React artifacts (Tailwind + lucide-react),
+not a project with its own build config. Don't invent one without discussing it first.
+
+## Rules, not suggestions
+
+- **Never claim something works without running it.** This project's own history includes real
+  bugs caught only by actually executing code and adversarial-testing it (§48) — including two
+  cases where a "fix" silently deleted content and looked correct until re-verified (§51.1).
+  Match that discipline: run it, don't reason your way to "should work."
+- **Don't fabricate benchmark numbers.** If you can't run something in this environment (no GPU,
+  no display, no live model backend), say so explicitly instead of estimating and presenting it
+  as measured. §47 is the template for how to report partial/blocked verification honestly.
+- **Security hardening in §36 and §9 is not optional scope** — path-jailing, untrusted-repo
+  quarantine, the Single Writer Invariant, External Content Fetch Gating (§50.2). These exist
+  because of documented failures in comparable tools (Cursor, Windsurf, Antigravity — §36.2).
+  Don't simplify them away for convenience during implementation.
+- **The Security & Exploit Auditor (§73) only ever targets the currently open, user-owned
+  project** — never a third-party host, never a URL outside that project's own configured
+  local/staging environment. This is a structural refusal (§73.2), not a warning dialog. Every
+  active-verification run needs its own explicit approval, even under Autonomous/Vibe autonomy
+  (§45) — the same category of standing exception Untrusted-Repo Quarantine (§36.4.2) already
+  carves out for a different risk. If a task description implies scanning or exploiting anything
+  other than the open project, stop and re-read §73.2 before writing code.
+- **"Developer Mode" (§60) never disables destructive-action approval or plugin sandboxing** —
+  those stay hard invariants at every revision. Path-jailing has exactly **one** documented
+  exception, made deliberately with the tradeoff surfaced and a specific scope chosen (§60.2.1,
+  amending §36.4.6) — it is not a template for other invariants to grow exceptions. If a task
+  description says "full system access" or similar, re-read §60 in full (especially §60.2.1)
+  before writing code; don't reason from the feature name or from this bullet's summary alone.
+- **§35 is the actual build order.** Don't jump ahead to Tier 2/3 features (full multi-language
+  support, enterprise SSO, the plugin marketplace) before Tier 0's remaining spikes and Tier 1's
+  MVP scope are real. If asked to build something, check §35 for what tier it's in and say so
+  if it's premature.
+- Before writing code for a new subsystem, check whether a Tier 0 spike already exists for the
+  risky part of it (§39). Don't re-litigate an already-validated design decision from scratch.
+- **Visual simplification/decluttering never removes the terminal, inline diagnostics, or
+  direct in-place code editing** (§36.4.10) — a real Antigravity 2.0 minimalism regression
+  reportedly did exactly that and alienated users who wanted an IDE, not a chat window (§36.2).
+  Decluttering targets secondary chrome (redundant borders, boxed badges, duplicate labels)
+  and generous whitespace, never a core editing/debugging surface. This is permanent, not a
+  one-time judgment call for whichever pass introduced it.
+
+## What NOT to do
+
+- Don't fork or vendor any VS Code/Monaco/CodeMirror code, ever, for any reason.
+- Don't add a new cloud model provider as a bespoke adapter — it goes through LiteLLM (§44)
+  unless there's a specific reason (like Claude's prompt caching) to hand-roll it, as already
+  decided for `ClaudeProvider`/`OllamaProvider`.
+- Don't touch `docs/architecture-spec.md`'s section numbering without re-running the structural
+  check §51.1 used (sequential 1–N, no duplicate headers, cross-references resolve) — that
+  exact bug happened once already in this project's own history.

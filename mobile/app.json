@@ -1,0 +1,59 @@
+{
+  "expo": {
+    "name": "Spartan Mobile IDE",
+    "slug": "spartan-mobile-ide",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Face ID confirms it's really you before approving a diff or plan Leo is waiting on.",
+        "NSCameraUsageDescription": "Photograph a whiteboard sketch or an error message to attach as context to a session.",
+        "NSPhotoLibraryUsageDescription": "Attach an existing photo as context to a session.",
+        "NSMicrophoneUsageDescription": "Dictate a new task into the Inbox using on-device speech recognition.",
+        "NSSpeechRecognitionUsageDescription": "Transcribe dictated tasks on-device before submitting them to the Inbox."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png"
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Photograph a whiteboard sketch or an error message to attach as context to a session.",
+          "photosPermission": "Attach an existing photo as context to a session."
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Dictate a new task into the Inbox using on-device speech recognition.",
+          "speechRecognitionPermission": "Transcribe dictated tasks on-device before submitting them to the Inbox."
+        }
+      ]
+    ]
+  }
+}

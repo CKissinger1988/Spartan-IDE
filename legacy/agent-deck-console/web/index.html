@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spartan Agent Deck Console</title>
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="rail" aria-label="Spartan navigation">
+        <div class="brand">
+          <span class="brand-mark">S</span>
+          <span class="brand-copy">Spartan<br />IDE</span>
+        </div>
+        <nav>
+          <a class="active" href="#fleet">FLEET</a>
+          <a href="#usage">USAGE</a>
+          <a href="#registry">AI_CLI</a>
+          <a href="#terminal">TERM</a>
+          <a href="#docs">DOCS</a>
+        </nav>
+        <button class="settings-cog" id="settingsCog" type="button" aria-label="Open settings">
+          <span>&#9881;</span>
+        </button>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="mono-label">Agent Deck bridge // terminal gui</p>
+            <h1>AI CLI Fleet Console</h1>
+          </div>
+          <div class="status-pill">
+            <span></span>
+            operator mode
+          </div>
+        </header>
+
+        <section id="fleet" class="grid">
+          <article class="panel hero-panel">
+            <div class="panel-title">
+              <span>CONTROL_SURFACE</span>
+              <strong>READY</strong>
+            </div>
+            <p>
+              Unified command surface for Gemini, Gemma, agy, Codex, and more. Featuring real-time usage tracking and autonomous model switching.
+            </p>
+            <div class="command-line">
+              <span>Spartan@nexusai#</span>
+              <code>./bin/spartan-agent-deck</code>
+            </div>
+          </article>
+
+          <article class="panel metric">
+            <span class="mono-label">Detected here</span>
+            <strong>3</strong>
+            <p>codex, gemini, opencode</p>
+          </article>
+
+          <article class="panel metric">
+            <span class="mono-label">Agent Deck</span>
+            <strong>EXT</strong>
+            <p>install with scripts/install-agent-deck.sh</p>
+          </article>
+        </section>
+
+        <section id="usage" class="panel">
+          <div class="panel-title">
+            <span>MODEL_USAGE_TRACKER</span>
+            <strong>Live Status</strong>
+          </div>
+          <div class="usage-grid" id="usageRows"></div>
+        </section>
+
+        <section id="registry" class="panel">
+          <div class="panel-title">
+            <span>AI_CLI_REGISTRY</span>
+            <strong>14 profiles</strong>
+          </div>
+          <div class="registry" id="registryRows"></div>
+        </section>
+
+        <section id="terminal" class="terminal panel">
+          <div class="terminal-bar">
+            <div class="dots"><span></span><span></span><span></span></div>
+            <span>root@nexusai: ~/Spartan_IDE</span>
+          </div>
+          <div class="terminal-body">
+            <p><b>Spartan Agent Deck Console</b> v0.1.0</p>
+            <p><span class="prompt">Spartan@nexusai#</span> ./bin/spartan-agent-deck doctor</p>
+            <p class="cyan">agent-deck: external command bridge</p>
+            <p class="green">codex: detected // gemini: detected // opencode: detected</p>
+            <p><span class="prompt">Spartan@nexusai#</span> agent-deck launch . -g Spartan/core -t "Codex Workspace" -c "codex"</p>
+          </div>
+        </section>
+
+        <section id="docs" class="docs">
+          <article class="panel">
+            <span class="mono-label">Launch</span>
+            <code>agent-deck launch . -g Spartan/core -t "Gemini Workspace" -c "gemini"</code>
+          </article>
+          <article class="panel">
+            <span class="mono-label">Attach</span>
+            <code>agent-deck session attach "Gemini Workspace"</code>
+          </article>
+          <article class="panel">
+            <span class="mono-label">Web</span>
+            <code>agent-deck web --listen 127.0.0.1:8420</code>
+          </article>
+        </section>
+      </section>
+    </main>
+
+    <section class="settings-drawer" id="settingsDrawer" aria-hidden="true">
+      <div class="settings-backdrop" data-close-settings></div>
+      <aside class="settings-panel" aria-label="Settings">
+        <header class="settings-header">
+          <div>
+            <p class="mono-label">configuration surface</p>
+            <h2>Settings</h2>
+          </div>
+          <button class="icon-button" type="button" data-close-settings aria-label="Close settings">x</button>
+        </header>
+
+        <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+          <button class="active" type="button" data-settings-tab="general">General</button>
+          <button type="button" data-settings-tab="api">API Keys</button>
+          <button type="button" data-settings-tab="mcp">MCP</button>
+          <button type="button" data-settings-tab="files">Local Files</button>
+          <button type="button" data-settings-tab="skills">Skills</button>
+          <button type="button" data-settings-tab="cli">CLI Registry</button>
+        </div>
+
+        <div class="settings-section active" data-settings-section="general">
+          <label>
+            <span>Agent Deck binary</span>
+            <input id="setting-AGENT_DECK_BIN" value="" />
+          </label>
+          <label>
+            <span>Agent Deck profile</span>
+            <input id="setting-AGENTDECK_PROFILE" value="" />
+          </label>
+          <label>
+            <span>Default launch group</span>
+            <input id="setting-Spartan_DEFAULT_GROUP" value="" />
+          </label>
+          <label>
+            <span>Default CLI</span>
+            <input id="setting-Spartan_DEFAULT_CLI" value="" />
+          </label>
+          <label>
+            <span>Default Model</span>
+            <input id="setting-Spartan_DEFAULT_MODEL" value="" />
+          </label>
+          <label>
+            <span>Style source</span>
+            <input id="setting-Spartan_STYLE_SOURCE" value="" />
+          </label>
+          <button class="save-button" id="saveGeneralSettings">Apply Changes</button>
+        </div>
+
+        <div class="settings-section" data-settings-section="api">
+          <p class="settings-note">Secrets are saved to config/spartan-settings.env. Environment variables take precedence if set.</p>
+          <div class="settings-list" id="apiKeyInputs"></div>
+          <button class="save-button" id="saveApiKeys">Save API Keys</button>
+        </div>
+
+        <div class="settings-section" data-settings-section="mcp">
+          <div class="settings-list" id="mcpRows"></div>
+          <div class="command-line compact">
+            <span>Spartan@nexusai#</span>
+            <code>agent-deck mcp list</code>
+          </div>
+        </div>
+
+        <div class="settings-section" data-settings-section="files">
+          <p class="settings-note">Configure local paths for Neural Link and BrainBridge integration.</p>
+          <label>
+            <span>Hub Root</span>
+            <input id="setting-HUB_ROOT" value="" placeholder="/path/to/hub" />
+          </label>
+          <label>
+            <span>Queue Path</span>
+            <input id="setting-QUEUE_PATH" value="" placeholder="data/neural_link/brainbridge_queue.jsonl" />
+          </label>
+          <label>
+            <span>Reports Directory</span>
+            <input id="setting-REPORTS_DIR" value="" placeholder="data/neural_link/reports" />
+          </label>
+          <button class="save-button" id="saveFileSettings">Save Path Settings</button>
+          <div class="settings-list" id="localFileRows"></div>
+        </div>
+
+        <div class="settings-section" data-settings-section="skills">
+          <div class="settings-summary">
+            <strong>1,474</strong>
+            <span>local AI skills linked into Agent Deck pool</span>
+          </div>
+          <div class="command-line compact">
+            <span>Spartan@nexusai#</span>
+            <code>./scripts/import-ai-skills.sh</code>
+          </div>
+          <div class="settings-list" id="skillRows"></div>
+        </div>
+
+        <div class="settings-section" data-settings-section="cli">
+          <div class="settings-list" id="cliSettingsRows"></div>
+        </div>
+      </aside>
+    </section>
+    <script src="./assets/app.js"></script>
+  </body>
+</html>

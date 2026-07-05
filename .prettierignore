@@ -1,0 +1,4 @@
+legacy/
+target/
+node_modules/
+*.md

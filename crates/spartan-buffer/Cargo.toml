@@ -1,0 +1,7 @@
+[package]
+name = "spartan-buffer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ropey = "1.6"

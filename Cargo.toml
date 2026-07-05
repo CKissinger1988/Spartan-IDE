@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "spikes/rope-spike",
+    "spikes/fallback-parser-spike",
+    "spikes/dap-spike",
+    "spikes/lsp-spike",
+    "crates/spartan-buffer",
+    "crates/spartan-languages",
+]

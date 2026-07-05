@@ -1,0 +1,16 @@
+{
+  "engines": {
+    "gemini": { "free_limit": 1500, "paid_limit": null, "cost_per_1k": 0, "usage": 0, "is_paid": false },
+    "gemma": { "free_limit": null, "paid_limit": null, "cost_per_1k": 0, "usage": 0, "is_paid": false },
+    "agy": { "free_limit": null, "paid_limit": null, "cost_per_1k": 0, "usage": 0, "is_paid": false },
+    "codex": { "free_limit": 100, "paid_limit": 1000, "cost_per_1k": 0.02, "usage": 0, "is_paid": false },
+    "vibe": { "free_limit": 50, "paid_limit": null, "cost_per_1k": 0, "usage": 0, "is_paid": false },
+    "copilot": { "free_limit": null, "paid_limit": null, "cost_per_1k": 0, "usage": 0, "is_paid": true },
+    "openai": { "free_limit": 0, "paid_limit": 10000, "cost_per_1k": 0.01, "usage": 0, "is_paid": true },
+    "chatgpt": { "free_limit": 100, "paid_limit": 10000, "cost_per_1k": 0.01, "usage": 0, "is_paid": false }
+  },
+  "settings": {
+    "auto_switch": true,
+    "fallback_order": ["gemini", "agy", "gemma", "codex", "chatgpt"]
+  }
+}

@@ -1,0 +1,20 @@
+# Rust workspace (new Spartan IDE architecture — spikes today, product later)
+/target/
+**/target/
+Cargo.lock.bak
+
+# Spartan runtime/state directories (created by the app, never committed)
+.spartan/
+
+# Legacy Agent Deck console (Electron/Node/Python) — kept for reference, not built here
+legacy/agent-deck-console/node_modules/
+legacy/agent-deck-console/package-lock.json
+legacy/agent-deck-console/.venv/
+legacy/agent-deck-console/__pycache__/
+legacy/agent-deck-console/**/*.pyc
+legacy/agent-deck-console/config/sentinel-settings.env
+legacy/agent-deck-console/config/spartan-settings.env
+legacy/agent-deck-console/data/neural_link/reports/*
+legacy/agent-deck-console/data/neural_link/brainbridge_queue.jsonl
+!legacy/agent-deck-console/data/neural_link/reports/.gitkeep
+legacy/agent-deck-console/dist/

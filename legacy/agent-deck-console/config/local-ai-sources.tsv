@@ -1,0 +1,16 @@
+# id	label	path	type	notes
+codex_config	Codex Config	/mnt/c/Users/ckiss/.codex/config.toml	settings	Local Codex runtime configuration.
+codex_agents	Codex Agents	/mnt/c/Users/ckiss/.codex/AGENTS.md	instructions	Global Codex agent instructions.
+codex_auth	Codex Auth	/mnt/c/Users/ckiss/.codex/auth.json	secret	Detected auth file; never display or copy contents.
+gemini_global	Gemini Global	/mnt/c/Users/ckiss/.gemini/GEMINI.md	instructions	Global Gemini instructions.
+antigravity_settings	Antigravity CLI	/mnt/c/Users/ckiss/.gemini/antigravity-cli/settings.json	settings	Gemini Antigravity CLI settings.
+antigravity_mcp	Antigravity MCP	/mnt/c/Users/ckiss/.gemini/antigravity/mcp_config.json	mcp	Local MCP server configuration.
+agent_deck_state	Agent Deck State	/home/creator/.agent-deck/profiles/default/state.db	state	Agent Deck default profile state database.
+security_agents	Spartan Agents	/mnt/c/GitHub/Spartan_Security_Suite/AGENTS.md.tmp	instructions	Spartan Security Suite agent instructions.
+security_claude	Spartan Claude	/mnt/c/GitHub/Spartan_Security_Suite/CLAUDE.md.tmp	instructions	Spartan Security Suite Claude instructions.
+security_gemini	Spartan Gemini	/mnt/c/GitHub/Spartan_Security_Suite/GEMINI.md.tmp	instructions	Spartan Security Suite Gemini instructions.
+creator_mandates	Creator Mandates	/mnt/c/GitHub/Spartan_Security_Suite/jarvis_mandates.txt	mandates	Creator/Jarvis mandate source.
+hub_master	Hub Master	/mnt/c/GitHub/Spartan_Hub_Master	settings	Jarvis and BrainBridge root.
+hub_jarvis	Jarvis Core	/mnt/c/GitHub/Spartan_Hub_Master/backend/core/CognitiveCore/jarvis.py	core	Hub Master Jarvis orchestrator module.
+hub_brain_bridge	BrainBridge	/mnt/c/GitHub/Spartan_Hub_Master/backend/core/brain_bridge.py	core	Hub Master BrainBridge module.
+neural_link_config	Neural Link	/mnt/c/Users/ckiss/OneDrive/Documentos/Spartan_IDE/config/neural-link.json	settings	Local safe Neural Link configuration.

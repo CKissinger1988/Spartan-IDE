@@ -1,0 +1,425 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REGISTRY="$ROOT_DIR/config/ai-clis.tsv"
+SKILLS_REGISTRY="$ROOT_DIR/config/ai-skills.tsv"
+SOURCES="$ROOT_DIR/config/local-ai-sources.tsv"
+SETTINGS_FILE="$ROOT_DIR/config/spartan-settings.env"
+AGENT_DECK_BIN="${AGENT_DECK_BIN:-}"
+
+if [[ -f "$SETTINGS_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$SETTINGS_FILE"
+  set +a
+fi
+
+CYAN=$'\033[38;5;51m'
+EMERALD=$'\033[38;5;48m'
+AMBER=$'\033[38;5;214m'
+RED=$'\033[38;5;196m'
+SLATE=$'\033[38;5;245m'
+DIM=$'\033[2m'
+BOLD=$'\033[1m'
+RESET=$'\033[0m'
+
+resolve_command() {
+  local raw="$1"
+  local exe="${raw%% *}"
+  type -P "$exe" >/dev/null 2>&1
+}
+
+agent_deck_available() {
+  [[ -n "$(agent_deck_cmd)" ]]
+}
+
+agent_deck_cmd() {
+  if [[ -n "$AGENT_DECK_BIN" && -x "$AGENT_DECK_BIN" ]]; then
+    printf "%s" "$AGENT_DECK_BIN"
+  elif type -P agent-deck >/dev/null 2>&1; then
+    type -P agent-deck
+  elif [[ -x "$HOME/.local/bin/agent-deck" ]]; then
+    printf "%s" "$HOME/.local/bin/agent-deck"
+  fi
+}
+
+pause() {
+  printf "\n${DIM}press enter to continue${RESET} "
+  read -r _
+}
+
+banner() {
+  clear 2>/dev/null || true
+  printf "${CYAN}${BOLD}"
+  printf "  Spartan Agent Deck Console\n"
+  printf "${RESET}${DIM}  AI CLI fleet control // Agent Deck bridge // terminal GUI${RESET}\n"
+  printf "${SLATE}  ------------------------------------------------------------${RESET}\n"
+}
+
+panel_line() {
+  printf "${SLATE}  %-16s${RESET} %s\n" "$1" "$2"
+}
+
+secret_state() {
+  local key="$1"
+  if [[ -n "${!key:-}" ]]; then
+    printf "${EMERALD}set${RESET}"
+  else
+    printf "${RED}missing${RESET}"
+  fi
+}
+
+doctor() {
+  banner
+  if agent_deck_available; then
+    panel_line "agent-deck" "${EMERALD}online${RESET} ($(agent_deck_cmd))"
+  else
+    panel_line "agent-deck" "${RED}missing${RESET}"
+    printf "\n${AMBER}Install:${RESET} ./scripts/install-agent-deck.sh\n"
+  fi
+
+  printf "\n${CYAN}${BOLD}  AI CLI Registry${RESET}\n"
+  while IFS=$'\t' read -r id label cmd group accent notes; do
+    [[ -z "${id:-}" || "${id:0:1}" == "#" ]] && continue
+    if resolve_command "$cmd"; then
+      panel_line "$label" "${EMERALD}detected${RESET} :: ${cmd} ${DIM}// ${group}${RESET}"
+    else
+      panel_line "$label" "${RED}missing${RESET}  :: ${cmd} ${DIM}// ${notes}${RESET}"
+    fi
+  done < "$REGISTRY"
+}
+
+settings_view() {
+  banner
+  printf "${CYAN}${BOLD}  Settings${RESET}\n\n"
+  panel_line "settings file" "$SETTINGS_FILE"
+  panel_line "registry" "$REGISTRY"
+  panel_line "local sources" "$SOURCES"
+  if agent_deck_available; then
+    panel_line "agent-deck" "$(agent_deck_cmd)"
+  else
+    panel_line "agent-deck" "${RED}missing${RESET}"
+  fi
+  panel_line "profile" "${AGENTDECK_PROFILE:-default}"
+  panel_line "default group" "${Spartan_DEFAULT_GROUP:-Spartan/core}"
+  panel_line "default cli" "${Spartan_DEFAULT_CLI:-gemini}"
+  panel_line "default model" "${Spartan_DEFAULT_MODEL:-gemini-cli}"
+
+  printf "\n${CYAN}${BOLD}  API Key Environment${RESET}\n"
+  for key in OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY GITHUB_TOKEN PERPLEXITY_API_KEY FIRECRAWL_API_KEY EXA_API_KEY; do
+    panel_line "$key" "$(secret_state "$key")"
+  done
+
+  printf "\n${CYAN}${BOLD}  MCP Servers${RESET}\n"
+  if agent_deck_available; then
+    "$(agent_deck_cmd)" mcp list || printf "${DIM}  No Agent Deck MCP catalog configured yet.${RESET}\n"
+  else
+    printf "${DIM}  Install Agent Deck to inspect MCP servers.${RESET}\n"
+  fi
+  if [[ -f /mnt/c/Users/ckiss/.gemini/antigravity/mcp_config.json ]]; then
+    panel_line "antigravity" "/mnt/c/Users/ckiss/.gemini/antigravity/mcp_config.json"
+  fi
+}
+
+local_sources_view() {
+  banner
+  printf "${CYAN}${BOLD}  Local AI Files, Settings, And Mandates${RESET}\n\n"
+  while IFS=$'\t' read -r id label path type notes; do
+    [[ -z "${id:-}" || "${id:0:1}" == "#" ]] && continue
+    local state="${RED}missing${RESET}"
+    [[ -e "$path" ]] && state="${EMERALD}found${RESET}"
+    printf "${SLATE}  %-18s${RESET} %b  ${DIM}%-12s${RESET} %s\n" "$label" "$state" "$type" "$path"
+  done < "$SOURCES"
+}
+
+skills_view() {
+  banner
+  printf "${CYAN}${BOLD}  Imported AI Skills${RESET}\n\n"
+  if [[ ! -f "$SKILLS_REGISTRY" ]]; then
+    printf "${AMBER}No imported skill registry found.${RESET}\n"
+    printf "Run: ./scripts/import-ai-skills.sh\n"
+    return 0
+  fi
+  local total
+  total="$(awk 'BEGIN{n=0} /^[^#]/ && NF {n++} END{print n}' "$SKILLS_REGISTRY")"
+  panel_line "registry" "$SKILLS_REGISTRY"
+  panel_line "imported" "$total skills"
+  panel_line "pool" "${AGENT_DECK_SKILL_POOL:-$HOME/.agent-deck/skills/pool}"
+  printf "\n${CYAN}${BOLD}  First 40 Skills${RESET}\n"
+  awk -F '\t' 'BEGIN{shown=0} /^[^#]/ && NF { printf "  \033[38;5;245m%-34s\033[0m %-12s %s\n", $2, $3, $6; shown++; if (shown >= 40) exit }' "$SKILLS_REGISTRY"
+}
+
+import_skills() {
+  banner
+  "$ROOT_DIR/scripts/import-ai-skills.sh"
+}
+
+neural_link_menu() {
+  while true; do
+    banner
+    printf "  ${BOLD}1${RESET}. Neural Link status\n"
+    printf "  ${BOLD}2${RESET}. Analyze this IDE workspace\n"
+    printf "  ${BOLD}3${RESET}. Analyze Hub Master\n"
+    printf "  ${BOLD}4${RESET}. Analyze Spartan Security Suite\n"
+    printf "  ${BOLD}5${RESET}. Attempt BrainBridge feed from queue\n"
+    printf "  ${BOLD}b${RESET}. Back\n\n"
+    printf "${SLATE}neural-link@nexusai#${RESET} "
+    read -r choice
+    case "$choice" in
+      1) "$ROOT_DIR/scripts/neural-link.py" status; pause ;;
+      2) "$ROOT_DIR/scripts/neural-link.py" analyze "$ROOT_DIR"; pause ;;
+      3) "$ROOT_DIR/scripts/neural-link.py" analyze "/mnt/c/GitHub/Spartan_Hub_Master"; pause ;;
+      4) "$ROOT_DIR/scripts/neural-link.py" analyze "/mnt/c/GitHub/Spartan_Security_Suite"; pause ;;
+      5) "$ROOT_DIR/scripts/neural-link.py" feed --limit 10; pause ;;
+      b|B) return ;;
+      *) printf "${RED}unknown command${RESET}\n"; sleep 1 ;;
+    esac
+  done
+}
+
+settings_menu() {
+  while true; do
+    banner
+    printf "  ${BOLD}1${RESET}. Settings overview\n"
+    printf "  ${BOLD}2${RESET}. API key environment status\n"
+    printf "  ${BOLD}3${RESET}. MCP servers\n"
+    printf "  ${BOLD}4${RESET}. Local AI files and creator mandates\n"
+    printf "  ${BOLD}5${RESET}. AI CLI registry\n"
+    printf "  ${BOLD}6${RESET}. Imported AI skills\n"
+    printf "  ${BOLD}7${RESET}. Sync/import all AI skills\n"
+    printf "  ${BOLD}8${RESET}. Open settings file in \$EDITOR\n"
+    printf "  ${BOLD}b${RESET}. Back\n\n"
+    printf "${SLATE}settings@nexusai#${RESET} "
+    read -r choice
+    case "$choice" in
+      1) settings_view; pause ;;
+      2)
+        banner
+        printf "${CYAN}${BOLD}  API Key Environment${RESET}\n\n"
+        for key in OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY GITHUB_TOKEN PERPLEXITY_API_KEY FIRECRAWL_API_KEY EXA_API_KEY; do
+          panel_line "$key" "$(secret_state "$key")"
+        done
+        pause
+        ;;
+      3)
+        banner
+        printf "${CYAN}${BOLD}  MCP Servers${RESET}\n\n"
+        if agent_deck_available; then
+          "$(agent_deck_cmd)" mcp list || true
+        fi
+        [[ -f /mnt/c/Users/ckiss/.gemini/antigravity/mcp_config.json ]] && panel_line "antigravity" "/mnt/c/Users/ckiss/.gemini/antigravity/mcp_config.json"
+        pause
+        ;;
+      4) local_sources_view; pause ;;
+      5) doctor; pause ;;
+      6) skills_view; pause ;;
+      7) import_skills; pause ;;
+      8)
+        if [[ ! -f "$SETTINGS_FILE" ]]; then
+          cp "$ROOT_DIR/config/spartan-settings.env.example" "$SETTINGS_FILE"
+        fi
+        "${EDITOR:-nano}" "$SETTINGS_FILE"
+        ;;
+      b|B) return ;;
+      *) printf "${RED}unknown command${RESET}\n"; sleep 1 ;;
+    esac
+  done
+}
+
+status_view() {
+  banner
+  if ! agent_deck_available; then
+    printf "${RED}agent-deck is not installed.${RESET}\n"
+    return 1
+  fi
+  printf "${CYAN}${BOLD}  Fleet Status${RESET}\n\n"
+  "$(agent_deck_cmd)" status -v || "$(agent_deck_cmd)" status || true
+}
+
+list_view() {
+  banner
+  if ! agent_deck_available; then
+    printf "${RED}agent-deck is not installed.${RESET}\n"
+    return 1
+  fi
+  printf "${CYAN}${BOLD}  Sessions${RESET}\n\n"
+  "$(agent_deck_cmd)" list || true
+}
+
+select_cli() {
+  local rows=()
+  local i=1
+  printf "${CYAN}${BOLD}  Available launch profiles${RESET}\n\n" >&2
+  while IFS=$'\t' read -r id label cmd group accent notes; do
+    [[ -z "${id:-}" || "${id:0:1}" == "#" ]] && continue
+    local state="${RED}missing${RESET}"
+    if resolve_command "$cmd"; then
+      state="${EMERALD}ready${RESET}"
+    fi
+    printf "  ${BOLD}%2d${RESET}. %-18s %b  ${DIM}%s${RESET}\n" "$i" "$label" "$state" "$cmd" >&2
+    rows+=("$id"$'\t'"$label"$'\t'"$cmd"$'\t'"$group")
+    i=$((i + 1))
+  done < "$REGISTRY"
+
+  printf "\n${SLATE}select profile:${RESET} " >&2
+  read -r choice
+  [[ "$choice" =~ ^[0-9]+$ ]] || return 1
+  local index=$((choice - 1))
+  [[ "$index" -ge 0 && "$index" -lt "${#rows[@]}" ]] || return 1
+  printf "%s" "${rows[$index]}"
+}
+
+launch_session() {
+  banner
+  if ! agent_deck_available; then
+    printf "${RED}agent-deck is not installed.${RESET}\n"
+    return 1
+  fi
+
+  local selected
+  selected="$(select_cli)" || {
+    printf "\n${RED}No valid profile selected.${RESET}\n"
+    return 1
+  }
+
+  IFS=$'\t' read -r id label cmd group <<< "$selected"
+
+  # Usage Resolution
+  local resolved_cmd="$cmd"
+  if type -P node >/dev/null 2>&1; then
+    resolved_cmd=$(node "$ROOT_DIR/scripts/usage-manager.js" resolve "$cmd")
+    if [[ "$resolved_cmd" != "$cmd" ]]; then
+      printf "\n${AMBER}${BOLD}AUTO-SWITCHER:${RESET} ${cmd} limit reached. Using ${resolved_cmd} instead.\n"
+      # Find the label for the resolved command
+      label=$(grep -P "\t${resolved_cmd}\t" "$REGISTRY" | awk -F'\t' '{print $2}')
+    fi
+  fi
+
+  printf "\n${SLATE}workspace path [default: %s]:${RESET} " "$PWD"
+  read -r path
+  path="${path:-$PWD}"
+  printf "${SLATE}session title [default: %s Workspace]:${RESET} " "$label"
+  read -r title
+  title="${title:-$label Workspace}"
+  printf "${SLATE}initial message [optional]:${RESET} "
+  read -r message
+
+  local command=("$(agent_deck_cmd)" launch "$path" -g "$group" -t "$title" -c "$resolved_cmd")
+  if [[ -n "$message" ]]; then
+    command+=(-m "$message")
+  fi
+
+  printf "\n${AMBER}exec:${RESET} "
+  printf "%q " "${command[@]}"
+  printf "\n\n"
+
+  # Track launch (1 usage point)
+  if type -P node >/dev/null 2>&1; then
+    node "$ROOT_DIR/scripts/usage-manager.js" track "$resolved_cmd" 1
+  fi
+
+  "${command[@]}"
+}
+
+attach_session() {
+  banner
+  if ! agent_deck_available; then
+    printf "${RED}agent-deck is not installed.${RESET}\n"
+    return 1
+  fi
+  "$(agent_deck_cmd)" list || true
+  printf "\n${SLATE}session id or title:${RESET} "
+  read -r target
+  [[ -n "$target" ]] || return 1
+  "$(agent_deck_cmd)" session attach "$target"
+}
+
+setup_conductor() {
+  banner
+  if ! agent_deck_available; then
+    printf "${RED}agent-deck is not installed.${RESET}\n"
+    return 1
+  fi
+  printf "${SLATE}conductor name [Spartan]:${RESET} "
+  read -r name
+  name="${name:-Spartan}"
+  printf "${SLATE}description [Spartan IDE fleet]:${RESET} "
+  read -r desc
+  desc="${desc:-Spartan IDE fleet}"
+  "$(agent_deck_cmd)" conductor setup "$name" --description "$desc"
+}
+
+web_ui() {
+  banner
+  if ! agent_deck_available; then
+    printf "${RED}agent-deck is not installed.${RESET}\n"
+    return 1
+  fi
+  printf "${EMERALD}Starting Agent Deck web UI at http://127.0.0.1:8420${RESET}\n\n"
+  "$(agent_deck_cmd)" web --listen 127.0.0.1:8420
+}
+
+cockpit_ui() {
+  banner
+  printf "${CYAN}Starting Spartan Cockpit Backend...${RESET}\n"
+  if ! type -P node >/dev/null 2>&1; then
+    printf "${RED}node is not installed. Node.js is required for the cockpit backend.${RESET}\n"
+    return 1
+  fi
+  printf "Server: http://localhost:8421\n"
+  node "$ROOT_DIR/scripts/cockpit-server.js"
+}
+
+main_menu() {
+  while true; do
+    banner
+    printf "  ${BOLD}1${RESET}. Doctor / detect AI CLIs\n"
+    printf "  ${BOLD}2${RESET}. Fleet status\n"
+    printf "  ${BOLD}3${RESET}. List sessions\n"
+    printf "  ${BOLD}4${RESET}. Launch AI CLI through Agent Deck\n"
+    printf "  ${BOLD}5${RESET}. Attach to session\n"
+    printf "  ${BOLD}6${RESET}. Setup conductor\n"
+    printf "  ${BOLD}7${RESET}. Start Agent Deck web UI\n"
+    printf "  ${BOLD}8${RESET}. Start Spartan Cockpit (Dynamic)\n"
+    printf "  ${BOLD}9${RESET}. Settings\n"
+    printf "  ${BOLD}10${RESET}. Imported AI skills\n"
+    printf "  ${BOLD}11${RESET}. Neural Link to Jarvis/BrainBridge\n"
+    printf "  ${BOLD}q${RESET}. Quit\n\n"
+    printf "${SLATE}Spartan@nexusai#${RESET} "
+    read -r choice
+    case "$choice" in
+      1) doctor; pause ;;
+      2) status_view; pause ;;
+      3) list_view; pause ;;
+      4) launch_session; pause ;;
+      5) attach_session ;;
+      6) setup_conductor; pause ;;
+      7) web_ui ;;
+      8) cockpit_ui ;;
+      9) settings_menu ;;
+      10) skills_view; pause ;;
+      11) neural_link_menu ;;
+      q|Q) exit 0 ;;
+      *) printf "${RED}unknown command${RESET}\n"; sleep 1 ;;
+    esac
+  done
+}
+
+case "${1:-menu}" in
+  menu) main_menu ;;
+  doctor) doctor ;;
+  status) status_view ;;
+  list|ls) list_view ;;
+  launch) launch_session ;;
+  attach) attach_session ;;
+  conductor) setup_conductor ;;
+  settings) settings_menu ;;
+  sources) local_sources_view ;;
+  skills) skills_view ;;
+  import-skills) import_skills ;;
+  neural-link) neural_link_menu ;;
+  web) web_ui ;;
+  cockpit) cockpit_ui ;;
+  *) printf "usage: %s [menu|doctor|status|list|launch|attach|conductor|settings|sources|skills|import-skills|neural-link|web|cockpit]\n" "$0"; exit 2 ;;
+esac

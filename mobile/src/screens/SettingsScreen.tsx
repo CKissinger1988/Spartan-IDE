@@ -1,0 +1,209 @@
+import { useCallback, useState } from 'react';
+import { Alert, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { mockArtifacts } from '../data/mockData';
+import { getConnectivitySnapshot } from '../lib/network';
+import { requestNotificationPermission } from '../lib/notifications';
+import { schedulePreviewNotification } from '../lib/notificationActions';
+import { clearQueue, getQueuedDecisions, replayQueue } from '../lib/offlineQueue';
+import { QueuedDecision } from '../types/queue';
+
+// §69.1's push-notification settings, reusing the desktop's existing
+// Notifications categories (§42) conceptually rather than inventing
+// mobile-only ones — this screen is the client-side permission toggle only;
+// there's no backend yet to actually deliver a push to this toggle.
+export function SettingsScreen() {
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [requesting, setRequesting] = useState(false);
+  const [queue, setQueue] = useState<QueuedDecision[]>([]);
+  const [connectivity, setConnectivity] = useState<{ isConnected: boolean; isWifi: boolean } | null>(
+    null
+  );
+
+  const refresh = useCallback(() => {
+    getQueuedDecisions().then(setQueue);
+    getConnectivitySnapshot().then(setConnectivity);
+  }, []);
+
+  // Re-check connectivity and the queue every time this screen is opened —
+  // §69.5's offline-first review queue only means anything if its status is
+  // visible, not just something happening silently in AsyncStorage.
+  useFocusEffect(
+    useCallback(() => {
+      refresh();
+    }, [refresh])
+  );
+
+  const handleToggle = async (next: boolean) => {
+    if (!next) {
+      setNotificationsEnabled(false);
+      return;
+    }
+
+    setRequesting(true);
+    const result = await requestNotificationPermission();
+    setRequesting(false);
+
+    if (result.granted) {
+      setNotificationsEnabled(true);
+    } else {
+      setNotificationsEnabled(false);
+      Alert.alert('Notifications unavailable', result.reason);
+    }
+  };
+
+  const handleReplay = async () => {
+    const result = await replayQueue();
+    Alert.alert('Sync attempted', `${result.attempted} queued. ${result.note}`);
+  };
+
+  const handleClear = async () => {
+    await clearQueue();
+    refresh();
+  };
+
+  const handleSendPreview = async (lowStakes: boolean) => {
+    const artifact = mockArtifacts.find((a) => a.lowStakes === lowStakes);
+    if (!artifact) return;
+    await schedulePreviewNotification(artifact);
+  };
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.row}>
+        <View style={styles.rowText}>
+          <Text style={styles.label}>Review-needed notifications</Text>
+          <Text style={styles.description}>
+            Push notifications when a diff, plan, or CI failure needs your review.
+          </Text>
+        </View>
+        <Switch
+          value={notificationsEnabled}
+          onValueChange={handleToggle}
+          disabled={requesting}
+        />
+      </View>
+      <Text style={styles.note}>
+        No push backend exists yet — this only requests OS permission and configures how a
+        notification would be presented. Nothing can actually be sent to this device yet.
+      </Text>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionHeader}>Connectivity</Text>
+        <Text style={styles.description}>
+          {connectivity === null
+            ? 'Checking…'
+            : connectivity.isConnected
+              ? connectivity.isWifi
+                ? 'Connected — Wi-Fi'
+                : 'Connected — cellular'
+              : 'Offline'}
+        </Text>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionHeader}>Pending sync queue ({queue.length})</Text>
+        {queue.length === 0 ? (
+          <Text style={styles.description}>No decisions queued.</Text>
+        ) : (
+          queue.map((item) => (
+            <Text key={item.id} style={styles.queueRow}>
+              {item.decision} · {item.artifactId} · queued {item.queuedAt}
+            </Text>
+          ))
+        )}
+        <View style={styles.queueActions}>
+          <Pressable style={styles.queueButton} onPress={handleReplay}>
+            <Text style={styles.queueButtonText}>Attempt sync</Text>
+          </Pressable>
+          <Pressable style={[styles.queueButton, styles.queueButtonSecondary]} onPress={handleClear}>
+            <Text style={styles.queueButtonText}>Clear queue</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.note}>
+          "Attempt sync" is a stub — there is no backend yet to actually send a queued decision
+          to. It only reports what's currently queued.
+        </Text>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionHeader}>Notification-surface actions</Text>
+        <Text style={styles.description}>
+          Send yourself a local preview notification to try the Approve/Reject action buttons
+          (low-stakes) or the open-to-review path (destructive class) — §69.5.
+        </Text>
+        <View style={styles.queueActions}>
+          <Pressable style={styles.queueButton} onPress={() => handleSendPreview(true)}>
+            <Text style={styles.queueButtonText}>Preview: low-stakes</Text>
+          </Pressable>
+          <Pressable style={[styles.queueButton, styles.queueButtonSecondary]} onPress={() => handleSendPreview(false)}>
+            <Text style={styles.queueButtonText}>Preview: destructive</Text>
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#fff',
+    padding: 16,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  rowText: {
+    flex: 1,
+  },
+  label: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  description: {
+    marginTop: 4,
+    color: '#6b7280',
+    fontSize: 13,
+  },
+  note: {
+    marginTop: 12,
+    color: '#9ca3af',
+    fontSize: 12,
+  },
+  section: {
+    marginTop: 28,
+  },
+  sectionHeader: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  queueRow: {
+    marginTop: 8,
+    fontFamily: 'Courier',
+    fontSize: 12,
+    color: '#374151',
+  },
+  queueActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  queueButton: {
+    backgroundColor: '#2563eb',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  queueButtonSecondary: {
+    backgroundColor: '#6b7280',
+  },
+  queueButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+});
