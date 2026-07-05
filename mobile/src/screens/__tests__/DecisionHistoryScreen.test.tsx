@@ -8,6 +8,7 @@ jest.mock('../../lib/decisionHistory', () => ({
 }));
 
 jest.mock('@react-navigation/native', () => ({
+  ...jest.requireActual('@react-navigation/native'),
   useFocusEffect: (effect: () => void) => require('react').useEffect(effect, [effect]),
 }));
 

@@ -8,6 +8,7 @@ import { recordDecision } from '../lib/decisionActions';
 import { DiffLineType, parseDiff } from '../lib/diffHighlight';
 import { localModelClient } from '../lib/localModel';
 import { RootStackParamList } from '../navigation/types';
+import { C } from '../theme';
 import { Artifact, ArtifactComment } from '../types/domain';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ArtifactReview'>;
@@ -52,7 +53,7 @@ export function ArtifactReviewScreen({ route }: Props) {
   if (artifact === undefined) {
     return (
       <View style={styles.container}>
-        <Text>Loading…</Text>
+        <Text style={styles.title}>Loading…</Text>
       </View>
     );
   }
@@ -60,7 +61,7 @@ export function ArtifactReviewScreen({ route }: Props) {
   if (!artifact) {
     return (
       <View style={styles.container}>
-        <Text>Artifact not found — not live, and nothing cached for it either.</Text>
+        <Text style={styles.title}>Artifact not found — not live, and nothing cached for it either.</Text>
       </View>
     );
   }
@@ -211,6 +212,7 @@ export function ArtifactReviewScreen({ route }: Props) {
           <TextInput
             style={styles.commentInput}
             placeholder="Leave a comment on this artifact"
+            placeholderTextColor={C.textDim}
             value={draftComment}
             onChangeText={setDraftComment}
             multiline
@@ -238,21 +240,22 @@ export function ArtifactReviewScreen({ route }: Props) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: C.bg,
     padding: 16,
   },
   title: {
     fontSize: 18,
     fontWeight: '700',
+    color: C.text,
   },
   summary: {
     marginTop: 6,
-    color: '#374151',
+    color: C.textMid,
   },
   fileBlock: {
     marginTop: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e5e7eb',
+    borderColor: C.border,
     borderRadius: 8,
     overflow: 'hidden',
   },
@@ -261,15 +264,16 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     paddingHorizontal: 10,
     paddingTop: 8,
+    color: C.text,
   },
   fileStats: {
     fontFamily: 'Courier',
-    color: '#6b7280',
+    color: C.textMid,
     paddingHorizontal: 10,
     paddingBottom: 6,
   },
   patchScroll: {
-    backgroundColor: '#0b1021',
+    backgroundColor: C.s1,
   },
   patchLines: {
     paddingVertical: 10,
@@ -277,27 +281,27 @@ const styles = StyleSheet.create({
   patchLine: {
     fontFamily: 'Courier',
     fontSize: 12,
-    color: '#e5e7eb',
+    color: C.text,
     paddingHorizontal: 10,
   },
   patchAdd: {
-    color: '#4ade80',
+    color: C.green,
   },
   patchRemove: {
-    color: '#f87171',
+    color: C.red,
   },
   patchHunk: {
-    color: '#6b7280',
+    color: C.textDim,
   },
   patchContext: {
-    color: '#e5e7eb',
+    color: C.text,
   },
   commentOnFile: {
     paddingVertical: 8,
     paddingHorizontal: 10,
   },
   commentOnFileText: {
-    color: '#2563eb',
+    color: C.accent,
     fontSize: 12,
     fontWeight: '600',
   },
@@ -305,19 +309,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#eff6ff',
+    backgroundColor: C.accentBg,
     borderRadius: 8,
     padding: 8,
     marginTop: 12,
   },
   commentTargetText: {
-    color: '#1d4ed8',
+    color: C.accent,
     fontSize: 12,
     fontFamily: 'Courier',
     flexShrink: 1,
   },
   commentTargetCancel: {
-    color: '#1d4ed8',
+    color: C.accent,
     fontSize: 12,
     fontWeight: '700',
     marginLeft: 8,
@@ -334,10 +338,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   rejectButton: {
-    backgroundColor: '#ef4444',
+    backgroundColor: C.red,
   },
   approveButton: {
-    backgroundColor: '#16a34a',
+    backgroundColor: C.green,
   },
   buttonText: {
     color: '#fff',
@@ -345,13 +349,13 @@ const styles = StyleSheet.create({
   },
   decisionNote: {
     marginTop: 12,
-    color: '#6b7280',
+    color: C.textMid,
     fontSize: 12,
     textAlign: 'center',
   },
   cacheBanner: {
-    backgroundColor: '#eff6ff',
-    color: '#1d4ed8',
+    backgroundColor: C.accentBg,
+    color: C.accent,
     fontSize: 12,
     padding: 10,
     borderRadius: 8,
@@ -365,20 +369,21 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     marginBottom: 8,
+    color: C.text,
   },
   commentRow: {
     paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e5e7eb',
+    borderBottomColor: C.border,
   },
   commentAuthor: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#6b7280',
+    color: C.textMid,
   },
   commentText: {
     marginTop: 2,
-    color: '#111827',
+    color: C.text,
   },
   commentInputRow: {
     flexDirection: 'row',
@@ -389,15 +394,17 @@ const styles = StyleSheet.create({
   commentInput: {
     flex: 1,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#d1d5db',
+    borderColor: C.borderLt,
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 8,
     minHeight: 40,
     maxHeight: 100,
+    color: C.text,
+    backgroundColor: C.s1,
   },
   commentSubmit: {
-    backgroundColor: '#2563eb',
+    backgroundColor: C.accent,
     borderRadius: 8,
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -408,12 +415,12 @@ const styles = StyleSheet.create({
   },
   commentsNote: {
     marginTop: 8,
-    color: '#9ca3af',
+    color: C.textDim,
     fontSize: 12,
   },
   localModelButton: {
     marginBottom: 4,
-    backgroundColor: '#7c3aed',
+    backgroundColor: C.teal,
     borderRadius: 8,
     paddingVertical: 12,
     alignItems: 'center',

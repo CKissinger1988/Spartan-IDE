@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { mockArtifacts } from './src/data/mockData';
 import {
@@ -21,6 +22,8 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
+      {/* light content for the dark theme (§50.3) -- see src/theme.ts */}
+      <StatusBar style="light" />
       <RootNavigator />
     </SafeAreaProvider>
   );

@@ -1,5 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 import { SessionStatus } from '../types/domain';
+import { STATUS_COLOR } from '../theme';
 
 const LABEL: Record<SessionStatus, string> = {
   running: 'Running',
@@ -7,15 +8,9 @@ const LABEL: Record<SessionStatus, string> = {
   done: 'Done',
 };
 
-const COLOR: Record<SessionStatus, string> = {
-  running: '#2563eb',
-  review: '#d97706',
-  done: '#16a34a',
-};
-
 export function StatusPill({ status }: { status: SessionStatus }) {
   return (
-    <View style={[styles.pill, { backgroundColor: COLOR[status] }]}>
+    <View style={[styles.pill, { backgroundColor: STATUS_COLOR[status] }]}>
       <Text style={styles.text}>{LABEL[status]}</Text>
     </View>
   );

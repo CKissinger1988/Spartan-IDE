@@ -8,6 +8,7 @@ import { requestNotificationPermission } from '../lib/notifications';
 import { schedulePreviewNotification } from '../lib/notificationActions';
 import { clearQueue, getQueuedDecisions, replayQueue } from '../lib/offlineQueue';
 import { RootStackParamList } from '../navigation/types';
+import { C } from '../theme';
 import { QueuedDecision } from '../types/queue';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
@@ -85,6 +86,8 @@ export function SettingsScreen({ navigation }: Props) {
           value={notificationsEnabled}
           onValueChange={handleToggle}
           disabled={requesting}
+          trackColor={{ false: C.s3, true: C.accent }}
+          thumbColor={C.text}
         />
       </View>
       <Text style={styles.note}>
@@ -166,7 +169,7 @@ export function SettingsScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: C.bg,
     padding: 16,
   },
   row: {
@@ -181,15 +184,16 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 16,
     fontWeight: '600',
+    color: C.text,
   },
   description: {
     marginTop: 4,
-    color: '#6b7280',
+    color: C.textMid,
     fontSize: 13,
   },
   note: {
     marginTop: 12,
-    color: '#9ca3af',
+    color: C.textDim,
     fontSize: 12,
   },
   section: {
@@ -198,12 +202,13 @@ const styles = StyleSheet.create({
   sectionHeader: {
     fontSize: 15,
     fontWeight: '700',
+    color: C.text,
   },
   queueRow: {
     marginTop: 8,
     fontFamily: 'Courier',
     fontSize: 12,
-    color: '#374151',
+    color: C.textMid,
   },
   queueActions: {
     flexDirection: 'row',
@@ -211,13 +216,13 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   queueButton: {
-    backgroundColor: '#2563eb',
+    backgroundColor: C.accent,
     borderRadius: 8,
     paddingVertical: 10,
     paddingHorizontal: 14,
   },
   queueButtonSecondary: {
-    backgroundColor: '#6b7280',
+    backgroundColor: C.s3,
   },
   historyButton: {
     marginTop: 14,

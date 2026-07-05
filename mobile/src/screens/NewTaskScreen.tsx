@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { addLocalTask } from '../data/localTaskStore';
 import { useVoiceCapture } from '../lib/voiceCapture';
 import { RootStackParamList } from '../navigation/types';
+import { C } from '../theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'NewTask'>;
 
@@ -28,6 +29,7 @@ export function NewTaskScreen({ navigation }: Props) {
         style={styles.transcriptInput}
         multiline
         placeholder="Tap the mic and start speaking, or type here directly"
+        placeholderTextColor={C.textDim}
         value={transcript}
         onChangeText={setTranscript}
         editable={!isListening}
@@ -62,36 +64,39 @@ export function NewTaskScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: C.bg,
     padding: 16,
   },
   label: {
     fontSize: 16,
     fontWeight: '700',
+    color: C.text,
   },
   transcriptInput: {
     marginTop: 12,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#d1d5db',
+    borderColor: C.borderLt,
     borderRadius: 8,
     padding: 12,
     minHeight: 100,
     textAlignVertical: 'top',
+    color: C.text,
+    backgroundColor: C.s1,
   },
   error: {
     marginTop: 8,
-    color: '#dc2626',
+    color: C.red,
     fontSize: 12,
   },
   micButton: {
     marginTop: 16,
-    backgroundColor: '#2563eb',
+    backgroundColor: C.accent,
     borderRadius: 8,
     paddingVertical: 14,
     alignItems: 'center',
   },
   micButtonActive: {
-    backgroundColor: '#dc2626',
+    backgroundColor: C.red,
   },
   micButtonText: {
     color: '#fff',
@@ -99,7 +104,7 @@ const styles = StyleSheet.create({
   },
   submitButton: {
     marginTop: 12,
-    backgroundColor: '#16a34a',
+    backgroundColor: C.green,
     borderRadius: 8,
     paddingVertical: 14,
     alignItems: 'center',
@@ -113,7 +118,7 @@ const styles = StyleSheet.create({
   },
   note: {
     marginTop: 20,
-    color: '#9ca3af',
+    color: C.textDim,
     fontSize: 12,
   },
 });

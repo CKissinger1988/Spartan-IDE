@@ -12,6 +12,7 @@ import {
 import { mockArtifacts, mockChatMessages, mockSessionThreads } from '../data/mockData';
 import { captureFromCamera, pickFromLibrary } from '../lib/imageCapture';
 import { RootStackParamList } from '../navigation/types';
+import { C } from '../theme';
 import { ChatMessage, ImageAttachment } from '../types/domain';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SessionDetail'>;
@@ -119,6 +120,7 @@ export function SessionDetailScreen({ route, navigation }: Props) {
           <TextInput
             style={styles.composerInput}
             placeholder="Message Leo"
+            placeholderTextColor={C.textDim}
             value={draftMessage}
             onChangeText={setDraftMessage}
             multiline
@@ -168,22 +170,23 @@ export function SessionDetailScreen({ route, navigation }: Props) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: C.bg,
   },
   header: {
     fontSize: 18,
     fontWeight: '700',
     padding: 16,
+    color: C.text,
   },
   artifactBanner: {
     marginHorizontal: 16,
     marginBottom: 8,
     padding: 12,
     borderRadius: 8,
-    backgroundColor: '#fef3c7',
+    backgroundColor: C.amberBg,
   },
   artifactBannerText: {
-    color: '#92400e',
+    color: C.amber,
     fontWeight: '600',
   },
   messages: {
@@ -198,14 +201,14 @@ const styles = StyleSheet.create({
   },
   bubbleUser: {
     alignSelf: 'flex-end',
-    backgroundColor: '#2563eb',
+    backgroundColor: C.accent,
   },
   bubbleLeo: {
     alignSelf: 'flex-start',
-    backgroundColor: '#f3f4f6',
+    backgroundColor: C.s2,
   },
   bubbleText: {
-    color: '#111827',
+    color: C.text,
   },
   bubbleTextUser: {
     color: '#fff',
@@ -213,7 +216,7 @@ const styles = StyleSheet.create({
   composerSection: {
     padding: 16,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#e5e7eb',
+    borderTopColor: C.border,
   },
   composerRow: {
     flexDirection: 'row',
@@ -223,15 +226,17 @@ const styles = StyleSheet.create({
   composerInput: {
     flex: 1,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#d1d5db',
+    borderColor: C.borderLt,
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 8,
     minHeight: 40,
     maxHeight: 100,
+    color: C.text,
+    backgroundColor: C.s1,
   },
   composerSend: {
-    backgroundColor: '#2563eb',
+    backgroundColor: C.accent,
     borderRadius: 8,
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -242,17 +247,18 @@ const styles = StyleSheet.create({
   },
   composerNote: {
     marginTop: 8,
-    color: '#9ca3af',
+    color: C.textDim,
     fontSize: 11,
   },
   attachmentsSection: {
     padding: 16,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#e5e7eb',
+    borderTopColor: C.border,
   },
   attachmentsHeader: {
     fontSize: 14,
     fontWeight: '700',
+    color: C.text,
   },
   thumbnailRow: {
     gap: 8,
@@ -269,13 +275,13 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   attachmentButton: {
-    backgroundColor: '#2563eb',
+    backgroundColor: C.accent,
     borderRadius: 8,
     paddingVertical: 10,
     paddingHorizontal: 12,
   },
   attachmentButtonSecondary: {
-    backgroundColor: '#6b7280',
+    backgroundColor: C.s3,
   },
   attachmentButtonText: {
     color: '#fff',
@@ -284,7 +290,7 @@ const styles = StyleSheet.create({
   },
   attachmentsNote: {
     marginTop: 8,
-    color: '#9ca3af',
+    color: C.textDim,
     fontSize: 11,
   },
 });

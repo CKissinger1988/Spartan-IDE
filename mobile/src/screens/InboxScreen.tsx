@@ -6,6 +6,7 @@ import { mockSessionThreads } from '../data/mockData';
 import { getLocalTasks, subscribeLocalTasks } from '../data/localTaskStore';
 import { cacheSessionThreads, getCachedSessionThreads } from '../lib/edgeCache';
 import { RootStackParamList } from '../navigation/types';
+import { C, STATUS_COLOR } from '../theme';
 import { SessionStatus, SessionThread } from '../types/domain';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Inbox'>;
@@ -18,14 +19,6 @@ const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
   { key: 'review', label: 'Review' },
   { key: 'done', label: 'Done' },
 ];
-
-// Reuses StatusPill's palette (§69.1) so an active filter pill reads as the
-// same status color the rows themselves use.
-const STATUS_COLOR: Record<SessionStatus, string> = {
-  running: '#2563eb',
-  review: '#d97706',
-  done: '#16a34a',
-};
 
 // §69.1's "Inbox/Agent Manager mirror" — the same task-thread list as
 // desktop's Inbox (§8, §50.1), read from the same session store once one
@@ -83,14 +76,14 @@ export function InboxScreen({ navigation }: Props) {
         value={query}
         onChangeText={setQuery}
         placeholder="Search threads"
-        placeholderTextColor="#9ca3af"
+        placeholderTextColor={C.textDim}
         autoCapitalize="none"
         autoCorrect={false}
       />
       <View style={styles.filterRow}>
         {STATUS_FILTERS.map(({ key, label }) => {
           const active = statusFilter === key;
-          const activeColor = key === 'all' ? '#2563eb' : STATUS_COLOR[key];
+          const activeColor = key === 'all' ? C.accent : STATUS_COLOR[key];
           return (
             <Pressable
               key={key}
@@ -137,11 +130,11 @@ export function InboxScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   list: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: C.bg,
   },
   cacheBanner: {
-    backgroundColor: '#eff6ff',
-    color: '#1d4ed8',
+    backgroundColor: C.accentBg,
+    color: C.accent,
     fontSize: 12,
     padding: 10,
   },
@@ -149,11 +142,13 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginTop: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e5e7eb',
+    borderColor: C.border,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
     fontSize: 14,
+    color: C.text,
+    backgroundColor: C.s1,
   },
   filterRow: {
     flexDirection: 'row',
@@ -166,21 +161,21 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 999,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e5e7eb',
+    borderColor: C.border,
   },
   filterPillText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#6b7280',
+    color: C.textMid,
   },
   filterPillTextActive: {
-    color: '#fff',
+    color: C.text,
   },
   row: {
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e5e7eb',
+    borderBottomColor: C.border,
   },
   rowHeader: {
     flexDirection: 'row',
@@ -192,17 +187,18 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     flexShrink: 1,
+    color: C.text,
   },
   subtitle: {
     marginTop: 4,
     fontSize: 13,
-    color: '#6b7280',
+    color: C.textMid,
   },
   unreadBadge: {
     position: 'absolute',
     right: 16,
     top: 14,
-    backgroundColor: '#ef4444',
+    backgroundColor: C.red,
     borderRadius: 999,
     minWidth: 18,
     height: 18,

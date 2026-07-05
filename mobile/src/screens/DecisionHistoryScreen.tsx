@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { clearDecisionHistory, DecisionHistoryEntry, getDecisionHistory } from '../lib/decisionHistory';
+import { C } from '../theme';
 
 // A local, persistent log of every Approve/Reject decision made through
 // either ArtifactReviewScreen's gated flow or notificationActions.ts's
@@ -64,7 +65,7 @@ export function DecisionHistoryScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: C.bg,
     padding: 16,
   },
   emptyContainer: {
@@ -73,13 +74,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   emptyText: {
-    color: '#6b7280',
+    color: C.textMid,
     fontSize: 14,
   },
   row: {
     paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e5e7eb',
+    borderBottomColor: C.border,
   },
   rowText: {
     flex: 1,
@@ -87,6 +88,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 15,
     fontWeight: '600',
+    color: C.text,
   },
   decision: {
     marginTop: 4,
@@ -94,25 +96,25 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   approved: {
-    color: '#16a34a',
+    color: C.green,
   },
   rejected: {
-    color: '#ef4444',
+    color: C.red,
   },
   decidedAt: {
     marginTop: 4,
-    color: '#6b7280',
+    color: C.textMid,
     fontSize: 12,
   },
   queuedBadge: {
     marginTop: 4,
-    color: '#9ca3af',
+    color: C.textDim,
     fontSize: 12,
     fontStyle: 'italic',
   },
   clearButton: {
     marginTop: 16,
-    backgroundColor: '#6b7280',
+    backgroundColor: C.s3,
     borderRadius: 8,
     paddingVertical: 12,
     alignItems: 'center',
@@ -123,7 +125,7 @@ const styles = StyleSheet.create({
   },
   note: {
     marginTop: 12,
-    color: '#9ca3af',
+    color: C.textDim,
     fontSize: 12,
   },
 });
