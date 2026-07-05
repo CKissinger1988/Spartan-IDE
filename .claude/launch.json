@@ -1,0 +1,35 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mobile-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "mobile", "run", "web", "--", "--port", "19006"],
+      "port": 19006
+    },
+    {
+      "name": "mobile-metro",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "mobile", "run", "start", "--", "--port", "8081"],
+      "port": 8081
+    },
+    {
+      "name": "mobile-android",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "mobile", "run", "android", "--", "--port", "8082"],
+      "port": 8082
+    },
+    {
+      "name": "mobile-ios",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "mobile", "run", "ios", "--", "--port", "8083"],
+      "port": 8083
+    },
+    {
+      "name": "agent-deck-cockpit",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["legacy/agent-deck-console/scripts/cockpit-server.js"],
+      "port": 8421
+    }
+  ]
+}
