@@ -1,0 +1,15 @@
+[package]
+name = "render-spike"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+spartan-buffer = { path = "../../crates/spartan-buffer" }
+wgpu = "0.19"
+winit = "0.29"
+glyphon = "0.5"
+pollster = "0.3"
+rand = "0.8"
+bytemuck = { version = "1", features = ["derive"] }
+
+[dev-dependencies]

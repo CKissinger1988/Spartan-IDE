@@ -11,6 +11,7 @@ and why).
 | `fallback-parser-spike` | Local-model tool-call fallback parsing, adversarial cases (§3.4, §47.2) | Nothing beyond `cargo` |
 | `dap-spike` | In-house DAP client against real debug adapters (§2.3, §39.2, §47.5, §47.7) | `rustc`; `lldb-dap`/`lldb-dap-18`; optionally `debugpy` for the cross-language test |
 | `lsp-spike` | In-house LSP client against real language servers (§2.3, §39.2, §47.6, §47.7) | `rust-analyzer`; optionally `pyright-langserver` for the cross-language test |
+| `render-spike` | GPU-half of rope+renderer latency (§2.2, §39.1, §47.9, companion to `rope-spike`'s CPU half) | A Vulkan/DX12/Metal-capable GPU and a display |
 
 Every test in `dap-spike`/`lsp-spike` skips (prints a message, doesn't fail)
 if its required tool isn't on `$PATH` — these are meant to degrade gracefully

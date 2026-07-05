@@ -5,6 +5,7 @@ members = [
     "spikes/fallback-parser-spike",
     "spikes/dap-spike",
     "spikes/lsp-spike",
+    "spikes/render-spike",
     "crates/spartan-buffer",
     "crates/spartan-languages",
 ]
