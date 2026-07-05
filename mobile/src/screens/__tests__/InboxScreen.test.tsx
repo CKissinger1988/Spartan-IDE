@@ -1,4 +1,5 @@
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react-native';
 import { InboxScreen } from '../InboxScreen';
 import { mockSessionThreads } from '../../data/mockData';
@@ -124,5 +125,29 @@ describe('InboxScreen', () => {
     expect(screen.queryByText('Fix checkout race condition')).toBeNull();
     expect(screen.queryByText('Add retry backoff to webhook sender')).toBeNull();
     expect(screen.queryByText('Migrate settings panel to new theme tokens')).toBeNull();
+  });
+
+  // Regression for a bug where the unread badge was absolutely positioned
+  // over the row instead of laid out beside the StatusPill, so it visually
+  // clipped status labels like "Review" (rendering as "Revie" with the "1"
+  // badge on top). The fix moves the badge into the row header's flex
+  // layout, so this asserts it's no longer detached from flow via absolute
+  // positioning and sits alongside a full, unclipped status label.
+  test('unread badge is laid out beside the status pill, not absolutely positioned over it', async () => {
+    await renderScreen();
+    const target = mockSessionThreads.find(
+      (thread) => thread.status === 'review' && thread.unreadCount > 0
+    );
+    expect(target).toBeTruthy();
+
+    const badge = screen.getByTestId(`unread-badge-${target!.id}`);
+    const flattenedStyle = StyleSheet.flatten(badge.props.style);
+    expect(flattenedStyle.position).not.toBe('absolute');
+
+    // "Review" also labels the filter pill, so there are multiple matches --
+    // what matters here is that the full word still renders somewhere,
+    // unclipped, alongside the badge's own count text.
+    expect(screen.getAllByText('Review').length).toBeGreaterThan(0);
+    expect(screen.getByText(String(target!.unreadCount))).toBeTruthy();
   });
 });

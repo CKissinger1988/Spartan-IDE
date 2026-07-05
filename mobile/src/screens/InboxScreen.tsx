@@ -112,14 +112,16 @@ export function InboxScreen({ navigation }: Props) {
               <Text style={styles.title} numberOfLines={1}>
                 {item.title}
               </Text>
-              <StatusPill status={item.status} />
+              <View style={styles.rowHeaderRight}>
+                {item.unreadCount > 0 && (
+                  <View style={styles.unreadBadge} testID={`unread-badge-${item.id}`}>
+                    <Text style={styles.unreadText}>{item.unreadCount}</Text>
+                  </View>
+                )}
+                <StatusPill status={item.status} />
+              </View>
             </View>
             <Text style={styles.subtitle}>{item.workspaceName}</Text>
-            {item.unreadCount > 0 && (
-              <View style={styles.unreadBadge}>
-                <Text style={styles.unreadText}>{item.unreadCount}</Text>
-              </View>
-            )}
           </Pressable>
         )}
       />
@@ -194,10 +196,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: C.textMid,
   },
+  rowHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 0,
+  },
   unreadBadge: {
-    position: 'absolute',
-    right: 16,
-    top: 14,
     backgroundColor: C.red,
     borderRadius: 999,
     minWidth: 18,

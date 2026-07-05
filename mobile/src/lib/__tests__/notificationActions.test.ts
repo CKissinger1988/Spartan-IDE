@@ -1,7 +1,9 @@
 import * as Notifications from 'expo-notifications';
+import { Platform } from 'react-native';
 import {
   categoryForArtifact,
   addNotificationResponseListener,
+  registerNotificationCategories,
 } from '../notificationActions';
 import { recordDecision } from '../decisionActions';
 import { navigationRef } from '../../navigation/navigationRef';
@@ -34,6 +36,31 @@ const destructiveArtifact: Artifact = {
   id: 'artifact-destructive',
   lowStakes: false,
 };
+
+describe('registerNotificationCategories', () => {
+  const originalOS = Platform.OS;
+
+  afterEach(() => {
+    Platform.OS = originalOS;
+    jest.clearAllMocks();
+  });
+
+  test('registers both categories on a native platform', async () => {
+    Platform.OS = 'ios';
+    await registerNotificationCategories();
+    expect(Notifications.setNotificationCategoryAsync).toHaveBeenCalledTimes(2);
+  });
+
+  // expo-notifications doesn't implement notification categories on web --
+  // setNotificationCategoryAsync throws there. Found by actually running
+  // the app with react-native-web, where it surfaced as an unhandled
+  // rejection on every load.
+  test('skips registration on web rather than letting an unhandled rejection through', async () => {
+    Platform.OS = 'web';
+    await registerNotificationCategories();
+    expect(Notifications.setNotificationCategoryAsync).not.toHaveBeenCalled();
+  });
+});
 
 describe('categoryForArtifact', () => {
   test('low-stakes artifacts get the actionable category', () => {
