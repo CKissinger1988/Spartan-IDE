@@ -4,4 +4,5 @@ export type RootStackParamList = {
   ArtifactReview: { artifactId: string };
   Settings: undefined;
   NewTask: undefined;
+  DecisionHistory: undefined;
 };

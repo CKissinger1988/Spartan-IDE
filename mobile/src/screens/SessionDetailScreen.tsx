@@ -1,10 +1,18 @@
 import { useState } from 'react';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  FlatList,
+  Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { mockArtifacts, mockChatMessages, mockSessionThreads } from '../data/mockData';
 import { captureFromCamera, pickFromLibrary } from '../lib/imageCapture';
 import { RootStackParamList } from '../navigation/types';
-import { ImageAttachment } from '../types/domain';
+import { ChatMessage, ImageAttachment } from '../types/domain';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SessionDetail'>;
 
@@ -16,11 +24,31 @@ type Props = NativeStackScreenProps<RootStackParamList, 'SessionDetail'>;
 export function SessionDetailScreen({ route, navigation }: Props) {
   const { sessionId } = route.params;
   const session = mockSessionThreads.find((s) => s.id === sessionId);
-  const messages = mockChatMessages.filter((m) => m.sessionId === sessionId);
   const pendingArtifact = mockArtifacts.find(
     (a) => a.sessionId === sessionId && a.approved === null
   );
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(
+    mockChatMessages.filter((m) => m.sessionId === sessionId)
+  );
+  const [draftMessage, setDraftMessage] = useState('');
+
+  const handleSendMessage = () => {
+    const text = draftMessage.trim();
+    if (!text) return;
+
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        id: `local-${Date.now()}`,
+        sessionId,
+        author: 'user',
+        text,
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    setDraftMessage('');
+  };
 
   const addAttachment = (uri: string) => {
     setAttachments((prev) => [
@@ -65,7 +93,7 @@ export function SessionDetailScreen({ route, navigation }: Props) {
 
       <FlatList
         style={styles.messages}
-        data={messages}
+        data={chatMessages}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
           <View
@@ -85,6 +113,24 @@ export function SessionDetailScreen({ route, navigation }: Props) {
           </View>
         )}
       />
+
+      <View style={styles.composerSection}>
+        <View style={styles.composerRow}>
+          <TextInput
+            style={styles.composerInput}
+            placeholder="Message Leo"
+            value={draftMessage}
+            onChangeText={setDraftMessage}
+            multiline
+          />
+          <Pressable style={styles.composerSend} onPress={handleSendMessage}>
+            <Text style={styles.composerSendText}>Send</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.composerNote}>
+          Local only — no sync client exists yet to send this message to Leo.
+        </Text>
+      </View>
 
       <View style={styles.attachmentsSection}>
         <Text style={styles.attachmentsHeader}>Attachments</Text>
@@ -163,6 +209,41 @@ const styles = StyleSheet.create({
   },
   bubbleTextUser: {
     color: '#fff',
+  },
+  composerSection: {
+    padding: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#e5e7eb',
+  },
+  composerRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'flex-end',
+  },
+  composerInput: {
+    flex: 1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    minHeight: 40,
+    maxHeight: 100,
+  },
+  composerSend: {
+    backgroundColor: '#2563eb',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  composerSendText: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+  composerNote: {
+    marginTop: 8,
+    color: '#9ca3af',
+    fontSize: 11,
   },
   attachmentsSection: {
     padding: 16,

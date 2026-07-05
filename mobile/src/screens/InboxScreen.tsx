@@ -1,14 +1,31 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { StatusPill } from '../components/StatusPill';
 import { mockSessionThreads } from '../data/mockData';
 import { getLocalTasks, subscribeLocalTasks } from '../data/localTaskStore';
 import { cacheSessionThreads, getCachedSessionThreads } from '../lib/edgeCache';
 import { RootStackParamList } from '../navigation/types';
-import { SessionThread } from '../types/domain';
+import { SessionStatus, SessionThread } from '../types/domain';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Inbox'>;
+
+type StatusFilter = SessionStatus | 'all';
+
+const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'running', label: 'Running' },
+  { key: 'review', label: 'Review' },
+  { key: 'done', label: 'Done' },
+];
+
+// Reuses StatusPill's palette (§69.1) so an active filter pill reads as the
+// same status color the rows themselves use.
+const STATUS_COLOR: Record<SessionStatus, string> = {
+  running: '#2563eb',
+  review: '#d97706',
+  done: '#16a34a',
+};
 
 // §69.1's "Inbox/Agent Manager mirror" — the same task-thread list as
 // desktop's Inbox (§8, §50.1), read from the same session store once one
@@ -21,6 +38,8 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Inbox'>;
 export function InboxScreen({ navigation }: Props) {
   const [threads, setThreads] = useState<SessionThread[]>(mockSessionThreads);
   const [fromCache, setFromCache] = useState(false);
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const localTasks = useSyncExternalStore(subscribeLocalTasks, getLocalTasks);
 
   useEffect(() => {
@@ -44,14 +63,52 @@ export function InboxScreen({ navigation }: Props) {
   }, []);
 
   const allThreads = [...localTasks, ...threads];
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleThreads = allThreads.filter((item) => {
+    const matchesQuery =
+      normalizedQuery.length === 0 ||
+      item.title.toLowerCase().includes(normalizedQuery) ||
+      item.workspaceName.toLowerCase().includes(normalizedQuery);
+    const matchesStatus = statusFilter === 'all' || item.status === statusFilter;
+    return matchesQuery && matchesStatus;
+  });
 
   return (
     <View style={styles.list}>
       {fromCache && (
         <Text style={styles.cacheBanner}>Showing cached threads from your last visit.</Text>
       )}
+      <TextInput
+        style={styles.searchInput}
+        value={query}
+        onChangeText={setQuery}
+        placeholder="Search threads"
+        placeholderTextColor="#9ca3af"
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
+      <View style={styles.filterRow}>
+        {STATUS_FILTERS.map(({ key, label }) => {
+          const active = statusFilter === key;
+          const activeColor = key === 'all' ? '#2563eb' : STATUS_COLOR[key];
+          return (
+            <Pressable
+              key={key}
+              style={[
+                styles.filterPill,
+                active && { backgroundColor: activeColor, borderColor: activeColor },
+              ]}
+              onPress={() => setStatusFilter(key)}
+            >
+              <Text style={[styles.filterPillText, active && styles.filterPillTextActive]}>
+                {label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
       <FlatList
-        data={allThreads}
+        data={visibleThreads}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
           <Pressable
@@ -87,6 +144,37 @@ const styles = StyleSheet.create({
     color: '#1d4ed8',
     fontSize: 12,
     padding: 10,
+  },
+  searchInput: {
+    marginHorizontal: 16,
+    marginTop: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#e5e7eb',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 14,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  filterPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#e5e7eb',
+  },
+  filterPillText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6b7280',
+  },
+  filterPillTextActive: {
+    color: '#fff',
   },
   row: {
     paddingHorizontal: 16,

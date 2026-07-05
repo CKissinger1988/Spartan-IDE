@@ -1,4 +1,5 @@
 import { requireBiometricApproval } from './biometricGate';
+import { appendDecisionEntry } from './decisionHistory';
 import { getConnectivitySnapshot } from './network';
 import { enqueueDecision } from './offlineQueue';
 import { Artifact } from '../types/domain';
@@ -35,11 +36,13 @@ export async function recordDecision(
 
     if (gate.outcome === 'unavailable') {
       const queued = await queueOrRecord(artifact, decision);
+      await appendDecisionEntry(artifact, decision, queued);
       return { status: 'biometric_unavailable', reason: gate.reason, recorded: true, queued };
     }
   }
 
   const queued = await queueOrRecord(artifact, decision);
+  await appendDecisionEntry(artifact, decision, queued);
   return { status: 'recorded', queued };
 }
 

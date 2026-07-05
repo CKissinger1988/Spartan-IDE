@@ -4,7 +4,7 @@ Companion mobile app for Spartan IDE — this `mobile/` subdirectory of the same
 branch. A separate platform, stack, and release cycle from the desktop IDE, but not a separate
 repository (it briefly was one; that changed by explicit decision — its real commit history was
 preserved via `git subtree` rather than squashed). The design this was built from is
-`../docs/architecture-spec.md` §69 (§69.1–§69.6): what this app is, what it deliberately is not,
+`../docs/architecture-spec.md` §69 (§69.1–§69.7): what this app is, what it deliberately is not,
 and why.
 
 ## What this actually is (and is not)
@@ -16,11 +16,13 @@ leaving it an unstated gap.
 **v1 scope — all built:**
 
 - Inbox / Agent Manager mirror — session threads across workspaces, same running/review/done
-  model as desktop
-- Chat with Leo, same conversation history as desktop/CLI
+  model as desktop, with search (title/workspace) and status filtering
+- Chat with Leo, same conversation history as desktop/CLI, with a real message composer (no fake
+  Leo replies — see Current status below)
 - Approve/Reject on Diff Cards and Implementation Plans, gated behind biometric approval (§69.5)
-- Read-only, syntax-highlighted diff viewing for review context
-- Artifact commenting
+- Read-only, **actually** syntax-highlighted diff viewing for review context (`src/lib/diffHighlight.ts`
+  parses unified-diff lines into add/remove/hunk/context, colored accordingly)
+- Artifact commenting, including per-file comments (not just whole-artifact ones)
 - Push-notification permission request and settings toggle (client-side only)
 - Offline-first review queue: an Approve/Reject made with no connection is queued on-device with
   the artifact state the reviewer saw, instead of silently failing or pretending to succeed
@@ -29,6 +31,8 @@ leaving it an unstated gap.
   and fall back to the cached copy if the live source comes up empty
 - Notification-surface actions: Approve/Reject buttons directly on the notification for
   low-stakes artifacts; destructive-class artifacts only open the app to the gated review screen
+- Decision History (§69.7) — a local, persistent log of every Approve/Reject decision made on the
+  device, reachable from Settings; a local audit log, not a synced one
 
 **v2 scope — built where genuinely possible, honestly stubbed where not:**
 
@@ -51,24 +55,31 @@ React Native was picked when that became actionable.
 
 ## Current status — read this before assuming more is done than is
 
-**Real code, not a mockup**: `App.tsx` boots a real `NavigationContainer` with five real,
-type-checked screens (`src/screens/`) wired to real navigation params (`src/navigation/`).
-Verified after every change by actually running:
+**Real code, not a mockup**: `App.tsx` boots a real `NavigationContainer` with six real,
+type-checked screens (`src/screens/`) wired to real navigation params (`src/navigation/`) — the
+original five plus `DecisionHistoryScreen` (§69.7). Verified after every change by actually
+running:
 
 ```bash
 npx tsc --noEmit          # clean
-npx expo export --platform android   # real Metro bundle, 928 modules, succeeds
-npm test                  # jest-expo + @testing-library/react-native, 45 tests, real assertions
+npx expo export --platform android   # real Metro bundle, 931 modules, succeeds
+npm test                  # jest-expo + @testing-library/react-native, 93 tests, real assertions
 ```
 
-**Real Jest coverage exists for the business-logic layer** (`src/lib/__tests__/`,
-`src/data/__tests__/`) — `offlineQueue`, `decisionActions`, `biometricGate`, `edgeCache`,
-`network`, `notificationActions`, `localTaskStore`, and the `localModel` stub, using the
-first-party jest mocks for AsyncStorage/NetInfo and hand-written mocks for the Expo modules that
-ship none. Every test was spot-checked by deliberately breaking the logic it covers and
-confirming the test actually fails, not just inspected for plausibility. What this does **not**
-cover: the five screens themselves (`src/screens/`) as rendered React components — no
-component-level render/interaction tests exist yet, only the logic they call into.
+**Real Jest coverage exists for both the business-logic layer and the screens themselves.**
+`src/lib/__tests__/` and `src/data/__tests__/` cover `offlineQueue`, `decisionActions`,
+`biometricGate`, `edgeCache`, `network`, `notificationActions`, `localTaskStore`, `decisionHistory`,
+`diffHighlight`, and the `localModel` stub, using the first-party jest mocks for AsyncStorage/
+NetInfo and hand-written mocks for the Expo modules that ship none. `src/screens/__tests__/`
+(§69.7) covers all six screens as rendered `@testing-library/react-native` components — render
+output, user interaction (typing, pressing, filtering), and the outcome of mocked async calls.
+Every test suite across both layers was spot-checked by deliberately breaking the real behavior
+it claims to cover and confirming the test actually fails, not just inspected for plausibility.
+
+One dependency-version quirk worth knowing if you add more screen tests: this repo's installed
+`@testing-library/react-native` 14.x, paired with React 19's concurrent renderer, makes `render()`
+and `fireEvent.*` asynchronous — they must be `await`ed, or queries silently fail or events never
+flush before assertions run. This isn't documented prominently in most RNTL examples online.
 
 **Backed entirely by mock data** (`src/data/mockData.ts`) — there is no session-store backend to
 talk to yet. Every screen reads local placeholder data; nothing here syncs, persists, or sends a

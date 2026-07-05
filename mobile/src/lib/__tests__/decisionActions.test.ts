@@ -1,5 +1,6 @@
 import { recordDecision } from '../decisionActions';
 import { requireBiometricApproval } from '../biometricGate';
+import { appendDecisionEntry } from '../decisionHistory';
 import { getConnectivitySnapshot } from '../network';
 import { enqueueDecision } from '../offlineQueue';
 import { Artifact } from '../../types/domain';
@@ -7,6 +8,7 @@ import { Artifact } from '../../types/domain';
 jest.mock('../biometricGate');
 jest.mock('../network');
 jest.mock('../offlineQueue');
+jest.mock('../decisionHistory');
 
 const artifact: Artifact = {
   id: 'artifact-1',
@@ -30,6 +32,7 @@ describe('recordDecision', () => {
     const outcome = await recordDecision(artifact, 'approved', { requireBiometric: false });
     expect(outcome).toEqual({ status: 'recorded', queued: false });
     expect(requireBiometricApproval).not.toHaveBeenCalled();
+    expect(appendDecisionEntry).toHaveBeenCalledWith(artifact, 'approved', false);
   });
 
   test('queues the decision with the seen artifact state when offline', async () => {
@@ -41,6 +44,7 @@ describe('recordDecision', () => {
     const outcome = await recordDecision(artifact, 'rejected', { requireBiometric: false });
     expect(outcome).toEqual({ status: 'recorded', queued: true });
     expect(enqueueDecision).toHaveBeenCalledWith('artifact-1', 'rejected', artifact.createdAt);
+    expect(appendDecisionEntry).toHaveBeenCalledWith(artifact, 'rejected', true);
   });
 
   test('denies the decision outright when the biometric gate is denied -- nothing is recorded', async () => {
@@ -49,6 +53,7 @@ describe('recordDecision', () => {
     expect(outcome).toEqual({ status: 'denied' });
     expect(getConnectivitySnapshot).not.toHaveBeenCalled();
     expect(enqueueDecision).not.toHaveBeenCalled();
+    expect(appendDecisionEntry).not.toHaveBeenCalled();
   });
 
   test('records anyway, but flags it, when biometric hardware is unavailable', async () => {
@@ -64,6 +69,7 @@ describe('recordDecision', () => {
       recorded: true,
       queued: false,
     });
+    expect(appendDecisionEntry).toHaveBeenCalledWith(artifact, 'approved', false);
   });
 
   test('records normally once biometric approval succeeds', async () => {
@@ -71,6 +77,7 @@ describe('recordDecision', () => {
     (getConnectivitySnapshot as jest.Mock).mockResolvedValue({ isConnected: true, isWifi: true });
     const outcome = await recordDecision(artifact, 'approved', { requireBiometric: true });
     expect(outcome).toEqual({ status: 'recorded', queued: false });
+    expect(appendDecisionEntry).toHaveBeenCalledWith(artifact, 'approved', false);
   });
 
   test('a "connected" decision is still local-only -- no sync backend exists to actually reach', async () => {

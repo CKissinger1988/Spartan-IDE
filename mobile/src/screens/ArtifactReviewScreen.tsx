@@ -5,6 +5,7 @@ import { Pressable } from 'react-native';
 import { mockArtifactComments, mockArtifacts } from '../data/mockData';
 import { cacheArtifact, getCachedArtifact } from '../lib/edgeCache';
 import { recordDecision } from '../lib/decisionActions';
+import { DiffLineType, parseDiff } from '../lib/diffHighlight';
 import { localModelClient } from '../lib/localModel';
 import { RootStackParamList } from '../navigation/types';
 import { Artifact, ArtifactComment } from '../types/domain';
@@ -25,6 +26,7 @@ export function ArtifactReviewScreen({ route }: Props) {
     mockArtifactComments.filter((c) => c.artifactId === artifactId)
   );
   const [draftComment, setDraftComment] = useState('');
+  const [commentTarget, setCommentTarget] = useState<string | null>(null);
   const [gating, setGating] = useState(false);
 
   useEffect(() => {
@@ -106,13 +108,14 @@ export function ArtifactReviewScreen({ route }: Props) {
       {
         id: `local-${Date.now()}`,
         artifactId: artifact.id,
-        filePath: null,
+        filePath: commentTarget,
         author: 'You',
         text,
         createdAt: new Date().toISOString(),
       },
     ]);
     setDraftComment('');
+    setCommentTarget(null);
   };
 
   const handleAskLocalModel = async () => {
@@ -148,8 +151,17 @@ export function ArtifactReviewScreen({ route }: Props) {
             +{file.additions} -{file.deletions}
           </Text>
           <ScrollView horizontal style={styles.patchScroll}>
-            <Text style={styles.patch}>{file.patch}</Text>
+            <View style={styles.patchLines}>
+              {parseDiff(file.patch).map((line, index) => (
+                <Text key={index} style={[styles.patchLine, patchLineStyles[line.type]]}>
+                  {line.text}
+                </Text>
+              ))}
+            </View>
           </ScrollView>
+          <Pressable style={styles.commentOnFile} onPress={() => setCommentTarget(file.path)}>
+            <Text style={styles.commentOnFileText}>Comment on this file</Text>
+          </Pressable>
         </View>
       ))}
 
@@ -187,6 +199,14 @@ export function ArtifactReviewScreen({ route }: Props) {
             <Text style={styles.commentText}>{comment.text}</Text>
           </View>
         ))}
+        {commentTarget && (
+          <View style={styles.commentTargetRow}>
+            <Text style={styles.commentTargetText}>Commenting on: {commentTarget}</Text>
+            <Pressable onPress={() => setCommentTarget(null)}>
+              <Text style={styles.commentTargetCancel}>Cancel</Text>
+            </Pressable>
+          </View>
+        )}
         <View style={styles.commentInputRow}>
           <TextInput
             style={styles.commentInput}
@@ -251,11 +271,56 @@ const styles = StyleSheet.create({
   patchScroll: {
     backgroundColor: '#0b1021',
   },
-  patch: {
+  patchLines: {
+    paddingVertical: 10,
+  },
+  patchLine: {
     fontFamily: 'Courier',
     fontSize: 12,
     color: '#e5e7eb',
-    padding: 10,
+    paddingHorizontal: 10,
+  },
+  patchAdd: {
+    color: '#4ade80',
+  },
+  patchRemove: {
+    color: '#f87171',
+  },
+  patchHunk: {
+    color: '#6b7280',
+  },
+  patchContext: {
+    color: '#e5e7eb',
+  },
+  commentOnFile: {
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  commentOnFileText: {
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  commentTargetRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#eff6ff',
+    borderRadius: 8,
+    padding: 8,
+    marginTop: 12,
+  },
+  commentTargetText: {
+    color: '#1d4ed8',
+    fontSize: 12,
+    fontFamily: 'Courier',
+    flexShrink: 1,
+  },
+  commentTargetCancel: {
+    color: '#1d4ed8',
+    fontSize: 12,
+    fontWeight: '700',
+    marginLeft: 8,
   },
   actions: {
     flexDirection: 'row',
@@ -358,3 +423,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
+
+const patchLineStyles: Record<DiffLineType, object> = {
+  add: styles.patchAdd,
+  remove: styles.patchRemove,
+  hunk: styles.patchHunk,
+  context: styles.patchContext,
+};

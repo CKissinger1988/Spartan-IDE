@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Alert, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { mockArtifacts } from '../data/mockData';
@@ -6,13 +7,16 @@ import { getConnectivitySnapshot } from '../lib/network';
 import { requestNotificationPermission } from '../lib/notifications';
 import { schedulePreviewNotification } from '../lib/notificationActions';
 import { clearQueue, getQueuedDecisions, replayQueue } from '../lib/offlineQueue';
+import { RootStackParamList } from '../navigation/types';
 import { QueuedDecision } from '../types/queue';
+
+type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
 
 // §69.1's push-notification settings, reusing the desktop's existing
 // Notifications categories (§42) conceptually rather than inventing
 // mobile-only ones — this screen is the client-side permission toggle only;
 // there's no backend yet to actually deliver a push to this toggle.
-export function SettingsScreen() {
+export function SettingsScreen({ navigation }: Props) {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [requesting, setRequesting] = useState(false);
   const [queue, setQueue] = useState<QueuedDecision[]>([]);
@@ -127,6 +131,20 @@ export function SettingsScreen() {
       </View>
 
       <View style={styles.section}>
+        <Text style={styles.sectionHeader}>Decision history</Text>
+        <Text style={styles.description}>
+          See every Approve/Reject decision recorded on this device, whether it applied live or
+          was queued offline.
+        </Text>
+        <Pressable
+          style={[styles.queueButton, styles.historyButton]}
+          onPress={() => navigation.navigate('DecisionHistory')}
+        >
+          <Text style={styles.queueButtonText}>View decision history</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.section}>
         <Text style={styles.sectionHeader}>Notification-surface actions</Text>
         <Text style={styles.description}>
           Send yourself a local preview notification to try the Approve/Reject action buttons
@@ -200,6 +218,10 @@ const styles = StyleSheet.create({
   },
   queueButtonSecondary: {
     backgroundColor: '#6b7280',
+  },
+  historyButton: {
+    marginTop: 14,
+    alignSelf: 'flex-start',
   },
   queueButtonText: {
     color: '#fff',

@@ -2,6 +2,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Pressable, Text, View } from 'react-native';
 import { ArtifactReviewScreen } from '../screens/ArtifactReviewScreen';
+import { DecisionHistoryScreen } from '../screens/DecisionHistoryScreen';
 import { InboxScreen } from '../screens/InboxScreen';
 import { NewTaskScreen } from '../screens/NewTaskScreen';
 import { SessionDetailScreen } from '../screens/SessionDetailScreen';
@@ -51,6 +52,11 @@ export function RootNavigator() {
           name="NewTask"
           component={NewTaskScreen}
           options={{ title: 'New Task' }}
+        />
+        <Stack.Screen
+          name="DecisionHistory"
+          component={DecisionHistoryScreen}
+          options={{ title: 'Decision History' }}
         />
       </Stack.Navigator>
     </NavigationContainer>
