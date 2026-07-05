@@ -58,7 +58,17 @@ Verified after every change by actually running:
 ```bash
 npx tsc --noEmit          # clean
 npx expo export --platform android   # real Metro bundle, 928 modules, succeeds
+npm test                  # jest-expo + @testing-library/react-native, 45 tests, real assertions
 ```
+
+**Real Jest coverage exists for the business-logic layer** (`src/lib/__tests__/`,
+`src/data/__tests__/`) — `offlineQueue`, `decisionActions`, `biometricGate`, `edgeCache`,
+`network`, `notificationActions`, `localTaskStore`, and the `localModel` stub, using the
+first-party jest mocks for AsyncStorage/NetInfo and hand-written mocks for the Expo modules that
+ship none. Every test was spot-checked by deliberately breaking the logic it covers and
+confirming the test actually fails, not just inspected for plausibility. What this does **not**
+cover: the five screens themselves (`src/screens/`) as rendered React components — no
+component-level render/interaction tests exist yet, only the logic they call into.
 
 **Backed entirely by mock data** (`src/data/mockData.ts`) — there is no session-store backend to
 talk to yet. Every screen reads local placeholder data; nothing here syncs, persists, or sends a
