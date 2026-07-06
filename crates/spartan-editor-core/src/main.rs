@@ -290,6 +290,24 @@ fn main() {
                         WindowEvent::Resized(new_size) => {
                             gpu_state.resize(new_size);
                             text_state.resize(new_size.width as f32, new_size.height as f32);
+
+                            // Recomputes how many lines are visible from the new window
+                            // height -- previously fixed at startup only (a named
+                            // limitation, §75.5), meaning a resized window's viewport size
+                            // silently drifted from what was actually on screen.
+                            let new_visible_lines = ((new_size.height as f32
+                                - 2.0 * text::TEXT_ORIGIN_Y)
+                                / text::LINE_HEIGHT)
+                                .floor()
+                                .max(1.0) as usize;
+                            if new_visible_lines != viewport.visible_lines {
+                                viewport.visible_lines = new_visible_lines;
+                                let (cursor_line, _) = editor.cursor_line_col();
+                                let doc_len_lines = editor.document.len_lines();
+                                viewport.ensure_visible(cursor_line, doc_len_lines);
+                                reshape_window(&mut text_state, &editor, &viewport);
+                                window.request_redraw();
+                            }
                         }
                         WindowEvent::KeyboardInput {
                             event:
@@ -320,7 +338,18 @@ fn main() {
                                 if effect != editor_view::EditEffect::None {
                                     edit_latency.note_key_event();
                                     lsp_debouncer.on_edit();
-                                    apply_edit_effect(&mut text_state, &editor, &viewport, effect);
+                                    let (cursor_line, _) = editor.cursor_line_col();
+                                    let doc_len_lines = editor.document.len_lines();
+                                    if viewport.ensure_visible(cursor_line, doc_len_lines) {
+                                        // The cursor moved outside the current window (e.g.
+                                        // Enter near the bottom edge) -- the viewport itself
+                                        // scrolled, so one full reshape against the new window
+                                        // covers both the scroll and the edit's own visual
+                                        // change, rather than reshaping twice.
+                                        reshape_window(&mut text_state, &editor, &viewport);
+                                    } else {
+                                        apply_edit_effect(&mut text_state, &editor, &viewport, effect);
+                                    }
                                     window.request_redraw();
                                 }
                             }

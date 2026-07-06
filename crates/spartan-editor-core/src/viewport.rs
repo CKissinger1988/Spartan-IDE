@@ -54,6 +54,31 @@ impl Viewport {
     pub fn contains_line(&self, doc_line: usize, doc_len_lines: usize) -> bool {
         self.visible_range(doc_len_lines).contains(&doc_line)
     }
+
+    /// Scrolls minimally so `doc_line` becomes visible -- a no-op if it
+    /// already is. If `doc_line` is above the current window, it becomes
+    /// the new first visible line; if below, it becomes the new last
+    /// visible line. This is the fix for a named, real gap from §75.5: with
+    /// no auto-follow, typing enough newlines near the bottom edge of the
+    /// window used to move the cursor off-screen with the viewport never
+    /// following it. Returns whether the scroll position actually changed,
+    /// matching `scroll_by`'s convention, so callers know whether a reshape
+    /// is needed.
+    pub fn ensure_visible(&mut self, doc_line: usize, doc_len_lines: usize) -> bool {
+        if self.contains_line(doc_line, doc_len_lines) {
+            return false;
+        }
+        let new_scroll = if doc_line < self.scroll_line {
+            doc_line
+        } else {
+            (doc_line + 1).saturating_sub(self.visible_lines)
+        };
+        let max_scroll = doc_len_lines.saturating_sub(1);
+        let new_scroll = new_scroll.min(max_scroll);
+        let changed = new_scroll != self.scroll_line;
+        self.scroll_line = new_scroll;
+        changed
+    }
 }
 
 /// Extracts only the currently-visible slice of the document as a single

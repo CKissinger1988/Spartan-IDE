@@ -116,17 +116,29 @@ updated to "0 diagnostics — clean" within one debounce cycle. The 50k-line
 change (LSP never spawns for synthetic fixtures, which have no real
 project root).
 
+## Auto-scroll and resize (§75.7)
+
+Two named limitations from earlier passes are now fixed: `Viewport::ensure_visible()`
+scrolls minimally to keep the cursor on screen (typing enough newlines near
+the bottom edge used to move the caret off-screen with no follow), and
+`WindowEvent::Resized` now recomputes `visible_lines` from the new window
+height and reshapes accordingly (previously fixed at startup only). Both
+verified for real: 45 synthetic `Enter` keypresses confirmed via screenshot
+to keep the caret visible at the bottom of the window, and a real Win32
+`SetWindowPos` resize confirmed via screenshot to reflow content and keep
+the caret correctly positioned. The 50k-line benchmark was re-run and shows
+no regression (the benchmark's scripted edit paths deliberately don't
+exercise the new auto-scroll code, by design).
+
 ## What is explicitly not done here
 
 - §39.1's <100ms cold-open target — still not met (575-620ms, ~6x over),
   though meaningfully closer than `render-spike`'s 897-1298ms.
 - Scroll cost (19-29ms p99) is a new, real, unaddressed cost against the
   same latency target edits are measured by.
-- No auto-scroll-to-cursor: typing enough newlines near the bottom edge of
-  the visible window moves the cursor off-screen with no auto-follow. A
-  named, deliberate simplification, not a bug found later.
-- `visible_lines` is computed once from the window's initial size and
-  never recomputed on resize.
+- Auto-scroll snaps the cursor to the window's very edge, with no
+  surrounding context margin (a real editor convention this pass didn't
+  attempt). No horizontal scrolling/wrapping for long lines.
 - No SDF glyph atlas, no layered compositing, no tree-sitter, no DAP, no
   Leo, no UI chrome (scrollbar, tabs, panels, a diagnostics/problems
   panel). Diagnostics are printed to stdout only.

@@ -121,6 +121,17 @@ first — it's the parity reference until each row there is actually reimplement
   tree-sitter, Leo, and any diagnostics UI remain unbuilt — see §75.6 for the full list, including
   the single-file-mode fallback and the ~7s worst-case shutdown-close freeze, both named rather than
   silently absorbed.
+- **Real, working code — auto-scroll-to-cursor + resize-aware viewport in `crates/spartan-editor-core`
+  (§75.7)**: closes two limitations §75.5 named explicitly. `Viewport::ensure_visible()` scrolls
+  minimally to keep the cursor on screen after an edit; `WindowEvent::Resized` now recomputes
+  `visible_lines` from the new window height (previously fixed at startup only) and reshapes.
+  Real visual verification: 45 scripted `Enter` keypresses confirmed via screenshot to keep the
+  caret visible at the bottom of the window instead of scrolling off-screen; a real Win32
+  `SetWindowPos` resize confirmed via screenshot to reflow content with the caret still correctly
+  positioned. The 50k-line benchmark was re-run and shows no regression (these fixes deliberately
+  don't touch the benchmark's scripted edit paths). One test-writing mistake caught by actually
+  running it, not by inspection: an early version of a clamp test assumed a scenario the clamp
+  logic can't actually reach for any valid input, worked out by hand and fixed — see §75.7.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -168,7 +179,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 90 tests: 6 spikes + 3 real crates (spartan-buffer,
+cargo test --workspace --release   # 95 tests: 6 spikes + 3 real crates (spartan-buffer,
                                     # spartan-languages, spartan-editor-core)
 # dap-spike needs `lldb-dap` (or `lldb-dap-18`) + `rustc`; lsp-spike and spartan-editor-core's own
 # lsp_integration.rs need `rust-analyzer` + `rustc`. All self-skip with a printed message if their

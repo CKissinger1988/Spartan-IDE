@@ -125,6 +125,62 @@ fn contains_line_agrees_with_to_local_line() {
     }
 }
 
+#[test]
+fn ensure_visible_is_a_no_op_when_the_line_is_already_visible() {
+    let doc = five_line_doc();
+    let mut viewport = Viewport::new(2); // shows lines 0..2
+    let changed = viewport.ensure_visible(1, doc.len_lines());
+    assert!(!changed);
+    assert_eq!(viewport.scroll_line, 0);
+}
+
+#[test]
+fn ensure_visible_scrolls_up_when_the_line_is_above_the_window() {
+    let doc = five_line_doc();
+    let mut viewport = Viewport::new(2);
+    viewport.scroll_line = 4;
+    let changed = viewport.ensure_visible(1, doc.len_lines());
+    assert!(changed);
+    // The target line becomes the new first visible line.
+    assert_eq!(viewport.scroll_line, 1);
+}
+
+#[test]
+fn ensure_visible_scrolls_down_so_the_line_becomes_the_last_visible_one() {
+    let doc = five_line_doc();
+    let mut viewport = Viewport::new(2); // shows lines 0..2
+    let changed = viewport.ensure_visible(3, doc.len_lines());
+    assert!(changed);
+    // visible_lines=2, so scroll_line=2 shows lines 2..4 -- line 3 is last.
+    assert_eq!(viewport.scroll_line, 2);
+    assert!(viewport.contains_line(3, doc.len_lines()));
+}
+
+#[test]
+fn ensure_visible_scrolling_down_to_the_documents_actual_last_line_stays_in_bounds() {
+    let doc = five_line_doc();
+    let mut viewport = Viewport::new(2);
+    let last_line = doc.len_lines() - 1;
+    let changed = viewport.ensure_visible(last_line, doc.len_lines());
+    assert!(changed);
+    assert!(viewport.contains_line(last_line, doc.len_lines()));
+    assert!(viewport.scroll_line <= last_line);
+}
+
+#[test]
+fn ensure_visible_clamps_even_for_a_doc_line_past_the_documents_end() {
+    // A real cursor position should never pass an out-of-range line, but
+    // the clamp is kept as a defensive guard anyway -- this locks in that
+    // it degrades to the last valid scroll position rather than producing
+    // a `scroll_line` no `visible_range` call could ever recover from.
+    let doc = five_line_doc();
+    let mut viewport = Viewport::new(2);
+    let out_of_range = doc.len_lines() + 10;
+    let changed = viewport.ensure_visible(out_of_range, doc.len_lines());
+    assert!(changed);
+    assert_eq!(viewport.scroll_line, doc.len_lines() - 1);
+}
+
 // -- spartan-languages integration: the first real, if narrow, combination
 // of the buffer/renderer crate with the language registry (§75.3's named
 // next gap).
