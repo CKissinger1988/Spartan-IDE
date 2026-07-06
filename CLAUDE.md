@@ -101,8 +101,13 @@ first — it's the parity reference until each row there is actually reimplement
   rounding away. Spike 0.4 has still never run on any environment this was built in — don't
   assume it's validated. Spike 0.2 (both halves), spike 0.1's CPU/data-structure half, and now
   spike 0.1's GPU half (partially, per above) are the spikes with real execution behind them;
-  spike 0.3's real-model fidelity test (§39.3) is still unexecuted (no reachable model backend in
-  any environment this has run in). See §39 for what the remaining spikes need, §47.5–§47.6 for
+  spike 0.3's real-model fidelity test (§39.3) is still unexecuted — but not for the reason
+  previously recorded. A later recheck (§47.2's addendum) found the old network blocker (a 403
+  from egress policy fetching Ollama) is gone; a real HTTP check reached both `ollama.com` and
+  the actual Windows installer. The real blocker now is disk space — 6.5GB free on a 98%-full
+  disk, far short of what even one quantized 7B-class model needs. Don't assume this spike is
+  closer to unblocked than it is just because the network excuse went away. See §39 for what the
+  remaining spikes need, §47.5–§47.6 for 0.2, §47.9 for 0.1's GPU-half first increment.
   0.2, §47.9 for 0.1's GPU-half first increment.
 
 ## Build & test

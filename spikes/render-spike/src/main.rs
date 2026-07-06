@@ -26,6 +26,41 @@ fn srgb_to_linear(s: f64) -> f64 {
     }
 }
 
+/// `Document::line()` (ropey) includes the line's trailing terminator, but
+/// cosmic-text's `BufferLine`s never do -- confirmed by reading
+/// `set_rich_text`'s `BidiParagraphs`-based line splitting, not assumed.
+/// Passing the terminator through would visibly append a literal newline
+/// glyph/gap to the line's rendered content.
+fn strip_line_ending(s: &str) -> &str {
+    s.strip_suffix("\r\n")
+        .or_else(|| s.strip_suffix('\n'))
+        .unwrap_or(s)
+}
+
+/// Routes a completed edit to the cheapest correct `TextState` update:
+/// `EditEffect::Line` uses the damage-region path (`set_line_text`) *only*
+/// when that line already exists in cosmic-text's buffer; anything else
+/// (`Structural`, `None`, or a `Line` index cosmic-text doesn't know about
+/// yet -- see `TextState::line_count`'s doc comment for why that last case
+/// is real, not hypothetical) falls back to the full-document reshape.
+fn apply_edit_effect(
+    text_state: &mut text::TextState,
+    editor: &editor_view::EditorView,
+    effect: editor_view::EditEffect,
+) {
+    match effect {
+        editor_view::EditEffect::Line(line_i) if line_i < text_state.line_count() => {
+            match editor.document.line(line_i) {
+                Ok(line_text) => text_state.set_line_text(line_i, strip_line_ending(&line_text)),
+                Err(_) => text_state.set_text(&editor.text()),
+            }
+        }
+        _ => {
+            text_state.set_text(&editor.text());
+        }
+    }
+}
+
 fn main() {
     let program_start = Instant::now();
     println!("=== render-spike -- Spike 0.1 GPU-half, first increment ===");
@@ -125,9 +160,10 @@ fn main() {
                         WindowEvent::KeyboardInput {
                             event: key_event, ..
                         } => {
-                            if input::handle_key_event(&mut editor, &key_event) {
+                            let effect = input::handle_key_event(&mut editor, &key_event);
+                            if effect != editor_view::EditEffect::None {
                                 latency_tracker.note_key_event();
-                                text_state.set_text(&editor.text());
+                                apply_edit_effect(&mut text_state, &editor, effect);
                                 window.request_redraw();
                             }
                         }
@@ -243,9 +279,11 @@ fn main() {
                 }
                 Event::AboutToWait => {
                     if bench_remaining > 0 {
-                        editor.insert_random(&mut bench_rng, "x");
-                        latency_tracker.note_key_event();
-                        text_state.set_text(&editor.text());
+                        let effect = editor.insert_random(&mut bench_rng, "x");
+                        if effect != editor_view::EditEffect::None {
+                            latency_tracker.note_key_event();
+                            apply_edit_effect(&mut text_state, &editor, effect);
+                        }
                         bench_remaining -= 1;
                     }
                     window.request_redraw();

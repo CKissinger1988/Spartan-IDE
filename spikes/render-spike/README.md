@@ -1,4 +1,4 @@
-# render-spike — Spike 0.1 GPU-Half, First Increment
+# render-spike — Spike 0.1 GPU-Half
 
 Real, runnable code — not pseudocode. Companion to `spikes/rope-spike` (the
 CPU-only half of the same spike, §47.1): where `rope-spike` measured the rope
@@ -6,6 +6,15 @@ data structure alone with no renderer at all, this spike adds the previously
 unexecuted other half — a real `wgpu` surface, real shaped/rasterized text
 from the real `spartan-buffer::Document`, real keyboard-driven edits, a real
 cursor, and a first real (not estimated) input-to-photon latency number.
+
+**Two passes so far.** The first increment (Steps 1-8) proved the pipeline
+end-to-end but re-shaped the *entire* document on every edit, missing
+§39.1's <5ms p99 target by ~45x at 50k lines. A second pass (the "damage-region
+increment" below) added real per-line CPU shaping and found the full-reshape
+approach was costing far more than initially estimated — cutting p50 latency
+by roughly 55x. Both passes' real numbers are kept in this report rather than
+overwriting the first with the second, since the delta between them is itself
+part of the honest record.
 
 This closes the historical blocker recorded in `CLAUDE.md` and §39/§47 —
 "Spike 0.1's GPU half... has never run — no display/GPU in either
@@ -39,7 +48,8 @@ spec table. What follows is a real, honestly-scoped first slice of it.
   buffer itself doesn't own: cursor position. Split into a library so
   `tests/editor_view_maps_document_state.rs` can exercise real
   `Document`-to-render-input mapping headlessly — no GPU, no window, no
-  display required for these 10 tests.
+  display required for these 18 tests (including the `EditEffect`
+  line-vs-structural classification the damage-region increment depends on).
 - `input.rs` — real `winit` `KeyEvent`s mapped to real `Document::insert`/
   `delete` calls.
 - `cursor.rs` / `cursor.wgsl` — a real second render pipeline drawing a
@@ -65,7 +75,7 @@ spec table. What follows is a real, honestly-scoped first slice of it.
   come from the internal scripted driver, since it's the only way to get a
   clean, repeatable 2000-sample run.
 
-## Two real bugs found by running this, not by inspection
+## Two real bugs found by running this, not by inspection (first pass)
 
 1. **sRGB gamma mismatch on the clear color.** `wgpu::Color` clear values are
    linear-space, but the chosen surface format is sRGB — an intended dark
@@ -91,6 +101,43 @@ Neither of these is a bug in `ropey`, `cosmic-text`, or `wgpu` — they're real
 seams between independently-correct libraries with different conventions,
 the exact kind of thing a spike like this exists to surface before the real
 Tier 1 editor is built on top of the same assumption.
+
+## The damage-region increment (second pass)
+
+The first pass's `TextState::set_text` re-shaped the entire document on
+every keystroke — named and measured as the dominant cost, but never fixed.
+A second pass added `TextState::set_line_text`, using cosmic-text's public
+`BufferLine::set_text` API (confirmed by reading cosmic-text 0.10.0's source:
+it invalidates only that one line's cached shape/layout, leaving every other
+line's already-computed state untouched) instead of rebuilding all 50,000
+lines for a single-character edit. `EditorView`'s edit methods now return an
+`EditEffect` (`Line(i)` / `Structural` / `None`) so callers can tell same-line
+edits (cheap: one line's shape invalidated) from structural ones (a newline
+inserted or removed — no public cosmic-text API exists for cheap line
+insert/delete, so these still fall back to a full reshape).
+
+**A third real bug, found by running this, not by inspection**: right after
+Enter creates a new trailing line, `Document` (ropey) immediately reports the
+cursor as being on that new, real line — but cosmic-text's `buffer.lines`
+isn't extended to include it until the next full `set_text()` rebuild
+processes that content. Calling `set_line_text` with that not-yet-existing
+line index silently no-ops (`Vec::get_mut` returns `None`), which **silently
+dropped the next character typed** after pressing Enter — found by literally
+pressing Enter, typing `abc`, and watching `abc` fail to render at all in a
+screenshot, then confirmed with fresh `eprintln!` diagnostics showing the
+`EditEffect` classification was actually correct and the drop was happening
+one layer down. Fixed by adding `TextState::line_count()` and having the
+caller (`apply_edit_effect` in `main.rs`) fall back to a full reshape
+whenever a `Line(i)` index falls outside cosmic-text's current line count —
+the same "detect the specific mismatch, name it, handle it explicitly"
+pattern as the cursor-rendering bug above, not a coincidence: it's the same
+underlying ropey/cosmic-text disagreement showing up in a second place.
+Verified by hand afterward: Enter, then typing `abc`, renders `abc` on its
+own new line with the caret tracking it correctly.
+
+This fix is also covered by a headless regression test
+(`insert_after_a_trailing_newline_reports_a_line_index_a_fresh_cosmic_text_rebuild_would_not_yet_have`)
+that locks in the exact line-index arithmetic without needing a GPU.
 
 ## What was verified by hand (Steps 1-5)
 
@@ -125,6 +172,60 @@ Reproduction:
 ```
 cargo run --release -p render-spike -- --synthetic:50000 2000
 ```
+
+### After the damage-region increment (current code)
+
+```
+=== render-spike -- Spike 0.1 GPU-half, first increment ===
+Loaded --synthetic:50000 -- 3527780 chars, 50000 lines
+Scripted latency benchmark: 2000 internally-driven random-position inserts
+Adapter: Intel(R) UHD Graphics 620 | backend=Vulkan | device_type=IntegratedGpu
+Cold-open: process start -> first presented frame = 1297.91ms
+  input-to-photon              p50=  3.0265ms  p95=  6.4806ms  p99= 25.1099ms  max= 26.0963ms  n=200
+  input-to-photon              p50=  2.8353ms  p95=  5.6431ms  p99= 15.1236ms  max= 26.0963ms  n=400
+  input-to-photon              p50=  2.8353ms  p95=  5.6196ms  p99= 15.9548ms  max= 27.9914ms  n=600
+  input-to-photon              p50=  2.7490ms  p95=  5.0764ms  p99= 13.4840ms  max= 27.9914ms  n=800
+  input-to-photon              p50=  2.7878ms  p95=  5.1273ms  p99= 12.0483ms  max= 27.9914ms  n=1000
+  input-to-photon              p50=  2.8411ms  p95=  5.2644ms  p99= 13.4840ms  max= 27.9914ms  n=1200
+  input-to-photon              p50=  2.9245ms  p95=  5.6431ms  p99= 11.0947ms  max= 27.9914ms  n=1400
+  input-to-photon              p50=  2.9600ms  p95=  5.7032ms  p99= 12.3503ms  max= 48.3381ms  n=1600
+  input-to-photon              p50=  2.9802ms  p95=  5.6324ms  p99= 11.0947ms  max= 48.3381ms  n=1800
+  input-to-photon              p50=  2.9971ms  p95=  5.6324ms  p99= 12.2390ms  max= 48.3381ms  n=2000
+
+=== Scripted benchmark complete (2000 inserts) ===
+  input-to-photon (scripted, final) p50=  2.9971ms  p95=  5.6324ms  p99= 12.2390ms  max= 48.3381ms  n=2000
+```
+
+Independent cross-check (500 iterations, separate process, run immediately
+after):
+
+```
+Cold-open: process start -> first presented frame = 1031.65ms
+  input-to-photon (scripted, final) p50=  2.1940ms  p95=  4.3133ms  p99=  5.9909ms  max= 23.9545ms  n=500
+```
+
+**p50 dropped from ~169ms to ~2-3ms (roughly 55-60x), p95 from ~196ms to
+~4-6ms (roughly 35-45x), p99 from ~224ms to ~6-25ms (roughly 10-35x,
+noticeably more run-to-run variance in the tail than before).** This is a
+much bigger improvement than expected going in — research into cosmic-text's
+API before writing this increment suggested `glyphon::TextRenderer::prepare()`
+re-uploading every visible line's glyphs every call (not scoped by which
+lines changed) would keep total latency GPU-upload-dominated even after
+fixing CPU-side shaping. The real numbers say otherwise: at 50,000 lines,
+the CPU cost of `Buffer::set_text` fully re-parsing and re-shaping the
+*entire* document (not just the ~35 visible lines) on every keystroke was
+apparently the larger share of the original ~169-224ms, not the GPU upload
+of the visible glyphs. Cold-open (unaffected by this change, since it isn't
+on the per-edit path) stayed in the same ~900-1300ms range as before, run-to-
+run variance rather than a regression.
+
+Median latency (p50 ≈ 3ms) is now comfortably under §39.1's 5ms *p99* target
+at this document size — but p99 itself (6-25ms across the two runs above)
+is not consistently under 5ms yet, so the target is not reliably met, only
+approached. Cold-open (~900-1300ms) remains far over the <100ms target,
+unaffected by this pass (see below for why).
+
+### Before the damage-region increment (first pass, kept for the record)
 
 Primary run (2000 internally-scripted random-position inserts):
 
@@ -174,22 +275,24 @@ crates/spartan-buffer/src/lib.rs (521 lines, 20,570 bytes):
 
 ## Against §39.1's actual success criteria
 
-| Criterion | Target | This increment | Verdict |
-|---|---|---|---|
-| p99 input-to-photon | <5ms | 223.9ms (50k lines) | **Fails, by ~45x** |
-| Cold file open to first paint | <100ms | 897.7ms (50k lines) | **Fails, by ~9x** |
-| Rope memory overhead vs. flat buffer | <20% | Not measured this pass | Not evaluated |
+| Criterion | Target | Before damage-region | After damage-region | Verdict |
+|---|---|---|---|---|
+| p50 input-to-photon | (not a stated target, but informative) | 169.3ms | 3.0ms | ~56x better |
+| p99 input-to-photon | <5ms | 223.9ms (50k lines) | 12.2ms (50k lines) | **Still fails, but by ~2.4x now, not ~45x** |
+| Cold file open to first paint | <100ms | 897.7ms (50k lines) | 1297.9ms (50k lines) | **Fails, by ~13x — this pass didn't touch cold-open at all** |
+| Rope memory overhead vs. flat buffer | <20% | Not measured | Not measured | Not evaluated |
 
-This is not a subtle miss — it's the expected, honest consequence of a named
-and deliberate shortcut: `TextState::set_text` re-shapes the *entire*
-document on every single edit (see its own doc comment), with no damage-region
-tracking of any kind. At 50,000 lines that full reshape dominates the
-input-to-photon budget completely; the latency numbers scale visibly with
-document size (34 bytes: ~1.2ms p50; 20.5KB: ~9.2ms p50; 3.5MB: ~169ms p50),
-which is itself evidence the instrumentation measures something real rather
-than returning a constant. Meeting §39.1's <5ms target on a 50k-line file
-requires the damage-region re-rasterization this increment explicitly
-skipped — that is the next real increment, not a tuning pass on this one.
+The damage-region increment closed most, but not all, of the p99 gap. What's
+left is real and named, not hand-waved: `glyphon::TextRenderer::prepare()`
+still walks every *visible* line's `layout_runs()` and re-uploads its glyphs
+on every call (confirmed by reading its source before writing this
+increment) — with ~35 visible lines at this window size, that's a real,
+non-zero, unavoidable-with-this-API cost that a scoped/partial GPU-upload API
+could still shave further. Cold-open is untouched by this pass entirely: it
+measures process start to the *first* frame, which happens before any edit
+occurs, so it was never on the code path this increment changed — closing
+that gap (still ~13x over target) needs separate work, most plausibly lazy/
+incremental font-system or atlas warmup, not investigated here.
 
 ## What this confirms
 
@@ -201,30 +304,47 @@ skipped — that is the next real increment, not a tuning pass on this one.
   real edits through the same `Document` API the rest of the project already
   depends on and tests.
 - The latency instrumentation itself is trustworthy: numbers are non-zero,
-  internally consistent across repeated runs (169-190ms p50 range across two
-  independent 50k-line runs — real measurement variance, not suspiciously
-  identical decimals), and respond predictably to a real load variable
-  (document size).
-- Two genuine cross-library seams (sRGB clear-color gamma; ropey vs.
-  cosmic-text's differing trailing-newline line-count semantics) were found
-  and fixed only by actually running the code, consistent with this
-  project's established discipline (§48, §51.1).
+  internally consistent across repeated runs, and respond predictably to a
+  real load variable (document size) both before and after the damage-region
+  change.
+- **Real per-line damage-region CPU shaping is achievable using cosmic-text's
+  existing public API** (`BufferLine::set_text`), no forking required, and
+  it closed most (not all) of the p99 gap to §39.1's target — a real, larger
+  improvement than research into the library's own GPU-upload behavior
+  predicted going in, which is itself a useful finding: don't assume a
+  documented limitation (glyphon's un-scoped `prepare()`) is the *dominant*
+  cost without measuring, even when it's a real limitation.
+- Three genuine cross-library seams (sRGB clear-color gamma; ropey vs.
+  cosmic-text's differing trailing-newline line-count semantics, which
+  surfaced twice — once in cursor rendering, once in damage-region text
+  updates) were found and fixed only by actually running the code,
+  consistent with this project's established discipline (§48, §51.1).
 
 ## What this does not confirm
 
-- **§39.1's <5ms p99 / <100ms cold-open success criteria are not met** at
-  50k lines with this increment's full-reshape-every-edit approach — see the
-  table above. Closing that gap needs real damage-region re-rasterization,
-  not implemented here.
-- **No true damage-region rendering of any kind.** Every edit re-shapes and
-  re-uploads the entire visible buffer content; this is explicitly the
-  simplest-possible-first-slice choice, named in `text.rs`'s own doc comment,
-  not an oversight.
+- **§39.1's <5ms p99 target is still not reliably met** at 50k lines — 12.2ms
+  and 6.0ms p99 across two runs, both over target though far closer than
+  before (previously 224-266ms). **Cold-open is essentially unchanged**
+  (~900-1300ms vs. a <100ms target) since this pass didn't touch the
+  cold-open code path at all.
+- **`glyphon::TextRenderer::prepare()` still re-uploads every visible line's
+  glyphs on every call**, regardless of which lines changed — this is a real,
+  named, unaddressed cost (see `TextState::line_count`'s doc comment and the
+  table above), and is the most likely next thing to fix if p99 needs to come
+  down further. Doing so would mean patching glyphon itself, a bigger,
+  riskier undertaking than reusing its existing public API, and was
+  deliberately not attempted in this pass.
 - **`glyphon`'s coverage-mask atlas, not a literal per-glyph SDF field.**
   Functionally similar (both are texture-atlas-based GPU text rendering) but
   a different technique from what §2.2/§39.1 literally specify. Hand-rolling
   a real SDF atlas (font parsing, rect packing, SDF generation, a custom
   alpha-thresholded shader) remains unattempted.
+- **Structural edits (newline inserted/removed) still trigger a full
+  document reshape** — cosmic-text has no public API for cheap line
+  insert/delete, so `EditEffect::Structural` falls back to the original
+  full-reshape path. A document consisting mostly of single-character edits
+  benefits enormously from this pass; one with frequent line insertion
+  (e.g. an agent writing many short lines) would not.
 - **No damage-region-aware rope**, no branching undo tree wired into this
   spike (`spartan-buffer::Document` has one — see `crates/spartan-buffer` —
   but this spike's benchmark never exercises undo/redo, snapshotting, or

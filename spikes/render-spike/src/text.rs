@@ -1,6 +1,6 @@
 use glyphon::{
-    Attrs, Buffer, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache, TextArea,
-    TextAtlas, TextBounds, TextRenderer,
+    Attrs, AttrsList, Buffer, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
+    TextArea, TextAtlas, TextBounds, TextRenderer,
 };
 
 /// Owns everything glyphon/cosmic-text needs to shape and rasterize real
@@ -51,9 +51,11 @@ impl TextState {
         }
     }
 
-    /// Replaces the buffer's content. Called on every document change for
-    /// this first increment -- full-content reshaping every edit, not real
-    /// damage-region tracking (see the exit report).
+    /// Replaces the buffer's entire content -- a full-document reshape.
+    /// Still required for structural edits (a newline inserted or removed),
+    /// since cosmic-text has no public API for cheap line insert/delete.
+    /// For same-line edits, prefer `set_line_text` (the damage-region
+    /// increment, Track A of this spike's deepening pass).
     pub fn set_text(&mut self, text: &str) {
         self.buffer.set_text(
             &mut self.font_system,
@@ -62,6 +64,57 @@ impl TextState {
             Shaping::Advanced,
         );
         self.buffer.shape_until_scroll(&mut self.font_system);
+    }
+
+    /// Real damage-region increment: replaces only the ONE line whose text
+    /// changed, via `BufferLine::set_text` -- a public cosmic-text API
+    /// (confirmed by reading cosmic-text 0.10.0's source, not assumed) that
+    /// invalidates only that line's cached shape/layout, leaving every other
+    /// line's already-computed shape/layout untouched. `shape_until_scroll`
+    /// then re-shapes only lines whose cache was invalidated, skipping the
+    /// rest.
+    ///
+    /// This fixes the CPU-shaping half of the full-reshape-on-every-edit
+    /// shortcut named in the exit report -- it does NOT fix the GPU-upload
+    /// half: `glyphon::TextRenderer::prepare()` still walks every visible
+    /// line's `layout_runs()` and re-uploads its glyphs on every call,
+    /// regardless of which lines changed, with no scoped/partial API to
+    /// avoid that. See the exit report for the real, measured effect of
+    /// this change (and why the <5ms target is still not expected to be
+    /// met by this alone).
+    ///
+    /// Only valid for edits that don't change the document's line count --
+    /// callers must route structural edits (newline inserted/removed)
+    /// through `set_text` instead (see `EditEffect::Structural`). Callers
+    /// must also check `line_i < self.line_count()` first (see that
+    /// method's doc comment for why) -- an out-of-range `line_i` here is
+    /// silently ignored rather than panicking, since this increment treats
+    /// "fell outside what's known to be safe" as "do nothing, let the
+    /// caller's fallback handle it" rather than a hard error.
+    pub fn set_line_text(&mut self, line_i: usize, text: &str) {
+        if let Some(line) = self.buffer.lines.get_mut(line_i) {
+            line.set_text(text, AttrsList::new(Attrs::new().family(Family::Monospace)));
+        }
+        self.buffer.shape_until_scroll(&mut self.font_system);
+    }
+
+    /// Number of lines cosmic-text's `Buffer` currently knows about.
+    ///
+    /// A real bug this increment's own verification found: `Document`
+    /// (ropey) and cosmic-text disagree about line counts on a document
+    /// ending in "\n" (see `cursor_pixel_pos`'s doc comment for the same
+    /// mismatch's cursor-rendering half). Concretely: right after a newline
+    /// is inserted, ropey immediately considers the cursor to be on a new,
+    /// real line -- but cosmic-text's `buffer.lines` isn't extended until
+    /// the *next* full `set_text()` rebuild processes that content. If a
+    /// same-line edit's `EditEffect::Line(line_i)` names a `line_i` that
+    /// hasn't been created in `buffer.lines` yet, calling `set_line_text`
+    /// directly silently drops the edit (`get_mut` returns `None`) --
+    /// found by actually typing across a line boundary and watching a
+    /// character vanish, not by inspection. Callers must check
+    /// `line_i < line_count()` and fall back to `set_text` otherwise.
+    pub fn line_count(&self) -> usize {
+        self.buffer.lines.len()
     }
 
     pub fn resize(&mut self, width: f32, height: f32) {
