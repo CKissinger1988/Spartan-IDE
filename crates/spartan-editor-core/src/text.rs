@@ -2,6 +2,7 @@ use glyphon::{
     Attrs, AttrsList, Buffer, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
     TextArea, TextAtlas, TextBounds, TextRenderer,
 };
+use spartan_editor_core::highlight::HighlightSpan;
 
 /// Owns everything glyphon/cosmic-text needs to shape and rasterize real
 /// text onto the GPU atlas each frame. Promoted from
@@ -76,6 +77,41 @@ impl TextState {
             Attrs::new().family(Family::Monospace),
             Shaping::Advanced,
         );
+        self.buffer.shape_until_scroll(&mut self.font_system);
+    }
+
+    /// Same as `set_text`, but colors each byte range in `spans`
+    /// differently via `Buffer::set_rich_text` -- the real cosmic-text API
+    /// for rendering more than one color within a buffer, confirmed
+    /// against the actual installed `cosmic-text-0.10.0` source before
+    /// writing this (§75.11). Bytes outside every span keep the plain
+    /// monospace `Attrs` (no explicit color, so `TextArea::default_color`
+    /// applies at render time). `spans` must be sorted by `start_byte` and
+    /// non-overlapping -- `highlight::Highlighter::highlight()`'s output
+    /// already satisfies this (it walks the source in byte order), so
+    /// callers passing that straight through are safe; this method does
+    /// not re-sort or validate, since re-validating output from the one
+    /// real producer of `HighlightSpan`s on every reshape would be pure
+    /// overhead.
+    pub fn set_text_highlighted(&mut self, text: &str, spans: &[HighlightSpan]) {
+        let default_attrs = Attrs::new().family(Family::Monospace);
+        let mut rich_spans: Vec<(&str, Attrs)> = Vec::new();
+        let mut cursor = 0usize;
+        for span in spans {
+            if span.start_byte > cursor {
+                rich_spans.push((&text[cursor..span.start_byte], default_attrs));
+            }
+            rich_spans.push((
+                &text[span.start_byte..span.end_byte],
+                default_attrs.color(span.color),
+            ));
+            cursor = span.end_byte;
+        }
+        if cursor < text.len() {
+            rich_spans.push((&text[cursor..], default_attrs));
+        }
+        self.buffer
+            .set_rich_text(&mut self.font_system, rich_spans, Shaping::Advanced);
         self.buffer.shape_until_scroll(&mut self.font_system);
     }
 

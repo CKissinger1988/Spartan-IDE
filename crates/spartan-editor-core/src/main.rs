@@ -6,7 +6,7 @@ mod latency;
 mod text;
 
 use spartan_editor_core::viewport::{self, Viewport};
-use spartan_editor_core::{build, dap_session, editor_view, language, lsp, lsp_session};
+use spartan_editor_core::{build, dap_session, editor_view, highlight, language, lsp, lsp_session};
 
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc};
@@ -43,13 +43,27 @@ fn strip_line_ending(s: &str) -> &str {
 /// (up to 50,000 in the benchmark fixture). This is the operation that
 /// replaces `render-spike`'s `text_state.set_text(&editor.text())` (which
 /// always passed the *entire* document) at every call site.
+///
+/// `highlighter`, when present, runs a real tree-sitter parse + highlight
+/// pass over the windowed text before it's shaped (§75.11) -- deliberately
+/// windowed, not whole-document, since `tree_sitter_highlight::Highlighter`'s
+/// public API has no cheap way to restrict itself to a sub-range (see
+/// `highlight.rs`'s doc comment for the real, verified finding that forced
+/// this scope).
 fn reshape_window(
     text_state: &mut text::TextState,
     editor: &editor_view::EditorView,
     viewport: &Viewport,
+    highlighter: Option<&mut highlight::Highlighter>,
 ) {
     let windowed = viewport::windowed_text(&editor.document, viewport);
-    text_state.set_text(&windowed);
+    match highlighter {
+        Some(hl) => {
+            let spans = hl.highlight(&windowed);
+            text_state.set_text_highlighted(&windowed, &spans);
+        }
+        None => text_state.set_text(&windowed),
+    }
 }
 
 /// Routes a completed edit to the cheapest correct `TextState` update,
@@ -60,37 +74,45 @@ fn reshape_window(
 /// document); one inside the viewport is translated to a window-local index
 /// first. Structural edits and any edge case cosmic-text's windowed buffer
 /// doesn't yet know about fall back to a full (but cheap, windowed) reshape.
+///
+/// A file with an active `highlighter` always takes that full windowed
+/// reshape path, even for an in-window same-line edit -- a single edited
+/// line can't be correctly re-highlighted in isolation (is this token
+/// inside a string that started on a previous line within the window?).
+/// This is a real, measured latency trade-off (§75.11), not a cost-free
+/// addition.
 fn apply_edit_effect(
     text_state: &mut text::TextState,
     editor: &editor_view::EditorView,
     viewport: &Viewport,
     effect: editor_view::EditEffect,
+    highlighter: Option<&mut highlight::Highlighter>,
 ) -> bool {
     match effect {
         editor_view::EditEffect::Line(doc_line_i) => {
             let doc_len_lines = editor.document.len_lines();
             match viewport::to_local_line(doc_line_i, viewport, doc_len_lines) {
                 None => false, // off-screen: genuinely nothing to redraw
-                Some(local_i) if local_i < text_state.line_count() => {
+                Some(local_i) if highlighter.is_none() && local_i < text_state.line_count() => {
                     match editor.document.line(doc_line_i) {
                         Ok(line_text) => {
                             text_state.set_line_text(local_i, strip_line_ending(&line_text));
                             true
                         }
                         Err(_) => {
-                            reshape_window(text_state, editor, viewport);
+                            reshape_window(text_state, editor, viewport, highlighter);
                             true
                         }
                     }
                 }
                 Some(_) => {
-                    reshape_window(text_state, editor, viewport);
+                    reshape_window(text_state, editor, viewport, highlighter);
                     true
                 }
             }
         }
         editor_view::EditEffect::Structural => {
-            reshape_window(text_state, editor, viewport);
+            reshape_window(text_state, editor, viewport, highlighter);
             true
         }
         editor_view::EditEffect::None => false,
@@ -161,6 +183,11 @@ fn main() {
     // Cargo project is discoverable, so F5 can run a real `cargo build`
     // first instead of requiring a pre-built binary.
     let mut dap_build_info: Option<(spartan_languages::CommandSpec, PathBuf, PathBuf)> = None;
+    // Real tree-sitter syntax highlighting (§75.11) -- only Rust is wired,
+    // matching every prior pass's own precedent (LSP started with
+    // rust-analyzer, DAP with lldb-dap). Any other grammar name is named
+    // and left unhighlighted rather than silently guessed at.
+    let mut highlighter: Option<highlight::Highlighter> = None;
     if !fixture_path.starts_with("--synthetic:") {
         match language::detect_language_for_file(Path::new(&fixture_path)) {
             Some(profile) => {
@@ -237,6 +264,16 @@ fn main() {
                             command.program
                         );
                     }
+                }
+                if profile.tree_sitter_grammar == "tree-sitter-rust" {
+                    println!("Syntax highlighting: real tree-sitter-rust (windowed, see §75.11)");
+                    highlighter = Some(highlight::Highlighter::rust());
+                } else {
+                    println!(
+                        "No real tree-sitter wiring for grammar {:?} yet -- only tree-sitter-rust \
+                         is wired (§75.11)",
+                        profile.tree_sitter_grammar
+                    );
                 }
             }
             None => println!("No language profile detected for {fixture_path}"),
@@ -316,7 +353,7 @@ fn main() {
     let t_text_state = Instant::now();
     // The key difference from render-spike: seeded with only the visible
     // window's text, not the whole document.
-    reshape_window(&mut text_state, &editor, &viewport);
+    reshape_window(&mut text_state, &editor, &viewport, highlighter.as_mut());
     let t_reshape = Instant::now();
 
     let cursor_renderer = cursor::CursorRenderer::new(&gpu_state.device, gpu_state.config.format);
@@ -404,7 +441,12 @@ fn main() {
                                 let (cursor_line, _) = editor.cursor_line_col();
                                 let doc_len_lines = editor.document.len_lines();
                                 viewport.ensure_visible(cursor_line, doc_len_lines);
-                                reshape_window(&mut text_state, &editor, &viewport);
+                                reshape_window(
+                                    &mut text_state,
+                                    &editor,
+                                    &viewport,
+                                    highlighter.as_mut(),
+                                );
                                 window.request_redraw();
                             }
                         }
@@ -420,7 +462,12 @@ fn main() {
                                 let page = viewport.visible_lines as isize;
                                 let doc_len_lines = editor.document.len_lines();
                                 if viewport.scroll_by(page, doc_len_lines) {
-                                    reshape_window(&mut text_state, &editor, &viewport);
+                                    reshape_window(
+                                        &mut text_state,
+                                        &editor,
+                                        &viewport,
+                                        highlighter.as_mut(),
+                                    );
                                     window.request_redraw();
                                 }
                             }
@@ -428,7 +475,12 @@ fn main() {
                                 let page = -(viewport.visible_lines as isize);
                                 let doc_len_lines = editor.document.len_lines();
                                 if viewport.scroll_by(page, doc_len_lines) {
-                                    reshape_window(&mut text_state, &editor, &viewport);
+                                    reshape_window(
+                                        &mut text_state,
+                                        &editor,
+                                        &viewport,
+                                        highlighter.as_mut(),
+                                    );
                                     window.request_redraw();
                                 }
                             }
@@ -520,9 +572,20 @@ fn main() {
                                         // scrolled, so one full reshape against the new window
                                         // covers both the scroll and the edit's own visual
                                         // change, rather than reshaping twice.
-                                        reshape_window(&mut text_state, &editor, &viewport);
+                                        reshape_window(
+                                            &mut text_state,
+                                            &editor,
+                                            &viewport,
+                                            highlighter.as_mut(),
+                                        );
                                     } else {
-                                        apply_edit_effect(&mut text_state, &editor, &viewport, effect);
+                                        apply_edit_effect(
+                                            &mut text_state,
+                                            &editor,
+                                            &viewport,
+                                            effect,
+                                            highlighter.as_mut(),
+                                        );
                                     }
                                     window.request_redraw();
                                 }
@@ -788,7 +851,8 @@ fn main() {
                         let effect = editor.insert_random(&mut bench_rng, "x");
                         if effect != editor_view::EditEffect::None {
                             edit_latency.note_key_event();
-                            let redrew = apply_edit_effect(&mut text_state, &editor, &viewport, effect);
+                            let redrew =
+                                apply_edit_effect(&mut text_state, &editor, &viewport, effect, None);
                             if redrew {
                                 in_window_edits += 1;
                             } else {
@@ -806,7 +870,7 @@ fn main() {
                         let effect = editor.insert_at_cursor("x");
                         if effect != editor_view::EditEffect::None {
                             cursor_latency.note_key_event();
-                            apply_edit_effect(&mut text_state, &editor, &viewport, effect);
+                            apply_edit_effect(&mut text_state, &editor, &viewport, effect, None);
                         }
                         cursor_bench_remaining -= 1;
                     } else if scroll_bench_remaining > 0 {
@@ -815,7 +879,7 @@ fn main() {
                         let page = direction * viewport.visible_lines as isize;
                         scroll_latency.note_key_event();
                         if viewport.scroll_by(page, doc_len_lines) {
-                            reshape_window(&mut text_state, &editor, &viewport);
+                            reshape_window(&mut text_state, &editor, &viewport, None);
                         }
                         scroll_bench_remaining -= 1;
                     }

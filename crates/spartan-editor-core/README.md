@@ -9,7 +9,8 @@ from one real file open. See `docs/architecture-spec.md` §75.5 (buffer +
 renderer + language registry, viewport virtualization), §75.6 (real LSP
 wiring), §75.7 (auto-scroll/resize), §75.8 (real DAP wiring), §75.9
 (cold-open investigation), and §75.10 (real DAP build-system integration)
-for the full write-ups this README summarizes.
+§75.11 (real tree-sitter syntax highlighting) for the full write-ups this
+README summarizes.
 
 ## What this is
 
@@ -34,7 +35,13 @@ for the full write-ups this README summarizes.
   real rendering. Also `find_project_root()`, which walks up a file's
   ancestor directories looking for the detected profile's own
   `marker_files` (e.g. `Cargo.toml`) — the project root a real LSP server
-  needs. Tree-sitter is **not** wired up; LSP and DAP now are (§75.6, §75.8).
+  needs.
+- `src/highlight.rs` — the real tree-sitter syntax highlighting added in
+  §75.11: `Highlighter::rust()` builds a real `tree-sitter-rust`
+  `HighlightConfiguration`; `Highlighter::highlight()` runs a real parse +
+  highlight-query pass over the *windowed* text (never the whole document
+  — see §75.11 for why) and returns byte-ranged, colored spans. Only Rust
+  is wired; any other grammar is named and left unhighlighted.
 - `src/lsp.rs` — `LspClient`/`DidChangeDebouncer`, promoted verbatim from
   `spikes/lsp-spike` (already proven against real `rust-analyzer` and
   `pyright-langserver`).
@@ -204,6 +211,59 @@ gracefully with the same honest error as §75.8, since `lldb-dap` still
 isn't installed here. The 50k-line benchmark was re-run and shows no
 regression.
 
+## Real tree-sitter syntax highlighting (§75.11)
+
+Rust only, and deliberately windowed rather than whole-document: reading
+`tree_sitter_highlight::Highlighter::highlight()`'s real installed source
+showed its public API always scans its entire input (hardcoded
+`0..usize::MAX`), with no cheap way to restrict to a sub-range — so, like
+every other subsystem in this crate, it only ever runs against the current
+~34-60 line visible window. A real, named consequence: a multi-line
+construct (a block comment, a raw string) starting above the window will
+be misinterpreted within it. The per-line fast path is bypassed entirely
+for highlighted files (a single line can't be correctly re-highlighted in
+isolation), routing every edit through a full windowed re-parse instead —
+measured, not assumed, to cost real latency (see below).
+
+A real bug was caught by the live screenshot itself, not by inspection:
+numeric literals first rendered uncolored, because tree-sitter-rust's own
+bundled query captures them as `@constant.builtin`, never `@number` —
+found by reading the actual `.scm` file, fixed by renaming the configured
+name to `"constant"` (which matches both `@constant` and `@constant.builtin`
+under `tree_sitter_highlight`'s real dot-segment matching rule), and locked
+in with a new headless test. After the fix, a real screenshot of a
+six-construct Rust fixture confirmed all six themed categories render in
+distinct colors: comments, keywords, types, functions, strings, and
+constants/numbers.
+
+**Real, honestly-measured cost of bypassing the fast path**: cursor-adjacent
+typing latency on the same 899-line real file (this crate's own `main.rs`),
+compared with vs. without highlighting (the "without" run used identical
+content saved under an unrecognized extension, so no `Highlighter` attaches
+and the fast path stays active) —
+
+| | p50 | p99 | max |
+|---|---|---|---|
+| Highlighted (2 runs) | 5.2-5.9ms | 28.7-34.3ms | 67-102ms |
+| Unhighlighted, same content (2 runs) | 2.8-3.1ms | 5.8ms | 15-17ms |
+
+A real ~1.9x p50 / ~5x p99 cost, reported as measured rather than assumed
+acceptable. The 50k-line `--synthetic:` benchmark (which never constructs a
+`Highlighter`) was re-run and, after an A/B against the prior committed
+binary confirmed the day's own ~7-9ms p99 baseline had simply drifted from
+an earlier session's 3.5-3.9ms due to environmental variance (not this
+pass's changes — the old binary showed the identical drift), shows no
+regression attributable to this pass.
+
+A second, real bug was found in the *benchmark harness* itself while
+measuring the above: passing a literal `0` for a scripted phase (intending
+to skip it) makes that phase report "complete" and exit immediately, since
+`0 >= 0` is trivially true on the very first frame — silently cutting off
+any phase ordered after it. Skipping a phase requires omitting its argument
+entirely (`None`), not passing `0`. Not fixed (it's a pre-existing quirk in
+`main.rs`'s own scripted-benchmark harness, not shipped product code), but
+named here so a future benchmark run isn't silently truncated by it.
+
 ## What is explicitly not done here
 
 - §39.1's <100ms cold-open target — still not met (467-715ms after §75.9's
@@ -217,10 +277,9 @@ regression.
 - Auto-scroll snaps the cursor to the window's very edge, with no
   surrounding context margin (a real editor convention this pass didn't
   attempt). No horizontal scrolling/wrapping for long lines.
-- No SDF glyph atlas, no layered compositing, no tree-sitter, no Leo, no
-  UI chrome (scrollbar, tabs, panels, a diagnostics/problems panel, a
-  breakpoint gutter, a variables panel). Diagnostics/stops are printed to
-  stdout only.
+- No SDF glyph atlas, no layered compositing, no Leo, no UI chrome
+  (scrollbar, tabs, panels, a diagnostics/problems panel, a breakpoint
+  gutter, a variables panel). Diagnostics/stops are printed to stdout only.
 - No hover or completion wiring — the promoted `LspClient` supports both,
   but there's no UI trigger (hover-position detection, a completion popup)
   to hang them off yet.
@@ -234,6 +293,12 @@ regression.
 - Build-system integration only covers Cargo (§75.10) — a language whose
   `build_systems` names something else (`npm`, `poetry`, `gradle`, ...)
   still requires an explicit `--debug-binary:<path>`.
+- Syntax highlighting (§75.11) only covers Rust, only six capture names
+  have colors, only the visible window is parsed (no context above/below
+  it, and no incremental re-parse — every reshape re-parses the whole
+  window from scratch), and bypassing the per-line fast path for
+  highlighted files has a real, measured latency cost (~1.9x p50 / ~5x p99
+  on a 899-line file) that's unaddressed, not just unmeasured.
 - No incremental-build awareness beyond what `cargo build` itself already
   does, and no build cancellation if `F5` is pressed again mid-build (the
   in-progress build simply finishes; the second press is rejected with a

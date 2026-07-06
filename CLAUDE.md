@@ -186,6 +186,29 @@ first — it's the parity reference until each row there is actually reimplement
   with the same honest error as §75.8, since `lldb-dap` still isn't installed here. The 50k-line
   benchmark was re-run and shows no regression. Only Cargo is wired; other build systems still
   need an explicit `--debug-binary:<path>`.
+- **Real, working code — real tree-sitter syntax highlighting in `crates/spartan-editor-core`
+  (§75.11)**: closes the standing, named "tree-sitter stays unwired" gap from §75.5-§75.10, for
+  Rust first. Deliberately windowed, not whole-document — reading `tree_sitter_highlight::
+  Highlighter::highlight()`'s real installed source showed its public API always scans its entire
+  input with no cheap sub-range option, so `src/highlight.rs` only ever parses the same ~34-60
+  line visible slice everything else in this crate uses; a real, named consequence is that a
+  multi-line construct starting above the window is misinterpreted within it. The per-line fast
+  path is bypassed entirely for highlighted files (a line can't be correctly re-highlighted in
+  isolation), routing every edit through a full windowed re-parse instead. A real bug was caught
+  by the live screenshot itself: numeric literals first rendered uncolored because tree-sitter-
+  rust's own bundled query captures them as `@constant.builtin`, never `@number` — found by
+  reading the real `.scm` file, fixed by renaming the configured highlight name to `"constant"`,
+  locked in with a new test. Real, honestly-measured cost of the fast-path bypass on the same
+  899-line real file, with vs. without highlighting (same content, unrecognized extension so no
+  `Highlighter` attaches): highlighted p50 5.2-5.9ms / p99 28.7-34.3ms vs. unhighlighted p50
+  2.8-3.1ms / p99 5.8ms — a real ~1.9x/~5x cost, reported plainly. The 50k-line benchmark was
+  re-run and, after an A/B against the prior committed binary showed the day's own noise baseline
+  had simply drifted (matching §75.9's own methodology for telling drift from a real regression),
+  shows no regression attributable to this pass. A second real bug was found in the benchmark
+  harness itself (not shipped product code): passing literal `0` for a scripted phase meant to be
+  skipped makes it report complete and exit immediately instead, silently cutting off any
+  later-ordered phase — skipping a phase requires omitting its argument entirely, not passing `0`.
+  Only Rust is wired, only six capture names are themed, and no incremental re-parsing exists yet.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -233,7 +256,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 99 tests: 6 spikes + 3 real crates (spartan-buffer,
+cargo test --workspace --release   # 103 tests: 6 spikes + 3 real crates (spartan-buffer,
                                     # spartan-languages, spartan-editor-core)
 # dap-spike and spartan-editor-core's own dap_integration.rs need `lldb-dap` (or `lldb-dap-18`) +
 # `rustc`; lsp-spike and spartan-editor-core's own lsp_integration.rs need `rust-analyzer` +
