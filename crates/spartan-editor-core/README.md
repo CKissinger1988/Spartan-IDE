@@ -7,8 +7,9 @@ text-rendering pipeline, `spartan-languages` (§20.1, the real language
 registry), and now real live LSP and DAP sessions are combined and driven
 from one real file open. See `docs/architecture-spec.md` §75.5 (buffer +
 renderer + language registry, viewport virtualization), §75.6 (real LSP
-wiring), §75.7 (auto-scroll/resize), §75.8 (real DAP wiring), and §75.9
-(cold-open investigation) for the full write-ups this README summarizes.
+wiring), §75.7 (auto-scroll/resize), §75.8 (real DAP wiring), §75.9
+(cold-open investigation), and §75.10 (real DAP build-system integration)
+for the full write-ups this README summarizes.
 
 ## What this is
 
@@ -183,6 +184,26 @@ which the test worked around with a generated wrapper script, but
 `main.rs`'s registry-driven dispatch has no such step. The 50k-line
 benchmark was re-run and shows no regression.
 
+## Real DAP build-system integration (§75.10)
+
+Closes §75.8's named gap for Cargo: `src/build.rs`'s `build_debug_binary()`
+runs a real `cargo build --message-format=json` (its exact JSON shape
+confirmed by running a real build, success and failure, before writing any
+parsing code) and returns the real resulting binary path or real rendered
+compiler diagnostics. `F5` now runs this on its own thread (never blocking
+the render loop) whenever no explicit `--debug-binary:` was given but a
+real Cargo project is discoverable. `DapSession::is_finished()` also fixes
+a small real gap: `F5` after a session ended used to silently fail to
+`Continue` a dead session; now it correctly starts fresh. Two new tests
+run a real `cargo build` against generated fixtures (success reports a
+real, existing executable path; a real type error reports the real
+`E0308` diagnostic). Live, through the actual binary: `F9`/`F5` triggered
+a real `cargo build` that succeeded, found the real executable (confirmed
+to exist on disk), and attempted a real DAP launch with it — failing
+gracefully with the same honest error as §75.8, since `lldb-dap` still
+isn't installed here. The 50k-line benchmark was re-run and shows no
+regression.
+
 ## What is explicitly not done here
 
 - §39.1's <100ms cold-open target — still not met (467-715ms after §75.9's
@@ -210,9 +231,13 @@ benchmark was re-run and shows no regression.
   delay window close if triggered mid-request — mitigated with a printed
   status line, not eliminated.
 - No crashed/hung language server detection or restart.
-- No build-system integration for DAP — `--debug-binary:<path>` must
-  already exist; this pass deliberately doesn't run `cargo build` or
-  similar.
+- Build-system integration only covers Cargo (§75.10) — a language whose
+  `build_systems` names something else (`npm`, `poetry`, `gradle`, ...)
+  still requires an explicit `--debug-binary:<path>`.
+- No incremental-build awareness beyond what `cargo build` itself already
+  does, and no build cancellation if `F5` is pressed again mid-build (the
+  in-progress build simply finishes; the second press is rejected with a
+  printed message, not queued or merged).
 - DAP breakpoints are plain line numbers, not rope-anchored — the
   §39.2-sanctioned v1 fallback, not an oversight, but a real limitation:
   an edit that shifts lines above a breakpoint will silently point it at

@@ -238,7 +238,7 @@ between:
   and found. Run it yourself:
 
   ```bash
-  cargo test --workspace --release   # 97 tests: 6 spikes + 3 real crates below
+  cargo test --workspace --release   # 99 tests: 6 spikes + 3 real crates below
   cargo clippy --workspace --all-targets --release   # clean
   cargo fmt --check                  # clean
   cargo build --release --workspace

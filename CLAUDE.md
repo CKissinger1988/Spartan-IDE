@@ -170,6 +170,22 @@ first — it's the parity reference until each row there is actually reimplement
   assumed either way, and turned out to be transient system noise from rapid rebuild-and-run
   cycles, not a real code effect. §39.1's <100ms cold-open target remains far from met
   (~4.7-7.2x over) — `GpuState::new()` is now the clear, dominant, unaddressed remaining cost.
+- **Real, working code — real DAP build-system integration in `crates/spartan-editor-core`
+  (§75.10)**: closes §75.8's named gap for Cargo. `src/build.rs`'s `build_debug_binary()` runs a
+  real `cargo build --message-format=json` (its exact JSON shape confirmed by running a real
+  build, both success and a real compile error, before writing any parsing code) and returns the
+  real resulting binary path or real rendered diagnostics. `F5` now runs this on its own thread
+  whenever no explicit `--debug-binary:` was given but a real Cargo project is discoverable, never
+  blocking the render loop. A small bundled fix: `DapSession::is_finished()` lets `F5` tell a
+  genuinely-over session apart from a live one, so pressing it again after a session ends
+  correctly starts fresh instead of silently failing to `Continue` a dead session. Two new tests
+  run a real `cargo build` against generated fixtures (real successful build reports a real,
+  existing executable path; a real type error reports the real `E0308` diagnostic). Live, through
+  the actual binary: `F9`/`F5` triggered a real `cargo build` that succeeded, found the real
+  executable (confirmed on disk), and attempted a real DAP launch with it — failing gracefully
+  with the same honest error as §75.8, since `lldb-dap` still isn't installed here. The 50k-line
+  benchmark was re-run and shows no regression. Only Cargo is wired; other build systems still
+  need an explicit `--debug-binary:<path>`.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -217,7 +233,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 97 tests: 6 spikes + 3 real crates (spartan-buffer,
+cargo test --workspace --release   # 99 tests: 6 spikes + 3 real crates (spartan-buffer,
                                     # spartan-languages, spartan-editor-core)
 # dap-spike and spartan-editor-core's own dap_integration.rs need `lldb-dap` (or `lldb-dap-18`) +
 # `rustc`; lsp-spike and spartan-editor-core's own lsp_integration.rs need `rust-analyzer` +

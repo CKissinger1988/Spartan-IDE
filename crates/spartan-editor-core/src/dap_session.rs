@@ -150,6 +150,16 @@ impl DapSession {
         self.updates_rx.try_iter().collect()
     }
 
+    /// True once the background thread has exited -- the debuggee ran to a
+    /// real exit, the launch/breakpoint sequence failed, or the command
+    /// channel was disconnected. Callers (see `main.rs`'s `F5` handler)
+    /// use this to tell a genuinely-over session apart from a live one,
+    /// so a new `F5` press rebuilds/relaunches instead of silently trying
+    /// to `Continue` a session nothing is listening on anymore.
+    pub fn is_finished(&self) -> bool {
+        self.thread.is_finished()
+    }
+
     /// Dropping the sender closes the channel, which makes the background
     /// thread's blocking `cmd_rx.recv()` return `Err` and exit its loop
     /// naturally, at which point it calls `DapClient::shutdown()` itself.

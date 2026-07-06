@@ -6,10 +6,10 @@ mod latency;
 mod text;
 
 use spartan_editor_core::viewport::{self, Viewport};
-use spartan_editor_core::{dap_session, editor_view, language, lsp, lsp_session};
+use spartan_editor_core::{build, dap_session, editor_view, language, lsp, lsp_session};
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 use winit::event::{ElementState, Event, KeyEvent, WindowEvent};
@@ -149,10 +149,18 @@ fn main() {
     // (§75.6) and DAP (§75.8) are both wired for real below.
     let mut lsp_session: Option<lsp_session::LspSession> = None;
     // (adapter command, pre-built binary, cwd, source path) -- captured here,
-    // consumed on the first F5 press below, not launched immediately (unlike
-    // LSP, a debug session should only start when the user asks for one).
+    // used on every F5 press below (cloned, not consumed, so the same
+    // pre-built binary can be relaunched repeatedly), not launched
+    // immediately (unlike LSP, a debug session should only start when the
+    // user asks for one).
     let mut dap_launch_info: Option<(spartan_languages::CommandSpec, PathBuf, PathBuf, PathBuf)> =
         None;
+    // (adapter command, project root, source path) -- the real build-system
+    // integration §75.8 named as out of scope for that pass (§75.10):
+    // captured only when no explicit `--debug-binary:` was given but a real
+    // Cargo project is discoverable, so F5 can run a real `cargo build`
+    // first instead of requiring a pre-built binary.
+    let mut dap_build_info: Option<(spartan_languages::CommandSpec, PathBuf, PathBuf)> = None;
     if !fixture_path.starts_with("--synthetic:") {
         match language::detect_language_for_file(Path::new(&fixture_path)) {
             Some(profile) => {
@@ -207,10 +215,25 @@ fn main() {
                             project_root.clone(),
                             file_path.to_path_buf(),
                         ));
+                    } else if profile.build_systems.iter().any(|s| s == "cargo")
+                        && project_root.join("Cargo.toml").is_file()
+                    {
+                        println!(
+                            "DAP ready: {} via a real `cargo build` (project root: {}) -- F9 \
+                             toggles a breakpoint at the cursor, F5 builds and launches",
+                            command.program,
+                            project_root.display()
+                        );
+                        dap_build_info = Some((
+                            command.clone(),
+                            project_root.clone(),
+                            file_path.to_path_buf(),
+                        ));
                     } else {
                         println!(
-                            "DAP available for {} but no --debug-binary:<path> was given -- \
-                             pass one to enable F5/F9/F10/F11 debugging",
+                            "DAP available for {} but no --debug-binary:<path> was given and no \
+                             cargo project was detected -- pass one to enable F5/F9/F10/F11 \
+                             debugging",
                             command.program
                         );
                     }
@@ -313,6 +336,19 @@ fn main() {
     // §75.8). No live changes once a session is running, a named limitation.
     let mut breakpoints: Vec<i64> = Vec::new();
     let mut dap_session: Option<dap_session::DapSession> = None;
+    // A real `cargo build` running on its own thread (§75.10) -- the
+    // receiver half of a one-shot channel, polled non-blockingly each
+    // frame, matching the `LspSession`/`DapSession` "never block the
+    // render thread" pattern even though this itself isn't an ongoing
+    // session.
+    let mut pending_build: Option<
+        mpsc::Receiver<(
+            spartan_languages::CommandSpec,
+            PathBuf,
+            PathBuf,
+            build::BuildResult,
+        )>,
+    > = None;
 
     let mut edit_latency = latency::LatencyTracker::new(2000);
     let mut cursor_latency = latency::LatencyTracker::new(2000);
@@ -410,10 +446,21 @@ fn main() {
                                 }
                             }
                             Key::Named(NamedKey::F5) => {
+                                // A session whose background thread has already exited
+                                // (the debuggee ran to completion, or the launch sequence
+                                // failed) is genuinely over -- treat it as gone so this
+                                // press rebuilds/relaunches instead of silently trying to
+                                // `Continue` a session nothing is listening on anymore.
+                                if dap_session.as_ref().is_some_and(|s| s.is_finished()) {
+                                    dap_session = None;
+                                }
+
                                 if let Some(session) = &dap_session {
                                     session.send_command(dap_session::DapCommand::Continue);
+                                } else if pending_build.is_some() {
+                                    println!("A build is already in progress -- please wait");
                                 } else if let Some((command, binary_path, cwd, source_path)) =
-                                    dap_launch_info.take()
+                                    dap_launch_info.clone()
                                 {
                                     println!(
                                         "Launching debug session: {} on {}",
@@ -427,10 +474,26 @@ fn main() {
                                         &source_path,
                                         &breakpoints,
                                     ));
+                                } else if let Some((command, project_root, source_path)) =
+                                    dap_build_info.clone()
+                                {
+                                    println!(
+                                        "Building {} with a real `cargo build`...",
+                                        project_root.display()
+                                    );
+                                    let (build_tx, build_rx) = mpsc::channel();
+                                    let build_project_root = project_root.clone();
+                                    thread::spawn(move || {
+                                        let result = build::build_debug_binary(&build_project_root);
+                                        let _ =
+                                            build_tx.send((command, project_root, source_path, result));
+                                    });
+                                    pending_build = Some(build_rx);
                                 } else {
                                     println!(
                                         "No debug session available (no --debug-binary:<path> \
-                                         given, or the detected language has no dap_command)"
+                                         given and no cargo project detected, or the detected \
+                                         language has no dap_command)"
                                     );
                                 }
                             }
@@ -620,6 +683,41 @@ fn main() {
                                         }
                                         dap_session::DapUpdate::Error(e) => {
                                             println!("DAP error: {e}")
+                                        }
+                                    }
+                                }
+                            }
+
+                            // A real `cargo build` triggered by F5 (§75.10) -- non-blocking
+                            // poll, matching the LspSession/DapSession update pattern, even
+                            // though this itself is a one-shot rather than an ongoing session.
+                            if let Some(rx) = &pending_build {
+                                if let Ok((command, cwd, source_path, result)) = rx.try_recv() {
+                                    pending_build = None;
+                                    match result {
+                                        build::BuildResult::Success(binary_path) => {
+                                            println!(
+                                                "Build succeeded: {}",
+                                                binary_path.display()
+                                            );
+                                            println!(
+                                                "Launching debug session: {} on {}",
+                                                command.program,
+                                                binary_path.display()
+                                            );
+                                            dap_session = Some(dap_session::DapSession::launch(
+                                                &command,
+                                                &binary_path,
+                                                &cwd,
+                                                &source_path,
+                                                &breakpoints,
+                                            ));
+                                        }
+                                        build::BuildResult::Failure(diagnostics) => {
+                                            println!("Build failed:");
+                                            for d in diagnostics {
+                                                println!("{d}");
+                                            }
                                         }
                                     }
                                 }
