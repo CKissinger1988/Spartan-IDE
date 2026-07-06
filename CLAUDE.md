@@ -67,7 +67,9 @@ first — it's the parity reference until each row there is actually reimplement
   documented in §47.5–§47.7. `render-spike` drives a real `wgpu`/`winit`/`glyphon` pipeline
   against real GPU hardware — see the GPU-half update below and §47.9–§47.10. `ui-shell-spike`
   drives a real `wgpu` shell plus a real embedded `wry`/WebView2 control in the same window — see
-  the Spike 0.4 update below and §47.11. Not the actual product, just Tier 0 risk-gate spikes.
+  the Spike 0.4 update below and §47.11. `fallback-parser-spike` now also drives a real local
+  Ollama instance (`tests/real_ollama_fidelity.rs`, self-skips if Ollama isn't running) — see the
+  Spike 0.3 update below and §47.12. Not the actual product, just Tier 0 risk-gate spikes.
   Also `legacy/agent-deck-console/` — a real, previously-shipped Electron/Node app, kept as a
   parity reference (§55), not part of the new architecture's build.
 - **Real, working code — Tier 1 implementation begun (§75)**: `crates/spartan-buffer` (the real
@@ -110,15 +112,20 @@ first — it's the parity reference until each row there is actually reimplement
   WebView (fixed with a direct Win32 `SetFocus` call) — the latter a concrete instance of the
   exact "does this feel like one app" risk §39.4 exists to test. Don't assume either spike is
   closed just because both have now run — see their own READMEs for exactly what's still
-  unconfirmed. Spike 0.2 (both halves), spike 0.1's CPU/data-structure half, spike 0.1's GPU half
-  (partially), and now spike 0.4 (partially) are the spikes with real execution behind them;
-  spike 0.3's real-model fidelity test (§39.3) is still unexecuted — but not for the reason
-  previously recorded. A later recheck (§47.2's addendum) found the old network blocker (a 403
-  from egress policy fetching Ollama) is gone; a real HTTP check reached both `ollama.com` and
-  the actual Windows installer. The real blocker now is disk space — 6.5GB free on a 98%-full
-  disk, far short of what even one quantized 7B-class model needs. Don't assume this spike is
-  closer to unblocked than it is just because the network excuse went away. See §39 for what the
-  remaining spikes need, §47.5–§47.6 for 0.2, §47.9–§47.10 for 0.1's GPU half, §47.11 for 0.4.
+  unconfirmed. **Spike 0.3 has also now gotten its first real local-model data** (§47.12): Ollama
+  turned out to already be genuinely installed and running; a real `llama3.2:1b` model (1.2B
+  params — smaller than §39.3's actual "~7B/13B class" targets, since disk space, ~11-12GB free,
+  couldn't safely fit a 13B model) was pulled and driven against the real, already-tested
+  `FallbackParser` (`spikes/fallback-parser-spike/tests/real_ollama_fidelity.rs`, self-skips if
+  Ollama/the model aren't present). The result is real but not flattering: only 2/3 real tool-call
+  attempts were even syntactically valid JSON, and **0/3 chose the semantically correct tool**
+  (wrong tool name spelling once, wrong tool entirely once) — a small, largely negative data point
+  at this model size, not a verdict on the 7B/13B class the spec actually targets. The parser
+  itself had no bugs surfaced: real invalid JSON was correctly caught and surfaced, never dropped.
+  Spike 0.2 (both halves), spike 0.1's CPU/data-structure half, spike 0.1's GPU half (partially),
+  spike 0.4 (partially), and now spike 0.3 (partially, and mostly a negative result at this model
+  size) are the spikes with real execution behind them. See §39 for what the remaining spikes
+  need, §47.5–§47.6 for 0.2, §47.9–§47.10 for 0.1's GPU half, §47.11 for 0.4, §47.12 for 0.3.
 
 ## Build & test
 
