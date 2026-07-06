@@ -238,7 +238,7 @@ between:
   and found. Run it yourself:
 
   ```bash
-  cargo test --workspace --release   # 45 tests: 4 spikes + 2 real crates below
+  cargo test --workspace --release   # 89 tests: 6 spikes + 3 real crates below
   cargo clippy --workspace --all-targets --release   # clean
   cargo fmt --check                  # clean
   cargo build --release --workspace
@@ -253,10 +253,19 @@ between:
   construction. `spartan-languages` is the real §20.1 `LanguageProfile` registry, seeded with
   exactly Tier 1's six launch languages (§35.4) and able to detect a genuinely polyglot project.
   15 and 10 tests respectively. Two real bugs were found only by running the tests, not by
-  inspection — see §75.2 for both. This is the start of Tier 1's core engine and language
-  registry, not the IDE — no GPU rendering, no LSP/DAP wiring, no UI (§75.3 is explicit about
-  what's still not done, and why: no GPU/display reachable in this environment, same finding as
-  every prior pass).
+  inspection — see §75.2 for both.
+
+- **Real, working code — [`crates/spartan-editor-core`](crates/spartan-editor-core) (§75.5)**:
+  the first crate combining `spartan-buffer`, a promoted-and-improved copy of `render-spike`'s
+  real GPU rendering, and `spartan-languages` in one real file open. Adds viewport
+  virtualization — cosmic-text's buffer now only ever sees the visible ~34-60 lines, never the
+  whole document — which drops cold-open at 50k lines from `render-spike`'s 897.7-1297.9ms to
+  575.5-617.5ms (still ~6x over the <100ms target, not closed) and gets realistic cursor-adjacent
+  edit p99 to 3.5-3.9ms, reliably under §39.1's 5ms target where `render-spike` wasn't. Scrolling
+  is a new, real, unaddressed cost (p99 19.4-29.2ms) never measured before. 14 headless tests plus
+  real screenshot/synthetic-input visual verification — see its own README and §75.5 for the full,
+  honest before/after numbers and what's still not built (no auto-scroll-to-cursor, no
+  tree-sitter, no real LSP/DAP spawning, no UI chrome).
 
 - **Reference-only interaction design**: [`prototypes/interface-prototype.jsx`](prototypes/interface-prototype.jsx)
   and [`prototypes/signature-features.jsx`](prototypes/signature-features.jsx) — standalone React
@@ -287,7 +296,8 @@ docs/architecture-spec.SNAPSHOT-2026-07-04-pre-implementation.md
                              Frozen copy of the spec taken before implementation began (§75.4)
 CLAUDE.md                   Index + behavioral contract for this repo
 spikes/                     Real, tested Tier 0 Rust spikes (see spikes/README.md)
-crates/                     Real Tier 1 product code (spartan-buffer, spartan-languages — §75)
+crates/                     Real Tier 1 product code (spartan-buffer, spartan-languages,
+                             spartan-editor-core — §75, §75.5)
 mobile/                     Spartan Mobile IDE — real Expo/React Native companion app (§69.6)
 prototypes/                 Reference-only React UI mockups
 legacy/agent-deck-console/  Prior product, preserved for feature-parity reference (§55)

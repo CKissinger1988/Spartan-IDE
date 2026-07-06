@@ -2959,6 +2959,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "spartan-editor-core"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "glyphon",
+ "pollster",
+ "rand 0.8.6",
+ "spartan-buffer",
+ "spartan-languages",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "spartan-languages"
 version = "0.1.0"
 dependencies = [

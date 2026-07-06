@@ -1,0 +1,16 @@
+[package]
+name = "spartan-editor-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+spartan-buffer = { path = "../spartan-buffer" }
+spartan-languages = { path = "../spartan-languages" }
+wgpu = "0.19"
+winit = "0.29"
+glyphon = "0.5"
+pollster = "0.3"
+bytemuck = { version = "1", features = ["derive"] }
+rand = "0.8"
+
+[dev-dependencies]

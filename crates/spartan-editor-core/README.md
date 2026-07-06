@@ -1,0 +1,99 @@
+# spartan-editor-core
+
+Real (non-spike) Tier 1 core-engine code — not a Tier 0 risk-gate experiment
+with a go/no-go verdict, and not the IDE itself. This crate is the first
+place `spartan-buffer` (§2.1, the real document/rope model), a real GPU
+text-rendering pipeline, and `spartan-languages` (§20.1, the real language
+registry) are combined and driven from one real file open. See
+`docs/architecture-spec.md` §75.5 for the full write-up this README
+summarizes.
+
+## What this is
+
+- `src/editor_view.rs` — owns a real `spartan_buffer::Document` plus the
+  cursor position, classifying every edit as `EditEffect::None` /
+  `Line(usize)` / `Structural` so the renderer knows whether a cheap
+  per-line reshape suffices or a full reshape is needed. Promoted from
+  `spikes/render-spike` (§47.9-§47.10) with one deliberate change: the
+  cursor starts at document position 0 (top of file), not end-of-file —
+  correct for opening a real file, where `render-spike`'s original choice
+  was just its own demo's convenience.
+- `src/viewport.rs` — the one genuinely new piece of engineering in this
+  crate: a `Viewport { scroll_line, visible_lines }` struct and
+  `windowed_text()`, which extracts only the currently-visible slice of the
+  document. This is what makes cosmic-text's `Buffer` see ~34-60 lines
+  regardless of whether the document is 3 lines or 50,000 — the literal
+  reading of §2.2's "only re-rasterize the visible viewport" requirement,
+  and the fix for the cold-open gap `render-spike`'s own exit report named
+  as untouched by its damage-region increment.
+- `src/language.rs` — `detect_language_for_file()`, wiring the real
+  `spartan_languages::LanguageRegistry` in for the first time alongside
+  real rendering. Tree-sitter and LSP/DAP themselves are **not** wired up
+  here — only the profile *lookup* is real; spawning `lsp_command`/
+  `dap_command` against the already-proven `lsp-spike`/`dap-spike` clients
+  is still a separate, later step.
+- `src/gpu.rs`, `src/text.rs`, `src/cursor.rs`, `src/cursor.wgsl`,
+  `src/latency.rs`, `src/input.rs`, `src/fixture.rs` — promoted from
+  `spikes/render-spike` essentially verbatim; already proven on this
+  project's real Intel UHD 620 / Vulkan / Windows-GNU setup.
+- `src/main.rs` — the real binary: opens a file (or `--synthetic:<lines>`
+  for the benchmark fixture), prints the detected language, opens a
+  wgpu/winit window seeded with only the initial viewport's text, and
+  wires keyboard input, PageUp/PageDown scrolling, and an optional
+  three-phase scripted latency benchmark together.
+
+## Real measured results (50,000-line synthetic fixture, same Intel UHD
+Graphics 620 / Vulkan / IntegratedGpu hardware `render-spike` used)
+
+| Metric | render-spike (post damage-region) | This crate (+ virtualization) |
+|---|---|---|
+| Cold-open | 897.7-1297.9ms | 575.5-617.5ms (3 runs) |
+| Edit p99, random-position across whole doc | 6.0-25.1ms | 2.5-3.1ms (see caveat below) |
+| Edit p99, realistic cursor-adjacent typing | 6.0-25.1ms (no other kind measured) | 3.5-3.9ms (2 runs, n=500) |
+| Scroll re-shape | not measured (never scrolled before) | p50 16.2-16.4ms, p99 19.4-29.2ms (3 runs, n=100) |
+
+**Caveat on the random-position row, stated plainly rather than rounded
+away**: with a ~34-60 line viewport against 50,000 lines, a uniformly
+random edit position lands inside the visible window only ~0.07-0.1% of
+the time. Across three 2000-iteration runs, 0-1 edits actually landed
+in-window — so that number mostly measures "how cheap is a genuine
+no-op," not real reshape cost. The dedicated **cursor-adjacent** benchmark
+(sequential typing at the cursor, which never leaves the visible window
+during that phase) is the honest answer to "does virtualization help
+realistic typing" — and it does, landing reliably under §39.1's <5ms p99
+target, which `render-spike`'s own report said was "not reliably met."
+
+Reproduce with:
+
+```bash
+cargo build -p spartan-editor-core --release
+./target/release/spartan-editor-core "--synthetic:50000" 2000 500 100
+# args: fixture (or --synthetic:<lines>), random-edit iters, cursor-typing iters, scroll iters
+```
+
+## Real visual verification
+
+Screenshot + `enigo`-based synthetic OS input (the same methodology already
+established for `render-spike`/`ui-shell-spike`): opened a real file
+(`crates/spartan-buffer/src/lib.rs`), confirmed the real detected language
+printed to stdout, confirmed real file content on screen, typed two real
+lines via OS-level synthetic keyboard input, confirmed the caret rendered
+at the correct position, scrolled forward two pages and confirmed the
+content changed, scrolled back and confirmed the original content —
+including the injected text exactly where it was typed — matched the
+pre-interaction screenshot.
+
+## What is explicitly not done here
+
+- §39.1's <100ms cold-open target — still not met (575-620ms, ~6x over),
+  though meaningfully closer than `render-spike`'s 897-1298ms.
+- Scroll cost (19-29ms p99) is a new, real, unaddressed cost against the
+  same latency target edits are measured by.
+- No auto-scroll-to-cursor: typing enough newlines near the bottom edge of
+  the visible window moves the cursor off-screen with no auto-follow. A
+  named, deliberate simplification, not a bug found later.
+- `visible_lines` is computed once from the window's initial size and
+  never recomputed on resize.
+- No SDF glyph atlas, no layered compositing, no tree-sitter, no real
+  LSP/DAP process spawning, no Leo, no UI chrome (scrollbar, tabs, panels).
+  This is core-engine plumbing, not the IDE.

@@ -9,4 +9,5 @@ members = [
     "spikes/ui-shell-spike",
     "crates/spartan-buffer",
     "crates/spartan-languages",
+    "crates/spartan-editor-core",
 ]

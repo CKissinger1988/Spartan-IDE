@@ -80,9 +80,26 @@ first — it's the parity reference until each row there is actually reimplement
   detection, extension-glob file matching). 15 and 10 tests respectively, all passing, clippy
   and fmt clean — real product code in `crates/`, deliberately not under `spikes/`, since these
   aren't go/no-go risk-gate experiments. Two real bugs were found and fixed only by running the
-  tests, not by inspection (§75.2). This is the start of Tier 1's core-engine/language-registry
+  tests, not by inspection (§75.2). This was the start of Tier 1's core-engine/language-registry
   work, not the IDE — no GPU rendering, no LSP/DAP wiring into the registry, no tree-sitter, no
-  Leo, no UI. See §75.3 before assuming more is done than is.
+  Leo, no UI, as of that pass. See §75.3 for what was true then; §75.5 (below) is what's changed
+  since.
+- **Real, working code — `crates/spartan-editor-core` (§75.5)**: the first real crate combining
+  `spartan-buffer`, a promoted-and-improved copy of `render-spike`'s GPU rendering, and
+  `spartan-languages` in one real file open. Adds **viewport virtualization** (`Viewport` +
+  `windowed_text()`) — cosmic-text's `Buffer` now only ever sees the visible ~34-60 lines, never
+  the whole document — the literal fix for the cold-open gap `render-spike`'s own report named as
+  untouched. Real, run-not-estimated numbers against the same 50k-line fixture and hardware
+  `render-spike` used: cold-open dropped from render-spike's 897.7-1297.9ms to 575.5-617.5ms
+  (~1.6-2.2x faster, but still ~6x over the <100ms target — not closed); a new cursor-adjacent
+  typing benchmark (added because the random-position one mostly measures a near-zero off-window
+  no-op at this document/viewport ratio, an honest caveat, not glossed over) shows edit p99 at
+  3.5-3.9ms, reliably under §39.1's 5ms p99 target where render-spike's own report said that
+  target was "not reliably met." Scrolling is a new, real, unaddressed cost never measured before
+  (p99 19.4-29.2ms). 14 new headless tests, real visual verification via screenshot +
+  `enigo`-synthetic keyboard input (real typing, real caret position, real scroll and scroll-back
+  confirmed on screen), clippy/fmt clean. No auto-scroll-to-cursor, no tree-sitter, no real
+  LSP/DAP spawning, no Leo, no UI chrome — see §75.5 for the full list of what this still isn't.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -130,7 +147,8 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 6 spikes + 2 real crates (spartan-buffer, spartan-languages)
+cargo test --workspace --release   # 89 tests: 6 spikes + 3 real crates (spartan-buffer,
+                                    # spartan-languages, spartan-editor-core)
 # dap-spike needs `lldb-dap` (or `lldb-dap-18`) + `rustc`; lsp-spike needs `rust-analyzer` + `rustc`.
 # Both self-skip with a printed message if their tool isn't found on $PATH.
 # render-spike needs a real GPU + display to `cargo run`; its own headless unit tests (Document
