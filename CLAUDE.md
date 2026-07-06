@@ -132,6 +132,28 @@ first — it's the parity reference until each row there is actually reimplement
   don't touch the benchmark's scripted edit paths). One test-writing mistake caught by actually
   running it, not by inspection: an early version of a clamp test assumed a scenario the clamp
   logic can't actually reach for any valid input, worked out by hand and fixed — see §75.7.
+- **Real, working code — real DAP wiring in `crates/spartan-editor-core` (§75.8)**: real
+  breakpoints, a real hit, real continue/step commands, real stack/variable inspection, promoted
+  from `spikes/dap-spike`'s already-proven `DapClient` (`src/dap.rs`, plus two new methods
+  `step_over`/`step_into`), orchestrated by a genuinely new `DapSession` (`src/dap_session.rs`)
+  that deliberately does NOT reuse `LspSession`'s mailbox — every debug command is discrete and
+  ordered, none may be dropped, so it uses a plain `mpsc::channel` instead. Two real, deliberate
+  scope cuts named up front rather than discovered later: a pre-built `--debug-binary:<path>` CLI
+  arg instead of real build-system integration (`dap_command` only names the adapter, not how to
+  build a debuggable binary — that's unmodeled in the registry entirely), and line-number
+  breakpoints instead of rope-anchored persistence (the exact §39.2-sanctioned v1 fallback, since
+  wiring the proven rope-anchoring would need byte-level edit details this crate's public API
+  doesn't expose yet). A real environment constraint hit during verification: `lldb-dap` isn't
+  installed on this machine, so a second real test against `debugpy` (mirroring `dap-spike`'s own
+  cross-language check) verifies the identical code path instead — real breakpoint hit, real
+  `StepOver` landing on the correct line, real `Continue` to a real exit, all genuinely executed.
+  A second real, unplanned finding from trying this: `spartan-languages`'s own Python
+  `dap_command` (`"debugpy"`) isn't directly invocable without a wrapper script `main.rs`'s
+  registry-driven dispatch doesn't generate — found by testing, documented, not fixed in this
+  pass. Live verification confirmed `F9`/`F5` work correctly through the real binary, including
+  graceful (non-crashing) error reporting when no adapter can be spawned. The 50k-line benchmark
+  was re-run and shows no regression. DAP UI, build integration, rope-anchored breakpoints, and
+  `step_into` test coverage remain open — see §75.8 for the complete list.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -179,18 +201,22 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 95 tests: 6 spikes + 3 real crates (spartan-buffer,
+cargo test --workspace --release   # 97 tests: 6 spikes + 3 real crates (spartan-buffer,
                                     # spartan-languages, spartan-editor-core)
-# dap-spike needs `lldb-dap` (or `lldb-dap-18`) + `rustc`; lsp-spike and spartan-editor-core's own
-# lsp_integration.rs need `rust-analyzer` + `rustc`. All self-skip with a printed message if their
-# tool isn't found on $PATH.
-# Three suites now spawn real language-server/debug-adapter subprocesses under real timing
-# (dap-spike, lsp-spike, spartan-editor-core's lsp_integration.rs) -- under `cargo test`'s default
-# full parallelism this occasionally produces a resource-contention flake (a different one of these
-# suites' tests timing out each run, not a real functional bug -- confirmed by re-running the exact
-# same binary in isolation, where it passes). If a real-subprocess test fails only inside a full
-# `--workspace` run, first retry with `cargo test --workspace --release -- --test-threads=1` before
-# assuming it's a real regression.
+# dap-spike and spartan-editor-core's own dap_integration.rs need `lldb-dap` (or `lldb-dap-18`) +
+# `rustc`; lsp-spike and spartan-editor-core's own lsp_integration.rs need `rust-analyzer` +
+# `rustc`; spartan-editor-core's dap_python_cross_language.rs needs python + the debugpy package.
+# All self-skip with a printed message if their tool isn't found on $PATH -- and do differ by
+# machine: this project's own history includes a session where lldb-dap was installed and one
+# (this one, as of §75.8) where it wasn't but debugpy was, so don't assume either is universally
+# present.
+# Real subprocess-spawning suites now spawn language-server/debug-adapter processes under real
+# timing (dap-spike, lsp-spike, and spartan-editor-core's own lsp_integration.rs/dap_integration.rs/
+# dap_python_cross_language.rs) -- under `cargo test`'s default full parallelism this occasionally
+# produces a resource-contention flake (a different one of these suites' tests timing out each run,
+# not a real functional bug -- confirmed by re-running the exact same binary in isolation, where it
+# passes). If a real-subprocess test fails only inside a full `--workspace` run, first retry with
+# `cargo test --workspace --release -- --test-threads=1` before assuming it's a real regression.
 # render-spike needs a real GPU + display to `cargo run`; its own headless unit tests (Document
 # <-> render-input mapping) run fine under `cargo test` with neither.
 # ui-shell-spike needs a real GPU + display + the WebView2 Runtime to `cargo run`; it has no

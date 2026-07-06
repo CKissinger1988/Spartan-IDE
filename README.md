@@ -238,7 +238,7 @@ between:
   and found. Run it yourself:
 
   ```bash
-  cargo test --workspace --release   # 95 tests: 6 spikes + 3 real crates below
+  cargo test --workspace --release   # 97 tests: 6 spikes + 3 real crates below
   cargo clippy --workspace --all-targets --release   # clean
   cargo fmt --check                  # clean
   cargo build --release --workspace
@@ -255,17 +255,23 @@ between:
   15 and 10 tests respectively. Two real bugs were found only by running the tests, not by
   inspection — see §75.2 for both.
 
-- **Real, working code — [`crates/spartan-editor-core`](crates/spartan-editor-core) (§75.5)**:
+- **Real, working code — [`crates/spartan-editor-core`](crates/spartan-editor-core) (§75.5-§75.8)**:
   the first crate combining `spartan-buffer`, a promoted-and-improved copy of `render-spike`'s
   real GPU rendering, and `spartan-languages` in one real file open. Adds viewport
   virtualization — cosmic-text's buffer now only ever sees the visible ~34-60 lines, never the
   whole document — which drops cold-open at 50k lines from `render-spike`'s 897.7-1297.9ms to
   575.5-617.5ms (still ~6x over the <100ms target, not closed) and gets realistic cursor-adjacent
   edit p99 to 3.5-3.9ms, reliably under §39.1's 5ms target where `render-spike` wasn't. Scrolling
-  is a new, real, unaddressed cost (p99 19.4-29.2ms) never measured before. 14 headless tests plus
-  real screenshot/synthetic-input visual verification — see its own README and §75.5 for the full,
-  honest before/after numbers and what's still not built (no auto-scroll-to-cursor, no
-  tree-sitter, no real LSP/DAP spawning, no UI chrome).
+  is a new, real, unaddressed cost (p99 19.4-29.2ms) never measured before. Later passes added:
+  auto-scroll-to-cursor and resize-aware viewport recomputation (§75.7); a real, live LSP session
+  (§75.6, real `rust-analyzer` diagnostics that update live as you type); and a real, live DAP
+  session (§75.8, real breakpoints/continue/step against `lldb-dap` or `debugpy`, whichever a
+  given machine actually has — this session's own machine only had the latter, so that's what got
+  real end-to-end verification here). 19 headless tests plus 3 real subprocess-backed integration
+  tests (against `rust-analyzer`, `lldb-dap`/`debugpy`) and real screenshot/synthetic-input visual
+  verification throughout — see the crate's own README and §75.5-§75.8 for the full, honest
+  numbers and what's still not built (no tree-sitter, no build-system integration, no DAP/LSP UI
+  chrome, line-number not rope-anchored breakpoints).
 
 - **Reference-only interaction design**: [`prototypes/interface-prototype.jsx`](prototypes/interface-prototype.jsx)
   and [`prototypes/signature-features.jsx`](prototypes/signature-features.jsx) — standalone React

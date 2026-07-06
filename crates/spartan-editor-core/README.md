@@ -4,10 +4,11 @@ Real (non-spike) Tier 1 core-engine code — not a Tier 0 risk-gate experiment
 with a go/no-go verdict, and not the IDE itself. This crate is the first
 place `spartan-buffer` (§2.1, the real document/rope model), a real GPU
 text-rendering pipeline, `spartan-languages` (§20.1, the real language
-registry), and now a real live LSP session are combined and driven from one
-real file open. See `docs/architecture-spec.md` §75.5 (buffer + renderer +
-language registry, viewport virtualization) and §75.6 (real LSP wiring) for
-the full write-ups this README summarizes.
+registry), and now real live LSP and DAP sessions are combined and driven
+from one real file open. See `docs/architecture-spec.md` §75.5 (buffer +
+renderer + language registry, viewport virtualization), §75.6 (real LSP
+wiring), §75.7 (auto-scroll/resize), and §75.8 (real DAP wiring) for the
+full write-ups this README summarizes.
 
 ## What this is
 
@@ -32,8 +33,7 @@ the full write-ups this README summarizes.
   real rendering. Also `find_project_root()`, which walks up a file's
   ancestor directories looking for the detected profile's own
   `marker_files` (e.g. `Cargo.toml`) — the project root a real LSP server
-  needs. Tree-sitter and DAP are **not** wired up — only LSP is, as of
-  §75.6.
+  needs. Tree-sitter is **not** wired up; LSP and DAP now are (§75.6, §75.8).
 - `src/lsp.rs` — `LspClient`/`DidChangeDebouncer`, promoted verbatim from
   `spikes/lsp-spike` (already proven against real `rust-analyzer` and
   `pyright-langserver`).
@@ -45,6 +45,15 @@ the full write-ups this README summarizes.
   not a channel) so a burst of debounce firings during a long indexing
   wait can never pile up a stale backlog — only the most recent edit ever
   actually gets dispatched.
+- `src/dap.rs` — `DapClient`, promoted verbatim from `spikes/dap-spike`
+  (proven against real `lldb-dap` and `debugpy`), plus two small new
+  methods (`step_over`, `step_into`) matching the already-promoted
+  `continue_()`'s exact shape.
+- `src/dap_session.rs` — the genuinely new engineering in §75.8: a real,
+  live `DapSession`. Deliberately **not** a mailbox like `LspSession` —
+  every debug command (continue, step-over, step-into) is discrete and
+  must execute in order, none dropped, so it uses a plain ordered
+  `mpsc::channel` instead.
 - `src/gpu.rs`, `src/text.rs`, `src/cursor.rs`, `src/cursor.wgsl`,
   `src/latency.rs`, `src/input.rs`, `src/fixture.rs` — promoted from
   `spikes/render-spike` essentially verbatim; already proven on this
@@ -54,8 +63,10 @@ the full write-ups this README summarizes.
   LSP session for real (non-synthetic) files whose language has an
   `lsp_command`, opens a wgpu/winit window seeded with only the initial
   viewport's text, and wires keyboard input, PageUp/PageDown scrolling,
-  live LSP diagnostics printing, and an optional three-phase scripted
-  latency benchmark together.
+  live LSP diagnostics printing, `F9`/`F5`/`F10`/`F11` debug controls
+  (toggle breakpoint / launch-or-continue / step-over / step-into, given a
+  `--debug-binary:<path>`), and an optional three-phase scripted latency
+  benchmark together.
 
 ## Real measured results (50,000-line synthetic fixture, same Intel UHD
 Graphics 620 / Vulkan / IntegratedGpu hardware `render-spike` used)
@@ -130,6 +141,28 @@ the caret correctly positioned. The 50k-line benchmark was re-run and shows
 no regression (the benchmark's scripted edit paths deliberately don't
 exercise the new auto-scroll code, by design).
 
+## Real DAP verification (§75.8)
+
+`lldb-dap`/`lldb-dap-18` weren't installed on the machine this pass ran on
+(a real, confirmed environment difference from an earlier session), so a
+second real test (`tests/dap_python_cross_language.rs`, mirroring
+`dap-spike`'s own cross-language test) verifies the identical
+`DapSession`/`DapClient` path against real `debugpy` instead: a real
+breakpoint hit with the correct variable value, a real `StepOver` landing
+on the correct next line, and a real `Continue` running to a real exit —
+all genuinely executed, not asserted. The primary `tests/dap_integration.rs`
+(Rust/`lldb-dap`) correctly self-skips here. Live, through the actual
+product binary: `F9` correctly toggles and prints a breakpoint; `F5`
+correctly attempts a launch and, since no adapter could be spawned in this
+environment for either language (see below), reports a clean error rather
+than hanging — confirmed via log and a follow-up screenshot showing the
+editor still fully responsive. A real, unplanned finding from trying this:
+`spartan-languages`'s own Python `dap_command` (`program = "debugpy"`)
+isn't directly invocable — `debugpy` needs `<python> -m debugpy.adapter`,
+which the test worked around with a generated wrapper script, but
+`main.rs`'s registry-driven dispatch has no such step. The 50k-line
+benchmark was re-run and shows no regression.
+
 ## What is explicitly not done here
 
 - §39.1's <100ms cold-open target — still not met (575-620ms, ~6x over),
@@ -139,9 +172,10 @@ exercise the new auto-scroll code, by design).
 - Auto-scroll snaps the cursor to the window's very edge, with no
   surrounding context margin (a real editor convention this pass didn't
   attempt). No horizontal scrolling/wrapping for long lines.
-- No SDF glyph atlas, no layered compositing, no tree-sitter, no DAP, no
-  Leo, no UI chrome (scrollbar, tabs, panels, a diagnostics/problems
-  panel). Diagnostics are printed to stdout only.
+- No SDF glyph atlas, no layered compositing, no tree-sitter, no Leo, no
+  UI chrome (scrollbar, tabs, panels, a diagnostics/problems panel, a
+  breakpoint gutter, a variables panel). Diagnostics/stops are printed to
+  stdout only.
 - No hover or completion wiring — the promoted `LspClient` supports both,
   but there's no UI trigger (hover-position detection, a completion popup)
   to hang them off yet.
@@ -152,3 +186,14 @@ exercise the new auto-scroll code, by design).
   delay window close if triggered mid-request — mitigated with a printed
   status line, not eliminated.
 - No crashed/hung language server detection or restart.
+- No build-system integration for DAP — `--debug-binary:<path>` must
+  already exist; this pass deliberately doesn't run `cargo build` or
+  similar.
+- DAP breakpoints are plain line numbers, not rope-anchored — the
+  §39.2-sanctioned v1 fallback, not an oversight, but a real limitation:
+  an edit that shifts lines above a breakpoint will silently point it at
+  the wrong line. No live breakpoint changes once a session is running.
+- `step_into` compiles and is wired to `F11` but isn't exercised by any
+  test or live verification yet, unlike `continue_`/`step_over`.
+- The Python registry entry's non-invocable `dap_command` (see above) is a
+  real, pre-existing gap this pass found but didn't fix.

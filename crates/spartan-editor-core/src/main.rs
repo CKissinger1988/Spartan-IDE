@@ -6,7 +6,7 @@ mod latency;
 mod text;
 
 use spartan_editor_core::viewport::{self, Viewport};
-use spartan_editor_core::{editor_view, language, lsp, lsp_session};
+use spartan_editor_core::{dap_session, editor_view, language, lsp, lsp_session};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -120,6 +120,13 @@ fn main() {
     let bench_edit_iters: Option<usize> = std::env::args().nth(2).and_then(|s| s.parse().ok());
     let bench_cursor_iters: Option<usize> = std::env::args().nth(3).and_then(|s| s.parse().ok());
     let bench_scroll_iters: Option<usize> = std::env::args().nth(4).and_then(|s| s.parse().ok());
+    // Optional 6th arg: a pre-built debug binary to launch under the
+    // detected language's DAP adapter (F9/F5/F10/F11 below). Deliberately
+    // NOT "build the project automatically" -- see §75.8 for why that's a
+    // separate, real piece of work this pass doesn't attempt.
+    let debug_binary_path: Option<PathBuf> = std::env::args()
+        .nth(5)
+        .and_then(|s| s.strip_prefix("--debug-binary:").map(PathBuf::from));
 
     let initial_text = if let Some(spec) = fixture_path.strip_prefix("--synthetic:") {
         let lines: usize = spec
@@ -137,11 +144,14 @@ fn main() {
     );
 
     // First real combination of spartan-buffer + rendering + spartan-languages
-    // (see language.rs's doc comment) -- tree-sitter stays unwired; LSP is
-    // wired for real for the first time below (§75.6). DAP stays unwired:
-    // no debugging UI (breakpoints, stepping, variable inspection) exists
-    // anywhere in this crate yet, so it's a deliberately separate, later pass.
+    // (see language.rs's doc comment) -- tree-sitter stays unwired. LSP
+    // (§75.6) and DAP (§75.8) are both wired for real below.
     let mut lsp_session: Option<lsp_session::LspSession> = None;
+    // (adapter command, pre-built binary, cwd, source path) -- captured here,
+    // consumed on the first F5 press below, not launched immediately (unlike
+    // LSP, a debug session should only start when the user asks for one).
+    let mut dap_launch_info: Option<(spartan_languages::CommandSpec, PathBuf, PathBuf, PathBuf)> =
+        None;
     if !fixture_path.starts_with("--synthetic:") {
         match language::detect_language_for_file(Path::new(&fixture_path)) {
             Some(profile) => {
@@ -152,21 +162,20 @@ fn main() {
                     profile.lsp_command.is_some(),
                     profile.dap_command.is_some()
                 );
+                let file_path = Path::new(&fixture_path);
+                let project_root = language::find_project_root(file_path, &profile.marker_files)
+                    .unwrap_or_else(|| {
+                        // Named, real limitation (see the crate README):
+                        // no marker file found in any ancestor means no
+                        // coherent project root, so this falls back to
+                        // single-file mode -- rust-analyzer still runs,
+                        // but with meaningfully worse diagnostics.
+                        file_path
+                            .parent()
+                            .map(Path::to_path_buf)
+                            .unwrap_or_else(|| PathBuf::from("."))
+                    });
                 if let Some(command) = &profile.lsp_command {
-                    let file_path = Path::new(&fixture_path);
-                    let project_root =
-                        language::find_project_root(file_path, &profile.marker_files)
-                            .unwrap_or_else(|| {
-                                // Named, real limitation (see the crate README):
-                                // no marker file found in any ancestor means no
-                                // coherent project root, so this falls back to
-                                // single-file mode -- rust-analyzer still runs,
-                                // but with meaningfully worse diagnostics.
-                                file_path
-                                    .parent()
-                                    .map(Path::to_path_buf)
-                                    .unwrap_or_else(|| PathBuf::from("."))
-                            });
                     println!(
                         "Starting real LSP session: {} (project root: {})",
                         command.program,
@@ -182,6 +191,27 @@ fn main() {
                         Err(e) => {
                             println!("Failed to start LSP session ({}): {e}", command.program)
                         }
+                    }
+                }
+                if let Some(command) = &profile.dap_command {
+                    if let Some(binary_path) = &debug_binary_path {
+                        println!(
+                            "DAP ready: {} on {} -- F9 toggles a breakpoint at the cursor, F5 launches",
+                            command.program,
+                            binary_path.display()
+                        );
+                        dap_launch_info = Some((
+                            command.clone(),
+                            binary_path.clone(),
+                            project_root.clone(),
+                            file_path.to_path_buf(),
+                        ));
+                    } else {
+                        println!(
+                            "DAP available for {} but no --debug-binary:<path> was given -- \
+                             pass one to enable F5/F9/F10/F11 debugging",
+                            command.program
+                        );
                     }
                 }
             }
@@ -254,6 +284,13 @@ fn main() {
     // the user stops generating other events.
     let mut lsp_debouncer = lsp::DidChangeDebouncer::new(Duration::from_millis(150));
 
+    // Line-number breakpoints (1-indexed, DAP convention), toggled by F9 at
+    // the cursor's current line -- the §39.2-sanctioned fallback for a v1
+    // that doesn't yet have rope-anchored breakpoint persistence (see
+    // §75.8). No live changes once a session is running, a named limitation.
+    let mut breakpoints: Vec<i64> = Vec::new();
+    let mut dap_session: Option<dap_session::DapSession> = None;
+
     let mut edit_latency = latency::LatencyTracker::new(2000);
     let mut cursor_latency = latency::LatencyTracker::new(2000);
     let mut scroll_latency = latency::LatencyTracker::new(200);
@@ -283,6 +320,9 @@ fn main() {
                             cursor_latency.report("input-to-photon (edits, cursor-adjacent)");
                             scroll_latency.report("scroll re-shape");
                             if let Some(session) = lsp_session.take() {
+                                session.shutdown();
+                            }
+                            if let Some(session) = dap_session.take() {
                                 session.shutdown();
                             }
                             elwt.exit();
@@ -331,6 +371,54 @@ fn main() {
                                 if viewport.scroll_by(page, doc_len_lines) {
                                     reshape_window(&mut text_state, &editor, &viewport);
                                     window.request_redraw();
+                                }
+                            }
+                            Key::Named(NamedKey::F9) => {
+                                let (cursor_line, _) = editor.cursor_line_col();
+                                let line_1indexed = (cursor_line + 1) as i64;
+                                if let Some(pos) =
+                                    breakpoints.iter().position(|&l| l == line_1indexed)
+                                {
+                                    breakpoints.remove(pos);
+                                    println!("Breakpoint removed at line {line_1indexed}");
+                                } else {
+                                    breakpoints.push(line_1indexed);
+                                    println!("Breakpoint set at line {line_1indexed}");
+                                }
+                            }
+                            Key::Named(NamedKey::F5) => {
+                                if let Some(session) = &dap_session {
+                                    session.send_command(dap_session::DapCommand::Continue);
+                                } else if let Some((command, binary_path, cwd, source_path)) =
+                                    dap_launch_info.take()
+                                {
+                                    println!(
+                                        "Launching debug session: {} on {}",
+                                        command.program,
+                                        binary_path.display()
+                                    );
+                                    dap_session = Some(dap_session::DapSession::launch(
+                                        &command,
+                                        &binary_path,
+                                        &cwd,
+                                        &source_path,
+                                        &breakpoints,
+                                    ));
+                                } else {
+                                    println!(
+                                        "No debug session available (no --debug-binary:<path> \
+                                         given, or the detected language has no dap_command)"
+                                    );
+                                }
+                            }
+                            Key::Named(NamedKey::F10) => {
+                                if let Some(session) = &dap_session {
+                                    session.send_command(dap_session::DapCommand::StepOver);
+                                }
+                            }
+                            Key::Named(NamedKey::F11) => {
+                                if let Some(session) = &dap_session {
+                                    session.send_command(dap_session::DapCommand::StepInto);
                                 }
                             }
                             _ => {
@@ -452,6 +540,28 @@ fn main() {
                                     println!("LSP diagnostics ({} item(s)):", lines.len());
                                     for line in lines {
                                         println!("  {line}");
+                                    }
+                                }
+                            }
+
+                            // No debug UI exists yet -- real DAP stop/exit/error
+                            // updates are surfaced to stdout here, matching the LSP
+                            // diagnostics pattern above.
+                            if let Some(session) = &dap_session {
+                                for update in session.poll_updates() {
+                                    match update {
+                                        dap_session::DapUpdate::Stopped(lines) => {
+                                            println!("DAP stopped:");
+                                            for line in lines {
+                                                println!("  {line}");
+                                            }
+                                        }
+                                        dap_session::DapUpdate::Exited => {
+                                            println!("DAP: program exited")
+                                        }
+                                        dap_session::DapUpdate::Error(e) => {
+                                            println!("DAP error: {e}")
+                                        }
                                     }
                                 }
                             }
