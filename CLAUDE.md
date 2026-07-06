@@ -100,6 +100,27 @@ first — it's the parity reference until each row there is actually reimplement
   `enigo`-synthetic keyboard input (real typing, real caret position, real scroll and scroll-back
   confirmed on screen), clippy/fmt clean. No auto-scroll-to-cursor, no tree-sitter, no real
   LSP/DAP spawning, no Leo, no UI chrome — see §75.5 for the full list of what this still isn't.
+- **Real, working code — real LSP wiring in `crates/spartan-editor-core` (§75.6)**: a real, live
+  `rust-analyzer` session for the open file, promoted verbatim from `spikes/lsp-spike`'s already-
+  proven `LspClient`/`DidChangeDebouncer` (`src/lsp.rs`), orchestrated by a genuinely new
+  `LspSession` (`src/lsp_session.rs`) that runs the entire session — spawn, initialize/didOpen,
+  every didChange dispatch — on its own OS thread so `LspClient`'s up-to-90s blocking calls never
+  freeze the render loop; the 150ms debounce timer itself stays on the render thread, handing the
+  background thread only a single-slot mailbox snapshot (`Mutex`+`Condvar`, not a channel) so a
+  burst of debounce firings during a long indexing wait can never queue a stale backlog. Diagnostics
+  are printed to stdout (no UI exists yet, same pattern as detected-language printing). A real,
+  load-bearing fix beyond the spike's own test coverage: `wait_real_diagnostics` only ever resolves
+  on a *non-empty* array by design, so live edits use `wait_notification` directly instead —
+  otherwise a fixed error could never be reported as fixed. Real, executed verification: a new
+  self-skipping integration test spawns real `rust-analyzer` against a generated fixture with a
+  deliberate `E0308` error, confirms the real diagnostic, then confirms it really clears to empty
+  after a corrected snapshot (2.49s wall-clock, first real exercise of `did_change_full`, which the
+  spike's own tests never called) — plus a live binary run (screenshot + `enigo` input) confirming
+  the same end-to-end on screen. The 50k-line `--synthetic:` benchmark was re-run afterward and
+  showed no regression (LSP never spawns for synthetic fixtures). DAP wiring, hover/completion,
+  tree-sitter, Leo, and any diagnostics UI remain unbuilt — see §75.6 for the full list, including
+  the single-file-mode fallback and the ~7s worst-case shutdown-close freeze, both named rather than
+  silently absorbed.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -147,10 +168,18 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 89 tests: 6 spikes + 3 real crates (spartan-buffer,
+cargo test --workspace --release   # 90 tests: 6 spikes + 3 real crates (spartan-buffer,
                                     # spartan-languages, spartan-editor-core)
-# dap-spike needs `lldb-dap` (or `lldb-dap-18`) + `rustc`; lsp-spike needs `rust-analyzer` + `rustc`.
-# Both self-skip with a printed message if their tool isn't found on $PATH.
+# dap-spike needs `lldb-dap` (or `lldb-dap-18`) + `rustc`; lsp-spike and spartan-editor-core's own
+# lsp_integration.rs need `rust-analyzer` + `rustc`. All self-skip with a printed message if their
+# tool isn't found on $PATH.
+# Three suites now spawn real language-server/debug-adapter subprocesses under real timing
+# (dap-spike, lsp-spike, spartan-editor-core's lsp_integration.rs) -- under `cargo test`'s default
+# full parallelism this occasionally produces a resource-contention flake (a different one of these
+# suites' tests timing out each run, not a real functional bug -- confirmed by re-running the exact
+# same binary in isolation, where it passes). If a real-subprocess test fails only inside a full
+# `--workspace` run, first retry with `cargo test --workspace --release -- --test-threads=1` before
+# assuming it's a real regression.
 # render-spike needs a real GPU + display to `cargo run`; its own headless unit tests (Document
 # <-> render-input mapping) run fine under `cargo test` with neither.
 # ui-shell-spike needs a real GPU + display + the WebView2 Runtime to `cargo run`; it has no

@@ -3,10 +3,11 @@
 Real (non-spike) Tier 1 core-engine code — not a Tier 0 risk-gate experiment
 with a go/no-go verdict, and not the IDE itself. This crate is the first
 place `spartan-buffer` (§2.1, the real document/rope model), a real GPU
-text-rendering pipeline, and `spartan-languages` (§20.1, the real language
-registry) are combined and driven from one real file open. See
-`docs/architecture-spec.md` §75.5 for the full write-up this README
-summarizes.
+text-rendering pipeline, `spartan-languages` (§20.1, the real language
+registry), and now a real live LSP session are combined and driven from one
+real file open. See `docs/architecture-spec.md` §75.5 (buffer + renderer +
+language registry, viewport virtualization) and §75.6 (real LSP wiring) for
+the full write-ups this README summarizes.
 
 ## What this is
 
@@ -28,19 +29,33 @@ summarizes.
   as untouched by its damage-region increment.
 - `src/language.rs` — `detect_language_for_file()`, wiring the real
   `spartan_languages::LanguageRegistry` in for the first time alongside
-  real rendering. Tree-sitter and LSP/DAP themselves are **not** wired up
-  here — only the profile *lookup* is real; spawning `lsp_command`/
-  `dap_command` against the already-proven `lsp-spike`/`dap-spike` clients
-  is still a separate, later step.
+  real rendering. Also `find_project_root()`, which walks up a file's
+  ancestor directories looking for the detected profile's own
+  `marker_files` (e.g. `Cargo.toml`) — the project root a real LSP server
+  needs. Tree-sitter and DAP are **not** wired up — only LSP is, as of
+  §75.6.
+- `src/lsp.rs` — `LspClient`/`DidChangeDebouncer`, promoted verbatim from
+  `spikes/lsp-spike` (already proven against real `rust-analyzer` and
+  `pyright-langserver`).
+- `src/lsp_session.rs` — the genuinely new engineering in §75.6: a real,
+  live `LspSession` running an entire language-server session (spawn,
+  initialize/didOpen, every subsequent didChange dispatch) on its own OS
+  thread, since `LspClient`'s calls block for up to 90s and would freeze
+  the render loop otherwise. Uses a single-slot mailbox (`Mutex`+`Condvar`,
+  not a channel) so a burst of debounce firings during a long indexing
+  wait can never pile up a stale backlog — only the most recent edit ever
+  actually gets dispatched.
 - `src/gpu.rs`, `src/text.rs`, `src/cursor.rs`, `src/cursor.wgsl`,
   `src/latency.rs`, `src/input.rs`, `src/fixture.rs` — promoted from
   `spikes/render-spike` essentially verbatim; already proven on this
   project's real Intel UHD 620 / Vulkan / Windows-GNU setup.
 - `src/main.rs` — the real binary: opens a file (or `--synthetic:<lines>`
-  for the benchmark fixture), prints the detected language, opens a
-  wgpu/winit window seeded with only the initial viewport's text, and
-  wires keyboard input, PageUp/PageDown scrolling, and an optional
-  three-phase scripted latency benchmark together.
+  for the benchmark fixture), prints the detected language, starts a real
+  LSP session for real (non-synthetic) files whose language has an
+  `lsp_command`, opens a wgpu/winit window seeded with only the initial
+  viewport's text, and wires keyboard input, PageUp/PageDown scrolling,
+  live LSP diagnostics printing, and an optional three-phase scripted
+  latency benchmark together.
 
 ## Real measured results (50,000-line synthetic fixture, same Intel UHD
 Graphics 620 / Vulkan / IntegratedGpu hardware `render-spike` used)
@@ -83,6 +98,24 @@ content changed, scrolled back and confirmed the original content —
 including the injected text exactly where it was typed — matched the
 pre-interaction screenshot.
 
+## Real LSP verification (§75.6)
+
+A self-skipping integration test (`tests/lsp_integration.rs`, skips if
+`rust-analyzer` isn't on `$PATH`) spawns a real `LspSession` against a real
+generated Cargo fixture with a deliberate `E0308` type error, confirms a
+real non-empty diagnostic, then sends corrected text via `notify_edit` and
+confirms diagnostics really update to empty — the first real exercise of
+`did_change_full`, which the spike's own tests never called. A live binary
+run against a real fixture (screenshot + `enigo` synthetic input) confirmed
+the same end-to-end, on screen: real diagnostics printed after real
+indexing, then — after typing `//` at the cursor to comment out the file's
+one line (the only edit reachable given this crate's cursor always starts
+at position 0 with no navigation beyond PageUp/PageDown) — real diagnostics
+updated to "0 diagnostics — clean" within one debounce cycle. The 50k-line
+`--synthetic:` benchmark was re-run afterward and showed no measurable
+change (LSP never spawns for synthetic fixtures, which have no real
+project root).
+
 ## What is explicitly not done here
 
 - §39.1's <100ms cold-open target — still not met (575-620ms, ~6x over),
@@ -94,6 +127,16 @@ pre-interaction screenshot.
   named, deliberate simplification, not a bug found later.
 - `visible_lines` is computed once from the window's initial size and
   never recomputed on resize.
-- No SDF glyph atlas, no layered compositing, no tree-sitter, no real
-  LSP/DAP process spawning, no Leo, no UI chrome (scrollbar, tabs, panels).
-  This is core-engine plumbing, not the IDE.
+- No SDF glyph atlas, no layered compositing, no tree-sitter, no DAP, no
+  Leo, no UI chrome (scrollbar, tabs, panels, a diagnostics/problems
+  panel). Diagnostics are printed to stdout only.
+- No hover or completion wiring — the promoted `LspClient` supports both,
+  but there's no UI trigger (hover-position detection, a completion popup)
+  to hang them off yet.
+- A file with no discoverable marker file in any ancestor directory falls
+  back to single-file mode (`find_project_root` returns `None`) — real,
+  but meaningfully worse diagnostics than a real project root gives.
+- `LspSession::shutdown()`'s bounded waits (~7s worst case) will visibly
+  delay window close if triggered mid-request — mitigated with a printed
+  status line, not eliminated.
+- No crashed/hung language server detection or restart.

@@ -238,7 +238,7 @@ between:
   and found. Run it yourself:
 
   ```bash
-  cargo test --workspace --release   # 89 tests: 6 spikes + 3 real crates below
+  cargo test --workspace --release   # 90 tests: 6 spikes + 3 real crates below
   cargo clippy --workspace --all-targets --release   # clean
   cargo fmt --check                  # clean
   cargo build --release --workspace
@@ -311,13 +311,18 @@ Cargo.toml / Cargo.lock     Rust workspace covering the spikes and crates (not m
 ```bash
 git clone <this-repo>
 cd Spartan_IDE
-cargo test --workspace --release    # exercises all four Tier 0 spikes
+cargo test --workspace --release    # exercises all six Tier 0 spikes + 3 real crates
 ```
 
-`dap-spike` needs `lldb-dap` (or `lldb-dap-18`) + `rustc`; `lsp-spike` needs `rust-analyzer` +
-`rustc`. Both self-skip with a printed message — not a failure — if their tool isn't found on
-`$PATH`; see [`spikes/README.md`](spikes/README.md) for exactly which optional tools unlock which
-tests, and why testing against a *second* real adapter (not just the first) is the whole point.
+`dap-spike` needs `lldb-dap` (or `lldb-dap-18`) + `rustc`; `lsp-spike` and
+`spartan-editor-core`'s own `lsp_integration.rs` need `rust-analyzer` + `rustc`. All self-skip
+with a printed message — not a failure — if their tool isn't found on `$PATH`; see
+[`spikes/README.md`](spikes/README.md) for exactly which optional tools unlock which tests, and
+why testing against a *second* real adapter (not just the first) is the whole point. Three
+suites now spawn real language-server/debug-adapter subprocesses (`dap-spike`, `lsp-spike`,
+`spartan-editor-core`'s `lsp_integration.rs`) — under `cargo test`'s default full parallelism
+this can occasionally produce a resource-contention flake in one of them; retry with
+`-- --test-threads=1` before assuming a real regression (see `CLAUDE.md`).
 
 There is no build system for the `.jsx` prototypes beyond Prettier formatting — don't invent one
 without discussing it first (see `CLAUDE.md`).

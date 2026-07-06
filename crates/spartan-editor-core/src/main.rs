@@ -6,11 +6,11 @@ mod latency;
 mod text;
 
 use spartan_editor_core::viewport::{self, Viewport};
-use spartan_editor_core::{editor_view, language};
+use spartan_editor_core::{editor_view, language, lsp, lsp_session};
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use winit::event::{ElementState, Event, KeyEvent, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::keyboard::{Key, NamedKey};
@@ -137,17 +137,54 @@ fn main() {
     );
 
     // First real combination of spartan-buffer + rendering + spartan-languages
-    // (see language.rs's doc comment) -- tree-sitter/LSP/DAP themselves stay
-    // unwired, only the lookup is real here.
+    // (see language.rs's doc comment) -- tree-sitter stays unwired; LSP is
+    // wired for real for the first time below (§75.6). DAP stays unwired:
+    // no debugging UI (breakpoints, stepping, variable inspection) exists
+    // anywhere in this crate yet, so it's a deliberately separate, later pass.
+    let mut lsp_session: Option<lsp_session::LspSession> = None;
     if !fixture_path.starts_with("--synthetic:") {
         match language::detect_language_for_file(Path::new(&fixture_path)) {
-            Some(profile) => println!(
-                "Detected language: {} (tree-sitter grammar: {}, LSP: {}, DAP: {})",
-                profile.id,
-                profile.tree_sitter_grammar,
-                profile.lsp_command.is_some(),
-                profile.dap_command.is_some()
-            ),
+            Some(profile) => {
+                println!(
+                    "Detected language: {} (tree-sitter grammar: {}, LSP: {}, DAP: {})",
+                    profile.id,
+                    profile.tree_sitter_grammar,
+                    profile.lsp_command.is_some(),
+                    profile.dap_command.is_some()
+                );
+                if let Some(command) = &profile.lsp_command {
+                    let file_path = Path::new(&fixture_path);
+                    let project_root =
+                        language::find_project_root(file_path, &profile.marker_files)
+                            .unwrap_or_else(|| {
+                                // Named, real limitation (see the crate README):
+                                // no marker file found in any ancestor means no
+                                // coherent project root, so this falls back to
+                                // single-file mode -- rust-analyzer still runs,
+                                // but with meaningfully worse diagnostics.
+                                file_path
+                                    .parent()
+                                    .map(Path::to_path_buf)
+                                    .unwrap_or_else(|| PathBuf::from("."))
+                            });
+                    println!(
+                        "Starting real LSP session: {} (project root: {})",
+                        command.program,
+                        project_root.display()
+                    );
+                    match lsp_session::LspSession::spawn(
+                        command,
+                        &project_root,
+                        file_path,
+                        &initial_text,
+                    ) {
+                        Ok(session) => lsp_session = Some(session),
+                        Err(e) => {
+                            println!("Failed to start LSP session ({}): {e}", command.program)
+                        }
+                    }
+                }
+            }
             None => println!("No language profile detected for {fixture_path}"),
         }
     }
@@ -209,6 +246,14 @@ fn main() {
 
     let cursor_renderer = cursor::CursorRenderer::new(&gpu_state.device, gpu_state.config.format);
 
+    // 150ms idle default per spec §2.3. This timer is polled from
+    // `AboutToWait`, which only fires continuously because this crate
+    // already runs `ControlFlow::Poll` unconditionally (for the benchmark
+    // harness below) -- if a future pass switches to `ControlFlow::Wait`
+    // for idle-CPU reasons, this debounce would silently stop firing once
+    // the user stops generating other events.
+    let mut lsp_debouncer = lsp::DidChangeDebouncer::new(Duration::from_millis(150));
+
     let mut edit_latency = latency::LatencyTracker::new(2000);
     let mut cursor_latency = latency::LatencyTracker::new(2000);
     let mut scroll_latency = latency::LatencyTracker::new(200);
@@ -237,6 +282,9 @@ fn main() {
                             edit_latency.report("input-to-photon (edits, random-position)");
                             cursor_latency.report("input-to-photon (edits, cursor-adjacent)");
                             scroll_latency.report("scroll re-shape");
+                            if let Some(session) = lsp_session.take() {
+                                session.shutdown();
+                            }
                             elwt.exit();
                         }
                         WindowEvent::Resized(new_size) => {
@@ -271,6 +319,7 @@ fn main() {
                                 let effect = input::handle_key_event(&mut editor, &key_event);
                                 if effect != editor_view::EditEffect::None {
                                     edit_latency.note_key_event();
+                                    lsp_debouncer.on_edit();
                                     apply_edit_effect(&mut text_state, &editor, &viewport, effect);
                                     window.request_redraw();
                                 }
@@ -363,6 +412,19 @@ fn main() {
                                     program_start.elapsed().as_secs_f64() * 1000.0
                                 );
                                 cold_open_reported = true;
+                            }
+
+                            // No diagnostics UI exists yet (matching how detected
+                            // language is also just printed) -- real LSP diagnostics
+                            // are surfaced to stdout here.
+                            if let Some(session) = &lsp_session {
+                                for update in session.poll_updates() {
+                                    let lsp_session::LspUpdate::Diagnostics(lines) = update;
+                                    println!("LSP diagnostics ({} item(s)):", lines.len());
+                                    for line in lines {
+                                        println!("  {line}");
+                                    }
+                                }
                             }
 
                             edit_latency.note_frame_presented();
@@ -460,6 +522,13 @@ fn main() {
                             reshape_window(&mut text_state, &editor, &viewport);
                         }
                         scroll_bench_remaining -= 1;
+                    }
+                    // Polled every tick because this crate runs `ControlFlow::Poll`
+                    // unconditionally (see `lsp_debouncer`'s declaration comment).
+                    if lsp_debouncer.should_dispatch_now() {
+                        if let Some(session) = &lsp_session {
+                            session.notify_edit(editor.text());
+                        }
                     }
                     window.request_redraw();
                 }
