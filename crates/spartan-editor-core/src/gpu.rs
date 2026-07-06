@@ -8,6 +8,18 @@ use winit::window::Window;
 /// real product code. Deliberately still minimal -- no multi-window
 /// support, no render-graph abstraction -- since those aren't required by
 /// this increment's scope (see the crate README).
+///
+/// A real optimization attempt was tried and reverted here (§75.9): trying
+/// a `Backends::VULKAN`-only `Instance::new()` first (skipping DX12/DX11/GL
+/// probing) before falling back to `Backends::all()`, on the hypothesis
+/// that probing every backend's loader was the reason `Instance::new()`
+/// measured as the single largest cold-open cost (~221-306ms). Real,
+/// repeated instrumented runs showed no measurable improvement (the
+/// Vulkan-only path's timings, 261-334ms, fully overlap the original
+/// `Backends::all()` range) -- so the ~220-300ms is apparently intrinsic to
+/// Vulkan loader/ICD initialization itself on this hardware, not to
+/// probing other backends. Reverted to keep the code simple rather than
+/// keep unproven complexity around.
 pub struct GpuState {
     pub surface: wgpu::Surface<'static>,
     pub device: wgpu::Device,

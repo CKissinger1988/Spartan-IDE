@@ -31,14 +31,21 @@ pub const TEXT_ORIGIN_X: f32 = 8.0;
 pub const TEXT_ORIGIN_Y: f32 = 8.0;
 
 impl TextState {
+    /// Takes an already-constructed `FontSystem` rather than building one
+    /// internally. `FontSystem::new()` scans and parses every font on the
+    /// system -- a real, measured ~93-97ms cost (§75.9) that has nothing to
+    /// do with the GPU device/queue this constructor otherwise needs, so
+    /// `main.rs` builds it on a background thread concurrently with
+    /// `GpuState::new()`'s async GPU setup instead of paying both costs
+    /// back-to-back on the same thread.
     pub fn new(
+        mut font_system: FontSystem,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         width: f32,
         height: f32,
     ) -> Self {
-        let mut font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
         let mut atlas = TextAtlas::new(device, queue, surface_format);
         let renderer =

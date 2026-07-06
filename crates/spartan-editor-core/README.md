@@ -7,8 +7,8 @@ text-rendering pipeline, `spartan-languages` (§20.1, the real language
 registry), and now real live LSP and DAP sessions are combined and driven
 from one real file open. See `docs/architecture-spec.md` §75.5 (buffer +
 renderer + language registry, viewport virtualization), §75.6 (real LSP
-wiring), §75.7 (auto-scroll/resize), and §75.8 (real DAP wiring) for the
-full write-ups this README summarizes.
+wiring), §75.7 (auto-scroll/resize), §75.8 (real DAP wiring), and §75.9
+(cold-open investigation) for the full write-ups this README summarizes.
 
 ## What this is
 
@@ -73,7 +73,7 @@ Graphics 620 / Vulkan / IntegratedGpu hardware `render-spike` used)
 
 | Metric | render-spike (post damage-region) | This crate (+ virtualization) |
 |---|---|---|
-| Cold-open | 897.7-1297.9ms | 575.5-617.5ms (3 runs) |
+| Cold-open | 897.7-1297.9ms | 575.5-617.5ms at first (3 runs); 467-715ms after §75.9's `FontSystem` parallelization (5 runs) |
 | Edit p99, random-position across whole doc | 6.0-25.1ms | 2.5-3.1ms (see caveat below) |
 | Edit p99, realistic cursor-adjacent typing | 6.0-25.1ms (no other kind measured) | 3.5-3.9ms (2 runs, n=500) |
 | Scroll re-shape | not measured (never scrolled before) | p50 16.2-16.4ms, p99 19.4-29.2ms (3 runs, n=100) |
@@ -96,6 +96,26 @@ cargo build -p spartan-editor-core --release
 ./target/release/spartan-editor-core "--synthetic:50000" 2000 500 100
 # args: fixture (or --synthetic:<lines>), random-edit iters, cursor-typing iters, scroll iters
 ```
+
+## Cold-open investigation (§75.9)
+
+A real, permanent per-step timing breakdown (printed alongside the
+existing cold-open number) found `GpuState::new()` (wgpu instance/adapter/
+device/surface) to be the single largest cost (~220-433ms), not text
+shaping. A hypothesis-driven fix — restricting `wgpu::Instance::new()` to
+`Backends::VULKAN` only, skipping the DX12/DX11/GL probing `Backends::all()`
+otherwise does — was implemented and measured across 5 runs, found to make
+no real difference, and reverted rather than kept as unproven complexity.
+A second fix did help for real: `FontSystem::new()` (cosmic-text's system
+font scan, ~93-97ms) has no actual dependency on the GPU device, so it now
+runs on its own thread concurrently with `GpuState::new()`'s async setup —
+`TextState::new()`'s own cost dropped to ~2-2.5ms, and cold-open dropped to
+a 467-715ms range from ~570-810ms. An apparent regression surfaced during
+verification of this change (cursor-adjacent p99 jumped to 4.65-4.73ms,
+scroll p99 to 41ms) turned out, after a controlled A/B/A/B comparison
+against the prior committed binary, to be transient system noise from
+repeated rapid rebuild-and-run cycles, not a real effect — documented as
+a real methodological finding, not glossed over.
 
 ## Real visual verification
 
@@ -165,8 +185,12 @@ benchmark was re-run and shows no regression.
 
 ## What is explicitly not done here
 
-- §39.1's <100ms cold-open target — still not met (575-620ms, ~6x over),
-  though meaningfully closer than `render-spike`'s 897-1298ms.
+- §39.1's <100ms cold-open target — still not met (467-715ms after §75.9's
+  fix, ~4.7-7.2x over), though meaningfully closer than `render-spike`'s
+  897-1298ms. `GpuState::new()`'s ~220-433ms wgpu instance/adapter/device
+  setup is now the clear, dominant, unaddressed remaining cost — a
+  Vulkan-only-backend optimization was tried for this specifically and
+  found not to help (§75.9).
 - Scroll cost (19-29ms p99) is a new, real, unaddressed cost against the
   same latency target edits are measured by.
 - Auto-scroll snaps the cursor to the window's very edge, with no

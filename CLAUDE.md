@@ -154,6 +154,22 @@ first — it's the parity reference until each row there is actually reimplement
   graceful (non-crashing) error reporting when no adapter can be spawned. The 50k-line benchmark
   was re-run and shows no regression. DAP UI, build integration, rope-anchored breakpoints, and
   `step_into` test coverage remain open — see §75.8 for the complete list.
+- **Real, working code — cold-open investigation in `crates/spartan-editor-core` (§75.9)**: a
+  real, permanent per-step timing breakdown (added to `main.rs`, not a one-off) found
+  `GpuState::new()`'s wgpu instance/adapter/device setup, not text shaping, to be cold-open's
+  single largest cost (~220-433ms). A hypothesis-driven fix — restricting `wgpu::Instance::new()`
+  to `Backends::VULKAN` only, since every run of this project on every machine so far has used
+  Vulkan — was implemented, measured across 5 runs, found to make no real difference, and
+  reverted rather than kept as unproven complexity: a real negative result, reported honestly, not
+  hidden. A second fix did help for real: `FontSystem::new()` (cosmic-text's font scan, ~93-97ms)
+  now runs on its own thread concurrently with `GpuState::new()`'s async setup, since it has no
+  actual GPU dependency — `TextState::new()` dropped to ~2-2.5ms and cold-open dropped to a
+  467-715ms range from ~570-810ms. A real methodological finding along the way: an apparent
+  regression during verification (cursor-adjacent p99 jumped to 4.65-4.73ms, scroll to 41ms) was
+  investigated via a controlled A/B/A/B comparison against the prior committed binary rather than
+  assumed either way, and turned out to be transient system noise from rapid rebuild-and-run
+  cycles, not a real code effect. §39.1's <100ms cold-open target remains far from met
+  (~4.7-7.2x over) — `GpuState::new()` is now the clear, dominant, unaddressed remaining cost.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

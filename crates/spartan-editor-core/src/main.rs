@@ -10,6 +10,7 @@ use spartan_editor_core::{dap_session, editor_view, language, lsp, lsp_session};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 use winit::event::{ElementState, Event, KeyEvent, WindowEvent};
 use winit::event_loop::EventLoop;
@@ -234,7 +235,13 @@ fn main() {
         println!("Scripted scroll benchmark: {n} internally-driven PageDown scrolls");
     }
 
+    // Real breakdown of where cold-open time actually goes, not a guess --
+    // §75.5-§75.8 all named the ~575-620ms cold-open number as ~6x over
+    // §39.1's <100ms target without ever measuring which step causes it.
+    let t_setup_done = Instant::now();
+
     let event_loop = EventLoop::new().expect("failed to create winit event loop");
+    let t_event_loop = Instant::now();
     let window = Arc::new(
         WindowBuilder::new()
             .with_title("Spartan editor-core")
@@ -242,8 +249,17 @@ fn main() {
             .build(&event_loop)
             .expect("failed to create window"),
     );
+    let t_window = Instant::now();
+
+    // `FontSystem::new()` scans and parses every font on the system -- a
+    // real, measured ~93-97ms cost (§75.9) with no dependency on the GPU
+    // device/queue `GpuState::new()` is about to spend ~220-330ms creating.
+    // Building it on its own thread lets that cost overlap with the async
+    // GPU setup instead of paying both back-to-back on the same thread.
+    let font_system_handle = thread::spawn(glyphon::FontSystem::new);
 
     let mut gpu_state = pollster::block_on(gpu::GpuState::new(window.clone()));
+    let t_gpu = Instant::now();
     println!(
         "Adapter: {} | backend={:?} | device_type={:?}",
         gpu_state.adapter_info.name,
@@ -263,18 +279,25 @@ fn main() {
         editor.document.len_lines()
     );
 
+    let font_system = font_system_handle
+        .join()
+        .expect("font system background thread panicked");
     let mut text_state = text::TextState::new(
+        font_system,
         &gpu_state.device,
         &gpu_state.queue,
         gpu_state.config.format,
         gpu_state.size.width as f32,
         gpu_state.size.height as f32,
     );
+    let t_text_state = Instant::now();
     // The key difference from render-spike: seeded with only the visible
     // window's text, not the whole document.
     reshape_window(&mut text_state, &editor, &viewport);
+    let t_reshape = Instant::now();
 
     let cursor_renderer = cursor::CursorRenderer::new(&gpu_state.device, gpu_state.config.format);
+    let t_cursor_renderer = Instant::now();
 
     // 150ms idle default per spec §2.3. This timer is polled from
     // `AboutToWait`, which only fires continuously because this crate
@@ -524,9 +547,45 @@ fn main() {
                             text_state.atlas.trim();
 
                             if !cold_open_reported {
+                                let ms = |from: Instant, to: Instant| {
+                                    to.saturating_duration_since(from).as_secs_f64() * 1000.0
+                                };
                                 println!(
                                     "Cold-open: process start -> first presented frame = {:.2}ms",
                                     program_start.elapsed().as_secs_f64() * 1000.0
+                                );
+                                println!("Cold-open breakdown (real, measured, not estimated):");
+                                println!(
+                                    "  arg parsing / fixture load / language detect / LSP spawn = {:.2}ms",
+                                    ms(program_start, t_setup_done)
+                                );
+                                println!(
+                                    "  winit EventLoop::new()                                   = {:.2}ms",
+                                    ms(t_setup_done, t_event_loop)
+                                );
+                                println!(
+                                    "  window creation                                          = {:.2}ms",
+                                    ms(t_event_loop, t_window)
+                                );
+                                println!(
+                                    "  GpuState::new() (wgpu instance/adapter/device/surface)   = {:.2}ms",
+                                    ms(t_window, t_gpu)
+                                );
+                                println!(
+                                    "  TextState::new() (cosmic-text FontSystem + glyphon atlas) = {:.2}ms",
+                                    ms(t_gpu, t_text_state)
+                                );
+                                println!(
+                                    "  initial reshape_window() (windowed text shaping)          = {:.2}ms",
+                                    ms(t_text_state, t_reshape)
+                                );
+                                println!(
+                                    "  CursorRenderer::new()                                    = {:.2}ms",
+                                    ms(t_reshape, t_cursor_renderer)
+                                );
+                                println!(
+                                    "  first RedrawRequested (surface acquire -> present)        = {:.2}ms",
+                                    ms(t_cursor_renderer, Instant::now())
                                 );
                                 cold_open_reported = true;
                             }
