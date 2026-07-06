@@ -57,17 +57,19 @@ first — it's the parity reference until each row there is actually reimplement
 ## Current status (check this before assuming anything is built)
 
 - **Real, working code — Tier 0 spikes**: `spikes/rope-spike`, `spikes/fallback-parser-spike`,
-  `spikes/dap-spike`, `spikes/lsp-spike`, `spikes/render-spike` — Rust, tested, run repeatedly on
-  real (if modest) hardware. `dap-spike` drives real `lldb-dap` and `debugpy` subprocesses;
-  `lsp-spike` drives real `rust-analyzer` and `pyright-langserver` subprocesses — both crates now
-  proven against two independent adapters/languages each, not just one, closing the "registry
-  replication" risk §47.6 flagged as open (fixing one real deadlock found only by testing the
-  second adapter — see §47.7). No mocked adapter/server anywhere in either crate. Together they
-  are the full DAP+LSP execution of Tier 0 Spike 0.2 (§39.2), documented in §47.5–§47.7.
-  `render-spike` drives a real `wgpu`/`winit`/`glyphon` pipeline against real GPU hardware — see
-  the GPU-half update below and §47.9. Not the actual product, just Tier 0 risk-gate spikes. Also
-  `legacy/agent-deck-console/` — a real, previously-shipped Electron/Node app, kept as a parity
-  reference (§55), not part of the new architecture's build.
+  `spikes/dap-spike`, `spikes/lsp-spike`, `spikes/render-spike`, `spikes/ui-shell-spike` — Rust,
+  tested, run repeatedly on real (if modest) hardware. `dap-spike` drives real `lldb-dap` and
+  `debugpy` subprocesses; `lsp-spike` drives real `rust-analyzer` and `pyright-langserver`
+  subprocesses — both crates now proven against two independent adapters/languages each, not just
+  one, closing the "registry replication" risk §47.6 flagged as open (fixing one real deadlock
+  found only by testing the second adapter — see §47.7). No mocked adapter/server anywhere in
+  either crate. Together they are the full DAP+LSP execution of Tier 0 Spike 0.2 (§39.2),
+  documented in §47.5–§47.7. `render-spike` drives a real `wgpu`/`winit`/`glyphon` pipeline
+  against real GPU hardware — see the GPU-half update below and §47.9–§47.10. `ui-shell-spike`
+  drives a real `wgpu` shell plus a real embedded `wry`/WebView2 control in the same window — see
+  the Spike 0.4 update below and §47.11. Not the actual product, just Tier 0 risk-gate spikes.
+  Also `legacy/agent-deck-console/` — a real, previously-shipped Electron/Node app, kept as a
+  parity reference (§55), not part of the new architecture's build.
 - **Real, working code — Tier 1 implementation begun (§75)**: `crates/spartan-buffer` (the real
   §2.1 document/buffer model — branching undo tree, bounded checkpoint ring, char-indexed edits
   safe against the multi-byte-boundary bug class §48 found once already) and
@@ -94,30 +96,40 @@ first — it's the parity reference until each row there is actually reimplement
 - **The "no GPU/display in this environment" assumption below was wrong for a later session's
   machine — a real GPU was reachable.** A standalone `wgpu` adapter/device probe succeeded
   against `Intel(R) UHD Graphics 620` (Vulkan, `IntegratedGpu`), and `spikes/render-spike`
-  (§47.9) now runs a real window/renderer/latency-benchmark against it, repeatedly. This is a
-  **first increment only** — it does not close Spike 0.1: it misses §39.1's own <5ms p99 /
-  <100ms cold-open targets by ~45x/~9x at 50k lines (full-document reshape on every edit, no
-  damage-region rendering), which `spikes/render-spike/README.md` reports honestly rather than
-  rounding away. Spike 0.4 has still never run on any environment this was built in — don't
-  assume it's validated. Spike 0.2 (both halves), spike 0.1's CPU/data-structure half, and now
-  spike 0.1's GPU half (partially, per above) are the spikes with real execution behind them;
+  (§47.9–§47.10) now runs a real window/renderer/latency-benchmark against it, repeatedly. This
+  is a **first increment, later deepened once, still not a closed spike** — a damage-region CPU
+  shaping pass (§47.10) cut p50 latency from 169ms to ~3ms and p99 from 224ms to 6-12ms at 50k
+  lines (down from missing the <5ms p99 target by ~45x to ~2x), but cold-open (~900-1300ms vs.
+  <100ms) is untouched and GPU-upload cost remains real and unaddressed, which
+  `spikes/render-spike/README.md` reports honestly rather than rounding away. **Spike 0.4 has
+  also now run for the first time** (`spikes/ui-shell-spike`, §47.11) — a real `wgpu` shell plus
+  a real embedded WebView2 control, with a real measured IPC round-trip (p50=2.3ms, well under
+  the <50ms target) and a real ~180ms mode-switch fade. Two real integration gaps were found and
+  fixed: a `WebView2Loader.dll` deployment gap specific to this project's GNU toolchain (fixed via
+  `build.rs`), and a genuine keyboard-focus ownership conflict between the native shell and the
+  WebView (fixed with a direct Win32 `SetFocus` call) — the latter a concrete instance of the
+  exact "does this feel like one app" risk §39.4 exists to test. Don't assume either spike is
+  closed just because both have now run — see their own READMEs for exactly what's still
+  unconfirmed. Spike 0.2 (both halves), spike 0.1's CPU/data-structure half, spike 0.1's GPU half
+  (partially), and now spike 0.4 (partially) are the spikes with real execution behind them;
   spike 0.3's real-model fidelity test (§39.3) is still unexecuted — but not for the reason
   previously recorded. A later recheck (§47.2's addendum) found the old network blocker (a 403
   from egress policy fetching Ollama) is gone; a real HTTP check reached both `ollama.com` and
   the actual Windows installer. The real blocker now is disk space — 6.5GB free on a 98%-full
   disk, far short of what even one quantized 7B-class model needs. Don't assume this spike is
   closer to unblocked than it is just because the network excuse went away. See §39 for what the
-  remaining spikes need, §47.5–§47.6 for 0.2, §47.9 for 0.1's GPU-half first increment.
-  0.2, §47.9 for 0.1's GPU-half first increment.
+  remaining spikes need, §47.5–§47.6 for 0.2, §47.9–§47.10 for 0.1's GPU half, §47.11 for 0.4.
 
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 5 spikes + 2 real crates (spartan-buffer, spartan-languages)
+cargo test --workspace --release   # 6 spikes + 2 real crates (spartan-buffer, spartan-languages)
 # dap-spike needs `lldb-dap` (or `lldb-dap-18`) + `rustc`; lsp-spike needs `rust-analyzer` + `rustc`.
 # Both self-skip with a printed message if their tool isn't found on $PATH.
 # render-spike needs a real GPU + display to `cargo run`; its own headless unit tests (Document
 # <-> render-input mapping) run fine under `cargo test` with neither.
+# ui-shell-spike needs a real GPU + display + the WebView2 Runtime to `cargo run`; it has no
+# headless tests of its own (everything it does is GPU/WebView-facing by nature).
 cargo build --release --workspace
 ```
 
