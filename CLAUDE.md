@@ -209,6 +209,23 @@ first — it's the parity reference until each row there is actually reimplement
   skipped makes it report complete and exit immediately instead, silently cutting off any
   later-ordered phase — skipping a phase requires omitting its argument entirely, not passing `0`.
   Only Rust is wired, only six capture names are themed, and no incremental re-parsing exists yet.
+- **Real, working code — first Linux-container verification pass, a real cross-platform regression
+  found and fixed (§75.12)**: every prior §75.x pass ran on Windows with a real GPU; this pass ran
+  in a Linux container with no GPU/display at all (confirmed via `/dev/dri`, not assumed), so it's
+  a pure `cargo test --workspace --release` + clippy/fmt verification pass, not a feature increment.
+  Two real, environment-specific (not code) build gaps were found and fixed by installing system
+  packages (`libgtk-3-dev`, `libwebkit2gtk-4.1-dev`) before the workspace would even compile — no
+  prior Windows session had ever surfaced them. Once compiling, the full suite passed for real,
+  including — new territory for this project — a machine with a real, installed `lldb-dap-18`.
+  Installing `debugpy` too (to get both real DAP adapters into one session for the first time)
+  surfaced a real regression: `spartan-editor-core`'s `dap_python_cross_language.rs` had silently
+  dropped `dap-spike`'s own `#[cfg(not(windows))]` wrapper-script branch when §75.8 ported it,
+  leaving only the Windows `.cmd` version — which has no executable bit and no interpreter on
+  Linux, so the test panicked for real instead of exercising breakpoint/step/continue. Invisible
+  until now because no prior session had both a non-Windows environment and a real `debugpy`
+  install at once. Fixed by restoring `dap-spike`'s original platform split verbatim; re-ran clean,
+  including the `StepOver`/`Continue`-to-exit assertions the test already had but had never
+  actually exercised end-to-end. clippy and fmt both re-confirmed clean after the fix.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -262,9 +279,10 @@ cargo test --workspace --release   # 103 tests: 6 spikes + 3 real crates (sparta
 # `rustc`; lsp-spike and spartan-editor-core's own lsp_integration.rs need `rust-analyzer` +
 # `rustc`; spartan-editor-core's dap_python_cross_language.rs needs python + the debugpy package.
 # All self-skip with a printed message if their tool isn't found on $PATH -- and do differ by
-# machine: this project's own history includes a session where lldb-dap was installed and one
-# (this one, as of §75.8) where it wasn't but debugpy was, so don't assume either is universally
-# present.
+# machine: this project's own history includes sessions where lldb-dap was installed and one
+# (§75.8) where it wasn't but debugpy was, and one (§75.12, a Linux container) where lldb-dap was
+# installed but debugpy had to be installed manually to get real dual-adapter coverage -- so
+# don't assume either is universally present.
 # Real subprocess-spawning suites now spawn language-server/debug-adapter processes under real
 # timing (dap-spike, lsp-spike, and spartan-editor-core's own lsp_integration.rs/dap_integration.rs/
 # dap_python_cross_language.rs) -- under `cargo test`'s default full parallelism this occasionally

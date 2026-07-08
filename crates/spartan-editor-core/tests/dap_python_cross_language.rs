@@ -62,16 +62,45 @@ fn work_dir(name: &str) -> PathBuf {
 /// command directly, no shell. Same technique as `dap-spike`'s own
 /// `spawn_debugpy_adapter`, adapted to return a `CommandSpec` instead of a
 /// `DapClient` directly, since `DapSession::launch` owns spawning itself.
+///
+/// The port originally dropped `dap-spike`'s `#[cfg(not(windows))]` branch
+/// and kept only the Windows `.cmd` wrapper, unnoticed because no session
+/// had both a non-Windows environment and `debugpy` actually installed at
+/// the same time until this one -- a `.cmd` file has no executable bit and
+/// no interpreter on Linux/macOS, so `DapClient::spawn` failed to launch it
+/// and the test surfaced an `Error`/`Exited` update instead of `Stopped`.
+/// Restored `dap-spike`'s original platform split (already learned there,
+/// per its own comment, from running it for real on Windows first).
 fn debugpy_wrapper_command(python: &str, dir: &std::path::Path) -> CommandSpec {
-    let wrapper = dir.join("run-debugpy-adapter.cmd");
-    std::fs::write(
-        &wrapper,
-        format!("@echo off\r\n{python} -m debugpy.adapter %*\r\n"),
-    )
-    .unwrap();
-    CommandSpec {
-        program: wrapper.to_string_lossy().to_string(),
-        args: vec![],
+    #[cfg(windows)]
+    {
+        let wrapper = dir.join("run-debugpy-adapter.cmd");
+        std::fs::write(
+            &wrapper,
+            format!("@echo off\r\n{python} -m debugpy.adapter %*\r\n"),
+        )
+        .unwrap();
+        CommandSpec {
+            program: wrapper.to_string_lossy().to_string(),
+            args: vec![],
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let wrapper = dir.join("run-debugpy-adapter.sh");
+        std::fs::write(
+            &wrapper,
+            format!("#!/bin/sh\nexec {python} -m debugpy.adapter \"$@\"\n"),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&wrapper).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&wrapper, perms).unwrap();
+        CommandSpec {
+            program: wrapper.to_string_lossy().to_string(),
+            args: vec![],
+        }
     }
 }
 
