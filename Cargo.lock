@@ -3253,6 +3253,7 @@ dependencies = [
  "spartan-buffer",
  "spartan-git",
  "spartan-languages",
+ "spartan-security",
  "tree-sitter",
  "tree-sitter-go",
  "tree-sitter-highlight",
@@ -3279,6 +3280,13 @@ dependencies = [
  "serde",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "spartan-security"
+version = "0.1.0"
+dependencies = [
+ "regex",
 ]
 
 [[package]]

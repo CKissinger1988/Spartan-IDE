@@ -241,6 +241,28 @@ fn open_file(label: &str, debug_binary_path: Option<&PathBuf>) -> OpenFile {
         initial_text.lines().count()
     );
 
+    // Real secrets-detection warning (§9, §36, task #6) -- the "Secrets
+    // scanning pass" §9 calls for, applied at the one real, honest call
+    // site that exists today (no Leo/`ModelProvider` tool-execution layer
+    // is built yet, so there's no "before any diff is shown to Leo"
+    // moment to hook into -- see `spartan-security`'s own doc comment).
+    // A whole-file, whole-document scan is correct here (unlike this
+    // crate's windowed-only highlighting/tree-sitter passes): a secret
+    // anywhere in the file is worth warning about, not just one currently
+    // scrolled into view.
+    let secret_findings = spartan_security::scan(&initial_text);
+    if !secret_findings.is_empty() {
+        println!(
+            "WARNING: {label} appears to contain {} possible secret(s): {}",
+            secret_findings.len(),
+            secret_findings
+                .iter()
+                .map(|f| format!("{:?}", f.kind))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
     let mut lsp_session = None;
     let mut dap_launch_info = None;
     let mut dap_build_info = None;

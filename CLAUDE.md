@@ -628,6 +628,31 @@ first — it's the parity reference until each row there is actually reimplement
   layer at all (§56.2-56.4, a separate larger increment), no multi-line commit body. A real, named,
   minor gap: `CloseRequested` doesn't guard against an open commit modal, so closing the window
   while it's up (with no dirty file) silently discards an in-progress, uncommitted message.
+- **Real, working code — secrets detection, the redaction half of §9, task #6 (§75.31)**: the first
+  real security-baseline code in this workspace. New `crates/spartan-security` implements `scan()`
+  (regex-based detection of 7 real credential shapes: AWS access key IDs, GitHub/Slack/Stripe/Google
+  tokens, PEM private-key blocks, and a lower-confidence generic `api_key`/`secret`/`token`/
+  `password`-assignment catch-all) and `redact()` (replaces each finding's span with
+  `[REDACTED:<KIND>]`), with most-specific-first overlap dedup so a token embedded in a generic
+  assignment is reported once, as its specific kind. 14 new headless tests against synthetic,
+  clearly-fake credential fixtures, all passing first run. Wired into `spartan-editor-core`'s
+  `open_file()`: every opened file is scanned in full (deliberately whole-file, unlike this crate's
+  windowed-only tree-sitter passes) and prints a `WARNING: ... appears to contain N possible
+  secret(s)` line if anything is found -- a real, agent-independent, immediately useful call site,
+  since no Leo/`ModelProvider` tool-execution layer exists yet to hook `redact()` into before a
+  cloud call (deliberately deferred, not built prematurely with no real caller -- same reasoning
+  applied to skip tool-execution approval gating and path-jailing, §36.4.6, in this same pass: both
+  need a real agent tool layer to gate, which doesn't exist in this workspace). Full test/clippy/fmt
+  clean across the whole workspace. Live, through the real binary: a fixture with a synthetic
+  `AKIA...`-shaped string printed the exact expected warning; a clean fixture printed none (no false
+  positive). The 50k-line benchmark was re-run and shows a real, small, honestly-reported cost: the
+  cold-open "arg parsing/fixture load" bucket moved from this session's own ~12ms baseline to a
+  consistent ~18ms across two repeated runs (~6ms from scanning the full 3.5MB synthetic fixture
+  with all 7 patterns) -- a real regression, not noise, reported plainly rather than rounded away;
+  overall cold-open and edit/scroll latencies are otherwise unaffected. No tool-execution approval
+  gating or path-jailing (both need a real tool layer that doesn't exist), `redact()` has no caller
+  yet, no debouncing/incremental re-scan (runs once per file open), and the generic-assignment
+  pattern is untuned against any real-world corpus, only this crate's own synthetic fixtures.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -675,8 +700,9 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 197 tests: 6 spikes + 4 real crates (spartan-buffer,
-                                    # spartan-languages, spartan-git, spartan-editor-core)
+cargo test --workspace --release   # 211 tests: 6 spikes + 5 real crates (spartan-buffer,
+                                    # spartan-languages, spartan-git, spartan-security,
+                                    # spartan-editor-core)
 # dap-spike and spartan-editor-core's own dap_integration.rs need `lldb-dap` (or `lldb-dap-18`) +
 # `rustc`; lsp-spike and spartan-editor-core's own lsp_integration.rs need `rust-analyzer` +
 # `rustc`; spartan-editor-core's dap_python_cross_language.rs needs python + the debugpy package.
