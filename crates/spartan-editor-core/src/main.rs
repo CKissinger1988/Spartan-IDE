@@ -6,10 +6,11 @@ mod latency;
 mod selection;
 mod text;
 
+use mode_toggle::AppMode;
 use spartan_editor_core::viewport::{self, Viewport};
 use spartan_editor_core::{
     accessibility, build, dap_session, editor_view, file_tree, git_panel, highlight, language, lsp,
-    lsp_session, tab_bar,
+    lsp_session, mode_toggle, tab_bar,
 };
 
 use std::path::{Path, PathBuf};
@@ -666,6 +667,11 @@ fn main() {
     let mut git_rows: Vec<git_panel::PanelRow> = Vec::new();
     let mut commit_message: Option<String> = None;
 
+    // Real Agent/Editor/Design mode toggle (§8, §16.1, task #3) -- starts
+    // in `Editor`, the one mode with real content behind it.
+    let mut mode = AppMode::Editor;
+    let mut mode_hits: Vec<mode_toggle::ModeHit> = Vec::new();
+
     let mut bench_rng = rand::thread_rng();
     let mut edit_bench_remaining = bench_edit_iters.unwrap_or(0);
     let mut cursor_bench_remaining = bench_cursor_iters.unwrap_or(0);
@@ -1114,6 +1120,8 @@ fn main() {
                             ..
                         } if pending_close.is_none()
                             && last_cursor_pos.0 >= text::SIDEBAR_WIDTH
+                            && last_cursor_pos.0
+                                < gpu_state.size.width as f32 - text::MODE_TOGGLE_WIDTH
                             && last_cursor_pos.1 < text::TAB_BAR_HEIGHT =>
                         {
                             // Real tab bar clicks (§75.21) -- resolved via the
@@ -1187,7 +1195,36 @@ fn main() {
                             state: ElementState::Pressed,
                             button: MouseButton::Left,
                             ..
-                        } if pending_close.is_none() => {
+                        } if pending_close.is_none()
+                            && commit_message.is_none()
+                            && last_cursor_pos.0
+                                >= gpu_state.size.width as f32 - text::MODE_TOGGLE_WIDTH
+                            && last_cursor_pos.1 < text::TAB_BAR_HEIGHT =>
+                        {
+                            // Real mode toggle clicks (§8, §16.1, task #3)
+                            // -- same real cosmic-text hit-testing
+                            // technique as every other click target in
+                            // this crate, not a pixel-guessing geometry
+                            // model.
+                            let local_x = last_cursor_pos.0
+                                - (gpu_state.size.width as f32 - text::MODE_TOGGLE_WIDTH);
+                            let local_y = last_cursor_pos.1 - text::TAB_BAR_TEXT_TOP;
+                            if let Some(char_index) =
+                                text_state.hit_test_mode_toggle(local_x, local_y)
+                            {
+                                if let Some(clicked_mode) =
+                                    mode_toggle::hit_test(&mode_hits, char_index)
+                                {
+                                    mode = clicked_mode;
+                                    window.request_redraw();
+                                }
+                            }
+                        }
+                        WindowEvent::MouseInput {
+                            state: ElementState::Pressed,
+                            button: MouseButton::Left,
+                            ..
+                        } if pending_close.is_none() && mode == AppMode::Editor => {
                             mouse_button_down = true;
                             // `hit_test` expects coordinates relative to the
                             // text buffer's own origin, the same convention
@@ -1450,6 +1487,66 @@ fn main() {
                                 },
                                 None => println!("No git repository detected for this project"),
                             }
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } if pending_close.is_none()
+                            && commit_message.is_none()
+                            && modifiers.control_key()
+                            && matches!(
+                                key_event.physical_key,
+                                PhysicalKey::Code(KeyCode::Digit1)
+                                    | PhysicalKey::Code(KeyCode::Digit2)
+                                    | PhysicalKey::Code(KeyCode::Digit3)
+                            ) =>
+                        {
+                            // Ctrl+1/2/3: real Agent/Editor/Design mode
+                            // switching (§8, §16.1, task #3) -- checked
+                            // before the "swallow everything while
+                            // non-Editor" arm just below, so mode-switch
+                            // keys always work regardless of the current
+                            // mode, the same way Escape always works to
+                            // close a modal regardless of what's on
+                            // screen behind it.
+                            mode = match key_event.physical_key {
+                                PhysicalKey::Code(KeyCode::Digit1) => AppMode::Agent,
+                                PhysicalKey::Code(KeyCode::Digit2) => AppMode::Editor,
+                                PhysicalKey::Code(KeyCode::Digit3) => AppMode::Design,
+                                _ => unreachable!(),
+                            };
+                            window.request_redraw();
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } if pending_close.is_none()
+                            && commit_message.is_none()
+                            && mode != AppMode::Editor =>
+                        {
+                            // Real mode-gating (§8, task #3): while Agent/
+                            // Design mode is showing its real, honest
+                            // empty-state placeholder instead of the real
+                            // document, keyboard input must not silently
+                            // mutate the hidden document underneath --
+                            // swallow everything except the mode-switch
+                            // shortcuts handled by the arm just above
+                            // (which this arm never sees, since match arms
+                            // are tried in order and that one already
+                            // claimed Ctrl+1/2/3). A real, named v1 scope
+                            // boundary, not a partial/buggy attempt at
+                            // gating every individual edit-capable arm
+                            // below: every other shortcut, including
+                            // save/undo/close, is intentionally inert
+                            // while a non-Editor mode is showing.
                         }
                         WindowEvent::KeyboardInput {
                             event:
@@ -1956,8 +2053,13 @@ fn main() {
                             // `Viewport::ensure_visible`, run every frame
                             // just like the tab bar's own text is rebuilt
                             // every frame above.
-                            let tab_bar_visible_width =
-                                (gpu_state.size.width as f32 - text::TEXT_ORIGIN_X).max(0.0);
+                            // Narrowed by `MODE_TOGGLE_WIDTH` (§8, task
+                            // #3), matching the tab bar's own real,
+                            // narrower clip bounds in `TextState::prepare`.
+                            let tab_bar_visible_width = (gpu_state.size.width as f32
+                                - text::TEXT_ORIGIN_X
+                                - text::MODE_TOGGLE_WIDTH)
+                                .max(0.0);
                             if let Some(active_hit) =
                                 tab_hits.iter().find(|hit| hit.file_index == active)
                             {
@@ -2018,10 +2120,33 @@ fn main() {
                                 format!(
                                     "Commit message (Enter to commit, Escape to cancel):\n\n{message}_"
                                 )
+                            } else if let Some(placeholder) = mode.placeholder_message() {
+                                // Real Agent/Design mode placeholder (§8,
+                                // task #3) -- reuses this same modal
+                                // rendering/dim-overlay infrastructure
+                                // rather than a sixth glyphon `TextArea`,
+                                // the same way the commit modal already
+                                // reused it instead of the unsaved-changes
+                                // modal's own dedicated buffer.
+                                placeholder.to_string()
                             } else {
                                 String::new()
                             };
                             text_state.set_modal_text(&modal_text);
+
+                            // Real mode toggle text (§8, §16.1, task #3),
+                            // rebuilt every frame just like the tab bar's
+                            // own text -- cheap for three fixed short
+                            // labels.
+                            let (mode_toggle_text, new_mode_hits) =
+                                mode_toggle::build_mode_toggle_text();
+                            let active_mode_range = new_mode_hits
+                                .iter()
+                                .find(|hit| hit.mode == mode)
+                                .map(|hit| hit.range.clone())
+                                .unwrap_or(0..0);
+                            mode_hits = new_mode_hits;
+                            text_state.set_mode_toggle_text(&mode_toggle_text, active_mode_range);
 
                             text_state
                                 .prepare(
@@ -2158,7 +2283,10 @@ fn main() {
                             // "quads before text" ordering `selection_rects`
                             // above already relies on.
                             let modal_rects: Vec<selection::SelectionRect> =
-                                if pending_close.is_some() || commit_message.is_some() {
+                                if pending_close.is_some()
+                                    || commit_message.is_some()
+                                    || mode.placeholder_message().is_some()
+                                {
                                     vec![selection::SelectionRect {
                                         x: 0.0,
                                         y: 0.0,

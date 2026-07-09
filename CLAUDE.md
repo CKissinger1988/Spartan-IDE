@@ -764,6 +764,29 @@ first — it's the parity reference until each row there is actually reimplement
   Windows/macOS packaging, no code signing, no CI/release-automation wiring, no `LICENSE` file, no
   version auto-detection from `Cargo.toml` (hardcoded `"0.1.0"`, matching every crate's current
   version but not read from one source of truth yet) -- all real, named gaps.
+- **Real, working code — Agent/Editor/Design mode toggle, the first piece of task #3 (§75.36)**:
+  the first real piece of the three-mode UI shell (§8, §16.1). New, pure `mode_toggle.rs`
+  (`AppMode` enum, real toggle-text layout, real click hit-testing, mirroring `tab_bar.rs`'s own
+  split) plus a 5th glyphon `TextArea` (`mode_toggle_buffer`) rendered top-right of the tab bar,
+  proactively `Wrap::None`'d from the start to avoid re-discovering §75.28's own hit-testing bug.
+  Ctrl+1/2/3 and clicking a label switch modes; a dedicated keyboard arm swallows all other input
+  while a non-Editor mode is active (a named blanket v1 choice over per-arm gating); `Agent` and
+  `Design` show a real, specific placeholder message explaining exactly what's missing (no
+  `ModelProvider`/Leo, no GUI Builder/WebView bridge) rather than simulated content, reusing the
+  existing modal/dim-overlay infrastructure instead of a fourth near-duplicate overlay type. 5 new
+  headless tests (39 total in this crate's `--lib` suite), full workspace test/clippy/fmt clean.
+  Live, through the real binary: toggle strip rendered correctly with the active label accented
+  (screenshotted); clicking and Ctrl+1/2/3 both switch modes correctly through all three states
+  (screenshotted at each step); typing while in Agent/Design mode is fully swallowed, confirmed by
+  returning to Editor mode and finding the document exactly unchanged (screenshotted); ordinary
+  Editor-mode click-to-position and typing confirmed unaffected (screenshotted). A real
+  methodological check: elevated cursor-adjacent p99 (12.9-17.0ms) on the 50k-line benchmark was
+  investigated via a real A/B against a `git worktree` build of the immediately prior commit,
+  which showed the same noisy spread (p99 10.4-20.8ms) with an identical stable p50 -- confirming
+  session-level noise, not a real regression from this change, per §75.9's/§75.29's own established
+  methodology. No command palette (§16.1's other half of task #3, still open, task stays
+  `in_progress`), no per-arm input isolation (blanket swallow only), no mode-switch transition
+  animation, no persisted last-active mode across restarts.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -811,7 +834,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 235 tests: 6 spikes + 7 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 240 tests: 6 spikes + 7 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-editor-core, xtask)
 # `cargo run -p xtask -- package` (§75.35) builds a real Linux .tar.gz release package into
