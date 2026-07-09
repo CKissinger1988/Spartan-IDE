@@ -1333,6 +1333,31 @@ first — it's the parity reference until each row there is actually reimplement
   responsive/breakpoint preview, no asset management, no live-reload while typing (refreshes on
   file-switch/edit-apply only, matching the tree's own existing cadence). This closes the largest
   prerequisite gap; the rest of "full web design suite" is real, substantial, and unstarted.
+- **Real, working code — real click-to-select on the live visual canvas, second step of "full web
+  design suite," task #12 (§75.53)**: closes the first gap §75.52 named explicitly. New
+  `gui-builder/src/annotate.ts` reuses `tree.ts`'s own canonical traversal (not a second,
+  separately-written id assignment) to inject a real `data-spartan-id` attribute onto every
+  element, carrying the exact same id the structural tree/edit panel already use -- by
+  construction, a click on a rendered element and a click on its tree row resolve to the literal
+  same id. `bundle.ts` wires this in via a real esbuild `onLoad` plugin scoped to the target
+  file's own path (degrading to the real, unannotated source if annotation itself fails, rather
+  than failing the whole preview). Since the live-preview iframe is sandboxed with no
+  `allow-same-origin` (§75.52), the generated entry script's click handler relays via
+  `window.parent.postMessage` -- the one real, correct cross-frame channel; `webview_bridge.rs`'s
+  outer page routes the received id through the *exact same* `selectNode` a tree-row click already
+  calls, so a canvas click and a tree-row click are indistinguishable to the rest of the edit flow.
+  6 new `gui-builder` tests (41 total, including one that independently re-parses the annotated
+  output to confirm ids really match a fresh parse, not just a string check), 372 Rust tests
+  unchanged, full clippy/fmt clean. Live, through the real binary: a real `Card.jsx` fixture's
+  live-rendered button, clicked directly in the rendered iframe, correctly opened the edit panel
+  reading "Selected: <button> (id n3)" -- confirmed against the same id the structural tree below
+  it already showed for that element, screenshotted. A real verification-environment note, not a
+  bug: the edit panel first appeared not to open because the taller page had scrolled it below the
+  visible window -- confirmed correct after scrolling. **What this does not confirm**: no visual
+  "selected" outline drawn on the canvas itself (only the edit panel/tree reflect selection), no
+  drag-and-drop/visual style editing/component palette/responsive preview/asset management (the
+  same real remaining "full web design suite" scope §75.52 named), not stress-tested against
+  deeply nested overlapping elements.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1428,9 +1453,9 @@ cargo test --workspace --release   # 372 tests: 6 spikes + 11 real crates + xtas
 # --workspace`/`cargo test --workspace` from the repo root never touch them; build them with
 # `cargo component build` from inside crates/plugins/<name> instead.
 # gui-builder/ (task #12, §75.38) is a real, separate npm/TypeScript project, not part of the
-# Cargo workspace at all -- `cd gui-builder && npm install && npm test` (38 tests, Node's built-in
-# `node:test` runner). Two of its own tests (§75.52) perform a real `npm install` of a temp
-# react/react-dom fixture and self-skip if that install fails (no network reachable).
+# Cargo workspace at all -- `cd gui-builder && npm install && npm test` (41 tests, Node's built-in
+# `node:test` runner). Several of its own tests (§75.52, §75.53) perform a real `npm install` of a
+# temp react/react-dom fixture and self-skip if that install fails (no network reachable).
 # spartan-editor-core's Design mode now embeds a real wry WebView (§6.1, §75.39) -- on Linux, live
 # `cargo run`/manual testing in a minimal/headless environment (no real desktop D-Bus session, e.g.
 # this project's own Xvfb+fluxbox verification setup) needs `GSETTINGS_BACKEND=memory` set or

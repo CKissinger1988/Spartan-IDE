@@ -64,6 +64,37 @@ test("bundles a real component with real react/react-dom resolved from the targe
   }
 });
 
+test("a real bundle carries real data-spartan-id attributes for click-to-select (§75.53)", async (t) => {
+  const dir = realFixtureWithReactInstalled();
+  if (!dir) {
+    t.skip("could not npm install a real react/react-dom fixture (no network?)");
+    return;
+  }
+  try {
+    const componentPath = path.join(dir, "Nested.jsx");
+    writeFileSync(
+      componentPath,
+      `export default function Nested() { return <div><span>hello</span></div>; }`,
+    );
+    const result = await bundleComponent(componentPath);
+    assert.ok("code" in result, `expected a real bundle, got: ${JSON.stringify(result)}`);
+    if ("code" in result) {
+      assert.ok(
+        result.code.includes("data-spartan-id"),
+        "the real bundle should carry the real click-to-select attribute",
+      );
+      assert.ok(result.code.includes('"n0"'), "the outer <div> should get id n0");
+      assert.ok(result.code.includes('"n1"'), "the nested <span> should get its own distinct id n1");
+      assert.ok(
+        result.code.includes("spartan-canvas-click"),
+        "the real bundle should include the real click-relay postMessage call",
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a real missing dependency produces a real, honest bundling error, not a silent partial render", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "gui-builder-bundle-missing-dep-"));
   try {

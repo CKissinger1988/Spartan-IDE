@@ -34,6 +34,15 @@
 //! not a replacement -- so Canvas -> Code editing keeps working exactly
 //! as before while the iframe gives real visual confirmation of the
 //! result.
+//!
+//! As of §75.53, the visual canvas is real-ly clickable: `gui-builder`'s
+//! own bundler now annotates every rendered element with a real
+//! `data-spartan-id` attribute (the exact id the structural tree already
+//! uses) and posts `{type:'spartan-canvas-click', nodeId}` across the
+//! sandbox boundary on click; this page's own `message` listener routes
+//! that through the same `selectNode` the tree's own row clicks already
+//! call, so clicking an element directly in the live render opens the
+//! identical edit form a tree-row click would.
 
 use serde::Deserialize;
 use std::cell::RefCell;
@@ -179,13 +188,35 @@ const HTML: &str = r#"<!DOCTYPE html>
       );
       node.children.forEach(function (child) { renderNode(child, depth + 1, lines); });
     }
+    var lastTreeRoots = [];
     function updateComponentTree(data) {
+      lastTreeRoots = data.roots;
       const lines = [];
       data.roots.forEach(function (root) { renderNode(root, 0, lines); });
       document.getElementById('componentTree').innerHTML =
         lines.length > 0 ? lines.join('') : '(no JSX elements found)';
       hideEditPanel();
     }
+    function findNodeById(nodes, id) {
+      for (const node of nodes) {
+        if (node.id === id) return node;
+        const found = findNodeById(node.children, id);
+        if (found) return found;
+      }
+      return null;
+    }
+    // Real §75.53 click-to-select relay: the sandboxed live-preview
+    // iframe (no "allow-same-origin") can only reach this outer page via
+    // postMessage -- received here and routed through the exact same
+    // `selectNode` the structural tree's own row clicks already use, so
+    // a canvas click and a tree-row click for the same element produce
+    // an identical selection.
+    window.addEventListener('message', function (event) {
+      const msg = event.data;
+      if (!msg || msg.type !== 'spartan-canvas-click') return;
+      const node = findNodeById(lastTreeRoots, msg.nodeId);
+      selectNode(msg.nodeId, node ? node.tagName : 'unknown');
+    });
     window.ipc.postMessage(JSON.stringify({type: 'ready'}));
   </script>
 </body>

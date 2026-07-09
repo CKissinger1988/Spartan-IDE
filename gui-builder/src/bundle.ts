@@ -23,9 +23,23 @@
  * know this is wrong at bundle time) but fail at real render time inside
  * the WebView -- the generated entry script's own try/catch reports that
  * failure visibly in the rendered output rather than a silent blank page.
+ *
+ * As of §75.53, the target file's own real source is annotated with a
+ * real `data-spartan-id` attribute per element (via `annotate.ts`,
+ * reusing the exact same id-assignment traversal the structural tree
+ * uses) through a real esbuild `onLoad` plugin -- so the live-rendered
+ * DOM can be clicked and traced back to the exact node id the structural
+ * tree/edit panel already use, closing the "no click-to-select on the
+ * canvas itself" gap §75.52 named. If annotation itself fails (a real
+ * parse error the id-assignment traversal can't handle, distinct from a
+ * bundling error), this degrades to bundling the real, unannotated
+ * source rather than failing the whole render over a click-to-select-only
+ * concern.
  */
 import * as esbuild from "esbuild";
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { injectNodeIds } from "./annotate.js";
 
 export interface BundleResult {
   code: string;
@@ -56,6 +70,24 @@ try {
   }
   const root = createRoot(rootEl);
   root.render(React.createElement(Component));
+
+  // Real §75.53 click-to-select relay: this iframe is sandboxed
+  // ("allow-scripts" only, no "allow-same-origin"), so it has an opaque
+  // origin and can't reach the parent page's own JS directly -- postMessage
+  // is the one real, correct channel across that boundary. Delegated on
+  // the document root rather than per-element, so it keeps working after
+  // React re-renders replace the underlying DOM nodes.
+  document.addEventListener("click", function (event) {
+    const target = event.target && event.target.closest
+      ? event.target.closest("[data-spartan-id]")
+      : null;
+    if (target) {
+      window.parent.postMessage(
+        { type: "spartan-canvas-click", nodeId: target.getAttribute("data-spartan-id") },
+        "*"
+      );
+    }
+  });
 } catch (e) {
   rootEl.innerHTML =
     '<div style="color:#e06c75;font-family:monospace;padding:1em;white-space:pre-wrap;">' +
@@ -63,6 +95,28 @@ try {
     '</div>';
 }
 `;
+}
+
+function annotateTargetFilePlugin(absPath: string): esbuild.Plugin {
+  return {
+    name: "spartan-annotate-target-file",
+    setup(build) {
+      build.onLoad({ filter: new RegExp(`^${absPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }, () => {
+        const original = readFileSync(absPath, "utf8");
+        let contents = original;
+        try {
+          contents = injectNodeIds(original);
+        } catch {
+          // Real, deliberate degrade: a real annotation-step parse
+          // failure falls back to the real, unannotated source rather
+          // than failing the whole live preview over a click-to-select-
+          // only concern -- the component still renders, it just isn't
+          // clickable.
+        }
+        return { contents, loader: "jsx" };
+      });
+    },
+  };
 }
 
 export async function bundleComponent(
@@ -82,6 +136,7 @@ export async function bundleComponent(
       platform: "browser",
       jsx: "automatic",
       logLevel: "silent",
+      plugins: [annotateTargetFilePlugin(absPath)],
     });
     const output = result.outputFiles?.[0];
     if (!output) {
