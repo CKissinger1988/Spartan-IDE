@@ -48,6 +48,21 @@ pub struct EditorView {
     /// just as valid a "redo" as this one), so the conventional
     /// most-recently-undone-wins behavior is built here, one layer up.
     redo_stack: Vec<spartan_buffer::CheckpointId>,
+    /// "Sticky column" (§75.22): the column an up/down *run* tries to return
+    /// to, even after passing through a shorter intermediate line that would
+    /// otherwise clamp it away permanently -- matching conventional editor
+    /// behavior (e.g. arrowing down through a blank line and back into a
+    /// long one restores the original column, not column 0). Stores the
+    /// *desired* column, not whatever `set_cursor_to_line_col` actually
+    /// clamped it to on a short line, which is what makes it survive
+    /// multiple short lines in a row. `None` when no up/down run is active;
+    /// captured by `move_up`/`move_down` on the first move of a run and
+    /// reused (not re-derived from the cursor) on every subsequent call in
+    /// the same run. Cleared by every other cursor-moving method, since a
+    /// run is defined as *consecutive* up/down moves only -- anything else
+    /// (left/right, word/line/document jumps, mouse clicks, edits,
+    /// undo/redo) intentionally starts a fresh run next time.
+    sticky_column: Option<usize>,
 }
 
 impl EditorView {
@@ -67,6 +82,7 @@ impl EditorView {
             cursor,
             selection_anchor: None,
             redo_stack: Vec::new(),
+            sticky_column: None,
         }
     }
 
@@ -112,6 +128,7 @@ impl EditorView {
             return EditEffect::None;
         };
         self.redo_stack.clear();
+        self.sticky_column = None;
         let line_start = self.document.char_to_line(start).ok();
         let line_end = self.document.char_to_line(end).ok();
         let structural = line_start != line_end;
@@ -143,6 +160,7 @@ impl EditorView {
             self.delete_selection();
         }
         self.redo_stack.clear();
+        self.sticky_column = None;
         let line_before = self.document.char_to_line(self.cursor).ok();
         if self.document.insert(self.cursor, text).is_ok() {
             self.cursor += text.chars().count();
@@ -168,6 +186,7 @@ impl EditorView {
             return EditEffect::None;
         }
         self.redo_stack.clear();
+        self.sticky_column = None;
         let line_before = self.document.char_to_line(self.cursor).ok();
         // If the cursor sits at the very start of its line, the character
         // being removed is the previous line's terminating "\n" -- deleting
@@ -231,13 +250,21 @@ impl EditorView {
     /// terminator (a click past the end of a short line lands at
     /// end-of-line, not out-of-bounds mid-terminator).
     pub fn set_cursor_to_line_col(&mut self, line: usize, col_chars: usize) {
+        self.sticky_column = None;
         let doc_len_lines = self.document.len_lines();
         let line = line.min(doc_len_lines.saturating_sub(1));
         let Ok(line_start) = self.document.line_to_char(line) else {
             return;
         };
-        let line_len_chars = self
-            .document
+        let line_len_chars = self.line_len_chars(line);
+        self.cursor = line_start + col_chars.min(line_len_chars);
+    }
+
+    /// A line's real length in chars, excluding its `\n`/`\r\n` terminator --
+    /// factored out of `set_cursor_to_line_col` in §75.22, when
+    /// `move_to_line_end` needed the exact same calculation.
+    fn line_len_chars(&self, line: usize) -> usize {
+        self.document
             .line(line)
             .map(|l| {
                 l.strip_suffix("\r\n")
@@ -246,8 +273,36 @@ impl EditorView {
                     .chars()
                     .count()
             })
-            .unwrap_or(0);
-        self.cursor = line_start + col_chars.min(line_len_chars);
+            .unwrap_or(0)
+    }
+
+    /// Real single-char fetch via `Document::text_between` (§75.22), used
+    /// only by the word-jump methods below -- bounded to a handful of calls
+    /// per jump (one word's worth of chars, not the whole document), so the
+    /// O(log n)-per-call rope slice cost this incurs stays cheap even on a
+    /// large file. `spartan-buffer::Document` has no cheaper single-char
+    /// accessor of its own.
+    fn char_before(&self, pos: usize) -> Option<char> {
+        if pos == 0 {
+            return None;
+        }
+        self.document
+            .text_between(pos - 1..pos)
+            .ok()?
+            .chars()
+            .next()
+    }
+
+    /// The char immediately at (not before) `pos`, mirroring `char_before`.
+    fn char_at(&self, pos: usize) -> Option<char> {
+        if pos >= self.document.len_chars() {
+            return None;
+        }
+        self.document
+            .text_between(pos..pos + 1)
+            .ok()?
+            .chars()
+            .next()
     }
 
     /// Moves the cursor one char left, clamped at document start. Returns
@@ -256,6 +311,7 @@ impl EditorView {
     /// redundant redraw when already at a boundary (e.g. repeated
     /// `ArrowLeft` at the very start of the document).
     pub fn move_left(&mut self) -> bool {
+        self.sticky_column = None;
         if self.cursor == 0 {
             return false;
         }
@@ -265,6 +321,7 @@ impl EditorView {
 
     /// Moves the cursor one char right, clamped at document end.
     pub fn move_right(&mut self) -> bool {
+        self.sticky_column = None;
         let len = self.document.len_chars();
         if self.cursor >= len {
             return false;
@@ -273,31 +330,142 @@ impl EditorView {
         true
     }
 
-    /// Moves the cursor up one line, keeping the current column where
-    /// possible (clamped to the shorter line, via `set_cursor_to_line_col`).
-    /// A no-op already at line 0. Deliberately does not remember a "desired
-    /// column" across a run of up/down moves through lines of different
-    /// lengths (the way most real editors do) -- a real, named, minor UX
-    /// gap, not a correctness bug: each individual move still lands
-    /// somewhere valid, it just re-derives the column from the *current*
-    /// (possibly already-clamped) position rather than an original one.
+    /// Moves the cursor up one line, keeping a "sticky" column where
+    /// possible across a whole run of consecutive up/down moves (§75.22) --
+    /// see the `sticky_column` field's own doc comment for why this survives
+    /// passing through shorter intermediate lines, unlike naively
+    /// re-deriving the column from the cursor on every call. A no-op already
+    /// at line 0.
     pub fn move_up(&mut self) -> bool {
         let (line, col) = self.cursor_line_col();
         if line == 0 {
             return false;
         }
-        self.set_cursor_to_line_col(line - 1, col);
+        let target_col = self.sticky_column.unwrap_or(col);
+        self.set_cursor_to_line_col(line - 1, target_col);
+        self.sticky_column = Some(target_col);
         true
     }
 
-    /// Moves the cursor down one line, same column-preservation caveat as
+    /// Moves the cursor down one line, same sticky-column behavior as
     /// `move_up`. A no-op already on the document's last line.
     pub fn move_down(&mut self) -> bool {
         let (line, col) = self.cursor_line_col();
         if line + 1 >= self.document.len_lines() {
             return false;
         }
-        self.set_cursor_to_line_col(line + 1, col);
+        let target_col = self.sticky_column.unwrap_or(col);
+        self.set_cursor_to_line_col(line + 1, target_col);
+        self.sticky_column = Some(target_col);
+        true
+    }
+
+    /// Moves to the start of the current line (Home). A no-op if the cursor
+    /// is already there.
+    pub fn move_to_line_start(&mut self) -> bool {
+        self.sticky_column = None;
+        let (line, col) = self.cursor_line_col();
+        if col == 0 {
+            return false;
+        }
+        let Ok(line_start) = self.document.line_to_char(line) else {
+            return false;
+        };
+        self.cursor = line_start;
+        true
+    }
+
+    /// Moves to the end of the current line, excluding its terminator (End).
+    /// A no-op if the cursor is already there.
+    pub fn move_to_line_end(&mut self) -> bool {
+        self.sticky_column = None;
+        let (line, col) = self.cursor_line_col();
+        let line_len_chars = self.line_len_chars(line);
+        if col >= line_len_chars {
+            return false;
+        }
+        let Ok(line_start) = self.document.line_to_char(line) else {
+            return false;
+        };
+        self.cursor = line_start + line_len_chars;
+        true
+    }
+
+    /// Moves to the very start of the document (Ctrl+Home). A no-op if the
+    /// cursor is already there.
+    pub fn move_to_document_start(&mut self) -> bool {
+        self.sticky_column = None;
+        if self.cursor == 0 {
+            return false;
+        }
+        self.cursor = 0;
+        true
+    }
+
+    /// Moves to the very end of the document (Ctrl+End). A no-op if the
+    /// cursor is already there.
+    pub fn move_to_document_end(&mut self) -> bool {
+        self.sticky_column = None;
+        let len = self.document.len_chars();
+        if self.cursor >= len {
+            return false;
+        }
+        self.cursor = len;
+        true
+    }
+
+    /// Moves left to the start of the previous word (Ctrl+Left), matching
+    /// conventional editor behavior: any whitespace/newlines immediately
+    /// before the cursor are skipped first, then the contiguous run of
+    /// "same kind" chars before that -- word chars (alphanumeric/`_`) and
+    /// punctuation are treated as different kinds, so `foo.bar| baz` stops
+    /// at `foo.|bar` before reaching `foo.| bar` then `|foo.bar baz`, not
+    /// just at whitespace. Crosses line boundaries freely since `\n` is
+    /// whitespace. A no-op at document start.
+    pub fn move_word_left(&mut self) -> bool {
+        if self.cursor == 0 {
+            return false;
+        }
+        self.sticky_column = None;
+        let mut pos = self.cursor;
+        while pos > 0 && self.char_before(pos).is_some_and(|c| c.is_whitespace()) {
+            pos -= 1;
+        }
+        if pos > 0 {
+            let is_word = self.char_before(pos).is_some_and(is_word_char);
+            while pos > 0 {
+                match self.char_before(pos) {
+                    Some(c) if !c.is_whitespace() && is_word_char(c) == is_word => pos -= 1,
+                    _ => break,
+                }
+            }
+        }
+        self.cursor = pos;
+        true
+    }
+
+    /// Moves right to the start of the next word (Ctrl+Right), mirroring
+    /// `move_word_left`. A no-op at document end.
+    pub fn move_word_right(&mut self) -> bool {
+        let len = self.document.len_chars();
+        if self.cursor >= len {
+            return false;
+        }
+        self.sticky_column = None;
+        let mut pos = self.cursor;
+        while pos < len && self.char_at(pos).is_some_and(|c| c.is_whitespace()) {
+            pos += 1;
+        }
+        if pos < len {
+            let is_word = self.char_at(pos).is_some_and(is_word_char);
+            while pos < len {
+                match self.char_at(pos) {
+                    Some(c) if !c.is_whitespace() && is_word_char(c) == is_word => pos += 1,
+                    _ => break,
+                }
+            }
+        }
+        self.cursor = pos;
         true
     }
 
@@ -319,6 +487,7 @@ impl EditorView {
         }
         self.redo_stack.push(before);
         self.selection_anchor = None;
+        self.sticky_column = None;
         self.cursor = self.cursor.min(self.document.len_chars());
         true
     }
@@ -335,10 +504,20 @@ impl EditorView {
         while let Some(id) = self.redo_stack.pop() {
             if self.document.jump_to_checkpoint(id).is_ok() {
                 self.selection_anchor = None;
+                self.sticky_column = None;
                 self.cursor = self.cursor.min(self.document.len_chars());
                 return true;
             }
         }
         false
     }
+}
+
+/// Classifies a char for word-boundary purposes (§75.22): alphanumeric or
+/// `_` counts as "word", everything else (punctuation) doesn't -- matching
+/// the common "words are identifiers" editor convention rather than
+/// natural-language word boundaries. Whitespace is handled separately by
+/// callers before this is consulted.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }

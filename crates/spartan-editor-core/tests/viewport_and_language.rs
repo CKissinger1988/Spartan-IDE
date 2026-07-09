@@ -256,6 +256,154 @@ fn move_down_at_last_line_is_a_no_op_and_reports_no_change() {
     assert_eq!(editor.cursor_line_col(), before);
 }
 
+// -- §75.22: Home/End/Ctrl+Arrow navigation, sticky column --
+
+#[test]
+fn move_to_line_start_moves_to_column_zero() {
+    let mut editor = EditorView::new("hello world\n");
+    editor.set_cursor_to_line_col(0, 6);
+    assert!(editor.move_to_line_start());
+    assert_eq!(editor.cursor_line_col(), (0, 0));
+}
+
+#[test]
+fn move_to_line_start_at_column_zero_is_a_no_op() {
+    let mut editor = EditorView::new("hello world\n");
+    assert!(!editor.move_to_line_start());
+    assert_eq!(editor.cursor_line_col(), (0, 0));
+}
+
+#[test]
+fn move_to_line_end_moves_to_the_last_real_column_excluding_the_terminator() {
+    let mut editor = EditorView::new("hello world\n");
+    assert!(editor.move_to_line_end());
+    assert_eq!(editor.cursor_line_col(), (0, "hello world".chars().count()));
+}
+
+#[test]
+fn move_to_line_end_already_there_is_a_no_op() {
+    let mut editor = EditorView::new("hi\n");
+    editor.set_cursor_to_line_col(0, 2);
+    assert!(!editor.move_to_line_end());
+    assert_eq!(editor.cursor_line_col(), (0, 2));
+}
+
+#[test]
+fn move_to_document_start_and_end_jump_across_lines() {
+    let mut editor = EditorView::new("abc\ndef\nghi\n");
+    editor.set_cursor_to_line_col(1, 1);
+    assert!(editor.move_to_document_start());
+    assert_eq!(editor.cursor, 0);
+    assert!(editor.move_to_document_end());
+    assert_eq!(editor.cursor, editor.document.len_chars());
+}
+
+#[test]
+fn move_to_document_start_at_start_is_a_no_op() {
+    let mut editor = EditorView::new("abc\n");
+    assert!(!editor.move_to_document_start());
+}
+
+#[test]
+fn move_to_document_end_at_end_is_a_no_op() {
+    let mut editor = EditorView::new("abc\n");
+    editor.cursor = editor.document.len_chars();
+    assert!(!editor.move_to_document_end());
+}
+
+#[test]
+fn move_word_right_skips_a_word_then_stops_before_the_next() {
+    let mut editor = EditorView::new("foo bar baz\n");
+    assert!(editor.move_word_right());
+    assert_eq!(editor.cursor_line_col(), (0, 3)); // end of "foo"
+    assert!(editor.move_word_right());
+    assert_eq!(editor.cursor_line_col(), (0, 7)); // end of "bar"
+}
+
+#[test]
+fn move_word_left_skips_whitespace_then_a_word() {
+    let mut editor = EditorView::new("foo bar baz\n");
+    editor.set_cursor_to_line_col(0, 11); // end of "baz"
+    assert!(editor.move_word_left());
+    assert_eq!(editor.cursor_line_col(), (0, 8)); // start of "baz"
+    assert!(editor.move_word_left());
+    assert_eq!(editor.cursor_line_col(), (0, 4)); // start of "bar"
+}
+
+#[test]
+fn move_word_left_stops_at_a_punctuation_boundary_not_just_whitespace() {
+    let mut editor = EditorView::new("foo.bar baz\n");
+    editor.set_cursor_to_line_col(0, 7); // end of "bar"
+    assert!(editor.move_word_left());
+    assert_eq!(editor.cursor_line_col(), (0, 4)); // start of "bar", after "."
+    assert!(editor.move_word_left());
+    assert_eq!(editor.cursor_line_col(), (0, 3)); // start of ".", after "foo"
+}
+
+#[test]
+fn move_word_right_crosses_a_line_boundary() {
+    // `move_word_right` skips whitespace (including "\n") first, then
+    // consumes the *whole* following token, landing at its end -- same
+    // "end of the next word" behavior `move_word_right_skips_a_word_...`
+    // above exercises within a single line, just also crossing a line
+    // boundary to get there.
+    let mut editor = EditorView::new("foo\nbar\n");
+    editor.set_cursor_to_line_col(0, 3); // end of "foo"
+    assert!(editor.move_word_right());
+    assert_eq!(editor.cursor_line_col(), (1, 3)); // end of "bar"
+}
+
+#[test]
+fn move_word_left_at_document_start_is_a_no_op() {
+    let mut editor = EditorView::new("foo bar\n");
+    assert!(!editor.move_word_left());
+}
+
+#[test]
+fn move_word_right_at_document_end_is_a_no_op() {
+    let mut editor = EditorView::new("foo\n");
+    editor.cursor = editor.document.len_chars();
+    assert!(!editor.move_word_right());
+}
+
+#[test]
+fn sticky_column_survives_a_blank_line_in_the_middle_of_a_run() {
+    // Down through a blank line and back into a long one should restore the
+    // original column, not stay clamped to 0 from the blank line.
+    let mut editor = EditorView::new("longer line\n\nanother long line\n");
+    editor.set_cursor_to_line_col(0, 8);
+    assert!(editor.move_down());
+    assert_eq!(editor.cursor_line_col(), (1, 0)); // clamped: line 1 is blank
+    assert!(editor.move_down());
+    assert_eq!(editor.cursor_line_col(), (2, 8)); // restored on line 2
+}
+
+#[test]
+fn sticky_column_resets_after_a_horizontal_move() {
+    let mut editor = EditorView::new("longer line\nx\nanother long line\n");
+    editor.set_cursor_to_line_col(0, 8);
+    assert!(editor.move_down());
+    assert_eq!(editor.cursor_line_col(), (1, 1)); // clamped: line 1 is just "x"
+                                                  // A horizontal move starts a fresh run -- moving down again should stick
+                                                  // to the now-current column (0), not silently resurrect the column-8
+                                                  // run from before.
+    editor.move_left();
+    assert_eq!(editor.cursor_line_col(), (1, 0));
+    assert!(editor.move_down());
+    assert_eq!(editor.cursor_line_col(), (2, 0));
+}
+
+#[test]
+fn sticky_column_does_not_apply_across_non_consecutive_up_down_runs() {
+    let mut editor = EditorView::new("longer line\n\nanother long line\n");
+    editor.set_cursor_to_line_col(0, 8);
+    assert!(editor.move_down());
+    assert_eq!(editor.cursor_line_col(), (1, 0));
+    editor.move_to_line_start(); // breaks the run even though column is still 0
+    assert!(editor.move_down());
+    assert_eq!(editor.cursor_line_col(), (2, 0));
+}
+
 #[test]
 fn selection_range_is_none_with_no_anchor() {
     let editor = EditorView::new("hello world");

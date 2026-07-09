@@ -122,23 +122,36 @@ fn apply_edit_effect(
     }
 }
 
-/// Real navigation-and-selection interaction rule (§75.18), matching
-/// conventional editor behavior: Shift+Arrow extends the active selection
-/// (arming one at the current cursor first if none exists yet); a plain
-/// (non-Shift) arrow press while a selection exists collapses it instead of
-/// moving further from wherever the cursor last was -- Left/Right jump
-/// straight to the selection's start/end, Up/Down clear the selection and
-/// still move from the (now-collapsed) cursor, since there's no single
-/// "correct" vertical collapse target the way there is a horizontal one.
-/// Returns whether anything visually changed (cursor position or selection
-/// state), so the caller knows whether a redraw is warranted.
-fn handle_arrow_key(editor: &mut editor_view::EditorView, key: NamedKey, shift: bool) -> bool {
+/// Real navigation-and-selection interaction rule (§75.18, extended by
+/// §75.22 for Home/End/Ctrl+Arrow), matching conventional editor behavior:
+/// Shift+<key> extends the active selection (arming one at the current
+/// cursor first if none exists yet); a plain (non-Shift, non-Ctrl) Left/
+/// Right press while a selection exists collapses it to the selection's
+/// start/end instead of moving further from wherever the cursor last was.
+/// Every other case (Up/Down, Home/End, Ctrl+Left/Right, Ctrl+Home/End)
+/// clears the selection and still moves from the (now-collapsed) cursor,
+/// since there's no single "correct" boundary-collapse target for those the
+/// way there is for a plain horizontal arrow. Returns whether anything
+/// visually changed (cursor position or selection state), so the caller
+/// knows whether a redraw is warranted.
+fn handle_navigation_key(
+    editor: &mut editor_view::EditorView,
+    key: NamedKey,
+    shift: bool,
+    ctrl: bool,
+) -> bool {
     let do_move = |editor: &mut editor_view::EditorView| match key {
+        NamedKey::ArrowLeft if ctrl => editor.move_word_left(),
         NamedKey::ArrowLeft => editor.move_left(),
+        NamedKey::ArrowRight if ctrl => editor.move_word_right(),
         NamedKey::ArrowRight => editor.move_right(),
         NamedKey::ArrowUp => editor.move_up(),
         NamedKey::ArrowDown => editor.move_down(),
-        _ => unreachable!("handle_arrow_key called with a non-arrow key"),
+        NamedKey::Home if ctrl => editor.move_to_document_start(),
+        NamedKey::Home => editor.move_to_line_start(),
+        NamedKey::End if ctrl => editor.move_to_document_end(),
+        NamedKey::End => editor.move_to_line_end(),
+        _ => unreachable!("handle_navigation_key called with a non-navigation key"),
     };
 
     if shift {
@@ -149,16 +162,15 @@ fn handle_arrow_key(editor: &mut editor_view::EditorView, key: NamedKey, shift: 
     if let Some((start, end)) = editor.selection_range() {
         editor.selection_anchor = None;
         return match key {
-            NamedKey::ArrowLeft => {
+            NamedKey::ArrowLeft if !ctrl => {
                 editor.cursor = start;
                 true
             }
-            NamedKey::ArrowRight => {
+            NamedKey::ArrowRight if !ctrl => {
                 editor.cursor = end;
                 true
             }
-            NamedKey::ArrowUp | NamedKey::ArrowDown => do_move(editor),
-            _ => unreachable!("handle_arrow_key called with a non-arrow key"),
+            _ => do_move(editor),
         };
     }
 
@@ -1136,17 +1148,21 @@ fn main() {
                                 key @ (NamedKey::ArrowLeft
                                 | NamedKey::ArrowRight
                                 | NamedKey::ArrowUp
-                                | NamedKey::ArrowDown),
+                                | NamedKey::ArrowDown
+                                | NamedKey::Home
+                                | NamedKey::End),
                             ) => {
-                                // Real arrow-key navigation (§75.17), now
-                                // Shift-aware for text selection (§75.18) --
-                                // see `handle_arrow_key`'s own doc comment
-                                // for the exact interaction rule.
+                                // Real arrow-key navigation (§75.17), Shift-
+                                // aware for text selection (§75.18), and
+                                // Home/End/Ctrl+Arrow/sticky-column (§75.22)
+                                // -- see `handle_navigation_key`'s own doc
+                                // comment for the exact interaction rule.
                                 let active_file = &mut files[active];
-                                let moved = handle_arrow_key(
+                                let moved = handle_navigation_key(
                                     &mut active_file.editor,
                                     *key,
                                     modifiers.shift_key(),
+                                    modifiers.control_key(),
                                 );
                                 if moved {
                                     let (cursor_line, _) = active_file.editor.cursor_line_col();

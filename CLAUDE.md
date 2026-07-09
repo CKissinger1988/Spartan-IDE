@@ -387,6 +387,33 @@ first — it's the parity reference until each row there is actually reimplement
   situation. Full test/clippy/fmt suite clean, 50k-line benchmark re-run with no regression. No file
   tree sidebar yet (files still only open via `--open:` CLI args), no tab reorder, no overflow
   handling, no Ctrl+W.
+- **Real, working code — Home/End/Ctrl+Arrow navigation, sticky column (§75.22)**: closes the three
+  gaps §75.17 named explicitly. Six new `EditorView` methods (`move_to_line_start/end`,
+  `move_to_document_start/end`, `move_word_left/right`), all following the existing
+  did-anything-change `bool` convention. Word jump has no cheap single-char `Document` accessor to
+  build on, so two new private helpers (`char_before`/`char_at`) each fetch one char via
+  `text_between(pos..pos+1)` -- O(log n) per call but bounded to a handful of calls per jump, not a
+  whole-document scan. Jump logic: skip adjacent whitespace (crossing line boundaries for free via
+  `\n`), then consume the contiguous run of same-kind chars, where word chars (alphanumeric/`_`) and
+  punctuation are different kinds -- so `foo.bar` stops at the `.` instead of jumping straight from
+  `foo` to `bar`. Sticky column (`EditorView::sticky_column`) stores the *desired* column `move_up`/
+  `move_down` were asked to reach, not whatever a short intermediate line clamped it to, so a run
+  survives multiple short lines and restores the original column on the next long-enough one --
+  cleared by every other cursor-moving method, since a "run" is strictly consecutive up/down calls.
+  `handle_arrow_key` renamed `handle_navigation_key`, gained a `ctrl: bool` param; §75.18's
+  selection-collapse rule for plain Left/Right is preserved (`if !ctrl`-gated), every other
+  combination clears the selection and moves, matching how §75.18 already treated Up/Down. Two real
+  test-writing mistakes caught only by running the tests: one assumed word-right lands at the start
+  of the next token (it actually lands at the end, matching the other passing word-jump tests); one
+  assumed moving right on a blank line is a no-op (a blank line still has a real `\n` to move over,
+  so it correctly crosses to the next line) -- both fixed by correcting the test, not the code. 15
+  new headless tests, full workspace test/clippy/fmt clean. Live, through the real binary: End/Home/
+  Ctrl+End/Ctrl+Home all landed correctly on a real fixture (screenshotted); six Ctrl+Right presses
+  landed exactly between `foo` and `.bar` in `foo.bar baz qux`, one Ctrl+Left retraced exactly back;
+  a dedicated three-line fixture confirmed sticky column end-to-end -- click mid-column, arrow down
+  onto a 1-char line (visibly clamped), arrow down again restored the original visual column instead
+  of staying at column 1. 50k-line benchmark re-run, no regression (cold-open ~104ms, edit/cursor p99
+  ~3.5-4.0ms, scroll p99 ~5.8ms, consistent with the prior baseline).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
