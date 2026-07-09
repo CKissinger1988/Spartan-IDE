@@ -4628,6 +4628,7 @@ dependencies = [
  "spartan-leo",
  "spartan-model",
  "spartan-security",
+ "spartan-settings",
  "tree-sitter",
  "tree-sitter-go",
  "tree-sitter-highlight",
@@ -4696,6 +4697,14 @@ name = "spartan-security"
 version = "0.1.0"
 dependencies = [
  "regex",
+]
+
+[[package]]
+name = "spartan-settings"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

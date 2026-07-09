@@ -23,7 +23,11 @@ pub const LEO_MODEL: &str = "llama3.1:8b";
 pub fn spawn_plan_request(task: String) -> mpsc::Receiver<Result<ImplementationPlan, PlanError>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let provider = OllamaProvider::local(LEO_MODEL);
+        // Real §57/§42 GPU offload setting (user-requested), read fresh
+        // per request rather than cached -- a change made in the settings
+        // panel takes effect on the *next* task, not retroactively.
+        let gpu_offload = spartan_settings::load().gpu_offload;
+        let provider = OllamaProvider::local(LEO_MODEL).with_gpu_layers(gpu_offload.num_gpu());
         let result = generate_plan(&provider, &task);
         let _ = tx.send(result);
     });

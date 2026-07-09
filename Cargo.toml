@@ -15,6 +15,7 @@ members = [
     "crates/spartan-plugin-host",
     "crates/spartan-model",
     "crates/spartan-leo",
+    "crates/spartan-settings",
     "crates/spartan-editor-core",
     "xtask",
 ]

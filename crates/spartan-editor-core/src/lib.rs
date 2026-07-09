@@ -26,5 +26,6 @@ pub mod leo_bridge;
 pub mod lsp;
 pub mod lsp_session;
 pub mod mode_toggle;
+pub mod settings_panel;
 pub mod tab_bar;
 pub mod viewport;

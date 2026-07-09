@@ -1182,6 +1182,39 @@ first — it's the parity reference until each row there is actually reimplement
   real exercise of the `Failed -> Recovering -> Executing` path from this UI (nothing yet drives a
   real failure to recover from), no long-line text wrapping in the panel (a real, minor, named
   rendering gap shared with this crate's other modal text).
+- **Real, working code — real settings persistence + a GPU offload toggle/selector, user-requested
+  (§75.48)**: closes a direct user request ("Place a toggle in the settings for GPU offloading and
+  amount to offload selector"). No settings system existed anywhere in this workspace before this
+  pass (§42 was spec-only). New `crates/spartan-settings`: a real `Settings` struct persisted as
+  JSON at `~/.spartan/settings.json`, defaulting (not erroring) on a missing or corrupt file.
+  `GpuOffloadSettings { enabled, layers }` maps directly onto Ollama's real `options.num_gpu`
+  request field -- disabled forces `Some(0)` (pure CPU) regardless of a stale layer count; enabled
+  with no explicit count sends no override at all (Ollama's own real auto-offload default); enabled
+  with an explicit count forces exactly that many layers. `spartan-model::OllamaProvider` gained a
+  real `with_gpu_layers(Option<u32>)` builder and now sends `options.num_gpu` when set -- verified
+  both via 4 new unit tests against an extracted, pure `build_request_body` function (including the
+  edge case that an explicit `Some(0)` is sent as a real `0`, not silently dropped) and live against
+  the actual running Ollama server via `curl` (both `num_gpu: 0` and `num_gpu: 8` accepted and
+  answered correctly -- though this container's own software-only Vulkan/CPU environment, consistent
+  with this project's entire history, means no real GPU hardware was available here to confirm an
+  actual layer-placement effect). New `settings_panel.rs` in `spartan-editor-core`, reachable via
+  Ctrl+, from any mode, reusing the existing modal/dim-overlay infrastructure: two rows (GPU
+  offloading enabled -- Space/Enter toggles; GPU layers to offload -- Left/Right cycles
+  `Auto -> 0 -> 1 -> ... -> 128 -> Auto`), Up/Down to move, Escape to save the real edited copy to
+  disk and close. `leo_bridge::spawn_plan_request` now loads real settings fresh on every call and
+  passes the resulting `num_gpu()` through -- a change made in the panel takes effect on the next
+  Leo task, not retroactively. Real, live, executed verification (same Xvfb+fluxbox setup): opening
+  the panel, moving to the layers row, three real Right presses walking `Auto -> 0 -> 1 -> 2`, and
+  Escape closing it were each screenshotted; the real resulting `~/.spartan/settings.json` was read
+  directly off disk afterward and matched exactly what was set through the UI
+  (`{"gpu_offload":{"enabled":true,"layers":2}}`), with the underlying document confirmed completely
+  unaffected throughout. 20 new tests (7 `spartan-settings`, 4 `spartan-model`, 9
+  `settings_panel.rs`), 347 tests total workspace-wide, full clippy/fmt clean. **What this does not
+  confirm**: no settings besides GPU offload exist yet (a narrow first increment of §42's much
+  larger taxonomy, not a general settings framework), no mouse interaction with the panel
+  (keyboard-only), no live-reload of an in-flight request (a deliberate choice, not an oversight), no
+  measured effect of a real GPU layer count on real GPU hardware, no settings import/migration (§70)
+  wired to this new store yet.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1239,10 +1272,10 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 325 tests: 6 spikes + 9 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 347 tests: 6 spikes + 10 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
-                                    # spartan-editor-core, xtask)
+                                    # spartan-settings, spartan-editor-core, xtask)
 # spartan-model's own tests/ollama_integration.rs (§75.43) and spartan-leo's own
 # tests/plan_ollama_integration.rs (§75.46) both need a real local Ollama instance
 # reachable at http://localhost:11434 with `llama3.1:8b` pulled -- self-skips (prints a message)

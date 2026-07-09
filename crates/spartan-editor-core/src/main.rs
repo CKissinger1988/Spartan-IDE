@@ -13,7 +13,8 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use spartan_editor_core::viewport::{self, Viewport};
 use spartan_editor_core::{
     accessibility, agent_panel, build, command_palette, dap_session, editor_view, file_tree,
-    git_panel, gui_bridge, highlight, language, leo_bridge, lsp, lsp_session, mode_toggle, tab_bar,
+    git_panel, gui_bridge, highlight, language, leo_bridge, lsp, lsp_session, mode_toggle,
+    settings_panel, tab_bar,
 };
 
 use std::path::{Path, PathBuf};
@@ -875,6 +876,14 @@ fn main() {
     }
     let mut command_palette_state: Option<CommandPaletteState> = None;
 
+    // Real settings panel (§42, user-requested) -- `None` is the ordinary
+    // closed state. Opened with `spartan_settings::load()`'s real,
+    // defaulted-if-missing settings; only actually written back to disk
+    // (`spartan_settings::save`) on close (Escape), matching the commit-
+    // message modal's own "edit a local copy, commit the real side effect
+    // only on confirm" shape.
+    let mut settings_state: Option<settings_panel::SettingsPanelState> = None;
+
     let mut bench_rng = rand::thread_rng();
     let mut edit_bench_remaining = bench_edit_iters.unwrap_or(0);
     let mut cursor_bench_remaining = bench_cursor_iters.unwrap_or(0);
@@ -1302,6 +1311,7 @@ fn main() {
                         } if pending_close.is_none()
                             && commit_message.is_none()
                             && command_palette_state.is_none()
+                            && settings_state.is_none()
                             && last_cursor_pos.0 < text::SIDEBAR_WIDTH
                             && sidebar_mode == SidebarMode::FileTree =>
                         {
@@ -1363,6 +1373,7 @@ fn main() {
                         } if pending_close.is_none()
                             && commit_message.is_none()
                             && command_palette_state.is_none()
+                            && settings_state.is_none()
                             && last_cursor_pos.0 < text::SIDEBAR_WIDTH
                             && sidebar_mode == SidebarMode::SourceControl =>
                         {
@@ -1402,6 +1413,7 @@ fn main() {
                         } if pending_close.is_none()
                             && commit_message.is_none()
                             && command_palette_state.is_none()
+                            && settings_state.is_none()
                             && last_cursor_pos.0 >= text::SIDEBAR_WIDTH
                             && last_cursor_pos.0
                                 < gpu_state.size.width as f32 - text::MODE_TOGGLE_WIDTH
@@ -1487,6 +1499,7 @@ fn main() {
                         } if pending_close.is_none()
                             && commit_message.is_none()
                             && command_palette_state.is_none()
+                            && settings_state.is_none()
                             && last_cursor_pos.0
                                 >= gpu_state.size.width as f32 - text::MODE_TOGGLE_WIDTH
                             && last_cursor_pos.1 < text::TAB_BAR_HEIGHT =>
@@ -1524,6 +1537,7 @@ fn main() {
                             ..
                         } if pending_close.is_none()
                             && command_palette_state.is_none()
+                            && settings_state.is_none()
                             && mode == AppMode::Editor =>
                         {
                             mouse_button_down = true;
@@ -1739,6 +1753,36 @@ fn main() {
                                         }
                                     }
                                 }
+                            }
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } if settings_state.is_some() => {
+                            // Real settings panel input (§42, user-
+                            // requested) -- same "intercept everything
+                            // while this state is Some" pattern as the
+                            // other real modals in this crate.
+                            if let Some(panel) = settings_state.as_mut() {
+                                match &key_event.logical_key {
+                                    Key::Named(NamedKey::Escape) => {
+                                        let _ = spartan_settings::save(&panel.settings);
+                                        settings_state = None;
+                                    }
+                                    Key::Named(NamedKey::ArrowDown) => panel.move_selection_down(),
+                                    Key::Named(NamedKey::ArrowUp) => panel.move_selection_up(),
+                                    Key::Named(NamedKey::Space) | Key::Named(NamedKey::Enter) => {
+                                        panel.toggle_selected();
+                                    }
+                                    Key::Named(NamedKey::ArrowLeft) => panel.adjust_layers(-1),
+                                    Key::Named(NamedKey::ArrowRight) => panel.adjust_layers(1),
+                                    _ => {}
+                                }
+                                window.request_redraw();
                             }
                         }
                         WindowEvent::KeyboardInput {
@@ -2002,6 +2046,7 @@ fn main() {
                         } if pending_close.is_none()
                             && commit_message.is_none()
                             && command_palette_state.is_none()
+                            && settings_state.is_none()
                             && modifiers.control_key()
                             && key_event.physical_key == PhysicalKey::Code(KeyCode::KeyP) =>
                         {
@@ -2029,6 +2074,30 @@ fn main() {
                                 filtered,
                                 selected: 0,
                             });
+                            window.request_redraw();
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } if pending_close.is_none()
+                            && commit_message.is_none()
+                            && command_palette_state.is_none()
+                            && settings_state.is_none()
+                            && modifiers.control_key()
+                            && key_event.physical_key == PhysicalKey::Code(KeyCode::Comma) =>
+                        {
+                            // Ctrl+, (the conventional IDE settings
+                            // shortcut): open the real settings panel (§42,
+                            // user-requested), reachable from any mode --
+                            // real §57/§42 GPU offload configuration is the
+                            // first (and currently only) real setting.
+                            settings_state = Some(settings_panel::SettingsPanelState::opened_with(
+                                spartan_settings::load(),
+                            ));
                             window.request_redraw();
                         }
                         WindowEvent::KeyboardInput {
@@ -2136,6 +2205,7 @@ fn main() {
                         } if pending_close.is_none()
                             && commit_message.is_none()
                             && command_palette_state.is_none()
+                            && settings_state.is_none()
                             && mode == AppMode::Agent =>
                         {
                             // Real Agent mode input (§4, task #5, §75.47) --
@@ -2884,6 +2954,12 @@ fn main() {
                                     &palette.filtered,
                                     palette.selected,
                                 )
+                            } else if let Some(panel) = &settings_state {
+                                // Real settings panel text (§42, user-
+                                // requested), same "opened from any mode,
+                                // takes rendering priority" rule the
+                                // command palette already established.
+                                settings_panel::build_panel_text(panel)
                             } else if mode == AppMode::Agent {
                                 // Real Agent mode content (§4, task #5,
                                 // §75.47) -- reuses this same modal

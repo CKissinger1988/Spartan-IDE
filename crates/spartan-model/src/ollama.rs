@@ -30,6 +30,15 @@ use std::time::Duration;
 pub struct OllamaProvider {
     base_url: String,
     model: String,
+    /// Real §57/§42 GPU offload override, sent as Ollama's own
+    /// `options.num_gpu` request field -- `None` sends no override at all
+    /// (Ollama's own default auto-offload behavior), matching
+    /// `spartan_settings::GpuOffloadSettings::num_gpu()`'s exact contract.
+    /// Deliberately a plain `Option<u32>` here rather than a dependency on
+    /// `spartan-settings` itself -- this crate stays settings-agnostic;
+    /// the caller (`spartan-editor-core`) is the one that reads real
+    /// settings and passes the resulting number through.
+    num_gpu: Option<u32>,
 }
 
 impl OllamaProvider {
@@ -37,6 +46,7 @@ impl OllamaProvider {
         Self {
             base_url: base_url.into(),
             model: model.into(),
+            num_gpu: None,
         }
     }
 
@@ -44,6 +54,14 @@ impl OllamaProvider {
     /// port (§3.3's own "talks to http://localhost:11434").
     pub fn local(model: impl Into<String>) -> Self {
         Self::new("http://localhost:11434", model)
+    }
+
+    /// Real §57/§42 GPU offload configuration (user-requested settings
+    /// toggle + amount selector) -- a builder so existing call sites
+    /// (`OllamaProvider::local(...)` alone) are unaffected.
+    pub fn with_gpu_layers(mut self, num_gpu: Option<u32>) -> Self {
+        self.num_gpu = num_gpu;
+        self
     }
 
     fn tags(&self) -> Result<Value, ProviderError> {
@@ -65,6 +83,53 @@ impl OllamaProvider {
             .find(|m| m["name"] == self.model || m["model"] == self.model)
             .cloned()
     }
+}
+
+/// Real, pure request-body construction, extracted from `stream_completion`
+/// so it's directly unit-testable without a real (or mock) HTTP server --
+/// the same "extract the pure logic, test it headlessly" split this whole
+/// workspace already follows for GPU/network/subprocess-facing code.
+fn build_request_body(request: &CompletionRequest, model: &str, num_gpu: Option<u32>) -> Value {
+    let mut messages = Vec::new();
+    if !request.system_prompt.is_empty() {
+        messages.push(json!({"role": "system", "content": request.system_prompt}));
+    }
+    for m in &request.messages {
+        let role = match m.role {
+            Role::System => "system",
+            Role::User => "user",
+            Role::Assistant => "assistant",
+            Role::Tool => "tool",
+        };
+        messages.push(json!({"role": role, "content": m.content}));
+    }
+
+    let mut body = json!({
+        "model": model,
+        "stream": true,
+        "messages": messages,
+    });
+    if !request.tools.is_empty() {
+        let tools: Vec<Value> = request
+            .tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters_schema,
+                    }
+                })
+            })
+            .collect();
+        body["tools"] = Value::Array(tools);
+    }
+    if let Some(num_gpu) = num_gpu {
+        body["options"] = json!({"num_gpu": num_gpu});
+    }
+    body
 }
 
 impl ModelProvider for OllamaProvider {
@@ -111,42 +176,7 @@ impl ModelProvider for OllamaProvider {
         request: &CompletionRequest,
         on_delta: &mut dyn FnMut(Delta),
     ) -> Result<(), ProviderError> {
-        let mut messages = Vec::new();
-        if !request.system_prompt.is_empty() {
-            messages.push(json!({"role": "system", "content": request.system_prompt}));
-        }
-        for m in &request.messages {
-            let role = match m.role {
-                Role::System => "system",
-                Role::User => "user",
-                Role::Assistant => "assistant",
-                Role::Tool => "tool",
-            };
-            messages.push(json!({"role": role, "content": m.content}));
-        }
-
-        let mut body = json!({
-            "model": self.model,
-            "stream": true,
-            "messages": messages,
-        });
-        if !request.tools.is_empty() {
-            let tools: Vec<Value> = request
-                .tools
-                .iter()
-                .map(|t| {
-                    json!({
-                        "type": "function",
-                        "function": {
-                            "name": t.name,
-                            "description": t.description,
-                            "parameters": t.parameters_schema,
-                        }
-                    })
-                })
-                .collect();
-            body["tools"] = Value::Array(tools);
-        }
+        let body = build_request_body(request, &self.model, self.num_gpu);
 
         let resp = ureq::post(&format!("{}/api/chat", self.base_url))
             .timeout(Duration::from_secs(120))
@@ -220,5 +250,52 @@ impl ModelProvider for OllamaProvider {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_request() -> CompletionRequest {
+        CompletionRequest {
+            messages: vec![],
+            tools: vec![],
+            system_prompt: String::new(),
+            max_tokens: 1024,
+            temperature: 0.0,
+        }
+    }
+
+    #[test]
+    fn with_no_gpu_override_the_request_body_has_no_options_field() {
+        let body = build_request_body(&minimal_request(), "llama3.1:8b", None);
+        assert!(
+            body.get("options").is_none(),
+            "no GPU override configured should mean no options field sent at all, \
+             letting Ollama's own real default auto-offload behavior apply"
+        );
+    }
+
+    #[test]
+    fn a_real_gpu_layer_override_is_sent_as_options_num_gpu() {
+        let body = build_request_body(&minimal_request(), "llama3.1:8b", Some(24));
+        assert_eq!(body["options"]["num_gpu"], 24);
+    }
+
+    #[test]
+    fn a_zero_gpu_override_forcing_cpu_only_is_still_sent_explicitly() {
+        // `Some(0)` (real §57/§42 "GPU offloading disabled") must be sent
+        // as a real, explicit `0`, not accidentally dropped as if it were
+        // `None` -- a naive `if num_gpu != 0` check would get this wrong.
+        let body = build_request_body(&minimal_request(), "llama3.1:8b", Some(0));
+        assert_eq!(body["options"]["num_gpu"], 0);
+    }
+
+    #[test]
+    fn with_gpu_layers_builder_is_reflected_in_the_real_request_body() {
+        let provider = OllamaProvider::local("llama3.1:8b").with_gpu_layers(Some(16));
+        let body = build_request_body(&minimal_request(), &provider.model, provider.num_gpu);
+        assert_eq!(body["options"]["num_gpu"], 16);
     }
 }
