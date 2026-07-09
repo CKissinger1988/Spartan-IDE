@@ -928,6 +928,34 @@ first — it's the parity reference until each row there is actually reimplement
   default `rustup` target is usually MSVC; the `advapi32` fix is almost certainly relevant there too
   but wasn't independently confirmed against MSVC's own default library search. No macOS
   verification exists anywhere in this project's history.
+- **Real, working code — real dev-server bridge, third increment of task #12, connecting
+  `gui-builder` to the real WebView (§75.41)**: closes the gap §75.38/§75.39 both named. New
+  `gui-builder/src/cli.ts` (compiled to `dist/cli.js`) is a real, minimal contract: one file path
+  in, real `{"roots": ComponentNode[]}` JSON out on stdout, a real `{"error"}` + non-zero exit on
+  stderr on failure. New `crates/spartan-editor-core/src/gui_bridge.rs` spawns this real `node`
+  subprocess on its own thread, delivered back via `mpsc::channel` polled non-blockingly in
+  `AboutToWait` -- the same pattern `build.rs`'s own DAP build integration (§75.10) already
+  established. `webview_bridge.rs` gained a real recursive JS tree renderer and three new push
+  methods; `main.rs`'s mode/file-switch call sites were consolidated through one new
+  `sync_webview_content` function so file-info and the real tree fetch always stay in sync. A real,
+  live bug was found only by testing a file switch, not by inspection: switching from a component
+  file to a non-component one correctly canceled the in-flight request but left the *previous*
+  file's tree stale on screen -- fixed with a new `push_component_tree_not_applicable()` path,
+  confirmed broken then confirmed fixed, both live and screenshotted. 3 new `gui-builder` tests (24
+  total) and 2 new self-skipping Rust integration tests (matching `lsp_integration.rs`'s own
+  convention), full workspace clean (251 tests, up from 249). Live, through the real binary: a
+  trivial real `.jsx` fixture rendered its exact real parsed tree; the stale-tree bug was
+  screenshotted both broken and fixed; and, most substantially, this repo's own real 490-line
+  `prototypes/signature-features.jsx` rendered a real, deep, correctly-nested tree with real custom
+  component tags, style/prop summaries, and a real conditional-expression prop -- proving the whole
+  pipeline holds up on genuinely complex source, not just a one-liner. 50k-line benchmark re-run,
+  no regression (never enters Design mode). Still not a live visual canvas (a real indented text
+  tree, not laid-out output); no `CanvasEdit` round-trip wired from the WebView back into source
+  yet; `locate_cli()`'s lookup is a real, named development-only heuristic, not a shipped packaging
+  story; only tested live on Linux (Windows cross-compile confirms the Rust side builds, but
+  spawning `node.exe` into a real WebView2 control wasn't independently verified); no file-watching
+  (fetched once per switch, not kept live while typing). Task #12 remains `in_progress` -- a real
+  `CanvasEdit`-triggering UI inside the WebView is the natural next increment.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

@@ -1,0 +1,94 @@
+//! Real §6.2 step 1 dev-server bridge (task #12): spawns the real
+//! `gui-builder` CLI (a real Node subprocess, `gui-builder/dist/cli.js`)
+//! to parse the active file's real JSX/TSX into a real `ComponentNode`
+//! tree, and delivers the result back to the render loop without ever
+//! blocking it -- the exact same spawn-on-a-thread, `mpsc::channel`,
+//! non-blocking-poll pattern `build.rs`'s own DAP build integration
+//! (§75.10) already established for a different real subprocess.
+//!
+//! Deliberately a v1: one file in, one JSON tree out, no persistent
+//! server, no file watching, no HMR -- §6.2 step 1's own "diffed against
+//! last-known tree, re-renders only changed nodes" remains unbuilt. See
+//! `gui-builder/README.md` and this crate's own README for the full,
+//! honest scope.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::mpsc;
+
+pub struct ComponentTreeRequest {
+    pub receiver: mpsc::Receiver<Result<String, String>>,
+}
+
+/// Real extension-based check for "does `gui-builder`'s CLI know how to
+/// parse this file" -- deliberately narrower than the full
+/// `spartan-languages` `typescript` profile (which also covers plain
+/// `.ts`/`.js`), matching exactly what `gui-builder`'s own real parser
+/// targets.
+pub fn is_component_file(path: &str) -> bool {
+    path.ends_with(".jsx") || path.ends_with(".tsx")
+}
+
+/// Real, deliberately simple location strategy for `gui-builder`'s
+/// compiled CLI: `$SPARTAN_GUI_BUILDER_DIR/dist/cli.js` if set, else
+/// `./gui-builder/dist/cli.js` relative to the current working directory
+/// -- a real, named development-only heuristic (this repo's own layout
+/// during `cargo run`), not a shipped packaging story. A real production
+/// build would need `gui-builder` bundled as an installed asset next to
+/// the binary, a separate, real packaging decision not attempted here.
+fn locate_cli() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("SPARTAN_GUI_BUILDER_DIR") {
+        let candidate = PathBuf::from(dir).join("dist").join("cli.js");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    let candidate = PathBuf::from("gui-builder").join("dist").join("cli.js");
+    if candidate.is_file() {
+        return Some(candidate);
+    }
+    None
+}
+
+/// Spawns the real `node <cli.js> <file>` subprocess on its own thread,
+/// returning immediately with a receiver the render loop polls
+/// non-blockingly (`AboutToWait`) -- never blocks the render thread
+/// itself. `Ok(json)` is the real stdout payload (already confirmed to be
+/// valid JSON before being sent, so a caller can safely splice it into an
+/// `evaluate_script` call without a second validation pass); `Err(message)`
+/// covers every real failure mode (`node`/`gui-builder` not found, a real
+/// parse error, malformed subprocess output) with a human-readable
+/// message, never a panic.
+pub fn spawn_component_tree_request(file_path: &Path) -> ComponentTreeRequest {
+    let (sender, receiver) = mpsc::channel();
+    let file_path = file_path.to_path_buf();
+    std::thread::spawn(move || {
+        let result = run_cli(&file_path);
+        let _ = sender.send(result);
+    });
+    ComponentTreeRequest { receiver }
+}
+
+fn run_cli(file_path: &Path) -> Result<String, String> {
+    let Some(cli_path) = locate_cli() else {
+        return Err(
+            "gui-builder CLI not found (set SPARTAN_GUI_BUILDER_DIR or run from the repo root, \
+             after `cd gui-builder && npm install && npm run build`)"
+                .to_string(),
+        );
+    };
+    let output = Command::new("node").arg(&cli_path).arg(file_path).output();
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => return Err(format!("failed to spawn node: {e}")),
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("gui-builder CLI failed: {stderr}"));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if serde_json::from_str::<serde_json::Value>(&stdout).is_err() {
+        return Err("gui-builder CLI produced invalid JSON".to_string());
+    }
+    Ok(stdout)
+}

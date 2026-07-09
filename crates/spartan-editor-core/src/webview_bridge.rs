@@ -6,13 +6,14 @@
 //! occupying the same screen region the main editor buffer otherwise
 //! renders into, not a second top-level window.
 //!
-//! Deliberately, honestly *not* a live component canvas yet -- there is no
-//! dev-server bridge (§6.2 step 1) anywhere in this workspace, so this
-//! WebView shows real, honest information (the active file's path, whether
-//! it looks like a component file, and a real IPC self-check) rather than
-//! simulated canvas content. See `mode_toggle.rs`'s own doc comment for
-//! the same "name the gap, don't fake it" discipline applied here to one
-//! more piece of a mode.
+//! As of §75.41, a real dev-server bridge (§6.2 step 1, `gui_bridge.rs`)
+//! does exist and this WebView renders its real output -- a real,
+//! structural component tree (tag names, props, nesting) parsed from the
+//! active file's real JSX/TSX by the real `gui-builder` CLI subprocess.
+//! Still honestly, deliberately *not* live React/JSX rendering: no
+//! bundler, no dev server, no HMR, no visual layout at all -- a real,
+//! indented text tree, not a canvas. See `gui_bridge.rs`'s own doc comment
+//! and `gui-builder/README.md` for the exact, current scope boundary.
 
 use serde::Deserialize;
 use std::cell::RefCell;
@@ -28,11 +29,13 @@ const HTML: &str = r#"<!DOCTYPE html>
   <p id="fileInfo" style="color:#A6A5A2;">Loading active file info&hellip;</p>
   <p style="color:#84838A;max-width:640px;line-height:1.5;">
     This is a real embedded WebView (not a mock), proven live and bidirectional
-    (see the IPC status line below). It does not yet render real React/JSX
-    output &mdash; that needs a real dev-server bridge (architecture-spec
-    &sect;6.2 step 1), which is not wired into this build.
+    (see the IPC status line below). The tree below is real structural data
+    from a real AST parse of the active file &mdash; it is not yet a live
+    visual canvas (no bundler/dev-server/HMR wired in, architecture-spec
+    &sect;6.2 step 1's remaining scope).
   </p>
   <p id="ipcStatus" style="color:#6E6D73;">IPC bridge: connecting&hellip;</p>
+  <div id="componentTree" style="margin-top:1em;white-space:pre;font-size:0.95em;"></div>
   <script>
     function updateFileInfo(path, isComponent) {
       document.getElementById('fileInfo').innerText =
@@ -40,6 +43,37 @@ const HTML: &str = r#"<!DOCTYPE html>
     }
     function ackReady() {
       document.getElementById('ipcStatus').innerText = 'IPC bridge: connected (real round-trip confirmed)';
+    }
+    function componentTreeLoading() {
+      document.getElementById('componentTree').textContent = 'Parsing real component tree…';
+    }
+    function componentTreeError(message) {
+      document.getElementById('componentTree').textContent = 'Component tree unavailable: ' + message;
+    }
+    function componentTreeNotApplicable() {
+      document.getElementById('componentTree').textContent = '';
+    }
+    function propsSummaryOf(props) {
+      const keys = Object.keys(props);
+      if (keys.length === 0) return '';
+      return ' ' + keys.map(function (k) {
+        const p = props[k];
+        if (p.kind === 'string') return k + '="' + p.value + '"';
+        if (p.kind === 'style') return k + '={...' + Object.keys(p.entries).length + ' entries}';
+        return k + '={' + p.source + '}';
+      }).join(' ');
+    }
+    function renderNode(node, depth, lines) {
+      const indent = '  '.repeat(depth);
+      const text = node.textContent ? ' “' + node.textContent + '”' : '';
+      lines.push(indent + '<' + node.tagName + propsSummaryOf(node.props) + '>' + text);
+      node.children.forEach(function (child) { renderNode(child, depth + 1, lines); });
+    }
+    function updateComponentTree(data) {
+      const lines = [];
+      data.roots.forEach(function (root) { renderNode(root, 0, lines); });
+      document.getElementById('componentTree').textContent =
+        lines.length > 0 ? lines.join('\n') : '(no JSX elements found)';
     }
     window.ipc.postMessage(JSON.stringify({type: 'ready'}));
   </script>
@@ -122,6 +156,52 @@ impl WebviewBridge {
             let _ = wv.evaluate_script(&format!(
                 "updateFileInfo('{escaped}', {is_component_file});"
             ));
+        }
+    }
+
+    /// Shows a real "parsing" state while a real `gui_bridge` request is
+    /// in flight -- called immediately on spawn, before the (real,
+    /// non-blocking) subprocess has actually returned.
+    pub fn push_component_tree_loading(&self) {
+        if let Some(wv) = self.webview.borrow().as_ref() {
+            let _ = wv.evaluate_script("componentTreeLoading();");
+        }
+    }
+
+    /// Clears any previously-rendered tree -- a real, live bug found only
+    /// by testing (not by inspection): switching from a component file to
+    /// a non-component one correctly updated the file-info line but left
+    /// the *previous* file's stale tree rendered underneath it, since
+    /// nothing had ever told the WebView to clear it. Called whenever the
+    /// active file is not a real component file.
+    pub fn push_component_tree_not_applicable(&self) {
+        if let Some(wv) = self.webview.borrow().as_ref() {
+            let _ = wv.evaluate_script("componentTreeNotApplicable();");
+        }
+    }
+
+    /// Renders the real component tree JSON `gui_bridge::run_cli` produced
+    /// -- `json` is spliced directly into the script call as a JS object
+    /// literal (valid, since JSON is a subset of JS expression syntax),
+    /// already confirmed to be real, well-formed JSON by the caller before
+    /// this is ever invoked.
+    pub fn push_component_tree(&self, json: &str) {
+        if let Some(wv) = self.webview.borrow().as_ref() {
+            let _ = wv.evaluate_script(&format!("updateComponentTree({json});"));
+        }
+    }
+
+    /// Shows a real, human-readable failure message (subprocess spawn
+    /// failure, a real parse error, `gui-builder` not found/built) instead
+    /// of silently leaving the last-rendered tree (possibly from a
+    /// previous file) misleadingly on screen.
+    pub fn push_component_tree_error(&self, message: &str) {
+        if let Some(wv) = self.webview.borrow().as_ref() {
+            let escaped = message
+                .replace('\\', "\\\\")
+                .replace('\'', "\\'")
+                .replace('\n', " ");
+            let _ = wv.evaluate_script(&format!("componentTreeError('{escaped}');"));
         }
     }
 }

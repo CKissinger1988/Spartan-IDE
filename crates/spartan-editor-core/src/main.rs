@@ -13,7 +13,7 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use spartan_editor_core::viewport::{self, Viewport};
 use spartan_editor_core::{
     accessibility, build, command_palette, dap_session, editor_view, file_tree, git_panel,
-    highlight, language, lsp, lsp_session, mode_toggle, tab_bar,
+    gui_bridge, highlight, language, lsp, lsp_session, mode_toggle, tab_bar,
 };
 
 use std::path::{Path, PathBuf};
@@ -89,7 +89,7 @@ fn design_hidden_bounds() -> Rect {
 }
 
 /// Ensures a WebView exists and is shown at the real content-area bounds
-/// (creating it lazily on first use), then refreshes its file info, if
+/// (creating it lazily on first use), then refreshes its content, if
 /// `mode` is `Design`; otherwise hides an already-existing one. Called
 /// after every real mode assignment (Ctrl+1/2/3, a mode-toggle click, a
 /// command-palette mode-switch command) -- not just ones that specifically
@@ -98,6 +98,7 @@ fn design_hidden_bounds() -> Rect {
 /// site that could possibly change `mode` away from it.
 fn sync_webview_for_mode(
     bridge: &mut Option<webview_bridge::WebviewBridge>,
+    component_tree_request: &mut Option<gui_bridge::ComponentTreeRequest>,
     mode: AppMode,
     window: &winit::window::Window,
     size: winit::dpi::PhysicalSize<u32>,
@@ -108,25 +109,53 @@ fn sync_webview_for_mode(
             webview_bridge::WebviewBridge::new(window, design_content_bounds(window, size))
         });
         b.set_bounds(design_content_bounds(window, size));
-        let is_component_file = file.label.ends_with(".jsx") || file.label.ends_with(".tsx");
-        b.push_file_info(&file.label, is_component_file);
+        sync_webview_content(b, component_tree_request, file);
     } else if let Some(b) = bridge {
         b.set_bounds(design_hidden_bounds());
     }
 }
 
-/// Pushes the real active file's path (and a real, simple extension-based
-/// component-file check -- deliberately not the full `LanguageProfile`
-/// registry lookup, since this is specifically about what `gui-builder`
-/// itself can parse, a narrower question than "is this a JS-family file at
-/// all") into the WebView, if one exists and Design mode is currently
-/// showing. A real, named limitation: this must be called explicitly at
-/// every "active file changed while potentially still in Design mode"
-/// site (tab bar click, sidebar click, closing a file bringing a different
-/// one to the front) -- there's no generic "on active file changed" hook
-/// in this crate to hang it off of instead.
+/// Pushes the real active file's path/component-file check into the
+/// WebView and, for a real component file, spawns a real §75.41
+/// `gui_bridge` request for its component tree (showing a real "parsing"
+/// state immediately, resolved later by `AboutToWait`'s own poll of
+/// `component_tree_request`). Called whenever a WebView already exists
+/// and Design mode is (or is becoming) the current mode -- a real, named
+/// limitation: this must be called explicitly at every "active file
+/// changed while potentially still in Design mode" site (tab bar click,
+/// sidebar click, closing a file bringing a different one to the front),
+/// since there's no generic "on active file changed" hook in this crate
+/// to hang it off of instead.
+fn sync_webview_content(
+    bridge: &webview_bridge::WebviewBridge,
+    component_tree_request: &mut Option<gui_bridge::ComponentTreeRequest>,
+    file: &OpenFile,
+) {
+    let is_component_file = gui_bridge::is_component_file(&file.label);
+    bridge.push_file_info(&file.label, is_component_file);
+    if is_component_file {
+        bridge.push_component_tree_loading();
+        *component_tree_request = Some(gui_bridge::spawn_component_tree_request(Path::new(
+            &file.label,
+        )));
+    } else {
+        // Real, live bug fixed here, found only by testing a real
+        // file-switch away from a component file, not by inspection: an
+        // earlier version just cleared `component_tree_request` (correctly
+        // canceling any in-flight fetch) but never told the WebView to
+        // stop showing the *previous* file's stale tree underneath the
+        // now-updated file-info line.
+        *component_tree_request = None;
+        bridge.push_component_tree_not_applicable();
+    }
+}
+
+/// Thin wrapper for call sites that only have `Option<&WebviewBridge>` (no
+/// mode-transition logic needed) -- an "active file changed" site where
+/// Design mode may already be showing.
 fn sync_webview_file_info(
     bridge: &Option<webview_bridge::WebviewBridge>,
+    component_tree_request: &mut Option<gui_bridge::ComponentTreeRequest>,
     mode: AppMode,
     file: &OpenFile,
 ) {
@@ -134,8 +163,7 @@ fn sync_webview_file_info(
         return;
     }
     if let Some(bridge) = bridge {
-        let is_component_file = file.label.ends_with(".jsx") || file.label.ends_with(".tsx");
-        bridge.push_file_info(&file.label, is_component_file);
+        sync_webview_content(bridge, component_tree_request, file);
     }
 }
 
@@ -1059,6 +1087,11 @@ fn main() {
     // deliberate lazy-creation choice (an app that never opens Design mode
     // never pays the cost of spawning a child WebKitGTK/WebView2 process).
     let mut webview_bridge: Option<webview_bridge::WebviewBridge> = None;
+    // Real §75.41 dev-server bridge in-flight request, if any -- a real
+    // `node`/`gui-builder` subprocess spawned on its own thread, polled
+    // non-blockingly in `AboutToWait` below (matching `pending_build`'s
+    // own established pattern for a different real subprocess).
+    let mut component_tree_request: Option<gui_bridge::ComponentTreeRequest> = None;
 
     event_loop
         .run(move |event, elwt| {
@@ -1287,7 +1320,12 @@ fn main() {
                                             &active_file.viewport,
                                             active_file.highlighter.as_mut(),
                                         );
-                                        sync_webview_file_info(&webview_bridge, mode, &files[active]);
+                                        sync_webview_file_info(
+                                            &webview_bridge,
+                                            &mut component_tree_request,
+                                            mode,
+                                            &files[active],
+                                        );
                                         window.request_redraw();
                                     }
                                 }
@@ -1406,7 +1444,12 @@ fn main() {
                                             &active_file.viewport,
                                             active_file.highlighter.as_mut(),
                                         );
-                                        sync_webview_file_info(&webview_bridge, mode, &files[active]);
+                                        sync_webview_file_info(
+                                            &webview_bridge,
+                                            &mut component_tree_request,
+                                            mode,
+                                            &files[active],
+                                        );
                                         window.request_redraw();
                                     }
                                 }
@@ -1440,6 +1483,7 @@ fn main() {
                                     mode = clicked_mode;
                                     sync_webview_for_mode(
                                         &mut webview_bridge,
+                                        &mut component_tree_request,
                                         mode,
                                         &window,
                                         gpu_state.size,
@@ -1575,7 +1619,12 @@ fn main() {
                                             &active_file.viewport,
                                             active_file.highlighter.as_mut(),
                                         );
-                                        sync_webview_file_info(&webview_bridge, mode, &files[active]);
+                                        sync_webview_file_info(
+                                            &webview_bridge,
+                                            &mut component_tree_request,
+                                            mode,
+                                            &files[active],
+                                        );
                                         window.request_redraw();
                                     }
                                     Some(PendingClose::App) => {
@@ -1864,6 +1913,7 @@ fn main() {
                                         // individual command arm.
                                         sync_webview_for_mode(
                                             &mut webview_bridge,
+                                            &mut component_tree_request,
                                             mode,
                                             &window,
                                             gpu_state.size,
@@ -2043,6 +2093,7 @@ fn main() {
                             };
                             sync_webview_for_mode(
                                 &mut webview_bridge,
+                                &mut component_tree_request,
                                 mode,
                                 &window,
                                 gpu_state.size,
@@ -2146,7 +2197,12 @@ fn main() {
                                     &active_file.viewport,
                                     active_file.highlighter.as_mut(),
                                 );
-                                sync_webview_file_info(&webview_bridge, mode, &files[active]);
+                                sync_webview_file_info(
+                                    &webview_bridge,
+                                    &mut component_tree_request,
+                                    mode,
+                                    &files[active],
+                                );
                                 window.request_redraw();
                             }
                         }
@@ -3127,6 +3183,27 @@ fn main() {
                     ))]
                     while gtk::events_pending() {
                         gtk::main_iteration_do(false);
+                    }
+
+                    // Real §75.41 dev-server bridge poll -- non-blocking
+                    // (`try_recv`), matching `pending_build`'s own
+                    // established pattern for a different real subprocess.
+                    // Only meaningful while a request is actually
+                    // in-flight; a stale result for a file the user has
+                    // since switched away from can't happen, since
+                    // `sync_webview_content` always replaces (not just
+                    // adds to) `component_tree_request` before a new
+                    // subprocess is spawned.
+                    if let Some(request) = &component_tree_request {
+                        if let Ok(result) = request.receiver.try_recv() {
+                            if let Some(bridge) = &webview_bridge {
+                                match result {
+                                    Ok(json) => bridge.push_component_tree(&json),
+                                    Err(message) => bridge.push_component_tree_error(&message),
+                                }
+                            }
+                            component_tree_request = None;
+                        }
                     }
 
                     if edit_bench_remaining > 0 {
