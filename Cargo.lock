@@ -4629,6 +4629,7 @@ dependencies = [
  "spartan-model",
  "spartan-security",
  "spartan-settings",
+ "spartan-updater",
  "tree-sitter",
  "tree-sitter-go",
  "tree-sitter-highlight",
@@ -4705,6 +4706,14 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "spartan-updater"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "ureq",
 ]
 
 [[package]]

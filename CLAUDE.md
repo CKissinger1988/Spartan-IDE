@@ -1215,6 +1215,39 @@ first — it's the parity reference until each row there is actually reimplement
   (keyboard-only), no live-reload of an in-flight request (a deliberate choice, not an oversight), no
   measured effect of a real GPU layer count on real GPU hardware, no settings import/migration (§70)
   wired to this new store yet.
+- **Real, working code — real "Check for Updates," categorized by IDE/language-definitions/Leo,
+  user-requested (§75.49)**: closes the other half of the same request §75.48 opened. A real,
+  deliberate, named scope limit decided up front: no code signing, no published releases, no
+  installer with an auto-update path exist in this workspace (§75.35 already named this), so
+  silently auto-downloading and replacing a running binary would be a real security regression, not
+  a feature (§9). This pass builds the honest half: a real, live check against this project's own
+  GitHub repository for whether a newer build exists, categorized by what kind of change it is. New
+  `crates/spartan-updater`: `build.rs` captures this binary's own real git commit hash at compile
+  time (`git rev-parse HEAD`, falling back to the honest `"unknown"` rather than a fabricated hash);
+  `check_for_updates` makes two real GitHub REST API calls (latest commit on the default branch,
+  then a real file-level compare if it differs) and a pure, fully unit-tested
+  `categorize_changed_files` sorts the changed paths into language-definitions
+  (`crates/spartan-languages/`), Leo/agent-core (`crates/spartan-leo/`, `crates/spartan-model/` --
+  the concrete, real mapping for "Leo has constant feature updates"), or other. New
+  `update_bridge.rs` (same background-thread pattern as `leo_bridge.rs`) and a third settings-panel
+  row, "Check for Updates" (Space/Enter triggers it, showing Checking.../Up to
+  date/Update-available-with-categories/an error). **A real, honestly-diagnosed environment
+  finding, not a product bug**: this sandbox's outbound HTTPS goes through a proxy whose
+  certificate `ureq`'s bundled root store doesn't trust (`invalid peer certificate: UnknownIssuer`)
+  while `curl` against the identical URL succeeds (it reads the system CA store this environment's
+  own harness populates) -- confirmed environment-specific by that direct comparison, not a defect;
+  a real end-user desktop with no MITM proxy hits GitHub's real API over a real, standard TLS
+  connection. Real, live GUI verification (Xvfb+fluxbox) exercised the complete real error path
+  end-to-end: opening the panel, selecting the new row (screenshotted), triggering a real background
+  HTTPS attempt, and the real resulting TLS error being caught and displayed correctly with no
+  crash (screenshotted), document unaffected throughout. 10 new `spartan-updater` tests (6 unit + 1
+  self-skipping live GitHub integration test) plus 5 new `settings_panel.rs` tests, 359 tests total
+  workspace-wide, full clippy/fmt clean. **What this does not confirm**: no actual "success" result
+  (up-to-date or a real update-available breakdown) was observed live, due to the sandbox's own
+  TLS-trust condition above -- the code path is real and tested, but that specific branch is
+  unverified live in this environment. No download/install/restart of any kind (by design). No
+  update checking for anything besides this one repository (no plugin marketplace, no per-language-
+  server version checks). No periodic/background checking -- user-triggered only.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1272,10 +1305,10 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 347 tests: 6 spikes + 10 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 359 tests: 6 spikes + 11 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
-                                    # spartan-settings, spartan-editor-core, xtask)
+                                    # spartan-settings, spartan-updater, spartan-editor-core, xtask)
 # spartan-model's own tests/ollama_integration.rs (§75.43) and spartan-leo's own
 # tests/plan_ollama_integration.rs (§75.46) both need a real local Ollama instance
 # reachable at http://localhost:11434 with `llama3.1:8b` pulled -- self-skips (prints a message)

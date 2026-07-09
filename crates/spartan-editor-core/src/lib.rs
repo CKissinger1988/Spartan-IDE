@@ -28,4 +28,5 @@ pub mod lsp_session;
 pub mod mode_toggle;
 pub mod settings_panel;
 pub mod tab_bar;
+pub mod update_bridge;
 pub mod viewport;

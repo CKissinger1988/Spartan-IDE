@@ -14,7 +14,7 @@ use spartan_editor_core::viewport::{self, Viewport};
 use spartan_editor_core::{
     accessibility, agent_panel, build, command_palette, dap_session, editor_view, file_tree,
     git_panel, gui_bridge, highlight, language, leo_bridge, lsp, lsp_session, mode_toggle,
-    settings_panel, tab_bar,
+    settings_panel, tab_bar, update_bridge,
 };
 
 use std::path::{Path, PathBuf};
@@ -883,6 +883,15 @@ fn main() {
     // message modal's own "edit a local copy, commit the real side effect
     // only on confirm" shape.
     let mut settings_state: Option<settings_panel::SettingsPanelState> = None;
+
+    // Real, live "Check for Updates" background request (§75.49, user-
+    // requested), same non-blocking `try_recv`-in-`AboutToWait` pattern
+    // every other real background bridge in this crate already uses.
+    let mut pending_update_check: Option<
+        mpsc::Receiver<
+            Result<spartan_updater::UpdateCheckResult, spartan_updater::UpdateCheckError>,
+        >,
+    > = None;
 
     let mut bench_rng = rand::thread_rng();
     let mut edit_bench_remaining = bench_edit_iters.unwrap_or(0);
@@ -1776,7 +1785,15 @@ fn main() {
                                     Key::Named(NamedKey::ArrowDown) => panel.move_selection_down(),
                                     Key::Named(NamedKey::ArrowUp) => panel.move_selection_up(),
                                     Key::Named(NamedKey::Space) | Key::Named(NamedKey::Enter) => {
-                                        panel.toggle_selected();
+                                        if panel.selected == settings_panel::SettingsRow::CheckForUpdates
+                                        {
+                                            panel.update_check =
+                                                settings_panel::UpdateCheckDisplay::Checking;
+                                            pending_update_check =
+                                                Some(update_bridge::spawn_update_check());
+                                        } else {
+                                            panel.toggle_selected();
+                                        }
                                     }
                                     Key::Named(NamedKey::ArrowLeft) => panel.adjust_layers(-1),
                                     Key::Named(NamedKey::ArrowRight) => panel.adjust_layers(1),
@@ -3458,6 +3475,31 @@ fn main() {
                                         message: e.to_string(),
                                     };
                                 }
+                            }
+                            window.request_redraw();
+                        }
+                    }
+
+                    // Real §75.49 "Check for Updates" poll -- same
+                    // non-blocking shape, only meaningful while the
+                    // settings panel is actually open and mid-check
+                    // (closing the panel doesn't clear this receiver, but
+                    // its eventual result is simply never read once
+                    // `settings_state` is `None` again, matching the Leo
+                    // plan-request poll's own "stale results just aren't
+                    // consulted" precedent).
+                    if let Some(receiver) = &pending_update_check {
+                        if let Ok(result) = receiver.try_recv() {
+                            pending_update_check = None;
+                            if let Some(panel) = settings_state.as_mut() {
+                                panel.update_check = match result {
+                                    Ok(update_result) => {
+                                        settings_panel::UpdateCheckDisplay::Ready(update_result)
+                                    }
+                                    Err(e) => {
+                                        settings_panel::UpdateCheckDisplay::Failed(e.to_string())
+                                    }
+                                };
                             }
                             window.request_redraw();
                         }

@@ -12,6 +12,7 @@ spartan-crash = { path = "../spartan-crash" }
 spartan-model = { path = "../spartan-model" }
 spartan-leo = { path = "../spartan-leo" }
 spartan-settings = { path = "../spartan-settings" }
+spartan-updater = { path = "../spartan-updater" }
 wgpu = "0.19"
 winit = "0.29"
 glyphon = "0.5"
