@@ -882,6 +882,52 @@ first — it's the parity reference until each row there is actually reimplement
   macOS testing (none available in this project's history), CPU cost while Design mode is open not
   precisely benchmarked. Task #12 remains `in_progress` -- connecting `gui-builder`'s real AST
   engine to this real WebView shell via a real dev-server bridge is the natural next increment.
+- **Real, working code — real Windows cross-compilation and execution verification, a real
+  cross-platform link bug found and fixed (§75.40)**: this project has always named Windows and
+  Linux as both required desktop targets, but no prior session had ever actually cross-checked the
+  *other* platform. This one does: installs a real `x86_64-pc-windows-gnu` Rust target + real
+  `mingw-w64`, cross-compiles the *entire* workspace for Windows, and installs real Wine to
+  actually *run* the resulting `.exe` test binaries, not just link them. A real bug was found and
+  fixed, not just discovered: `libgit2-sys` 0.17.0's own Windows build script never linked
+  `advapi32` (confirmed by reading its actual source), causing real `undefined reference to
+  __imp_GetLengthSid`/`__imp_RegOpenKeyExW`/`__imp_CryptAcquireContextA` link failures for
+  `spartan-git` (and transitively `spartan-editor-core`) on the GNU toolchain -- invisible from
+  this project's entire prior history since no Windows build had ever been attempted post-§75.30.
+  Fixed by bumping `git2` `"0.19"` -> `"0.20"` (resolves to `libgit2-sys` 0.18.5, confirmed by
+  reading its build script to add exactly the missing `advapi32` link line) -- re-verified clean on
+  *both* platforms afterward (full native Linux build/clippy/test, and the Windows cross-target).
+  Real, executed compilation verification: `cargo check`/`clippy --all-targets`/`test --no-run` for
+  the Windows target, both for `spartan-editor-core` alone and the full workspace (every crate,
+  every spike, `xtask`, including `spartan-plugin-host`'s real `wasmtime`), all clean. A second real
+  confirmation §75.39's `build.rs` genuinely works: the Windows cross-build's own output showed the
+  real "copied WebView2Loader.dll" success message for the first time ever (every prior Linux
+  session only exercised the harmless no-op branch). Real, executed *execution* verification via
+  Wine -- a real step beyond linking, and the first real Windows-binary execution performed inside
+  the same session that built the binaries (`ui-shell-spike`'s own Windows verification, §47.11,
+  was real but from an earlier, separate session on a real machine this project no longer has):
+  every pure-logic crate's real test suite ran and passed unmodified under Wine --
+  `spartan-buffer` (22/22), `spartan-security` (14/14), `spartan-crash` (6/6, including a real
+  Windows-filesystem-emulated write+read-back), `spartan-languages` (17/17), `xtask` (4/4),
+  `spartan-plugin-host` manifest tests (3/3), and `spartan-editor-core`'s own `--lib` (48/48) and
+  `viewport_and_language.rs` (75/75) suites. Most pointedly, `spartan-git`'s own suite (10/10) --
+  real repo discovery/stage/unstage/commit -- passed under Wine, the real, positive, run-not-assumed
+  proof the `advapi32` fix is correct, not merely link-clean, since these operations call exactly
+  the previously-unlinked APIs. `lsp_integration.rs`/`dap_integration.rs` correctly self-skipped
+  (no Windows `rust-analyzer.exe`/`lldb-dap.exe` in this bare Wine sandbox) -- a real, correct
+  outcome, not a false pass. `build_integration.rs` genuinely failed (2/2) for a real, understood,
+  *environment* reason: it deliberately doesn't self-skip (assumes a real dev machine has
+  `cargo`/`rustc`), and this Wine sandbox has no Windows Rust toolchain installed inside it -- named
+  honestly, not papered over. A real, honest environment hiccup along the way, distinguished from
+  the actual bug: a `--workspace --no-run` build hit "No space left on device" partway through
+  (`target/debug` had grown to 16GB across this session's own many rebuilds) -- fixed by clearing
+  it (safe, regenerable, nothing tracked), not by weakening the check. No GPU/GUI/WebView execution
+  under Wine was attempted (needs `wine32`/a real X setup this sandbox lacks) -- the real product
+  binary's own GPU-facing paths remain unverified from this session specifically, resting on
+  cross-compilation success plus `ui-shell-spike`'s own separate real-Windows verification. No MSVC
+  target checked (GNU only, what a Linux mingw-w64 cross-setup can produce) -- a real dev machine's
+  default `rustup` target is usually MSVC; the `advapi32` fix is almost certainly relevant there too
+  but wasn't independently confirmed against MSVC's own default library search. No macOS
+  verification exists anywhere in this project's history.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -969,6 +1015,14 @@ cargo test --workspace --release   # 249 tests: 6 spikes + 7 real crates + xtask
 # `gtk::init()` hangs indefinitely trying to reach a dconf service that isn't there -- a real
 # environment-only requirement, not something the binary sets itself (a real desktop always has a
 # working D-Bus session). See §75.39 for the full diagnosis.
+# Real Windows cross-compilation/execution verification (§75.40): `rustup target add
+# x86_64-pc-windows-gnu` + `apt-get install mingw-w64` gets a real Windows GNU toolchain on Linux;
+# `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo check/clippy/test --no-run
+# --target x86_64-pc-windows-gnu --workspace` cross-compiles everything. `apt-get install wine64`
+# (Wine 9.0) then actually *runs* the resulting `.exe` test binaries -- e.g. `wine
+# target/x86_64-pc-windows-gnu/debug/deps/spartan_buffer-<hash>.exe`. GPU/GUI/WebView binaries were
+# never run this way (no `wine32`/X setup for that); only headless test suites were. See §75.40 for
+# the real `advapi32`/`libgit2-sys` link bug this process found and fixed.
 # spartan-editor-core's real accessibility tree (§16.3, §75.34) only has headless tests for its
 # own pure tree-building logic (accessibility.rs) -- live AT-SPI registration needs a real Linux
 # desktop accessibility stack (at-spi2-core's `at-spi-bus-launcher`, a real D-Bus session, and
