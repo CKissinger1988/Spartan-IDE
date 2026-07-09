@@ -573,7 +573,27 @@ enum SidebarMode {
     SourceControl,
 }
 
+/// Real local-first crash directory (§18, task #13): `~/.spartan/crashes`
+/// (`$HOME`, falling back to `$USERPROFILE` for Windows, falling back to
+/// the current directory if neither is set -- the same kind of degrade-
+/// gracefully-rather-than-panic posture this crate's own LSP/DAP spawn
+/// failures already use). No config system exists yet to make this
+/// configurable; `.spartan/` matches §15's own `.spartan/memory/team.md`
+/// naming convention for this project's local dotfile namespace.
+fn crash_dir() -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".spartan").join("crashes")
+}
+
 fn main() {
+    // Installed before anything else in `main` can possibly panic --
+    // real crash capture only has real value if it's live for the
+    // earliest failure this process can hit, not just failures after
+    // setup completes.
+    spartan_crash::install_hook(crash_dir());
+
     let program_start = Instant::now();
     println!("=== spartan-editor-core -- real Tier 1 core-engine increment ===");
 

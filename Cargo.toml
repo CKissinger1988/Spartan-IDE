@@ -11,5 +11,6 @@ members = [
     "crates/spartan-languages",
     "crates/spartan-git",
     "crates/spartan-security",
+    "crates/spartan-crash",
     "crates/spartan-editor-core",
 ]

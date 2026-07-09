@@ -3240,6 +3240,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "spartan-crash"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "spartan-security",
+]
+
+[[package]]
 name = "spartan-editor-core"
 version = "0.1.0"
 dependencies = [
@@ -3251,6 +3260,7 @@ dependencies = [
  "serde",
  "serde_json",
  "spartan-buffer",
+ "spartan-crash",
  "spartan-git",
  "spartan-languages",
  "spartan-security",

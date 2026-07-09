@@ -653,6 +653,27 @@ first — it's the parity reference until each row there is actually reimplement
   gating or path-jailing (both need a real tool layer that doesn't exist), `redact()` has no caller
   yet, no debouncing/incremental re-scan (runs once per file open), and the generic-assignment
   pattern is untuned against any real-world corpus, only this crate's own synthetic fixtures.
+- **Real, working code — local-first crash reporter, closing §18, task #13 (§75.32)**: the first
+  real crash-reporting code in this workspace. New `crates/spartan-crash`: `CrashReport::
+  from_panic_info` builds a report from a real `std::panic::PanicHookInfo`; `format_report` runs
+  both the panic message and its `file:line:column` location through `spartan_security::redact`
+  (§75.31) before serializing to JSON, same "redact before anything leaves local disk" discipline
+  §9 calls for; `write_report` writes `~/.spartan/crashes/crash-<timestamp>.json`; `install_hook`
+  chains onto the real existing default panic hook (captured via `take_hook()`) rather than
+  replacing it, so normal terminal panic output is unchanged. Deliberately local-only this pass --
+  no upload path exists at all yet, so "never auto-uploads" is true by construction, not a
+  disable-able gate. 6 new headless tests (JSON shape, redaction of a secret in the message, in the
+  location, real file creation/naming, clean-message non-redaction), all passing first run. Wired
+  into `spartan-editor-core`'s `main()` as the literal first statement, before anything else can
+  panic. Full test/clippy/fmt clean across the whole workspace. Live, through the real binary:
+  triggering a real, pre-existing panic path (`--synthetic:not-a-number`) with `$HOME` pointed at a
+  scratch directory produced a real crash report file on disk with the exact real panic message and
+  source location, confirmed by reading the file directly; normal terminal panic output (thread
+  name, message, backtrace) still printed unchanged, confirming the default hook is genuinely
+  chained, not replaced. 50k-line benchmark re-run, no additional regression beyond §75.31's own
+  already-reported scan cost. No upload path of any kind yet (an explicit user-initiated upload is
+  real future work), no UI for browsing/deleting past reports (unbounded local accumulation, a real
+  named gap), no OS-level segfault/native-crash capture (Rust panics only).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -700,9 +721,9 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 211 tests: 6 spikes + 5 real crates (spartan-buffer,
+cargo test --workspace --release   # 217 tests: 6 spikes + 6 real crates (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
-                                    # spartan-editor-core)
+                                    # spartan-crash, spartan-editor-core)
 # dap-spike and spartan-editor-core's own dap_integration.rs need `lldb-dap` (or `lldb-dap-18`) +
 # `rustc`; lsp-spike and spartan-editor-core's own lsp_integration.rs need `rust-analyzer` +
 # `rustc`; spartan-editor-core's dap_python_cross_language.rs needs python + the debugpy package.
