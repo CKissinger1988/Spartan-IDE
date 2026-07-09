@@ -285,6 +285,18 @@ first — it's the parity reference until each row there is actually reimplement
   correctly. No visual file-tree/tab bar, no shared LSP session across files, no unified multi-file
   breakpoint set, no open-file dialog. Also surfaced a bigger, real, separate gap: **no file in this
   crate has ever been saved to disk** -- there is no save functionality at all yet, for any file.
+- **Real, working code — real save-to-disk, Ctrl+S (§75.16)**: closes the gap §75.15 named. Real
+  `std::fs::write` on Ctrl+S (matched via `physical_key`, not `logical_key`, since Ctrl-held letters
+  don't reliably carry `text` on every platform), guarded against `--synthetic:` fixtures (no real
+  path to write to -- prints a clear refusal instead). `OpenFile.dirty` tracks unsaved changes; since
+  no UI chrome exists anywhere in this crate, the window title itself is the first real dirty
+  indicator (`window.set_title` appends `*`). Live verification against a real scratch file (not a
+  tracked repo file): typed an edit, confirmed the title gained `*` via `xdotool getwindowname`
+  (not just a screenshot -- the real title was wider than the visible titlebar), pressed Ctrl+S,
+  confirmed the `*` cleared, confirmed `"Saved: <path>"` printed, and confirmed by reading the file
+  directly off disk that its actual bytes matched the edit. No prompt/confirmation on closing or
+  switching away from a dirty file -- both currently discard unsaved changes silently, a real,
+  named data-loss risk, not a hidden one. No save-as, no external-change detection, no auto-save.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

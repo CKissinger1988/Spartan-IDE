@@ -14,7 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use winit::event::{ElementState, Event, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::EventLoop;
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::WindowBuilder;
 
 /// `wgpu::Color` clear values are specified in linear space, but the chosen
@@ -149,6 +149,11 @@ struct OpenFile {
     breakpoints: Vec<i64>,
     dap_launch_info: Option<(spartan_languages::CommandSpec, PathBuf, PathBuf, PathBuf)>,
     dap_build_info: Option<(spartan_languages::CommandSpec, PathBuf, PathBuf)>,
+    /// Real, per-file unsaved-changes tracking (§75.16) -- set on any
+    /// non-`EditEffect::None` edit, cleared on a successful `Ctrl+S` save.
+    /// `label.starts_with("--synthetic:")` files are never saveable (they
+    /// have no real path), so `dirty` on one is display-only.
+    dirty: bool,
 }
 
 /// Loads one file (or `--synthetic:<n>`), detects its language, and spawns
@@ -283,6 +288,19 @@ fn open_file(label: &str, debug_binary_path: Option<&PathBuf>) -> OpenFile {
         breakpoints: Vec::new(),
         dap_launch_info,
         dap_build_info,
+        dirty: false,
+    }
+}
+
+/// The window title reflects the active file's label and, for the first
+/// time in this crate (§75.16), a real unsaved-changes indicator -- the
+/// only user-visible signal of dirty state that exists anywhere yet, since
+/// no tab bar (task #16) has been built.
+fn window_title(file: &OpenFile) -> String {
+    if file.dirty {
+        format!("Spartan editor-core — {} *", file.label)
+    } else {
+        format!("Spartan editor-core — {}", file.label)
     }
 }
 
@@ -367,7 +385,7 @@ fn main() {
     let t_event_loop = Instant::now();
     let window = Arc::new(
         WindowBuilder::new()
-            .with_title("Spartan editor-core")
+            .with_title(window_title(&files[active]))
             .with_inner_size(winit::dpi::LogicalSize::new(1000.0, 700.0))
             .build(&event_loop)
             .expect("failed to create window"),
@@ -583,6 +601,43 @@ fn main() {
                                     ..
                                 },
                             ..
+                        } if modifiers.control_key()
+                            && key_event.physical_key == PhysicalKey::Code(KeyCode::KeyS) =>
+                        {
+                            // Ctrl+S: real save-to-disk (§75.16) -- the first
+                            // save functionality anywhere in this crate. Only
+                            // matched via `physical_key` (layout/modifier-
+                            // independent), not `logical_key`, since some
+                            // platforms report no `text` at all for a
+                            // Ctrl-held letter, and this needs to fire
+                            // regardless of what `logical_key` resolves to.
+                            let active_file = &mut files[active];
+                            if active_file.label.starts_with("--synthetic:") {
+                                println!(
+                                    "Cannot save {} -- a --synthetic: fixture has no real file path",
+                                    active_file.label
+                                );
+                            } else {
+                                match std::fs::write(&active_file.label, active_file.editor.text())
+                                {
+                                    Ok(()) => {
+                                        active_file.dirty = false;
+                                        println!("Saved: {}", active_file.label);
+                                        window.set_title(&window_title(active_file));
+                                    }
+                                    Err(e) => {
+                                        println!("Failed to save {}: {e}", active_file.label)
+                                    }
+                                }
+                            }
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
                         } => match &key_event.logical_key {
                             Key::Named(NamedKey::Tab) if modifiers.control_key() => {
                                 // Ctrl+Tab / Ctrl+Shift+Tab: cycle the active
@@ -595,6 +650,7 @@ fn main() {
                                 };
                                 println!("Switched to: {}", files[active].label);
                                 let active_file = &mut files[active];
+                                window.set_title(&window_title(active_file));
                                 reshape_window(
                                     &mut text_state,
                                     &active_file.editor,
@@ -726,6 +782,10 @@ fn main() {
                                 if effect != editor_view::EditEffect::None {
                                     edit_latency.note_key_event();
                                     active_file.lsp_debouncer.on_edit();
+                                    if !active_file.dirty {
+                                        active_file.dirty = true;
+                                        window.set_title(&window_title(active_file));
+                                    }
                                     let (cursor_line, _) = active_file.editor.cursor_line_col();
                                     let doc_len_lines = active_file.editor.document.len_lines();
                                     if active_file
