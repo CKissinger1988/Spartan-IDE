@@ -520,6 +520,27 @@ first — it's the parity reference until each row there is actually reimplement
   `None` and the sidebar renders nothing), no regression. No caching/filesystem watching, no keyboard
   tree navigation (mouse-only), no delete/rename/create, no git-status decoration or icons, no
   sidebar toggle (always shown once a root is known, fixed 200px regardless of window width).
+- **Real, working code — tab drag-to-reorder, closing task #25 (§75.27)**: closes the reorder half
+  of task #25 (§75.24 already closed the Ctrl+W half; tab overflow handling is the one piece still
+  open under the same task). A real, named v1 cut: teleport-on-release, not a live "ghost tab" --
+  `tab_drag_start` just remembers which file a press landed on; the release position, hit-tested like
+  a fresh click, decides whether/where to reorder. A drag is distinguished from a plain click by
+  `to != from` at release time, not a pixel-distance threshold -- a click starts and ends on the same
+  tab, so it can never accidentally reorder. `reorder_file()` is `Vec::remove`+`Vec::insert` (no
+  `Clone` needed) plus index-remapping for `active`, hand-verified for both drag directions across
+  all three cases (moved-file, strictly-between, unaffected) before any live testing. A real finding
+  from a deliberately harder 3-tab test, not from inspection: the tab-press handler already sets
+  `active = file_index` immediately on press (unchanged, pre-existing behavior, the same path a plain
+  click uses) -- so by the time `reorder_file` runs on release, `active` is already forced to `from`,
+  meaning the "strictly between" branch, though hand-verified correct, is currently unreachable via
+  this UI. Named explicitly rather than silently deleting real, correct-but-unreached logic or hiding
+  the gap. No new headless test (binary-private helper, same established live-verification-only
+  pattern as `close_file`/`window_title`/`modal_message`). Full test/clippy/fmt clean. Live: a 2-tab
+  drag reordered and correctly kept the dragged file active (screenshotted before/after); a plain
+  click on the same tab correctly didn't reorder (screenshotted); a 3-tab test (2nd tab made active,
+  1st dragged onto 3rd) produced the exact hand-verified position result `[lib.rs, nested.rs,
+  main.rs]` and surfaced the live-unreachability finding above. 50k-line benchmark re-run, no
+  regression. Tab overflow handling remains the one open piece of task #25.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

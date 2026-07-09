@@ -435,6 +435,35 @@ fn close_file(files: &mut Vec<OpenFile>, active: &mut usize, index: usize) {
     }
 }
 
+/// Real tab drag-to-reorder (§75.27, task #25): moves the file at `from`
+/// to sit exactly at `to`'s current position, shifting every file between
+/// them over by one -- the standard `Vec::remove` + `Vec::insert` reorder.
+/// A no-op if `from == to` or either index is out of range (the second
+/// case shouldn't happen in practice, since both are resolved from a real
+/// tab-bar hit-test against the current `files`, but is still checked
+/// rather than trusted, matching this file's own established defensive
+/// style). Adjusts `active` so it keeps pointing at the same *logical*
+/// file regardless of where that file numerically ends up: follows `from`
+/// directly to `to` if `active` was the file being moved; shifts by one in
+/// the opposite direction of the move if `active` was strictly between
+/// `from` and `to`; otherwise unaffected.
+fn reorder_file(files: &mut Vec<OpenFile>, active: &mut usize, from: usize, to: usize) {
+    if from == to || from >= files.len() || to >= files.len() {
+        return;
+    }
+    let moved = files.remove(from);
+    files.insert(to, moved);
+    *active = if *active == from {
+        to
+    } else if from < to && *active > from && *active <= to {
+        *active - 1
+    } else if to < from && *active >= to && *active < from {
+        *active + 1
+    } else {
+        *active
+    };
+}
+
 /// What a real unsaved-changes confirmation modal (§75.23, task #18) is
 /// currently blocking on -- either closing one specific tab (mouse click on
 /// its `×` while it's dirty) or exiting the whole app (`CloseRequested`
@@ -714,6 +743,15 @@ fn main() {
     // for the full story). `CursorMoved` arms a real selection anchor from
     // this lazily, only once the cursor has actually moved away from it.
     let mut drag_anchor_pos: Option<usize> = None;
+    // Real tab drag-to-reorder (§75.27, task #25): the file index a tab
+    // press started on, if the press landed on a tab's body (not its `×`).
+    // Resolved on the matching release: if the release also lands on the
+    // tab bar, at a *different* file index than the press, the two are
+    // swapped via `reorder_file`. A real, deliberate v1 simplification: no
+    // visual "ghost tab" follows the cursor mid-drag, only a teleport-on-
+    // release reorder -- `CursorMoved` isn't wired to update anything about
+    // an in-progress tab drag.
+    let mut tab_drag_start: Option<usize> = None;
     // Real OS clipboard integration (§75.20). Construction can genuinely
     // fail (no X11/Wayland clipboard manager reachable, etc.) -- printed
     // once and handled gracefully rather than treated as fatal, matching
@@ -964,6 +1002,14 @@ fn main() {
                                             close_file(&mut files, &mut active, file_index);
                                         } else {
                                             active = file_index;
+                                            // Real tab drag-to-reorder
+                                            // (§75.27): armed on a press on
+                                            // a tab's body (never its `×`,
+                                            // which already took the other
+                                            // branch above), resolved on
+                                            // the matching `MouseInput`
+                                            // release below.
+                                            tab_drag_start = Some(file_index);
                                         }
                                         let active_file = &mut files[active];
                                         window.set_title(&window_title(active_file));
@@ -1039,6 +1085,37 @@ fn main() {
                         } => {
                             mouse_button_down = false;
                             drag_anchor_pos = None;
+                            // Real tab drag-to-reorder (§75.27): resolved
+                            // here, on release, against whatever tab (if
+                            // any) the cursor is currently over -- a real
+                            // reorder only if the release also landed on
+                            // the tab bar, at a *different* file index than
+                            // the press started on (a plain click, with no
+                            // drag at all, must not silently reorder
+                            // anything).
+                            if let Some(from) = tab_drag_start.take() {
+                                if pending_close.is_none()
+                                    && last_cursor_pos.0 >= text::SIDEBAR_WIDTH
+                                    && last_cursor_pos.1 < text::TAB_BAR_HEIGHT
+                                {
+                                    let local_x = last_cursor_pos.0 - text::TEXT_ORIGIN_X;
+                                    let local_y = last_cursor_pos.1 - text::TAB_BAR_TEXT_TOP;
+                                    if let Some(char_index) =
+                                        text_state.hit_test_tab_bar(local_x, local_y)
+                                    {
+                                        if let Some((to, is_close)) =
+                                            tab_bar::hit_test_tab_bar(&tab_hits, char_index)
+                                        {
+                                            if !is_close && to != from {
+                                                reorder_file(&mut files, &mut active, from, to);
+                                                let active_file = &mut files[active];
+                                                window.set_title(&window_title(active_file));
+                                                window.request_redraw();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                         WindowEvent::KeyboardInput {
                             event:
