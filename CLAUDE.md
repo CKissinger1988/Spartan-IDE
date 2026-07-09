@@ -494,6 +494,32 @@ first — it's the parity reference until each row there is actually reimplement
   Ctrl+Z removed only the "!", leaving "hello world" intact. 50k-line benchmark re-run, no regression
   (this benchmark never calls undo/redo, so only `insert_at_cursor`'s marginally larger per-call
   bookkeeping was exercised). No idle-timeout run termination, no backspace coalescing.
+- **Real, working code — file tree sidebar, task #24 (§75.26)**: closes the file-tree half of task
+  #16 split off back in §75.21. Before this, files could only be opened via `--open:<path>` CLI args
+  at startup -- no in-app browse-and-open existed. New, pure, no-GPU `file_tree.rs` (same split as
+  `tab_bar.rs`) owns `FileTree` (root + a `BTreeSet` of expanded dirs) and two pure functions:
+  `visible_rows()` (real, recursive `std::fs::read_dir` through expanded dirs only, no caching, a
+  named v1 cost) and `build_tree_text()` (ASCII `"> "`/`"v "`/`"  "` markers, not Unicode triangles,
+  so no font-coverage dependency). Hit-testing turned out *simpler* than the tab bar's own: since the
+  sidebar is genuinely multi-line (one row per line), the real cosmic-text `Buffer::hit`'s own
+  `Cursor::line` *is* the row index directly -- no char-range list needed the way the tab bar's
+  single-line-many-tabs layout requires. The layout shift reused §75.21's own proven trick instead of
+  touching call sites by hand: `TEXT_ORIGIN_X` is now `SIDEBAR_WIDTH + 8.0`, and since the main editor
+  and tab bar's rendering *and* hit-testing already routed through that one symbolic constant, both
+  shifted right automatically. `sidebar_root()` reuses the exact same `language::find_project_root`
+  call `open_file()` already makes for LSP root detection -- the sidebar shows the same root the
+  language server is actually analyzing. Clicking an already-open file switches to it instead of
+  duplicating it (`find_open_file_index`, canonicalizing both sides before comparing, falling back to
+  raw comparison if that fails). 8 new headless tests, all passed first run. Full test/clippy/fmt
+  clean (95 tests across this crate's lib+integration suites). Live, against a real 3-level fixture
+  project: root listing rendered correctly sorted (dirs first); clicking a dir expanded it to depth 1;
+  clicking a file opened a real new tab with real content; clicking that same file again in the
+  sidebar switched back instead of duplicating (tab count unchanged); clicking a nested dir revealed
+  its child at depth 2; the main editor's click-to-position and keyboard input both still worked
+  correctly through the shifted layout. 50k-line benchmark re-run (no real path, so `file_tree` is
+  `None` and the sidebar renders nothing), no regression. No caching/filesystem watching, no keyboard
+  tree navigation (mouse-only), no delete/rename/create, no git-status decoration or icons, no
+  sidebar toggle (always shown once a root is known, fixed 200px regardless of window width).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

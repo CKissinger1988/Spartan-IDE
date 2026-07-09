@@ -14,6 +14,7 @@ pub mod build;
 pub mod dap;
 pub mod dap_session;
 pub mod editor_view;
+pub mod file_tree;
 pub mod highlight;
 pub mod language;
 pub mod lsp;

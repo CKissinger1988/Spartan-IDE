@@ -35,6 +35,13 @@ pub struct TextState {
     /// on/off flag needed here, matching how the tab bar itself has no
     /// "hidden" state distinct from "empty content."
     pub modal_buffer: Buffer,
+    /// Real file tree sidebar text (§75.26) -- a fourth, independent
+    /// cosmic-text `Buffer`, same sharing reasoning as `tab_bar_buffer`/
+    /// `modal_buffer`. One real line of text per visible tree row (see
+    /// `file_tree::build_tree_text`), so hit-testing a click just needs the
+    /// clicked line index, not a per-row char-range list the way the tab
+    /// bar's single-line-many-tabs layout needs.
+    pub sidebar_buffer: Buffer,
 }
 
 pub const FONT_SIZE: f32 = 16.0;
@@ -54,11 +61,27 @@ pub const TAB_BAR_LINE_HEIGHT: f32 = 20.0;
 /// reasonable.
 pub const TAB_BAR_TEXT_TOP: f32 = (TAB_BAR_HEIGHT - TAB_BAR_LINE_HEIGHT) / 2.0;
 
+/// Real file tree sidebar width (§75.26), reserved on the left of the
+/// window -- `TEXT_ORIGIN_X` below is defined in terms of this, so every
+/// existing call site that already uses `TEXT_ORIGIN_X` symbolically (main
+/// editor and tab bar rendering *and* hit-testing, both already routed
+/// through this one constant) shifts right to make room for it
+/// automatically, the exact same trick `TAB_BAR_HEIGHT`/`TEXT_ORIGIN_Y`
+/// already used in §75.21 to make room vertically. The sidebar itself uses
+/// its own, separate small left/top padding (`SIDEBAR_TEXT_LEFT`/
+/// `SIDEBAR_TEXT_TOP`), not `TEXT_ORIGIN_X`/`TEXT_ORIGIN_Y` -- it isn't
+/// positioned relative to itself.
+pub const SIDEBAR_WIDTH: f32 = 200.0;
+pub const SIDEBAR_FONT_SIZE: f32 = 13.0;
+pub const SIDEBAR_LINE_HEIGHT: f32 = 18.0;
+pub const SIDEBAR_TEXT_LEFT: f32 = 8.0;
+pub const SIDEBAR_TEXT_TOP: f32 = 8.0;
+
 /// Text origin within the window, in pixels -- kept as constants (rather than
 /// re-typing `8.0` in both `prepare()`'s `TextArea` and the cursor-position
 /// math in `main.rs`) so the two can never drift apart and mis-align the
 /// caret against the glyphs it's supposed to sit next to.
-pub const TEXT_ORIGIN_X: f32 = 8.0;
+pub const TEXT_ORIGIN_X: f32 = SIDEBAR_WIDTH + 8.0;
 pub const TEXT_ORIGIN_Y: f32 = 8.0 + TAB_BAR_HEIGHT;
 
 impl TextState {
@@ -94,6 +117,12 @@ impl TextState {
         let mut modal_buffer = Buffer::new(&mut font_system, Metrics::new(FONT_SIZE, LINE_HEIGHT));
         modal_buffer.set_size(&mut font_system, width, height);
 
+        let mut sidebar_buffer = Buffer::new(
+            &mut font_system,
+            Metrics::new(SIDEBAR_FONT_SIZE, SIDEBAR_LINE_HEIGHT),
+        );
+        sidebar_buffer.set_size(&mut font_system, SIDEBAR_WIDTH, height);
+
         Self {
             font_system,
             swash_cache,
@@ -102,6 +131,7 @@ impl TextState {
             buffer,
             tab_bar_buffer,
             modal_buffer,
+            sidebar_buffer,
         }
     }
 
@@ -135,6 +165,21 @@ impl TextState {
             Shaping::Advanced,
         );
         self.modal_buffer.shape_until_scroll(&mut self.font_system);
+    }
+
+    /// Replaces the file tree sidebar's entire content (§75.26). Same
+    /// "always a full reshape" reasoning as `set_tab_bar_text` -- a file
+    /// tree is never large enough in practice to need a windowed or
+    /// per-line fast path the way the main editor buffer does.
+    pub fn set_sidebar_text(&mut self, text: &str) {
+        self.sidebar_buffer.set_text(
+            &mut self.font_system,
+            text,
+            Attrs::new().family(Family::Monospace),
+            Shaping::Advanced,
+        );
+        self.sidebar_buffer
+            .shape_until_scroll(&mut self.font_system);
     }
 
     /// Replaces the buffer's entire content -- a full reshape, but of
@@ -232,6 +277,8 @@ impl TextState {
             .set_size(&mut self.font_system, width, TAB_BAR_HEIGHT);
         self.modal_buffer
             .set_size(&mut self.font_system, width, height);
+        self.sidebar_buffer
+            .set_size(&mut self.font_system, SIDEBAR_WIDTH, height);
     }
 
     pub fn prepare(
@@ -292,6 +339,27 @@ impl TextState {
                         left: 0,
                         top: 0,
                         right: width as i32,
+                        bottom: height as i32,
+                    },
+                    default_color: Color::rgb(0xE9, 0xE7, 0xE4),
+                },
+                // Real file tree sidebar text (§75.26) -- its own
+                // coordinate space starting at the window's left edge (not
+                // `TEXT_ORIGIN_X`, which already accounts for the
+                // sidebar's own width), clipped to `SIDEBAR_WIDTH` so a
+                // long file name can't visually bleed into the main
+                // editor. Empty text (no project root known) shapes to
+                // zero glyphs, same "no separate on/off flag" pattern
+                // every other optional buffer here already uses.
+                TextArea {
+                    buffer: &self.sidebar_buffer,
+                    left: SIDEBAR_TEXT_LEFT,
+                    top: SIDEBAR_TEXT_TOP,
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: 0,
+                        top: 0,
+                        right: SIDEBAR_WIDTH as i32,
                         bottom: height as i32,
                     },
                     default_color: Color::rgb(0xE9, 0xE7, 0xE4),
@@ -402,6 +470,17 @@ impl TextState {
             .map(|s| s.chars().count())
             .unwrap_or(0);
         Some(col_chars)
+    }
+
+    /// Real hit-testing for the file tree sidebar (§75.26) -- simpler than
+    /// `hit_test_tab_bar`: since the sidebar is genuinely multi-line (one
+    /// real line per tree row, via `file_tree::build_tree_text`), the real
+    /// cosmic-text `Buffer::hit`'s own `Cursor::line` *is* the row index
+    /// directly, with no char-range list to resolve against. `x`/`y` are
+    /// relative to the sidebar's own origin (`SIDEBAR_TEXT_LEFT`/
+    /// `SIDEBAR_TEXT_TOP`). `None` if the click landed below the last row.
+    pub fn hit_test_sidebar(&self, x: f32, y: f32) -> Option<usize> {
+        self.sidebar_buffer.hit(x, y).map(|cursor| cursor.line)
     }
 
     /// Real pixel x-position for a char column within the tab bar's single

@@ -8,7 +8,7 @@ mod text;
 
 use spartan_editor_core::viewport::{self, Viewport};
 use spartan_editor_core::{
-    build, dap_session, editor_view, highlight, language, lsp, lsp_session, tab_bar,
+    build, dap_session, editor_view, file_tree, highlight, language, lsp, lsp_session, tab_bar,
 };
 
 use std::path::{Path, PathBuf};
@@ -350,6 +350,50 @@ fn open_file(label: &str, debug_binary_path: Option<&PathBuf>) -> OpenFile {
     }
 }
 
+/// Real file tree sidebar root (§75.26, task #24): reuses exactly the same
+/// project-root detection an LSP session already needs (`open_file`'s own
+/// `language::find_project_root` call), rather than a second, separate
+/// notion of "root" -- if a real project marker file is found, the sidebar
+/// shows the same root rust-analyzer (or whichever language server) is
+/// actually analyzing; otherwise it falls back to the file's own parent
+/// directory, matching `open_file`'s own single-file-mode fallback.
+/// `None` only for a `--synthetic:<n>` label, which has no real path to
+/// derive a root from at all.
+fn sidebar_root(label: &str) -> Option<PathBuf> {
+    if label.starts_with("--synthetic:") {
+        return None;
+    }
+    let file_path = Path::new(label);
+    let marker_files = language::detect_language_for_file(file_path)
+        .map(|profile| profile.marker_files)
+        .unwrap_or_default();
+    language::find_project_root(file_path, &marker_files)
+        .or_else(|| file_path.parent().map(Path::to_path_buf))
+}
+
+/// Resolves a real filesystem path (from a file tree sidebar click) to an
+/// already-open file's index, if any -- clicking a file that's already
+/// open should switch to it, not spawn a second `OpenFile` (and a second
+/// real LSP session) for the same real path. Canonicalizes both sides
+/// before comparing so e.g. a relative CLI-launch path and an absolute
+/// sidebar-derived path for the same real file still match; falls back to
+/// a raw path comparison if canonicalization fails on either side (a file
+/// that's been removed out from under an already-open tab, say) rather
+/// than treating that as "never matches, always reopen."
+fn find_open_file_index(files: &[OpenFile], path: &Path) -> Option<usize> {
+    let target_canonical = std::fs::canonicalize(path).ok();
+    files.iter().position(|f| {
+        if f.label.starts_with("--synthetic:") {
+            return false;
+        }
+        let label_path = Path::new(&f.label);
+        match (&target_canonical, std::fs::canonicalize(label_path)) {
+            (Some(target), Ok(label_canonical)) => *target == label_canonical,
+            _ => label_path == path,
+        }
+    })
+}
+
 /// The window title reflects the active file's label and, for the first
 /// time in this crate (§75.16), a real unsaved-changes indicator -- the
 /// only user-visible signal of dirty state that exists anywhere yet, since
@@ -491,6 +535,14 @@ fn main() {
         files.push(open_file(extra, None));
     }
     let mut active: usize = 0;
+
+    // Real file tree sidebar (§75.26, task #24) -- rooted at whatever
+    // `sidebar_root` resolves for the first opened file (the same real
+    // project-root detection an LSP session already uses). `None` for a
+    // `--synthetic:<n>` fixture (no real path to root a tree at) -- the
+    // sidebar then has nothing to show, same "empty is the ordinary state"
+    // pattern the modal/tab bar buffers already established.
+    let mut file_tree = sidebar_root(&fixture_path).map(file_tree::FileTree::new);
 
     let mut bench_rng = rand::thread_rng();
     let mut edit_bench_remaining = bench_edit_iters.unwrap_or(0);
@@ -682,6 +734,10 @@ fn main() {
     // button). Persists across frames/events, unlike the tab bar text
     // itself, which `TextState` already owns.
     let mut tab_hits: Vec<tab_bar::TabHit> = Vec::new();
+    // Real file tree sidebar hit-testing state (§75.26) -- same rebuild-
+    // every-frame, read-back-by-`MouseInput` pattern as `tab_hits` just
+    // above.
+    let mut sidebar_rows: Vec<file_tree::TreeRow> = Vec::new();
     // Real unsaved-changes confirmation state (§75.23, task #18) -- `None`
     // the vast majority of the time. While `Some`, the dedicated
     // `KeyboardInput` arm below intercepts *all* keyboard input (Enter
@@ -815,7 +871,60 @@ fn main() {
                             state: ElementState::Pressed,
                             button: MouseButton::Left,
                             ..
-                        } if pending_close.is_none() && last_cursor_pos.1 < text::TAB_BAR_HEIGHT => {
+                        } if pending_close.is_none() && last_cursor_pos.0 < text::SIDEBAR_WIDTH => {
+                            // Real file tree sidebar clicks (§75.26) --
+                            // resolved via the same real cosmic-text
+                            // hit-testing technique as the main editor and
+                            // tab bar, not a pixel-guessing geometry model.
+                            // A directory row toggles expand/collapse; a
+                            // file row opens it, or switches to it if
+                            // already open (`find_open_file_index`) rather
+                            // than spawning a second `OpenFile` -- and a
+                            // second real LSP session -- for the same path.
+                            let local_x = last_cursor_pos.0 - text::SIDEBAR_TEXT_LEFT;
+                            let local_y = last_cursor_pos.1 - text::SIDEBAR_TEXT_TOP;
+                            if let Some(row_index) = text_state.hit_test_sidebar(local_x, local_y)
+                            {
+                                if let Some(row) = sidebar_rows.get(row_index).cloned() {
+                                    if row.is_dir {
+                                        if let Some(tree) = file_tree.as_mut() {
+                                            tree.toggle(&row.path);
+                                        }
+                                        window.request_redraw();
+                                    } else {
+                                        let target_index = find_open_file_index(&files, &row.path)
+                                            .unwrap_or_else(|| {
+                                                let mut new_file = open_file(
+                                                    &row.path.display().to_string(),
+                                                    None,
+                                                );
+                                                new_file.viewport.visible_lines =
+                                                    files[active].viewport.visible_lines;
+                                                files.push(new_file);
+                                                files.len() - 1
+                                            });
+                                        active = target_index;
+                                        let active_file = &mut files[active];
+                                        window.set_title(&window_title(active_file));
+                                        reshape_window(
+                                            &mut text_state,
+                                            &active_file.editor,
+                                            &active_file.viewport,
+                                            active_file.highlighter.as_mut(),
+                                        );
+                                        window.request_redraw();
+                                    }
+                                }
+                            }
+                        }
+                        WindowEvent::MouseInput {
+                            state: ElementState::Pressed,
+                            button: MouseButton::Left,
+                            ..
+                        } if pending_close.is_none()
+                            && last_cursor_pos.0 >= text::SIDEBAR_WIDTH
+                            && last_cursor_pos.1 < text::TAB_BAR_HEIGHT =>
+                        {
                             // Real tab bar clicks (§75.21) -- resolved via the
                             // same real cosmic-text hit-testing technique as
                             // the main editor, not a pixel-guessing geometry
@@ -1463,6 +1572,19 @@ fn main() {
                                 tab_bar::build_tab_bar_text(&tab_labels);
                             tab_hits = new_tab_hits;
                             text_state.set_tab_bar_text(&tab_bar_text);
+
+                            // Real file tree sidebar text (§75.26), rebuilt
+                            // from a fresh real directory read every frame
+                            // just like the tab bar's own text above --
+                            // `sidebar_rows` is kept around (like `tab_hits`)
+                            // so a later `MouseInput` can resolve a click
+                            // against the exact same row list that's
+                            // actually on screen.
+                            sidebar_rows = file_tree
+                                .as_ref()
+                                .map(|t| t.visible_rows())
+                                .unwrap_or_default();
+                            text_state.set_sidebar_text(&file_tree::build_tree_text(&sidebar_rows));
 
                             // Real unsaved-changes modal text (§75.23),
                             // rebuilt from live state every frame just like
