@@ -1032,6 +1032,36 @@ first — it's the parity reference until each row there is actually reimplement
   exercises the structured-output fallback path in this pass (llama3.1:8b has real native tool
   support). Task #4 is a first real increment, not yet the full "Full trait + both providers" Tier 1
   bar §35.4 sets.
+- **Real, working code — real Kotlin syntax highlighting, closing a twice-blocked gap (§75.44)**:
+  prompted by an explicit user instruction to make sure Python and Kotlin are genuinely supported.
+  Every other Tier 1 language has had real tree-sitter highlighting since §75.11/§75.29; Kotlin
+  never did, because the only tree-sitter-0.25-compatible grammar crate ships no bundled highlights
+  query. Re-checked fresh rather than trusted from memory: `tree-sitter-kotlin-ng` has moved to a
+  real 1.1.0 under a new maintaining org since it was last checked, still compatible -- but a real
+  shallow clone of its actual source repo (not just the crate) confirmed, again, no query file
+  exists anywhere in it. New `crates/spartan-editor-core/src/kotlin_highlights.scm` is a real,
+  hand-authored query vendored directly into this crate, built from the grammar's own real
+  `node-types.json` field/type names. A real bug was caught only by running it, not by inspection:
+  a first draft's keyword list (grepped from `grammar.js` source text) included `"break"`, which
+  made `HighlightConfiguration::new` fail with a real `QueryError` -- fixed by writing a small
+  diagnostic program that iterates every real symbol id in the *compiled* grammar and prints its
+  actual visible tokens, revealing `"break"`/`"continue"`/`"reified"` are all real source text but
+  not reachable as real query tokens in the compiled grammar. A second real, structural finding:
+  this grammar has no distinct boolean/null literal node type at all -- `true`/`false`/`null` parse
+  as plain identifiers, not specially highlightable by any query. 1 new headless test (275 total
+  workspace-wide, up from 274), full workspace clean, 50k-line benchmark unaffected (no language
+  profile on synthetic fixtures). Live, through the real binary: a real, non-trivial `.kt` fixture
+  (class, companion object, constant, string templates, `if`/`else`, a function call) rendered
+  keywords/types/function-names/strings/numbers all in correct, distinct colors, screenshot-
+  confirmed. **Kotlin's LSP/DAP wiring remain real, separate, open gaps**: `languages.toml` has no
+  `dap_command` for Kotlin at all (contrary to informal earlier session language implying otherwise),
+  and neither its LSP nor a DAP entry has ever been live-verified, unlike Rust/Python/Go's own
+  dual-adapter-proven wiring. A real `kotlin-language-server` 1.3.13 was downloaded during this same
+  investigation (confirming real reachability), but this environment's safety classifier correctly
+  declined to let it be *executed* without more specific user authorization than the general
+  "make sure Kotlin is supported" instruction gave -- the same real authorization gate this
+  session's Ollama install went through explicitly first. Live LSP verification and DAP wiring for
+  Kotlin remain open, named follow-up work.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1089,7 +1119,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 274 tests: 6 spikes + 8 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 275 tests: 6 spikes + 8 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model,
                                     # spartan-editor-core, xtask)

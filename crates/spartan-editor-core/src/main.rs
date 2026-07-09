@@ -519,12 +519,15 @@ fn open_file(label: &str, debug_binary_path: Option<&PathBuf>) -> OpenFile {
                         println!("Syntax highlighting: real tree-sitter-go (windowed, see §75.29)");
                         highlighter = Some(highlight::Highlighter::go());
                     }
-                    other => {
+                    "tree-sitter-kotlin" => {
                         println!(
-                            "No real tree-sitter wiring for grammar {other:?} yet -- Kotlin is a \
-                             real, blocked gap (see §75.29): no available tree-sitter-0.25-compatible \
-                             Kotlin grammar crate ships a bundled highlights query"
+                            "Syntax highlighting: real tree-sitter-kotlin-ng with this crate's own \
+                             vendored highlights query (windowed, see §75.44)"
                         );
+                        highlighter = Some(highlight::Highlighter::kotlin());
+                    }
+                    other => {
+                        println!("No real tree-sitter wiring for grammar {other:?} yet");
                     }
                 }
             }

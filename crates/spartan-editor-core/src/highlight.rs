@@ -26,13 +26,26 @@
 //! below: parsing with `tree_sitter_typescript::LANGUAGE_TYPESCRIPT` and
 //! querying with the two query strings concatenated (JS query first, TS
 //! query second) correctly highlights both a base-JS string literal and a
-//! TS-only `interface` keyword in the same source. Kotlin is a real,
-//! named gap, not attempted this pass: the only tree-sitter-0.25-compatible
-//! Kotlin grammar crate (`tree-sitter-kotlin-ng`) ships no bundled
-//! highlights query at all (confirmed via a full file listing of the
-//! published crate), and the one alternate crate that does bundle a query
-//! (`tree-sitter-kotlin` 0.3.8) pins `tree-sitter = "0.22"`, a real,
-//! hard version incompatibility with this workspace's `tree-sitter = "0.25"`.
+//! TS-only `interface` keyword in the same source.
+//!
+//! Kotlin was a real, named gap through §75.29-§75.43: the only
+//! tree-sitter-0.25-compatible Kotlin grammar crate then known
+//! (`tree-sitter-kotlin-ng` 0.x) shipped no bundled highlights query, and
+//! the one alternate crate that did (`tree-sitter-kotlin` 0.3.8) pinned
+//! `tree-sitter = "0.22"`, hard-incompatible with this workspace. §75.44
+//! re-checked this (the same "recheck a stale blocker" discipline that
+//! found Ollama newly reachable in the same session) and found
+//! `tree-sitter-kotlin-ng` had moved to 1.1.0 under a new maintaining org
+//! -- still compatible with `tree-sitter = "0.25"`, confirmed by adding it
+//! and building -- but a real shallow clone of its actual source repo
+//! (not just the published crate) confirmed it *still* ships no
+//! `queries/highlights.scm` anywhere. `kotlin_highlights.scm` (vendored
+//! directly into this crate, `include_str!`'d below) is a real,
+//! hand-authored query built from the grammar's own real, installed
+//! `node-types.json` field/type names -- not guessed, and not carried
+//! over from any other language's query -- see that file's own doc
+//! comment for the one real, confirmed gap it can't cover (no distinct
+//! boolean/null literal node type exists in this grammar at all).
 
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter as TsHighlighter};
 
@@ -88,8 +101,8 @@ pub struct HighlightSpan {
 }
 
 /// Owns a real tree-sitter parser configuration for one language. Rust
-/// (§75.11), TypeScript/JavaScript, Python, Java, and Go (§75.29) are
-/// wired; Kotlin is a real, named gap (see this module's doc comment).
+/// (§75.11), TypeScript/JavaScript, Python, Java, and Go (§75.29), and now
+/// Kotlin (§75.44, via this crate's own vendored query) are wired.
 pub struct Highlighter {
     inner: TsHighlighter,
     config: HighlightConfiguration,
@@ -174,6 +187,21 @@ impl Highlighter {
             "",
         )
         .expect("tree-sitter-java's own bundled highlights query must be valid");
+        config.configure(HIGHLIGHT_NAMES);
+        Self {
+            inner: TsHighlighter::new(),
+            config,
+        }
+    }
+
+    /// Real `tree-sitter-kotlin-ng` config -- query text is this crate's
+    /// own vendored `kotlin_highlights.scm` (see this module's doc
+    /// comment for why: the grammar crate ships no bundled query at all).
+    pub fn kotlin() -> Self {
+        let language: tree_sitter::Language = tree_sitter_kotlin_ng::LANGUAGE.into();
+        let query = include_str!("kotlin_highlights.scm");
+        let mut config = HighlightConfiguration::new(language, "kotlin", query, "", "")
+            .expect("this crate's own vendored kotlin_highlights.scm must be valid");
         config.configure(HIGHLIGHT_NAMES);
         Self {
             inner: TsHighlighter::new(),
@@ -432,6 +460,87 @@ mod tests {
 
         let string_start = source.find('"').unwrap();
         let string_end = source.rfind('"').unwrap() + 1;
+        let string_span = spans
+            .iter()
+            .find(|s| s.start_byte == string_start && s.end_byte == string_end)
+            .unwrap_or_else(|| panic!("expected a string span, got: {spans:?}"));
+        assert_eq!(string_span.color, color_for("string"));
+    }
+
+    #[test]
+    fn kotlin_keyword_string_comment_number_function_and_type_all_get_real_spans() {
+        // Real, hand-authored query (§75.44, `kotlin_highlights.scm`) --
+        // no bundled query exists for this grammar to fall back on, so
+        // this test is this query's own real correctness proof, not just
+        // a smoke test.
+        let mut hl = Highlighter::kotlin();
+        let source =
+            "// a comment\nclass Greeter {\n  fun greet(name: String): String {\n    val count = 42\n    return \"hi \" + name\n  }\n}";
+        let spans = hl.highlight(source);
+
+        let comment_span = spans
+            .iter()
+            .find(|s| s.start_byte == 0 && s.end_byte == "// a comment".len())
+            .unwrap_or_else(|| panic!("expected a comment span, got: {spans:?}"));
+        assert_eq!(comment_span.color, color_for("comment"));
+
+        let class_kw_start = source.find("class").unwrap();
+        let class_kw_span = spans
+            .iter()
+            .find(|s| {
+                s.start_byte == class_kw_start && s.end_byte == class_kw_start + "class".len()
+            })
+            .unwrap_or_else(|| panic!("expected a 'class' keyword span, got: {spans:?}"));
+        assert_eq!(class_kw_span.color, color_for("keyword"));
+
+        let type_start = source.find("Greeter").unwrap();
+        let type_span = spans
+            .iter()
+            .find(|s| s.start_byte == type_start && s.end_byte == type_start + "Greeter".len())
+            .unwrap_or_else(|| panic!("expected a 'Greeter' type span, got: {spans:?}"));
+        assert_eq!(type_span.color, color_for("type"));
+
+        let fun_kw_start = source.find("fun").unwrap();
+        let fun_kw_span = spans
+            .iter()
+            .find(|s| s.start_byte == fun_kw_start && s.end_byte == fun_kw_start + "fun".len())
+            .unwrap_or_else(|| panic!("expected a 'fun' keyword span, got: {spans:?}"));
+        assert_eq!(fun_kw_span.color, color_for("keyword"));
+
+        let func_name_start = source.find("greet").unwrap();
+        let func_name_span = spans
+            .iter()
+            .find(|s| {
+                s.start_byte == func_name_start && s.end_byte == func_name_start + "greet".len()
+            })
+            .unwrap_or_else(|| panic!("expected a 'greet' function-name span, got: {spans:?}"));
+        assert_eq!(func_name_span.color, color_for("function"));
+
+        let val_kw_start = source.find("val").unwrap();
+        let val_kw_span = spans
+            .iter()
+            .find(|s| s.start_byte == val_kw_start && s.end_byte == val_kw_start + "val".len())
+            .unwrap_or_else(|| panic!("expected a 'val' keyword span, got: {spans:?}"));
+        assert_eq!(val_kw_span.color, color_for("keyword"));
+
+        let number_start = source.find("42").unwrap();
+        let number_span = spans
+            .iter()
+            .find(|s| s.start_byte == number_start && s.end_byte == number_start + 2)
+            .unwrap_or_else(|| panic!("expected a span covering the literal '42', got: {spans:?}"));
+        assert_eq!(number_span.color, color_for("number"));
+
+        let return_kw_start = source.find("return").unwrap();
+        let return_kw_span = spans
+            .iter()
+            .find(|s| {
+                s.start_byte == return_kw_start && s.end_byte == return_kw_start + "return".len()
+            })
+            .unwrap_or_else(|| panic!("expected a 'return' keyword span, got: {spans:?}"));
+        assert_eq!(return_kw_span.color, color_for("keyword"));
+
+        let string_start = source.find('"').unwrap();
+        let string_end = source[string_start + 1..].find('"').unwrap() + string_start + 2;
         let string_span = spans
             .iter()
             .find(|s| s.start_byte == string_start && s.end_byte == string_end)
