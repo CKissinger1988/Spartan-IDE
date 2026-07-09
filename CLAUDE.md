@@ -333,6 +333,21 @@ first — it's the parity reference until each row there is actually reimplement
   50k-line benchmark re-run, no regression. No clipboard (copy/cut/paste) yet -- deferred as its own
   complete feature, needs a real clipboard crate dependency. No double/triple-click. An empty
   selected line renders with zero width (invisible) -- a real, named, minor gap.
+- **Real, working code — real undo/redo, Ctrl+Z/Ctrl+Y (§75.19)**: found live while testing
+  selection -- Ctrl+Z was inserting a literal "z" instead of undoing anything. Investigation
+  surfaced that `spartan-buffer::Document` has had a complete, tested branching undo tree since
+  §75.2 (`undo()`, `jump_to_checkpoint()`) that nothing in `spartan-editor-core` had ever called.
+  Since a branching tree has no single well-defined "redo," that conventional behavior is built one
+  layer up: `EditorView` gained a `redo_stack` (pushed by `undo()`, popped by `redo()`, cleared by
+  any real edit), treating an already-evicted checkpoint (a real possibility given the bounded ring)
+  as "skip it" rather than an error. `main.rs` wires Ctrl+Z to undo, both Ctrl+Y and Ctrl+Shift+Z to
+  redo, matched via `physical_key` like Ctrl+S. Always a full reshape, never the cheap per-line path
+  -- undo/redo can change an unbounded amount of content at once. 7 new headless tests, all passed
+  first run. Live verification: typed 10 characters, one Ctrl+Z removed exactly one (confirming this
+  crate commits one checkpoint per keystroke, not per logical edit), 9 more fully restored the
+  original content, 10 Ctrl+Y presses then restored the typed text exactly -- each step
+  screenshot-confirmed. No undo coalescing (ten keystrokes need ten undos, tracked as a follow-up),
+  no undo/redo UI, no explicit LSP re-notification path beyond the normal debounced one.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

@@ -38,6 +38,16 @@ pub struct EditorView {
     /// by `selection_range()`, not a real empty one, matching how a mouse
     /// click naturally arms an anchor before any actual drag has happened.
     pub selection_anchor: Option<usize>,
+    /// Real undo/redo (§75.19): checkpoint IDs undone *away from*, most
+    /// recent last -- pushed by `undo()` on success, popped and jumped back
+    /// to by `redo()`, cleared by any new real edit. Lives here, not in
+    /// `Document`, because `spartan-buffer`'s undo tree only models "move
+    /// to parent" / "jump anywhere"; it deliberately has no linear redo
+    /// concept of its own (§2.1's branching design means "redo" isn't
+    /// always well-defined -- jumping to an arbitrary sibling checkpoint is
+    /// just as valid a "redo" as this one), so the conventional
+    /// most-recently-undone-wins behavior is built here, one layer up.
+    redo_stack: Vec<spartan_buffer::CheckpointId>,
 }
 
 impl EditorView {
@@ -56,6 +66,7 @@ impl EditorView {
             document,
             cursor,
             selection_anchor: None,
+            redo_stack: Vec::new(),
         }
     }
 
@@ -92,6 +103,7 @@ impl EditorView {
         let Some((start, end)) = self.selection_range() else {
             return EditEffect::None;
         };
+        self.redo_stack.clear();
         let line_start = self.document.char_to_line(start).ok();
         let line_end = self.document.char_to_line(end).ok();
         let structural = line_start != line_end;
@@ -122,6 +134,7 @@ impl EditorView {
         if had_selection {
             self.delete_selection();
         }
+        self.redo_stack.clear();
         let line_before = self.document.char_to_line(self.cursor).ok();
         if self.document.insert(self.cursor, text).is_ok() {
             self.cursor += text.chars().count();
@@ -146,6 +159,7 @@ impl EditorView {
         if self.cursor == 0 {
             return EditEffect::None;
         }
+        self.redo_stack.clear();
         let line_before = self.document.char_to_line(self.cursor).ok();
         // If the cursor sits at the very start of its line, the character
         // being removed is the previous line's terminating "\n" -- deleting
@@ -277,5 +291,46 @@ impl EditorView {
         }
         self.set_cursor_to_line_col(line + 1, col);
         true
+    }
+
+    /// Real undo (§75.19): moves to the parent checkpoint in
+    /// `spartan-buffer`'s own branching undo tree, remembering where we
+    /// came from (on `self.redo_stack`) so `redo()` can return to it.
+    /// Returns whether anything actually changed -- `false` at the root of
+    /// the undo tree, or once that history has aged out of the bounded
+    /// ring (`Document::undo`'s own two documented cases), matching every
+    /// other movement method's "did anything change" convention. Clears
+    /// any active selection (an undone edit invalidates whatever the
+    /// selection was pointing at) and clamps the cursor into the restored
+    /// document's real bounds -- `self.cursor` has no meaning in the
+    /// restored rope otherwise.
+    pub fn undo(&mut self) -> bool {
+        let before = self.document.current_checkpoint();
+        if !self.document.undo() {
+            return false;
+        }
+        self.redo_stack.push(before);
+        self.selection_anchor = None;
+        self.cursor = self.cursor.min(self.document.len_chars());
+        true
+    }
+
+    /// Real redo: jumps back to the most recently undone-away-from
+    /// checkpoint, if any. A checkpoint can legitimately have aged out of
+    /// `spartan-buffer`'s bounded ring since it was pushed here (a real,
+    /// honest possibility this crate's own design allows for, not a
+    /// hypothetical) -- `jump_to_checkpoint` reports that as an `Err`,
+    /// which this method treats as "skip it and try the next one" rather
+    /// than surfacing an error there's nothing a caller could usefully act
+    /// on. Returns whether anything actually changed.
+    pub fn redo(&mut self) -> bool {
+        while let Some(id) = self.redo_stack.pop() {
+            if self.document.jump_to_checkpoint(id).is_ok() {
+                self.selection_anchor = None;
+                self.cursor = self.cursor.min(self.document.len_chars());
+                return true;
+            }
+        }
+        false
     }
 }

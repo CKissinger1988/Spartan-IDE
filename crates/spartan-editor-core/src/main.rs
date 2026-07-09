@@ -736,6 +736,59 @@ fn main() {
                                     ..
                                 },
                             ..
+                        } if modifiers.control_key()
+                            && (key_event.physical_key == PhysicalKey::Code(KeyCode::KeyZ)
+                                || key_event.physical_key == PhysicalKey::Code(KeyCode::KeyY)) =>
+                        {
+                            // Real undo/redo (§75.19) -- Ctrl+Z undoes, both
+                            // Ctrl+Y and Ctrl+Shift+Z redo (the two common
+                            // conventions), wired to the real branching undo
+                            // tree `spartan-buffer` already had implemented
+                            // but nothing anywhere in this crate had ever
+                            // called. Matched via `physical_key`, same
+                            // reasoning as Ctrl+S above.
+                            let active_file = &mut files[active];
+                            let is_redo = key_event.physical_key == PhysicalKey::Code(KeyCode::KeyY)
+                                || (key_event.physical_key == PhysicalKey::Code(KeyCode::KeyZ)
+                                    && modifiers.shift_key());
+                            let changed = if is_redo {
+                                active_file.editor.redo()
+                            } else {
+                                active_file.editor.undo()
+                            };
+                            if changed {
+                                if !active_file.dirty {
+                                    active_file.dirty = true;
+                                    window.set_title(&window_title(active_file));
+                                }
+                                let (cursor_line, _) = active_file.editor.cursor_line_col();
+                                let doc_len_lines = active_file.editor.document.len_lines();
+                                active_file.viewport.ensure_visible(cursor_line, doc_len_lines);
+                                // Unlike a keystroke edit, undo/redo can change an
+                                // unbounded amount of content at once (jumping to
+                                // any checkpoint in the tree) -- always a full
+                                // reshape, never the cheap per-line fast path.
+                                reshape_window(
+                                    &mut text_state,
+                                    &active_file.editor,
+                                    &active_file.viewport,
+                                    active_file.highlighter.as_mut(),
+                                );
+                                window.request_redraw();
+                            } else {
+                                println!(
+                                    "Nothing to {}",
+                                    if is_redo { "redo" } else { "undo" }
+                                );
+                            }
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
                         } => match &key_event.logical_key {
                             Key::Named(NamedKey::Tab) if modifiers.control_key() => {
                                 // Ctrl+Tab / Ctrl+Shift+Tab: cycle the active

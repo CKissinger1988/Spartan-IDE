@@ -322,6 +322,81 @@ fn backspace_with_an_active_selection_deletes_only_the_selection() {
 }
 
 #[test]
+fn undo_reverts_the_most_recent_edit() {
+    let mut editor = EditorView::new("hello");
+    editor.set_cursor_to_line_col(0, 5);
+    editor.insert_at_cursor(" world");
+    assert_eq!(editor.text(), "hello world");
+    assert!(editor.undo());
+    assert_eq!(editor.text(), "hello");
+}
+
+#[test]
+fn undo_at_the_root_is_a_no_op_and_reports_no_change() {
+    let mut editor = EditorView::new("hello");
+    assert!(!editor.undo());
+    assert_eq!(editor.text(), "hello");
+}
+
+#[test]
+fn redo_restores_what_undo_just_reverted() {
+    let mut editor = EditorView::new("hello");
+    editor.set_cursor_to_line_col(0, 5);
+    editor.insert_at_cursor(" world");
+    editor.undo();
+    assert!(editor.redo());
+    assert_eq!(editor.text(), "hello world");
+}
+
+#[test]
+fn redo_with_nothing_undone_is_a_no_op_and_reports_no_change() {
+    let mut editor = EditorView::new("hello");
+    assert!(!editor.redo());
+}
+
+#[test]
+fn a_new_edit_after_undo_clears_the_redo_stack() {
+    let mut editor = EditorView::new("hello");
+    editor.set_cursor_to_line_col(0, 5);
+    editor.insert_at_cursor(" world");
+    editor.undo();
+    editor.insert_at_cursor("!");
+    assert_eq!(editor.text(), "hello!");
+    // The " world" branch is still reachable in spartan-buffer's own tree,
+    // but this crate's conventional linear redo stack should no longer
+    // offer to go there -- a fresh edit after undo clears it.
+    assert!(!editor.redo());
+    assert_eq!(editor.text(), "hello!");
+}
+
+#[test]
+fn undo_clears_an_active_selection() {
+    let mut editor = EditorView::new("hello world");
+    editor.set_cursor_to_line_col(0, 5);
+    editor.insert_at_cursor("!");
+    editor.selection_anchor = Some(0);
+    editor.cursor = 3;
+    assert!(editor.undo());
+    assert_eq!(editor.selection_anchor, None);
+}
+
+#[test]
+fn multiple_undo_calls_walk_back_through_several_edits() {
+    let mut editor = EditorView::new("");
+    editor.insert_at_cursor("a");
+    editor.insert_at_cursor("b");
+    editor.insert_at_cursor("c");
+    assert_eq!(editor.text(), "abc");
+    assert!(editor.undo());
+    assert_eq!(editor.text(), "ab");
+    assert!(editor.undo());
+    assert_eq!(editor.text(), "a");
+    assert!(editor.undo());
+    assert_eq!(editor.text(), "");
+    assert!(!editor.undo());
+}
+
+#[test]
 fn contains_line_agrees_with_to_local_line() {
     let doc = five_line_doc();
     let mut viewport = Viewport::new(2);
