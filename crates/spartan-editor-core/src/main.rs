@@ -8,7 +8,8 @@ mod text;
 
 use spartan_editor_core::viewport::{self, Viewport};
 use spartan_editor_core::{
-    build, dap_session, editor_view, file_tree, highlight, language, lsp, lsp_session, tab_bar,
+    build, dap_session, editor_view, file_tree, git_panel, highlight, language, lsp, lsp_session,
+    tab_bar,
 };
 
 use std::path::{Path, PathBuf};
@@ -539,6 +540,17 @@ fn modal_message(pending: &PendingClose, files: &[OpenFile]) -> String {
 /// curve), unlike the window's own non-black clear color just below.
 const MODAL_DIM_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
 
+/// Real Source Control panel (§56.1, task #7): the left sidebar shows
+/// either the file tree (§75.26) or real git status, toggled with Ctrl+G,
+/// never both at once -- matching how §75.21's tab bar and this sidebar
+/// already share the same left-rail region rather than each owning a
+/// separate one (that's task #3's three-column shell, not yet built).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidebarMode {
+    FileTree,
+    SourceControl,
+}
+
 fn main() {
     let program_start = Instant::now();
     println!("=== spartan-editor-core -- real Tier 1 core-engine increment ===");
@@ -599,6 +611,18 @@ fn main() {
     // sidebar then has nothing to show, same "empty is the ordinary state"
     // pattern the modal/tab bar buffers already established.
     let mut file_tree = sidebar_root(&fixture_path).map(file_tree::FileTree::new);
+
+    // Real Source Control panel (§56.1, task #7) -- `GitRepo::discover`
+    // walks upward from the same root the file tree uses (real repos are
+    // almost always at or above the project root LSP/DAP already
+    // resolve), `None` if this project isn't inside a real git repo at
+    // all (not an error -- an ungit'd project is a normal, valid state).
+    let git_repo = sidebar_root(&fixture_path)
+        .as_deref()
+        .and_then(spartan_git::GitRepo::discover);
+    let mut sidebar_mode = SidebarMode::FileTree;
+    let mut git_rows: Vec<git_panel::PanelRow> = Vec::new();
+    let mut commit_message: Option<String> = None;
 
     let mut bench_rng = rand::thread_rng();
     let mut edit_bench_remaining = bench_edit_iters.unwrap_or(0);
@@ -936,7 +960,11 @@ fn main() {
                             state: ElementState::Pressed,
                             button: MouseButton::Left,
                             ..
-                        } if pending_close.is_none() && last_cursor_pos.0 < text::SIDEBAR_WIDTH => {
+                        } if pending_close.is_none()
+                            && commit_message.is_none()
+                            && last_cursor_pos.0 < text::SIDEBAR_WIDTH
+                            && sidebar_mode == SidebarMode::FileTree =>
+                        {
                             // Real file tree sidebar clicks (§75.26) --
                             // resolved via the same real cosmic-text
                             // hit-testing technique as the main editor and
@@ -977,6 +1005,44 @@ fn main() {
                                             &active_file.viewport,
                                             active_file.highlighter.as_mut(),
                                         );
+                                        window.request_redraw();
+                                    }
+                                }
+                            }
+                        }
+                        WindowEvent::MouseInput {
+                            state: ElementState::Pressed,
+                            button: MouseButton::Left,
+                            ..
+                        } if pending_close.is_none()
+                            && commit_message.is_none()
+                            && last_cursor_pos.0 < text::SIDEBAR_WIDTH
+                            && sidebar_mode == SidebarMode::SourceControl =>
+                        {
+                            // Real Source Control panel clicks (§56.1, task
+                            // #7) -- resolved via the same real cosmic-text
+                            // sidebar hit-testing the file tree already uses.
+                            // Clicking a file row in the "Staged Changes"
+                            // section unstages it; clicking one in "Changes"
+                            // stages it. Clicking a section header is a
+                            // no-op (`git_rows.get` returns a `Header`, which
+                            // the `if let` below simply doesn't match).
+                            let local_x = last_cursor_pos.0 - text::SIDEBAR_TEXT_LEFT;
+                            let local_y = last_cursor_pos.1 - text::SIDEBAR_TEXT_TOP;
+                            if let Some(row_index) = text_state.hit_test_sidebar(local_x, local_y)
+                            {
+                                if let Some(git_panel::PanelRow::File { path, staged }) =
+                                    git_rows.get(row_index)
+                                {
+                                    if let Some(repo) = &git_repo {
+                                        let result = if *staged {
+                                            repo.unstage(path)
+                                        } else {
+                                            repo.stage(path)
+                                        };
+                                        if let Err(e) = result {
+                                            println!("git operation failed: {e}");
+                                        }
                                         window.request_redraw();
                                     }
                                 }
@@ -1210,6 +1276,119 @@ fn main() {
                                     window.request_redraw();
                                 }
                                 _ => {}
+                            }
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } if commit_message.is_some() => {
+                            // Real commit-message modal (§56.1, task #7) --
+                            // same "intercept everything while this state is
+                            // Some" pattern as the unsaved-changes modal just
+                            // above (mutually exclusive with it in practice:
+                            // nothing can open the commit modal while
+                            // `pending_close` is already showing, since that
+                            // arm's own guard requires `commit_message.is_none()`).
+                            // Reuses the same `modal_buffer`/dim-overlay
+                            // rendering rather than a second modal type.
+                            match &key_event.logical_key {
+                                Key::Named(NamedKey::Enter) => {
+                                    let message = commit_message.clone().unwrap_or_default();
+                                    if message.trim().is_empty() {
+                                        println!("Commit message cannot be empty");
+                                    } else if let Some(repo) = &git_repo {
+                                        match repo.commit(message.trim()) {
+                                            Ok(oid) => {
+                                                println!(
+                                                    "Committed {oid}: {}",
+                                                    message.trim()
+                                                );
+                                                commit_message = None;
+                                            }
+                                            Err(e) => println!("Commit failed: {e}"),
+                                        }
+                                    }
+                                    window.request_redraw();
+                                }
+                                Key::Named(NamedKey::Escape) => {
+                                    commit_message = None;
+                                    window.request_redraw();
+                                }
+                                Key::Named(NamedKey::Backspace) => {
+                                    if let Some(msg) = commit_message.as_mut() {
+                                        msg.pop();
+                                    }
+                                    window.request_redraw();
+                                }
+                                _ => {
+                                    if let Some(text) = &key_event.text {
+                                        if !text.is_empty() && text.chars().all(|c| !c.is_control())
+                                        {
+                                            if let Some(msg) = commit_message.as_mut() {
+                                                msg.push_str(text);
+                                            }
+                                            window.request_redraw();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } if pending_close.is_none()
+                            && commit_message.is_none()
+                            && modifiers.control_key()
+                            && key_event.physical_key == PhysicalKey::Code(KeyCode::KeyG) =>
+                        {
+                            // Ctrl+G: toggle the left sidebar between the
+                            // file tree (§75.26) and the real Source Control
+                            // panel (§56.1, task #7) -- they share one region
+                            // rather than each getting a dedicated pane,
+                            // since a real multi-pane left rail is task #3's
+                            // three-column shell, not yet built.
+                            sidebar_mode = match sidebar_mode {
+                                SidebarMode::FileTree => SidebarMode::SourceControl,
+                                SidebarMode::SourceControl => SidebarMode::FileTree,
+                            };
+                            window.request_redraw();
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } if pending_close.is_none()
+                            && commit_message.is_none()
+                            && modifiers.control_key()
+                            && modifiers.shift_key()
+                            && key_event.physical_key == PhysicalKey::Code(KeyCode::KeyC) =>
+                        {
+                            // Ctrl+Shift+C: open the real commit-message
+                            // modal -- only if a real git repo was
+                            // discovered and something is actually staged
+                            // (an empty commit is refused up front rather
+                            // than opening a modal that can only fail).
+                            match &git_repo {
+                                Some(repo) => match repo.status() {
+                                    Ok(status) if status.iter().any(|e| e.staged.is_some()) => {
+                                        commit_message = Some(String::new());
+                                        window.request_redraw();
+                                    }
+                                    Ok(_) => println!("Nothing staged to commit"),
+                                    Err(e) => println!("git status failed: {e}"),
+                                },
+                                None => println!("No git repository detected for this project"),
                             }
                         }
                         WindowEvent::KeyboardInput {
@@ -1703,28 +1882,60 @@ fn main() {
                                 );
                             }
 
-                            // Real file tree sidebar text (§75.26), rebuilt
-                            // from a fresh real directory read every frame
-                            // just like the tab bar's own text above --
-                            // `sidebar_rows` is kept around (like `tab_hits`)
-                            // so a later `MouseInput` can resolve a click
+                            // Real left-sidebar text (§75.26 file tree /
+                            // §56.1 Source Control, task #7), rebuilt from
+                            // fresh real state every frame just like the tab
+                            // bar's own text above -- `sidebar_rows`/
+                            // `git_rows` are kept around (like `tab_hits`) so
+                            // a later `MouseInput` can resolve a click
                             // against the exact same row list that's
-                            // actually on screen.
-                            sidebar_rows = file_tree
-                                .as_ref()
-                                .map(|t| t.visible_rows())
-                                .unwrap_or_default();
-                            text_state.set_sidebar_text(&file_tree::build_tree_text(&sidebar_rows));
+                            // actually on screen. Only the active mode's
+                            // real state is queried each frame (a real git
+                            // `status()` walk is real I/O, not free) -- the
+                            // other mode's row list is left stale rather
+                            // than cleared, but it's never rendered or
+                            // clicked while its mode isn't active, so a
+                            // stale list there is inert.
+                            match sidebar_mode {
+                                SidebarMode::FileTree => {
+                                    sidebar_rows = file_tree
+                                        .as_ref()
+                                        .map(|t| t.visible_rows())
+                                        .unwrap_or_default();
+                                    text_state
+                                        .set_sidebar_text(&file_tree::build_tree_text(&sidebar_rows));
+                                }
+                                SidebarMode::SourceControl => {
+                                    let git_status: Vec<spartan_git::StatusEntry> = git_repo
+                                        .as_ref()
+                                        .and_then(|r| r.status().ok())
+                                        .unwrap_or_default();
+                                    git_rows = git_panel::build_rows(&git_status);
+                                    text_state.set_sidebar_text(&git_panel::build_panel_text(
+                                        &git_rows,
+                                        &git_status,
+                                    ));
+                                }
+                            }
 
-                            // Real unsaved-changes modal text (§75.23),
-                            // rebuilt from live state every frame just like
-                            // the tab bar's own text just above -- empty
-                            // when no modal is showing, which shapes to zero
-                            // glyphs at effectively no cost.
-                            let modal_text = pending_close
-                                .as_ref()
-                                .map(|p| modal_message(p, &files))
-                                .unwrap_or_default();
+                            // Real modal text (§75.23 unsaved-changes / §56.1
+                            // commit message, task #7), rebuilt from live
+                            // state every frame just like the tab bar's own
+                            // text just above -- empty when neither modal is
+                            // showing, which shapes to zero glyphs at
+                            // effectively no cost. The two modals are
+                            // mutually exclusive in practice (see the
+                            // `commit_message.is_none()` guard everywhere
+                            // `pending_close` can be set, and vice versa).
+                            let modal_text = if let Some(pending) = &pending_close {
+                                modal_message(pending, &files)
+                            } else if let Some(message) = &commit_message {
+                                format!(
+                                    "Commit message (Enter to commit, Escape to cancel):\n\n{message}_"
+                                )
+                            } else {
+                                String::new()
+                            };
                             text_state.set_modal_text(&modal_text);
 
                             text_state
@@ -1862,7 +2073,7 @@ fn main() {
                             // "quads before text" ordering `selection_rects`
                             // above already relies on.
                             let modal_rects: Vec<selection::SelectionRect> =
-                                if pending_close.is_some() {
+                                if pending_close.is_some() || commit_message.is_some() {
                                     vec![selection::SelectionRect {
                                         x: 0.0,
                                         y: 0.0,

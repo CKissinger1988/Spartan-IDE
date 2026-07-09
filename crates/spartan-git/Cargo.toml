@@ -1,0 +1,7 @@
+[package]
+name = "spartan-git"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }

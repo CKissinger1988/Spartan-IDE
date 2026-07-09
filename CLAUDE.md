@@ -596,6 +596,38 @@ first — it's the parity reference until each row there is actually reimplement
   highlighting code runs on that path at all). No JSX-aware parsing for `.tsx`/`.jsx` (uses the
   plain TypeScript grammar), no injections for any of the five wired languages, same windowed-only
   and no-incremental-reparse limitations §75.11 already named for Rust apply identically here.
+- **Real, working code — local Source Control panel, closing §56.1, task #7 (§75.30)**: the first
+  real git integration anywhere in this workspace. New `crates/spartan-git` (real `git2`, vendored
+  `libgit2`, no system git binary or network access needed) provides real repo discovery, status
+  (independent staged/unstaged halves per file, matching git's own real semantics), stage/unstage,
+  and commit -- 10 new headless tests against a real temp git repository, all passing first run.
+  New `git_panel.rs` (pure sidebar-row layout, mirroring `file_tree.rs`/`tab_bar.rs`'s own split)
+  builds "Staged Changes"/"Changes" sections with real status glyphs -- 5 more tests. UI wiring in
+  `main.rs`: Ctrl+G toggles the left sidebar between the file tree and this panel (sharing one
+  region, not a second pane -- a real multi-pane left rail is task #3's three-column shell, not yet
+  built); clicking a file row stages or unstages it; Ctrl+Shift+C opens a real commit-message modal
+  (refused up front if nothing is staged or no repo was found) that reuses the *existing*
+  unsaved-changes modal's rendering infrastructure rather than adding a fourth glyphon `TextArea`,
+  extended to accept real typed text and Backspace. A real compiler warning
+  (`unused_assignments`, "did you mean to capture by reference instead?") was caught and fixed, not
+  suppressed: an initial version captured git status into an outer closure-persistent variable the
+  same way `sidebar_rows`/`git_rows` are, but unlike `git_rows` it was never actually read again
+  across separate closure invocations -- fixed by making it a local `let` inside the match arm
+  instead, both correct and simpler. Full test/clippy/fmt clean across the whole workspace. Live,
+  through the real binary, against a real git repository fixture (real `git init`, a real initial
+  commit, then real modified/staged/untracked files via actual `git` CLI commands): the panel
+  showed the exact real `git status` split (screenshotted); clicking staged/unstaged rows moved
+  files between sections in both directions (screenshotted); the commit modal opened, accepted real
+  typed text, and Enter produced a real commit -- confirmed not just by the panel clearing but by
+  reading the fixture repo's own `git log`/`git show` off disk afterward, showing the exact real
+  commit hash, author, message, and diff; a second commit attempt with nothing staged correctly
+  printed a refusal instead of opening an empty modal. 50k-line benchmark re-run, no regression (a
+  `--synthetic:` fixture has no real path, so no `GitRepo` is ever discovered on that path). No diff
+  view (no Diff Card component exists yet -- that's Agent-view artifact-card territory, task #3/#5),
+  no per-hunk staging, no branch switcher, no stash, no merge-conflict resolution UI, no GitHub
+  layer at all (§56.2-56.4, a separate larger increment), no multi-line commit body. A real, named,
+  minor gap: `CloseRequested` doesn't guard against an open commit modal, so closing the window
+  while it's up (with no dirty file) silently discards an in-progress, uncommitted message.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -643,8 +675,8 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 182 tests: 6 spikes + 3 real crates (spartan-buffer,
-                                    # spartan-languages, spartan-editor-core)
+cargo test --workspace --release   # 197 tests: 6 spikes + 4 real crates (spartan-buffer,
+                                    # spartan-languages, spartan-git, spartan-editor-core)
 # dap-spike and spartan-editor-core's own dap_integration.rs need `lldb-dap` (or `lldb-dap-18`) +
 # `rustc`; lsp-spike and spartan-editor-core's own lsp_integration.rs need `rust-analyzer` +
 # `rustc`; spartan-editor-core's dap_python_cross_language.rs needs python + the debugpy package.

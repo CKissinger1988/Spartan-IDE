@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 spartan-buffer = { path = "../spartan-buffer" }
 spartan-languages = { path = "../spartan-languages" }
+spartan-git = { path = "../spartan-git" }
 wgpu = "0.19"
 winit = "0.29"
 glyphon = "0.5"
