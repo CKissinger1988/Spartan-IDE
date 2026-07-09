@@ -1062,6 +1062,40 @@ first — it's the parity reference until each row there is actually reimplement
   "make sure Kotlin is supported" instruction gave -- the same real authorization gate this
   session's Ollama install went through explicitly first. Live LSP verification and DAP wiring for
   Kotlin remain open, named follow-up work.
+- **Real, working code — real Kotlin LSP/DAP live verification, two real bugs found and fixed, one
+  real adapter limitation confirmed and documented (§75.45)**: closes the two gaps §75.44 named.
+  With explicit user authorization, a real `kotlin-language-server` 1.3.13 and real
+  `kotlin-debug-adapter` 0.4.4 were installed and actually run. **LSP: successful, one real bug
+  found and fixed.** The first real test run failed with a timeout -- `kotlin-language-server`'s
+  real JVM cold start exceeded `lsp.rs`'s existing 10s `DEFAULT_TIMEOUT`, never previously tested
+  against a JVM-based server. Fixed with a new, dedicated `INITIALIZE_TIMEOUT` (45s), deliberately
+  not a blanket bump that would also loosen the still-unused `completion`/`hover` timeouts. With
+  the fix: a real deliberate type-mismatch error was correctly reported and correctly cleared after
+  a real live edit. **DAP: a real client bug found and fixed, a real generalization built, and one
+  real, confirmed, unresolved third-party adapter limitation, reported honestly rather than hidden
+  or worked around.** `kotlin-debug-adapter`'s real `launch` shape (`mainClass`/`projectRoot`) is
+  fundamentally different from the "spawn a program at a path" shape every other adapter shares --
+  `dap.rs`'s `launch_and_break` was generalized into a thin wrapper over a new
+  `launch_and_break_with_body`, preserving byte-identical behavior for existing adapters (re-
+  confirmed by re-running `dap_integration.rs`/`dap_python_cross_language.rs`, both still green). A
+  real hand-crafted raw-protocol probe found and fixed a real bug: `setBreakpoints` threw a real
+  Java `NullPointerException` in the adapter's own code without a `name` field on the DAP `Source`
+  object (every other adapter has always tolerated its absence) -- fixed by always including a real
+  file-basename `name`. Even with that fix, a real, external, unresolved adapter limitation was
+  found and confirmed, not assumed: `setBreakpoints` reports `verified: true` but the real JVM
+  debuggee runs straight through to completion without ever stopping -- ruled out as a client-side
+  timing race two different ways (zero-delay requests; a real `Thread.sleep(4000)` before the
+  breakpoint line), both still never stopping. A new real DAP test was kept but deliberately does
+  not assert a stop, verifying instead exactly what's real and working (spawn, initialize, launch,
+  the real `setBreakpoints` fix). **A real, deliberate decision not to wire this into the live F5/F9
+  keyboard flow**: `languages.toml`'s Kotlin entry still has no `dap_command`, since adding one
+  without also teaching `main.rs`/`DapSession` to branch on launch shape would make the product
+  print a real "DAP ready... F5 launches" message that, in practice, sends a structurally broken
+  request -- a real, misleading UX, not a harmless stub. 2 new tests (277 total, up from 275), all
+  existing real DAP/LSP suites re-confirmed green, full workspace clean, no benchmark regression.
+  Kotlin's DAP remains real and proven at the client level but not live-usable through the product's
+  own keyboard flow; the breakpoint-stop limitation and Gradle-classpath-fidelity gaps remain real,
+  open, and named.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1119,7 +1153,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 275 tests: 6 spikes + 8 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 277 tests: 6 spikes + 8 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model,
                                     # spartan-editor-core, xtask)

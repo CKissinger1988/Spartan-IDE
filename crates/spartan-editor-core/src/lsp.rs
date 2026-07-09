@@ -108,6 +108,17 @@ pub struct LspClient {
 }
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+/// A real, live finding (§75.45): `rust-analyzer`/`pyright-langserver`/
+/// `typescript-language-server` all answer the real `initialize` request
+/// well within `DEFAULT_TIMEOUT`, but a real, live `kotlin-language-server`
+/// (a JVM process with a real, measured cold-start cost well past 10s) did
+/// not -- `open_project`'s own real integration test failed against it
+/// with `DEFAULT_TIMEOUT` before this constant existed. A dedicated
+/// constant, not a blanket bump to `DEFAULT_TIMEOUT` (which also still
+/// gates `completion`/`hover`, both real but currently unused by any
+/// product code path -- loosening their timeout too would be an
+/// unmeasured, unmotivated change to a path nothing exercises yet).
+pub const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(45);
 /// rust-analyzer needs real time to load the sysroot/std metadata and index
 /// even a one-file crate; this is not tunable away, so callers that wait on
 /// the first diagnostics pass use this instead of DEFAULT_TIMEOUT.
@@ -266,7 +277,7 @@ impl LspClient {
                     }
                 },
             })),
-            DEFAULT_TIMEOUT,
+            INITIALIZE_TIMEOUT,
         )?;
         init_resp.get("result")?;
         self.notify("initialized", json!({})).ok()?;

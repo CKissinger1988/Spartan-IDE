@@ -120,7 +120,17 @@ impl DapClient {
         })
     }
 
-    fn send_request(&mut self, command: &str, arguments: Value) -> std::io::Result<i64> {
+    /// Fires a request without blocking for its response, returning the
+    /// request's own sequence number so a caller can later match the
+    /// eventual response via `wait_for`. Real, deliberate `pub` visibility
+    /// (§75.45): some real adapters (`debugpy`, and now confirmed
+    /// `kotlin-debug-adapter` too) defer a request's response until after
+    /// later requests in the same handshake, so blocking on `request`
+    /// immediately can deadlock -- callers driving a non-standard handshake
+    /// sequence (see `dap_kotlin_cross_language.rs`) need this same
+    /// fire-and-forget primitive `launch_and_break_with_body` already uses
+    /// internally.
+    pub fn send_request(&mut self, command: &str, arguments: Value) -> std::io::Result<i64> {
         self.next_seq += 1;
         let seq = self.next_seq;
         let msg = json!({
@@ -151,8 +161,11 @@ impl DapClient {
     /// Waits for a message matching `pred`, buffering (in order) anything
     /// that doesn't match so a subsequent wait can still see it. This is
     /// necessary because DAP interleaves request responses with async events
-    /// on the same stream.
-    fn wait_for<F: Fn(&Value) -> bool>(&mut self, pred: F, timeout: Duration) -> Option<Value> {
+    /// on the same stream. Real, deliberate `pub` visibility (§75.45): see
+    /// `send_request`'s own doc comment -- callers pairing it with a
+    /// non-standard handshake need to match the eventual response
+    /// themselves.
+    pub fn wait_for<F: Fn(&Value) -> bool>(&mut self, pred: F, timeout: Duration) -> Option<Value> {
         let deadline = Instant::now() + timeout;
         let mut skipped = VecDeque::new();
         let result = loop {
@@ -202,11 +215,40 @@ impl DapClient {
     /// The standard DAP launch sequence for an adapter that supports
     /// `configurationDone`: initialize, launch, wait for `initialized`, set
     /// breakpoints, configurationDone, then wait for the program to
-    /// actually stop.
+    /// actually stop. Convenience wrapper over `launch_and_break_with_body`
+    /// for the "spawn a program at a path" launch shape `lldb-dap`/
+    /// `debugpy`/`dlv` all share.
     pub fn launch_and_break(
         &mut self,
         program: &str,
         cwd: &str,
+        source_path: &str,
+        break_lines: &[i64],
+    ) -> Option<Value> {
+        self.launch_and_break_with_body(
+            json!({
+                "program": program,
+                "args": Vec::<String>::new(),
+                "cwd": cwd,
+                "stopOnEntry": false,
+            }),
+            source_path,
+            break_lines,
+        )
+    }
+
+    /// The same real launch sequence as `launch_and_break`, but taking an
+    /// arbitrary real `launch` request body -- a real, live finding
+    /// (§75.45): `kotlin-debug-adapter`'s real `launch` request shape
+    /// (`mainClass`/`projectRoot`, no `program`/`cwd`/`args`/`stopOnEntry`
+    /// at all -- confirmed by reading its actual installed
+    /// `KotlinDebugAdapter.kt` source, not assumed) is fundamentally
+    /// different from every other adapter this crate has driven so far,
+    /// since Kotlin/JVM debugging launches a named class on a resolved
+    /// classpath rather than spawning an executable/script at a path.
+    pub fn launch_and_break_with_body(
+        &mut self,
+        launch_body: Value,
         source_path: &str,
         break_lines: &[i64],
     ) -> Option<Value> {
@@ -235,25 +277,32 @@ impl DapClient {
         // deferred pattern. Fire the request, keep its seq, and only
         // collect the response once it's safe to have not gotten it yet
         // either way.
-        let launch_seq = self
-            .send_request(
-                "launch",
-                json!({
-                    "program": program,
-                    "args": Vec::<String>::new(),
-                    "cwd": cwd,
-                    "stopOnEntry": false,
-                }),
-            )
-            .ok()?;
+        let launch_seq = self.send_request("launch", launch_body).ok()?;
 
         self.wait_event("initialized", DEFAULT_TIMEOUT)?;
 
+        // A real, live finding (§75.45): `kotlin-debug-adapter`'s real
+        // `setBreakpoints` handler throws a real
+        // `NullPointerException: getName(...) must not be null` in its own
+        // `DAPConverter.toInternalSource` if the DAP `Source` object's
+        // optional `name` field is omitted -- confirmed with a raw
+        // hand-crafted protocol probe against the real adapter before this
+        // fix, not assumed. `lldb-dap`/`debugpy`/`dlv` have all tolerated a
+        // `source` object with only `path` throughout this crate's history
+        // (this same code path, unchanged, is still exercised by
+        // `dap_integration.rs`/`dap_python_cross_language.rs`'s own
+        // continued passing), so a real file-basename `name` is now always
+        // included -- a harmless, DAP-spec-legal extra field for adapters
+        // that don't need it, a real requirement for the one that does.
+        let source_name = std::path::Path::new(source_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(source_path);
         let bp_lines: Vec<Value> = break_lines.iter().map(|l| json!({"line": l})).collect();
         let set_bp_resp = self.request(
             "setBreakpoints",
             json!({
-                "source": {"path": source_path},
+                "source": {"path": source_path, "name": source_name},
                 "breakpoints": bp_lines,
             }),
             DEFAULT_TIMEOUT,
