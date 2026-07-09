@@ -13,6 +13,7 @@ members = [
     "crates/spartan-security",
     "crates/spartan-crash",
     "crates/spartan-plugin-host",
+    "crates/spartan-model",
     "crates/spartan-editor-core",
     "xtask",
 ]

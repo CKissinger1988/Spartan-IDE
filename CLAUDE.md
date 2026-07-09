@@ -996,6 +996,42 @@ first — it's the parity reference until each row there is actually reimplement
   oversight; only tested live on Linux. Task #12's Canvas → Code direction now round-trips
   correctly; a real live visual canvas backed by a dev server/bundler remains the largest
   remaining piece and is unstarted.
+- **Real, working code — real `ModelProvider` trait, `OllamaProvider`, and `ClaudeProvider`, first
+  increment of task #4, plus a real Ollama install (§75.43)**: the "no installable Ollama" half of
+  this project's own long-standing blocker turned out to be stale, not permanent -- a real
+  `ollama.com` reachability check succeeded; with explicit user authorization (this environment's
+  own safety classifier correctly stopped an unauthorized attempt to run a fetched install script
+  first), a real Ollama 0.31.2 was installed, a real `zstd` dependency gap fixed, the server
+  hand-started (`ollama serve`, no `systemd` in this container), ~14GB of reclaimable build
+  artifacts freed for real room, and a real `llama3.1:8b` (the actual §39.3-target ~7-8B class, not
+  a smaller stand-in) pulled alongside the existing `llama3.2:1b`. Re-running
+  `real_ollama_fidelity.rs` against the new model produced a real, dramatically better result than
+  §47.12's own earlier 1.2B finding: 3/3 syntactically valid tool calls, 3/3 correct tool chosen,
+  correctly no tool call on the arithmetic-only prompt -- both results kept in the record as real,
+  differently-sized data points (see the Spike 0.3 status note above). New `crates/spartan-model`:
+  `provider.rs` defines the real §3.1 trait and shared types, with one deliberate, named adaptation
+  -- sync/callback-based streaming instead of `async`/`Stream`, matching this workspace's own
+  established thread+channel convention rather than introducing `tokio` as a side effect of one
+  feature. `ollama.rs`'s `OllamaProvider` was written only after driving a real live Ollama instance
+  with real `curl` requests and reading the exact real response shapes -- a real finding beyond
+  §3.3's own sketch: `/api/tags` already exposes each model's real context length *and* a real
+  `capabilities` array directly, so context-window and native-tool-calling detection both come from
+  one already-present call, no `/api/show` or curated manifest needed for either; a second real
+  finding: Ollama's native tool-calling returns each call's arguments as one whole parsed JSON
+  object per chunk, not incrementally-streamed partial JSON the way Anthropic's API does. `claude.rs`'s
+  `ClaudeProvider` is a real, structurally complete Anthropic Messages API client (request shape,
+  real SSE stream parser) -- **honestly not live-verified** (no real API key in this environment).
+  `fallback.rs` is `fallback-parser-spike`'s own `FallbackParser` promoted verbatim, the same
+  pattern `lsp.rs`/`dap.rs` already established. 15 new unit tests plus 4 new real, live integration
+  tests against the actual running `llama3.1:8b` (health check, context-window/tool-support query,
+  streaming text, and a real native tool-calling round trip with a real model-generated payload, not
+  a fixture) -- full workspace clean (274 tests, up from 255), 50k-line benchmark re-run with no
+  regression (`spartan-editor-core` doesn't depend on this crate yet). No live Anthropic
+  verification, no Leo agentic core (task #5, this crate is exactly its prerequisite), no UI wiring,
+  no routing engine, no curated-model manifest, no prompt-caching implementation, no real model ever
+  exercises the structured-output fallback path in this pass (llama3.1:8b has real native tool
+  support). Task #4 is a first real increment, not yet the full "Full trait + both providers" Tier 1
+  bar §35.4 sets.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1025,27 +1061,42 @@ first — it's the parity reference until each row there is actually reimplement
   WebView (fixed with a direct Win32 `SetFocus` call) — the latter a concrete instance of the
   exact "does this feel like one app" risk §39.4 exists to test. Don't assume either spike is
   closed just because both have now run — see their own READMEs for exactly what's still
-  unconfirmed. **Spike 0.3 has also now gotten its first real local-model data** (§47.12): Ollama
-  turned out to already be genuinely installed and running; a real `llama3.2:1b` model (1.2B
-  params — smaller than §39.3's actual "~7B/13B class" targets, since disk space, ~11-12GB free,
-  couldn't safely fit a 13B model) was pulled and driven against the real, already-tested
-  `FallbackParser` (`spikes/fallback-parser-spike/tests/real_ollama_fidelity.rs`, self-skips if
-  Ollama/the model aren't present). The result is real but not flattering: only 2/3 real tool-call
-  attempts were even syntactically valid JSON, and **0/3 chose the semantically correct tool**
-  (wrong tool name spelling once, wrong tool entirely once) — a small, largely negative data point
-  at this model size, not a verdict on the 7B/13B class the spec actually targets. The parser
-  itself had no bugs surfaced: real invalid JSON was correctly caught and surfaced, never dropped.
-  Spike 0.2 (both halves), spike 0.1's CPU/data-structure half, spike 0.1's GPU half (partially),
-  spike 0.4 (partially), and now spike 0.3 (partially, and mostly a negative result at this model
-  size) are the spikes with real execution behind them. See §39 for what the remaining spikes
-  need, §47.5–§47.6 for 0.2, §47.9–§47.10 for 0.1's GPU half, §47.11 for 0.4, §47.12 for 0.3.
+  unconfirmed. **Spike 0.3 first got real local-model data with a small model, and later (§75.43)
+  a real, much stronger result at the model size the spec actually targets** (§47.12, updated by
+  §75.43): Ollama turned out to already be genuinely installed and running; a first real
+  `llama3.2:1b` model (1.2B params — smaller than §39.3's actual "~7B/13B class" targets, since
+  disk space, ~11-12GB free at the time, couldn't safely fit a 13B model) was pulled and driven
+  against the real, already-tested `FallbackParser`
+  (`spikes/fallback-parser-spike/tests/real_ollama_fidelity.rs`, self-skips if Ollama/the model
+  aren't present). That first result was real but not flattering: only 2/3 real tool-call attempts
+  were even syntactically valid JSON, and 0/3 chose the semantically correct tool (wrong tool name
+  spelling once, wrong tool entirely once) — a small, largely negative data point at that model
+  size, not a verdict on the 7B/13B class the spec actually targets. The parser itself had no bugs
+  surfaced in either run: real invalid JSON was correctly caught and surfaced, never dropped. A
+  later session (§75.43) found the "no installable Ollama" framing of this blocker had gone stale
+  (a real `ollama.com` reachability check succeeded), got explicit user authorization, installed a
+  real Ollama for real, reclaimed real disk space, and pulled a real `llama3.1:8b` (~8B, the actual
+  target class) -- re-running the same test against it produced a real, dramatically better result:
+  **3/3 syntactically valid, 3/3 correct tool chosen, and the arithmetic-only prompt correctly
+  produced no tool call at all.** Both results are real and both are kept in the record rather than
+  overwriting the earlier one -- the small model's real weakness and the target-class model's real
+  strength are both genuine, differently-sized data points. Spike 0.2 (both halves), spike 0.1's
+  CPU/data-structure half, spike 0.1's GPU half (partially), spike 0.4 (partially), and spike 0.3
+  (now with two real data points at two real model sizes) are the spikes with real execution behind
+  them. See §39 for what the remaining spikes need, §47.5–§47.6 for 0.2, §47.9–§47.10 for 0.1's GPU
+  half, §47.11 for 0.4, §47.12 for 0.3's first result, §75.43 for its updated one.
 
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 255 tests: 6 spikes + 7 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 274 tests: 6 spikes + 8 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
-                                    # spartan-crash, spartan-plugin-host, spartan-editor-core, xtask)
+                                    # spartan-crash, spartan-plugin-host, spartan-model,
+                                    # spartan-editor-core, xtask)
+# spartan-model's own tests/ollama_integration.rs (§75.43) needs a real local Ollama instance
+# reachable at http://localhost:11434 with `llama3.1:8b` pulled -- self-skips (prints a message)
+# if either isn't present, matching every other real-external-tool integration suite in this repo.
+# `ollama serve` has no systemd unit in a bare container -- start it manually in the background.
 # `cargo run -p xtask -- package` (§75.35) builds a real Linux .tar.gz release package into
 # dist/ (gitignored) -- see §75.35 for the real install.sh verification recipe.
 # dap-spike and spartan-editor-core's own dap_integration.rs need `lldb-dap` (or `lldb-dap-18`) +

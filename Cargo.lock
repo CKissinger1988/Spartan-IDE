@@ -4657,6 +4657,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "spartan-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
 name = "spartan-plugin-host"
 version = "0.1.0"
 dependencies = [

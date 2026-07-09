@@ -10,19 +10,22 @@
 //! isn't pulled -- this is meant to degrade gracefully across machines, not
 //! gate CI on a specific local model being present everywhere.
 //!
-//! Model used: `llama3.2:1b` -- a real, but *smaller* class than §39.3's
-//! literal "~7B class, ~13B class" targets. This machine's disk had only
-//! ~12GB free at the time this test was written (see CLAUDE.md's Spike 0.3
-//! status note for why), nowhere near enough to safely pull a 13B-class
-//! model on top of everything else already on this disk. This test is
-//! honestly scoped to what's safe to run here, not silently substituted
-//! without saying so.
+//! Model used: `llama3.1:8b` -- a real §39.3-target-class model (~8B
+//! parameters, the literal "~7B class" this spike's own fidelity target was
+//! scoped to), updated from an earlier session's `llama3.2:1b` run. That
+//! smaller model was a real, deliberate, honestly-scoped-down substitution
+//! at the time (disk had only ~12GB free, nowhere near enough for a
+//! 7B-class model on top of everything else already on disk) -- this
+//! session found more real headroom (reclaimed regenerable build artifacts,
+//! ~14GB freed) and pulled the actually-targeted model size instead of
+//! continuing to report against a smaller stand-in. See CLAUDE.md's Spike
+//! 0.3 status note for both the original 1.2B result and this update.
 
 use fallback_parser_spike::{FallbackParser, ParseEvent};
 use std::time::Duration;
 
 const OLLAMA_URL: &str = "http://localhost:11434";
-const MODEL: &str = "llama3.2:1b";
+const MODEL: &str = "llama3.1:8b";
 
 const SYSTEM_PROMPT: &str = "You are a coding assistant with access to tools. To call a tool, respond with ONLY a fenced code block in this exact format, and nothing else:\n```spartan-tool-call\n{\"tool\": \"<tool_name>\", \"args\": {<arguments as JSON>}}\n```\nAvailable tools:\n- read_file(path: string): reads a file's contents\n- edit_file(path: string, content: string): writes content to a file\n- run_terminal(command: string): runs a shell command";
 
@@ -148,12 +151,14 @@ fn real_local_model_tool_call_fidelity() {
 
     // This assertion is deliberately loose -- the point of this test is an
     // honest, printed fidelity report against a real model, not a strict
-    // quality gate on a 1.2B-parameter model's tool-selection judgment
-    // (§39.3's own 80% target was scoped to 7B/13B-class models, not this
-    // one). The one thing that MUST hold, matching §3.4's non-negotiable
-    // requirement: a real, syntactically-valid tool call this small a model
-    // is capable of producing must actually parse -- if it doesn't, the
-    // parser (not the model) has a real bug.
+    // CI-enforced quality gate on this specific model's tool-selection
+    // judgment (§39.3's own 80% target is a real design goal to measure
+    // against, not something this test fails the build over -- a model
+    // upgrade, prompt change, or quantization difference can legitimately
+    // move this number run to run). The one thing that MUST hold, matching
+    // §3.4's non-negotiable requirement: a real, syntactically-valid tool
+    // call this model is capable of producing must actually parse -- if it
+    // doesn't, the parser (not the model) has a real bug.
     assert!(
         parsed_a_tool_call >= 1,
         "expected at least one real tool call to parse successfully; got 0/{}",
