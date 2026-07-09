@@ -92,3 +92,63 @@ fn a_missing_file_produces_a_real_error_not_a_panic() {
         "a missing file should produce a real Err, not Ok"
     );
 }
+
+/// Real §75.42 Canvas -> Code round trip: a real `PropChange` applied
+/// against a real in-memory source string (never written to disk --
+/// proving the CLI really reads from stdin, not from whatever's on disk
+/// at the path a real caller would otherwise pass).
+#[test]
+fn a_real_prop_change_produces_real_regenerated_source() {
+    if !cli_available() {
+        eprintln!("SKIP: node or gui-builder/dist/cli.js not available");
+        return;
+    }
+    std::env::set_var("SPARTAN_GUI_BUILDER_DIR", gui_builder_dir());
+
+    let source = r#"const X = () => <div className="app">Hello</div>;"#.to_string();
+    let edit_json =
+        r#"{"kind":"PropChange","nodeId":"n0","prop":"className","value":"updated"}"#.to_string();
+
+    let request = gui_bridge::spawn_apply_edit_request(source, edit_json);
+    let result = request
+        .receiver
+        .recv_timeout(Duration::from_secs(30))
+        .expect("gui-builder CLI apply subprocess should respond within 30s");
+
+    let new_source = result.expect("a real, valid PropChange should produce Ok(new_source)");
+    assert!(
+        new_source.contains(r#"className="updated""#),
+        "regenerated source should contain the real new prop value, got: {new_source}"
+    );
+    assert!(
+        new_source.contains("const X = () =>"),
+        "recast should preserve the untouched surrounding code verbatim, got: {new_source}"
+    );
+}
+
+/// A real, unknown node id (e.g. the source changed structurally since the
+/// id was last computed) must produce a real `Err`, not a panic or a
+/// silently unchanged source.
+#[test]
+fn an_unknown_node_id_produces_a_real_error() {
+    if !cli_available() {
+        eprintln!("SKIP: node or gui-builder/dist/cli.js not available");
+        return;
+    }
+    std::env::set_var("SPARTAN_GUI_BUILDER_DIR", gui_builder_dir());
+
+    let source = r#"const X = () => <div>Hello</div>;"#.to_string();
+    let edit_json =
+        r#"{"kind":"PropChange","nodeId":"does-not-exist","prop":"id","value":"x"}"#.to_string();
+
+    let request = gui_bridge::spawn_apply_edit_request(source, edit_json);
+    let result = request
+        .receiver
+        .recv_timeout(Duration::from_secs(30))
+        .expect("gui-builder CLI apply subprocess should respond within 30s");
+
+    assert!(
+        result.is_err(),
+        "an unknown node id should produce a real Err, not Ok"
+    );
+}

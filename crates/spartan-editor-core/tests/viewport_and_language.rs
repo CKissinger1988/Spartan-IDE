@@ -685,6 +685,34 @@ fn coalesced_undo_falls_back_to_clamp_when_the_run_partially_ages_out_of_the_rin
 }
 
 #[test]
+fn replace_all_text_swaps_the_entire_document_content() {
+    // §75.42's real Canvas -> Code entry point: gui-builder regenerates
+    // whole-file source, not a diff.
+    let mut editor = EditorView::new("line one\nline two\n");
+    let effect = editor.replace_all_text("completely different\ncontent\n");
+    assert_eq!(effect, editor_view::EditEffect::Structural);
+    assert_eq!(editor.text(), "completely different\ncontent\n");
+}
+
+#[test]
+fn replace_all_text_is_undoable_like_any_other_edit() {
+    // `replace_all_text` reuses `insert_at_cursor`'s existing
+    // selection-replace path, which -- like a real selected-text-replaced-
+    // by-typing edit (see `typing_over_a_selection_does_not_coalesce_
+    // with_surrounding_inserts` above) -- commits as two separate
+    // checkpoints (delete-selection, then insert), not one. Two undos are
+    // needed to fully revert, matching that same established precedent
+    // rather than a new, special-cased single-checkpoint behavior.
+    let mut editor = EditorView::new("original");
+    editor.replace_all_text("replaced");
+    assert_eq!(editor.text(), "replaced");
+    assert!(editor.undo()); // undoes the insert, leaving the deletion applied
+    assert_eq!(editor.text(), "");
+    assert!(editor.undo()); // undoes the deletion, restoring the original
+    assert_eq!(editor.text(), "original");
+}
+
+#[test]
 fn contains_line_agrees_with_to_local_line() {
     let doc = five_line_doc();
     let mut viewport = Viewport::new(2);

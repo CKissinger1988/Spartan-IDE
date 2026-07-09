@@ -1092,6 +1092,13 @@ fn main() {
     // non-blockingly in `AboutToWait` below (matching `pending_build`'s
     // own established pattern for a different real subprocess).
     let mut component_tree_request: Option<gui_bridge::ComponentTreeRequest> = None;
+    // Real §75.42 Canvas -> Code in-flight request, if any -- a real
+    // `node`/`gui-builder apply` subprocess spawned on its own thread when
+    // the WebView's edit form posts a real `CanvasEdit` over IPC, polled
+    // non-blockingly in `AboutToWait` below (same pattern as
+    // `component_tree_request` just above, for the opposite sync
+    // direction).
+    let mut pending_apply_edit: Option<gui_bridge::ApplyEditRequest> = None;
 
     event_loop
         .run(move |event, elwt| {
@@ -3203,6 +3210,88 @@ fn main() {
                                 }
                             }
                             component_tree_request = None;
+                        }
+                    }
+
+                    // Real §75.42 Canvas -> Code poll: the moment the
+                    // WebView's edit form posts a real `CanvasEdit` over
+                    // IPC, spawn a real apply-edit subprocess fed the
+                    // *active file's live buffer* (`editor.text()`, not
+                    // whatever's on disk) as its stdin -- an edit must
+                    // never silently discard or race against unsaved
+                    // keystrokes already made in the real editor. Dropped
+                    // (not queued) if a previous apply is still in flight,
+                    // since a second `CanvasEdit` before the first
+                    // resolves would target node ids computed against a
+                    // tree that no longer matches the file this second
+                    // request itself needs to be based on.
+                    if pending_apply_edit.is_none() {
+                        if let Some(bridge) = &webview_bridge {
+                            if let Some(edit_json) = bridge.take_pending_edit() {
+                                let active_file = &files[active];
+                                let source = active_file.editor.text();
+                                pending_apply_edit =
+                                    Some(gui_bridge::spawn_apply_edit_request(source, edit_json));
+                            }
+                        }
+                    }
+
+                    // Real §75.42 apply-edit poll, same non-blocking
+                    // pattern as `component_tree_request` just above. A
+                    // successful apply replaces the active file's entire
+                    // real live buffer via `EditorView::replace_all_text`
+                    // -- going through the same undo/dirty-tracking path
+                    // any other edit already does -- then immediately
+                    // re-requests a fresh component tree, since node ids
+                    // are a pure function of tree structure and a
+                    // structural edit can shift every id after the one
+                    // just changed. Deliberately does *not* call
+                    // `edit_latency.note_key_event()`: this isn't a
+                    // keystroke, and folding a real subprocess round-trip
+                    // (tens-to-hundreds of ms) into the input-to-photon
+                    // typing-latency report would misrepresent what that
+                    // report measures, not just add noise to it.
+                    if let Some(request) = &pending_apply_edit {
+                        if let Ok(result) = request.receiver.try_recv() {
+                            pending_apply_edit = None;
+                            match result {
+                                Ok(new_source) => {
+                                    let active_file = &mut files[active];
+                                    let effect = active_file.editor.replace_all_text(&new_source);
+                                    if effect != editor_view::EditEffect::None {
+                                        if !active_file.dirty {
+                                            active_file.dirty = true;
+                                            window.set_title(&window_title(active_file));
+                                        }
+                                        active_file.lsp_debouncer.on_edit();
+                                        let (cursor_line, _) = active_file.editor.cursor_line_col();
+                                        let doc_len_lines = active_file.editor.document.len_lines();
+                                        active_file
+                                            .viewport
+                                            .ensure_visible(cursor_line, doc_len_lines);
+                                        reshape_window(
+                                            &mut text_state,
+                                            &active_file.editor,
+                                            &active_file.viewport,
+                                            active_file.highlighter.as_mut(),
+                                        );
+                                    }
+                                    if let Some(bridge) = &webview_bridge {
+                                        bridge.push_edit_applied();
+                                        bridge.push_component_tree_loading();
+                                    }
+                                    component_tree_request =
+                                        Some(gui_bridge::spawn_component_tree_request(Path::new(
+                                            &files[active].label,
+                                        )));
+                                    window.request_redraw();
+                                }
+                                Err(message) => {
+                                    if let Some(bridge) = &webview_bridge {
+                                        bridge.push_edit_error(&message);
+                                    }
+                                }
+                            }
                         }
                     }
 

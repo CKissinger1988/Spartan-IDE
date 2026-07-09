@@ -956,6 +956,46 @@ first — it's the parity reference until each row there is actually reimplement
   spawning `node.exe` into a real WebView2 control wasn't independently verified); no file-watching
   (fetched once per switch, not kept live while typing). Task #12 remains `in_progress` -- a real
   `CanvasEdit`-triggering UI inside the WebView is the natural next increment.
+- **Real, working code — real Canvas → Code edit UI, fourth increment of task #12, closing the
+  round trip (§75.42)**: closes the gap §75.41 named. `gui-builder/src/cli.ts` gained a real
+  `apply <editJson>` mode reading source from **stdin** (not disk -- deliberate, so an edit applies
+  against the live, possibly-unsaved buffer, never disk) and returning real regenerated
+  `{"source"}` JSON via `gui-builder`'s already-tested `applyCanvasEdit`/`recast`. `gui_bridge.rs`
+  gained `spawn_apply_edit_request`, the same spawn-thread/channel/non-blocking-poll shape as
+  §75.41's own tree fetch. `webview_bridge.rs`'s WebView gained a real, always-present edit panel:
+  clicking a rendered tree row selects it and shows a real key/value form ("Set Prop"/"Set Style")
+  that posts a real structured edit over the existing IPC channel; a new `IpcMessage::Edit` variant
+  carries it through as raw JSON into a `pending_edit` cell `main.rs` polls. A successful apply
+  calls a genuinely new `EditorView::replace_all_text` (whole-file swap, since `gui-builder`
+  regenerates whole-file source, not a diff) that deliberately reuses the existing
+  select-everything-then-`insert_at_cursor` path, so a canvas edit gets the same undo/dirty
+  tracking any other edit already has, then immediately re-fetches the tree so node ids stay
+  correct. A real test-writing mistake was caught only by running the test: one `Ctrl+Z` doesn't
+  fully revert a canvas edit, because `replace_all_text` inherits an already-established,
+  already-tested precedent (§75.18/§75.25) that a selection-replace commits as two checkpoints
+  (delete, then insert), not one -- fixed by correcting the test's expectation, not the code. A
+  real, honest architectural finding from live testing, deliberately not fixed in this pass: the
+  WebView's re-rendered tree can show stale data until `Ctrl+S`, since the tree-refresh path
+  (§75.41, unchanged) always re-parses from disk while an applied edit only updates the live
+  buffer -- confirmed live in both directions (stale before save, correct after); fixing it
+  properly (routing every refresh trigger through the live buffer, not just the post-edit one)
+  is named as real, separate future work rather than special-cased here. 4 new `gui-builder` tests
+  (28 total, real stdin-piping support added to the test harness), 2 new Rust integration tests (4
+  total in `gui_bridge_integration.rs`), 2 new `replace_all_text` tests -- full workspace clean
+  (255 tests, up from 251). Live, through the real binary: a real live input-timing artifact was
+  found and correctly diagnosed as a verification-environment issue (fast synthetic `xdotool type`
+  outrunning WebKitGTK's real input processing, not a product bug) -- resolved with an explicit
+  typing delay, confirmed reproducible and then confirmed fixed via screenshots; with correct
+  input, a real `PropChange` and a real `StyleChange` were each applied, confirmed against the
+  actual live buffer text (switching to Editor mode), confirmed to coexist correctly, and
+  confirmed undoable in exactly two `Ctrl+Z` presses each, matching the documented two-checkpoint
+  behavior. 50k-line benchmark re-run, no regression. Still no visual canvas (text-tree-driven
+  selection/editing only); no `Reparent`/`ComponentInsert` (unimplemented in `gui-builder` itself
+  since §75.38); the edit form's fields aren't cleared on a new selection (a real, minor, named
+  rough edge); the stale-tree-until-save behavior above is real and unfixed by design choice, not
+  oversight; only tested live on Linux. Task #12's Canvas → Code direction now round-trips
+  correctly; a real live visual canvas backed by a dev server/bundler remains the largest
+  remaining piece and is unstarted.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1003,7 +1043,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 249 tests: 6 spikes + 7 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 255 tests: 6 spikes + 7 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-editor-core, xtask)
 # `cargo run -p xtask -- package` (§75.35) builds a real Linux .tar.gz release package into

@@ -14,6 +14,15 @@
 //! bundler, no dev server, no HMR, no visual layout at all -- a real,
 //! indented text tree, not a canvas. See `gui_bridge.rs`'s own doc comment
 //! and `gui-builder/README.md` for the exact, current scope boundary.
+//!
+//! As of §75.42, the real Canvas -> Code direction is wired too: clicking
+//! a real rendered tree row selects it and shows a real inline edit form
+//! (key/value + "Set Prop"/"Set Style" buttons); submitting posts a real
+//! structured `CanvasEdit` back over IPC, which `main.rs` picks up via
+//! `take_pending_edit()` and applies through `gui_bridge::
+//! spawn_apply_edit_request` against the real live buffer. Still no
+//! click-to-select-on-a-visual-canvas (there is no visual canvas) -- this
+//! is a real, structural, text-tree-driven edit UI, not WYSIWYG.
 
 use serde::Deserialize;
 use std::cell::RefCell;
@@ -36,7 +45,25 @@ const HTML: &str = r#"<!DOCTYPE html>
   </p>
   <p id="ipcStatus" style="color:#6E6D73;">IPC bridge: connecting&hellip;</p>
   <div id="componentTree" style="margin-top:1em;white-space:pre;font-size:0.95em;"></div>
+  <div id="editPanel" style="display:none;margin-top:1em;padding:0.75em;border:1px solid #333;max-width:520px;">
+    <div id="editPanelTitle" style="color:#E9E7E4;margin-bottom:0.5em;font-size:0.9em;"></div>
+    <div>
+      <label style="color:#A6A5A2;">Key
+        <input id="editKey" type="text" style="width:8em;margin-left:0.3em;" />
+      </label>
+      <label style="color:#A6A5A2;margin-left:0.75em;">Value
+        <input id="editValue" type="text" style="width:14em;margin-left:0.3em;" />
+      </label>
+    </div>
+    <div style="margin-top:0.5em;">
+      <button onclick="submitEdit('PropChange')">Set Prop</button>
+      <button onclick="submitEdit('StyleChange')" style="margin-left:0.4em;">Set Style</button>
+    </div>
+    <div id="editStatus" style="color:#84838A;margin-top:0.4em;font-size:0.9em;"></div>
+  </div>
   <script>
+    var selectedNodeId = null;
+
     function updateFileInfo(path, isComponent) {
       document.getElementById('fileInfo').innerText =
         'Active file: ' + path + (isComponent ? ' (looks like a component file)' : ' (not a JS/TS/JSX/TSX file)');
@@ -44,14 +71,21 @@ const HTML: &str = r#"<!DOCTYPE html>
     function ackReady() {
       document.getElementById('ipcStatus').innerText = 'IPC bridge: connected (real round-trip confirmed)';
     }
+    function hideEditPanel() {
+      selectedNodeId = null;
+      document.getElementById('editPanel').style.display = 'none';
+    }
     function componentTreeLoading() {
       document.getElementById('componentTree').textContent = 'Parsing real component tree…';
+      hideEditPanel();
     }
     function componentTreeError(message) {
       document.getElementById('componentTree').textContent = 'Component tree unavailable: ' + message;
+      hideEditPanel();
     }
     function componentTreeNotApplicable() {
       document.getElementById('componentTree').textContent = '';
+      hideEditPanel();
     }
     function propsSummaryOf(props) {
       const keys = Object.keys(props);
@@ -63,17 +97,54 @@ const HTML: &str = r#"<!DOCTYPE html>
         return k + '={' + p.source + '}';
       }).join(' ');
     }
+    function escapeHtml(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+    function selectNode(nodeId, tagName) {
+      selectedNodeId = nodeId;
+      document.getElementById('editPanel').style.display = 'block';
+      document.getElementById('editPanelTitle').innerText = 'Selected: <' + tagName + '> (id ' + nodeId + ')';
+      document.getElementById('editStatus').innerText = '';
+    }
+    function submitEdit(kind) {
+      if (!selectedNodeId) return;
+      const key = document.getElementById('editKey').value;
+      const value = document.getElementById('editValue').value;
+      if (!key) {
+        document.getElementById('editStatus').innerText = 'Key is required.';
+        return;
+      }
+      const edit = kind === 'StyleChange'
+        ? {kind: 'StyleChange', nodeId: selectedNodeId, property: key, value: value}
+        : {kind: 'PropChange', nodeId: selectedNodeId, prop: key, value: value};
+      document.getElementById('editStatus').innerText = 'Applying…';
+      window.ipc.postMessage(JSON.stringify({type: 'edit', edit: edit}));
+    }
+    function editApplied() {
+      document.getElementById('editStatus').innerText = 'Applied — real source updated, component tree refreshed.';
+    }
+    function editError(message) {
+      document.getElementById('editStatus').innerText = 'Error: ' + message;
+    }
     function renderNode(node, depth, lines) {
-      const indent = '  '.repeat(depth);
-      const text = node.textContent ? ' “' + node.textContent + '”' : '';
-      lines.push(indent + '<' + node.tagName + propsSummaryOf(node.props) + '>' + text);
+      const indent = '&nbsp;&nbsp;'.repeat(depth);
+      const text = node.textContent ? ' &ldquo;' + escapeHtml(node.textContent) + '&rdquo;' : '';
+      const label = '&lt;' + escapeHtml(node.tagName) + escapeHtml(propsSummaryOf(node.props)) + '&gt;' + text;
+      const safeId = node.id.replace(/'/g, "\\'");
+      const safeTag = node.tagName.replace(/'/g, "\\'");
+      lines.push(
+        '<div style="cursor:pointer;padding:1px 2px;" onclick="selectNode(\'' + safeId + '\', \'' + safeTag + '\')">' +
+        indent + label +
+        '</div>'
+      );
       node.children.forEach(function (child) { renderNode(child, depth + 1, lines); });
     }
     function updateComponentTree(data) {
       const lines = [];
       data.roots.forEach(function (root) { renderNode(root, 0, lines); });
-      document.getElementById('componentTree').textContent =
-        lines.length > 0 ? lines.join('\n') : '(no JSX elements found)';
+      document.getElementById('componentTree').innerHTML =
+        lines.length > 0 ? lines.join('') : '(no JSX elements found)';
+      hideEditPanel();
     }
     window.ipc.postMessage(JSON.stringify({type: 'ready'}));
   </script>
@@ -85,6 +156,15 @@ const HTML: &str = r#"<!DOCTYPE html>
 enum IpcMessage {
     #[serde(rename = "ready")]
     Ready,
+    /// A real, structured `CanvasEdit` (§75.42) the JS side's edit form
+    /// posted -- `edit` is passed through as raw JSON rather than a typed
+    /// Rust struct, since its exact shape (`PropChange`/`StyleChange`,
+    /// each with different fields) already exactly matches
+    /// `gui-builder`'s own `CanvasEdit` union and is going straight back
+    /// out to that same CLI as a JSON string; re-typing it here would just
+    /// be a second, redundant definition to keep in sync.
+    #[serde(rename = "edit")]
+    Edit { edit: serde_json::Value },
 }
 
 /// Owns the child `WebView` occupying Design mode's content region. Lives
@@ -101,15 +181,25 @@ pub struct WebviewBridge {
     /// it back yet), named here rather than silently dropped.
     #[allow(dead_code)]
     pub ready_acked: Rc<RefCell<bool>>,
+    /// The most recent real `CanvasEdit` JSON (§75.42) the JS side's edit
+    /// form posted, if any hasn't been consumed yet -- `main.rs`'s
+    /// `AboutToWait` polls this via `take_pending_edit()`, the same
+    /// "IPC handler can only stash data, not act on it directly" pattern
+    /// `component_tree_request` already established, since applying an
+    /// edit needs access to the live `OpenFile`/`Document` state the IPC
+    /// closure itself has no way to reach.
+    pending_edit: Rc<RefCell<Option<String>>>,
 }
 
 impl WebviewBridge {
     pub fn new(window: &Window, bounds: Rect) -> Self {
         let ready_acked = Rc::new(RefCell::new(false));
+        let pending_edit = Rc::new(RefCell::new(None));
         let webview_slot: Rc<RefCell<Option<WebView>>> = Rc::new(RefCell::new(None));
 
         let webview_slot_handler = webview_slot.clone();
         let ready_acked_handler = ready_acked.clone();
+        let pending_edit_handler = pending_edit.clone();
 
         let webview = WebViewBuilder::new_as_child(window)
             .with_bounds(bounds)
@@ -122,6 +212,9 @@ impl WebviewBridge {
                         if let Some(wv) = webview_slot_handler.borrow().as_ref() {
                             let _ = wv.evaluate_script("ackReady();");
                         }
+                    }
+                    Ok(IpcMessage::Edit { edit }) => {
+                        *pending_edit_handler.borrow_mut() = Some(edit.to_string());
                     }
                     Err(e) => {
                         eprintln!("[webview_bridge] failed to parse IPC message {body:?}: {e}");
@@ -136,6 +229,7 @@ impl WebviewBridge {
         Self {
             webview: webview_slot,
             ready_acked,
+            pending_edit,
         }
     }
 
@@ -202,6 +296,38 @@ impl WebviewBridge {
                 .replace('\'', "\\'")
                 .replace('\n', " ");
             let _ = wv.evaluate_script(&format!("componentTreeError('{escaped}');"));
+        }
+    }
+
+    /// Consumes (at most once) the most recent real `CanvasEdit` JSON the
+    /// JS side's edit form posted, if any -- polled non-blockingly from
+    /// `AboutToWait`, same pattern `gui_bridge`'s own subprocess results
+    /// use. Returns `None` on every call once already taken, until the JS
+    /// side posts a new one.
+    pub fn take_pending_edit(&self) -> Option<String> {
+        self.pending_edit.borrow_mut().take()
+    }
+
+    /// Real confirmation the edit was applied and the live buffer updated
+    /// -- called after a real `gui_bridge::spawn_apply_edit_request`
+    /// resolves `Ok`.
+    pub fn push_edit_applied(&self) {
+        if let Some(wv) = self.webview.borrow().as_ref() {
+            let _ = wv.evaluate_script("editApplied();");
+        }
+    }
+
+    /// Real, human-readable failure message for a `CanvasEdit` that
+    /// couldn't be applied (unknown node id, unsupported edit shape,
+    /// subprocess failure) -- shown in the edit panel rather than silently
+    /// discarded.
+    pub fn push_edit_error(&self, message: &str) {
+        if let Some(wv) = self.webview.borrow().as_ref() {
+            let escaped = message
+                .replace('\\', "\\\\")
+                .replace('\'', "\\'")
+                .replace('\n', " ");
+            let _ = wv.evaluate_script(&format!("editError('{escaped}');"));
         }
     }
 }

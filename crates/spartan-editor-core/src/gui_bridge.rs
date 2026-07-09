@@ -1,22 +1,36 @@
-//! Real §6.2 step 1 dev-server bridge (task #12): spawns the real
-//! `gui-builder` CLI (a real Node subprocess, `gui-builder/dist/cli.js`)
-//! to parse the active file's real JSX/TSX into a real `ComponentNode`
-//! tree, and delivers the result back to the render loop without ever
-//! blocking it -- the exact same spawn-on-a-thread, `mpsc::channel`,
-//! non-blocking-poll pattern `build.rs`'s own DAP build integration
-//! (§75.10) already established for a different real subprocess.
+//! Real §6.2 dev-server bridge (task #12): spawns the real `gui-builder`
+//! CLI (a real Node subprocess, `gui-builder/dist/cli.js`) for both real
+//! sync directions -- parsing the active file's real JSX/TSX into a real
+//! `ComponentNode` tree (§75.41, "Code -> Canvas"), and, as of §75.42,
+//! applying a real structured `CanvasEdit` and getting back real
+//! regenerated source ("Canvas -> Code") -- and delivers each result back
+//! to the render loop without ever blocking it, the exact same
+//! spawn-on-a-thread, `mpsc::channel`, non-blocking-poll pattern
+//! `build.rs`'s own DAP build integration (§75.10) already established for
+//! a different real subprocess.
 //!
-//! Deliberately a v1: one file in, one JSON tree out, no persistent
+//! Deliberately a v1: one file/edit in, one JSON result out, no persistent
 //! server, no file watching, no HMR -- §6.2 step 1's own "diffed against
 //! last-known tree, re-renders only changed nodes" remains unbuilt. See
 //! `gui-builder/README.md` and this crate's own README for the full,
 //! honest scope.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 
 pub struct ComponentTreeRequest {
+    pub receiver: mpsc::Receiver<Result<String, String>>,
+}
+
+/// A real, in-flight `CanvasEdit` application (§75.42) -- `Ok(new_source)`
+/// is the real, regenerated whole-file source `gui-builder`'s own
+/// `applyCanvasEdit` produced (never written to disk by the CLI itself;
+/// the caller is responsible for feeding it into the live `Document`, the
+/// same as any other in-memory edit, so it correctly goes through undo/
+/// dirty-tracking/Ctrl+S like a keystroke would).
+pub struct ApplyEditRequest {
     pub receiver: mpsc::Receiver<Result<String, String>>,
 }
 
@@ -91,4 +105,74 @@ fn run_cli(file_path: &Path) -> Result<String, String> {
         return Err("gui-builder CLI produced invalid JSON".to_string());
     }
     Ok(stdout)
+}
+
+/// Spawns the real `node <cli.js> apply <editJson>` subprocess on its own
+/// thread, piping `current_source` (the live in-memory buffer, not
+/// whatever's on disk) to its stdin -- the same non-blocking-poll contract
+/// as `spawn_component_tree_request`. `Ok(new_source)` is the real
+/// regenerated whole-file source; `Err(message)` covers every real failure
+/// mode (unknown node id, an unsupported edit shape, subprocess spawn
+/// failure) with a human-readable message.
+pub fn spawn_apply_edit_request(current_source: String, edit_json: String) -> ApplyEditRequest {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = run_apply_cli(&current_source, &edit_json);
+        let _ = sender.send(result);
+    });
+    ApplyEditRequest { receiver }
+}
+
+fn run_apply_cli(current_source: &str, edit_json: &str) -> Result<String, String> {
+    let Some(cli_path) = locate_cli() else {
+        return Err(
+            "gui-builder CLI not found (set SPARTAN_GUI_BUILDER_DIR or run from the repo root, \
+             after `cd gui-builder && npm install && npm run build`)"
+                .to_string(),
+        );
+    };
+    let mut child = match Command::new("node")
+        .arg(&cli_path)
+        .arg("apply")
+        .arg(edit_json)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return Err(format!("failed to spawn node: {e}")),
+    };
+
+    // Write and drop stdin in its own scope so the pipe closes (signaling
+    // real EOF to the CLI's `readFileSync(0, ...)` read) before
+    // `wait_with_output` blocks for the real subprocess's exit.
+    {
+        let Some(mut stdin) = child.stdin.take() else {
+            return Err("failed to open stdin for gui-builder CLI".to_string());
+        };
+        if let Err(e) = stdin.write_all(current_source.as_bytes()) {
+            return Err(format!(
+                "failed to write source to gui-builder CLI stdin: {e}"
+            ));
+        }
+    }
+
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => return Err(format!("failed to wait for gui-builder CLI: {e}")),
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("gui-builder CLI apply failed: {stderr}"));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let value: serde_json::Value = match serde_json::from_str(&stdout) {
+        Ok(v) => v,
+        Err(_) => return Err("gui-builder CLI apply produced invalid JSON".to_string()),
+    };
+    match value.get("source").and_then(|s| s.as_str()) {
+        Some(s) => Ok(s.to_string()),
+        None => Err("gui-builder CLI apply response missing a 'source' field".to_string()),
+    }
 }

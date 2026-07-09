@@ -211,6 +211,29 @@ impl EditorView {
         }
     }
 
+    /// Replaces the entire document with `new_text` -- the real Canvas ->
+    /// Code entry point (§75.42): `gui-builder`'s own `applyCanvasEdit`
+    /// regenerates whole-file source, not a diff, so there's no smaller
+    /// edit to apply. Deliberately reuses the exact same
+    /// select-everything-then-`insert_at_cursor` path a real drag-select
+    /// followed by typing would take, rather than a new low-level
+    /// `Document` mutation -- so a canvas-driven edit gets the same
+    /// undo/redo, dirty-tracking, and (via `insert_at_cursor` clearing
+    /// `typing_run` on a selection replace) run-coalescing-reset behavior
+    /// any other edit already gets, for free -- including the same real,
+    /// already-established two-checkpoint quirk a selection replaced by
+    /// typing has (`delete_selection` and the new `insert` each commit
+    /// their own checkpoint), so undoing a canvas edit takes two `Ctrl+Z`
+    /// presses, not one; not a new behavior invented for this method.
+    /// Always reports `EditEffect::Structural` in practice (whole-file
+    /// replacement almost always changes line count), inherited from
+    /// `insert_at_cursor`'s own "replacing a selection" rule.
+    pub fn replace_all_text(&mut self, new_text: &str) -> EditEffect {
+        self.selection_anchor = Some(0);
+        self.cursor = self.document.len_chars();
+        self.insert_at_cursor(new_text)
+    }
+
     /// Deletes the character immediately before the cursor (Backspace) --
     /// or, if a selection is active, deletes exactly the selection instead
     /// of the selection *plus* one more character before it, matching

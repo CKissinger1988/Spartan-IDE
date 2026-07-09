@@ -9,9 +9,12 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cliPath = path.join(here, "cli.ts");
 
-function runCli(args: string[]): { stdout: string; status: number } {
+function runCli(args: string[], input?: string): { stdout: string; status: number } {
   try {
-    const stdout = execFileSync("node", ["--import", "tsx", cliPath, ...args], { encoding: "utf8" });
+    const stdout = execFileSync("node", ["--import", "tsx", cliPath, ...args], {
+      encoding: "utf8",
+      input: input ?? "",
+    });
     return { stdout, status: 0 };
   } catch (e) {
     const err = e as { stdout?: Buffer | string; status?: number };
@@ -41,5 +44,32 @@ test("real subprocess: CLI reports a real error (non-zero exit) for a missing fi
 
 test("real subprocess: CLI reports a real error (non-zero exit) with no arguments", () => {
   const { status } = runCli([]);
+  assert.equal(status, 1);
+});
+
+test("real subprocess: CLI apply mode reads source from stdin and returns real regenerated source", () => {
+  const source = `const X = () => <div className="app">Hello</div>;`;
+  const edit = JSON.stringify({ kind: "PropChange", nodeId: "n0", prop: "className", value: "updated" });
+
+  const { stdout, status } = runCli(["apply", edit], source);
+
+  assert.equal(status, 0);
+  const parsed = JSON.parse(stdout);
+  assert.match(parsed.source, /className="updated"/);
+  // recast preserves everything untouched -- the arrow function and
+  // semicolon survive verbatim, real proof this isn't string templating.
+  assert.match(parsed.source, /const X = \(\) =>/);
+});
+
+test("real subprocess: CLI apply mode reports a real error for an unknown node id", () => {
+  const source = `const X = () => <div>Hello</div>;`;
+  const edit = JSON.stringify({ kind: "PropChange", nodeId: "does-not-exist", prop: "id", value: "x" });
+
+  const { status } = runCli(["apply", edit], source);
+  assert.equal(status, 1);
+});
+
+test("real subprocess: CLI apply mode reports a real error for invalid edit JSON", () => {
+  const { status } = runCli(["apply", "{not valid json"], "const X = () => <div/>;");
   assert.equal(status, 1);
 });
