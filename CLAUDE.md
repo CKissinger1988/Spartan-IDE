@@ -744,6 +744,26 @@ first — it's the parity reference until each row there is actually reimplement
   or Source-Control-panel accessibility nodes, no high-contrast/reduce-motion settings (§16.3's
   other two bullets, out of this pass's scope), no Windows/macOS backend testing (Linux/AT-SPI only,
   the only platform available in this environment).
+- **Real, working code — Linux packaging pipeline, task #14 (§75.35)**: the first real
+  build-automation code in this workspace, via the standard Rust "xtask" convention (`cargo run -p
+  xtask -- package`). Deliberately Linux-only -- the one platform this environment can both build
+  and actually *run* the resulting package on to verify it, unlike Windows/macOS packaging this
+  environment has no way to build or test. `xtask/src/package.rs` separates pure, headlessly-tested
+  content generation (a real freedesktop.org `.desktop` entry, a real XDG-conventions `install.sh`,
+  a real end-user README -- 4 new tests, all passing first run) from real I/O (a genuine `cargo
+  build --release`, a genuine `tar` subprocess call). No `LICENSE` file exists in this repo yet, so
+  none is bundled or invented -- a real, named, out-of-scope gap, not fabricated. Real,
+  end-to-end-executed verification, not just "it compiles": ran the real pipeline, inspected the
+  real resulting `.tar.gz`'s contents, extracted it to a real scratch directory, ran `install.sh`
+  with `$HOME` pointed at a separate scratch home, confirmed the real installed binary and desktop
+  entry (with its `Exec=` line correctly rewritten to the real absolute path) -- and then actually
+  **ran the installed binary from its new location** under the same Xvfb pipeline this session has
+  used throughout, confirmed via a real screenshot showing correct rendering and syntax
+  highlighting, proving the packaged artifact is a genuine working copy, not just a same-named
+  file. `/dist/` added to `.gitignore`. Full test/clippy/fmt clean across the whole workspace. No
+  Windows/macOS packaging, no code signing, no CI/release-automation wiring, no `LICENSE` file, no
+  version auto-detection from `Cargo.toml` (hardcoded `"0.1.0"`, matching every crate's current
+  version but not read from one source of truth yet) -- all real, named gaps.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -791,9 +811,11 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 231 tests: 6 spikes + 7 real crates (spartan-buffer,
+cargo test --workspace --release   # 235 tests: 6 spikes + 7 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
-                                    # spartan-crash, spartan-plugin-host, spartan-editor-core)
+                                    # spartan-crash, spartan-plugin-host, spartan-editor-core, xtask)
+# `cargo run -p xtask -- package` (§75.35) builds a real Linux .tar.gz release package into
+# dist/ (gitignored) -- see §75.35 for the real install.sh verification recipe.
 # dap-spike and spartan-editor-core's own dap_integration.rs need `lldb-dap` (or `lldb-dap-18`) +
 # `rustc`; lsp-spike and spartan-editor-core's own lsp_integration.rs need `rust-analyzer` +
 # `rustc`; spartan-editor-core's dap_python_cross_language.rs needs python + the debugpy package.

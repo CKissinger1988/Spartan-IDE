@@ -3,6 +3,9 @@
 **/target/
 Cargo.lock.bak
 
+# xtask packaging output (task #14, §75.35) -- real build artifacts, never committed
+/dist/
+
 # Spartan runtime/state directories (created by the app, never committed)
 .spartan/
 

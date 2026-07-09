@@ -14,6 +14,7 @@ members = [
     "crates/spartan-crash",
     "crates/spartan-plugin-host",
     "crates/spartan-editor-core",
+    "xtask",
 ]
 
 # `crates/plugins/*` are real WASM Component-Model guest crates (§5, task
