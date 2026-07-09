@@ -16,6 +16,23 @@ struct SelectionVertex {
 /// per-vertex at every call site.
 pub const ACCENT_HIGHLIGHT: [f32; 4] = [0.5524, 0.0563, 0.0242, 0.35];
 
+/// The same rust/terracotta accent at full opacity (no `0.35` translucency)
+/// -- the "Spartan Coding futuristic" half of §75.54's user-requested visual
+/// pass, real and buildable within this renderer's actual capability today
+/// (solid-color quads only, no gradient/glow shader). A plain flat
+/// Antigravity-style highlight alone reads as pure minimalism; a thin,
+/// solid, saturated accent strip under the active tab is this renderer's
+/// real, honest version of a "signature glow" -- sharp and deliberate
+/// rather than soft-diffused, which would need real shader work this pass
+/// doesn't attempt.
+pub const ACCENT_SOLID: [f32; 4] = [0.5524, 0.0563, 0.0242, 1.0];
+
+/// Real pixel thickness of the active-tab accent underline strip below --
+/// thin enough to read as a deliberate accent line, not a thick bar,
+/// matching this project's own established "declutter" discipline
+/// (§36.4.10) for any new chrome.
+pub const ACCENT_UNDERLINE_PX: f32 = 2.0;
+
 /// Pixel-space rect for one quad (top-left `x, y`, given `width`/`height`,
 /// linear-space `color`) -- originally one per visual line a text selection
 /// spans (a multi-line selection isn't a single rectangle the way the caret

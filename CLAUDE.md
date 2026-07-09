@@ -1358,6 +1358,34 @@ first — it's the parity reference until each row there is actually reimplement
   drag-and-drop/visual style editing/component palette/responsive preview/asset management (the
   same real remaining "full web design suite" scope §75.52 named), not stress-tested against
   deeply nested overlapping elements.
+- **Real, working code — real Antigravity 2.0 color/layering applied to the actual renderer, plus
+  a Spartan accent signature, user-requested (§75.54)**: direct response to a real user report that
+  "the GUI looks nothing like it is supposed to." §50.3's real, sourced Antigravity 2.0 palette
+  (`bg` `#09090B`, `s2` `#18181B`, `border` `#27272A`, Spartan's own kept rust/terracotta accent)
+  had only ever reached `prototypes/interface-prototype.jsx` -- the actual Rust/wgpu renderer used
+  one flat, different, lighter clear color for every region with zero bg/surface/border layering,
+  which is exactly why the running product didn't resemble its own already-researched design. New
+  `crates/spartan-editor-core/src/theme.rs` centralizes real color tokens copied verbatim from the
+  prototype's own token object (hand sRGB-to-linear-converted where needed, same discipline as
+  `cursor.wgsl`'s own caret color); a new 4th `SelectionRenderer` instance, `chrome_renderer` (the
+  same generic quad renderer already reused three times for selection/tab-highlight/modal-dim),
+  draws real sidebar/tab-bar surface panels and hairline borders as the base layer under everything
+  else. The now-fully-dead `srgb_to_linear` helper was deleted outright, not left unused. The
+  "more Spartan Coding futuristic" half of the request, scoped honestly to this renderer's real
+  capability (solid-color quads and text only, no gradient/glow/blur shader exists): a new
+  `selection::ACCENT_SOLID`/`ACCENT_UNDERLINE_PX` add a thin, full-opacity accent strip beneath the
+  active tab's existing translucent highlight -- a sharp, deliberate accent line, not an overclaimed
+  soft glow this renderer can't actually produce. Full `cargo test --workspace --release`/clippy/
+  fmt clean, no regressions. Live, through the real binary (Xvfb+fluxbox): pixel-sampled directly
+  off a real screenshot with ImageMagick, not eyeballed -- editor background measured exactly
+  `#09090B`, sidebar/tab-bar surface exactly `#18181B`, both border hairlines exactly `#27272A`, and
+  the new accent underline exactly `#C4432B`, all matching `theme.rs`'s constants to the pixel; a
+  follow-up live edit confirmed ordinary typing/dirty-marker behavior unaffected. A real, immediately
+  -diagnosed harness mistake during verification (not a product bug): `--open:<path>` only applies
+  to files past the 6th CLI arg (§75.15) -- the primary file is a bare positional path -- fixed by
+  passing it correctly. No theme-switching UI (one hardcoded palette, now correctly sourced instead
+  of ad hoc), no gradient/glow/blur/rounded-corner rendering of any kind, no per-panel border
+  treatment beyond the shared base layer, no dark/light toggle.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

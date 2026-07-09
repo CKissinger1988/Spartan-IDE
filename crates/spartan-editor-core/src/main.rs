@@ -5,6 +5,7 @@ mod input;
 mod latency;
 mod selection;
 mod text;
+mod theme;
 mod webview_bridge;
 
 use mode_toggle::AppMode;
@@ -176,18 +177,6 @@ fn sync_webview_file_info(
     }
     if let Some(bridge) = bridge {
         sync_webview_content(bridge, component_tree_request, pending_bundle_request, file);
-    }
-}
-
-/// `wgpu::Color` clear values are specified in linear space, but the chosen
-/// surface format is sRGB -- passing a perceptual/sRGB value straight
-/// through renders noticeably lighter than intended. Promoted from
-/// `spikes/render-spike/src/main.rs` (§39.1, §47.9) verbatim.
-fn srgb_to_linear(s: f64) -> f64 {
-    if s <= 0.04045 {
-        s / 12.92
-    } else {
-        ((s + 0.055) / 1.055).powf(2.4)
     }
 }
 
@@ -725,8 +714,8 @@ fn modal_message(pending: &PendingClose, files: &[OpenFile]) -> String {
 }
 
 /// Linear-space black at moderate alpha (§75.23) -- pure black needs no
-/// sRGB-to-linear conversion (`srgb_to_linear(0.0) == 0.0` regardless of the
-/// curve), unlike the window's own non-black clear color just below.
+/// sRGB-to-linear conversion at all (any gamma curve maps 0.0 to 0.0),
+/// unlike `theme.rs`'s own non-black color tokens.
 const MODAL_DIM_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
 
 /// Real Source Control panel (§56.1, task #7): the left sidebar shows
@@ -1073,6 +1062,14 @@ fn main() {
     // on top of the dim overlay in the same text pass, the same "quads
     // before text" ordering every other highlight here already relies on.
     let mut modal_renderer =
+        selection::SelectionRenderer::new(&gpu_state.device, gpu_state.config.format);
+    // Real §75.54 sidebar/tab-bar surface panels + hairline border
+    // separators (`theme::SURFACE`/`theme::BORDER`) -- a fourth instance of
+    // the same generic `SelectionRenderer`, rendered *first* (the base
+    // layer every other quad and all text draws on top of), giving this
+    // renderer real bg/surface/border layering for the first time instead
+    // of one flat clear color for every region.
+    let mut chrome_renderer =
         selection::SelectionRenderer::new(&gpu_state.device, gpu_state.config.format);
 
     // 150ms idle default per spec §2.3, now one debouncer per open file
@@ -3104,6 +3101,59 @@ fn main() {
                                 )
                                 .expect("glyphon text prepare failed");
 
+                            // Real §75.54 sidebar/tab-bar surface + border
+                            // chrome -- the base layer everything else in
+                            // this pass draws on top of. Recomputed every
+                            // frame from the real current window size (cheap
+                            // for four fixed rects), matching every other
+                            // per-frame rect rebuild in this function.
+                            let window_w = gpu_state.size.width as f32;
+                            let window_h = gpu_state.size.height as f32;
+                            let chrome_rects = vec![
+                                // Sidebar surface panel.
+                                selection::SelectionRect {
+                                    x: 0.0,
+                                    y: 0.0,
+                                    width: text::SIDEBAR_WIDTH,
+                                    height: window_h,
+                                    color: theme::SURFACE,
+                                },
+                                // Tab bar surface panel (right of the sidebar).
+                                selection::SelectionRect {
+                                    x: text::SIDEBAR_WIDTH,
+                                    y: 0.0,
+                                    width: (window_w - text::SIDEBAR_WIDTH).max(0.0),
+                                    height: text::TAB_BAR_HEIGHT,
+                                    color: theme::SURFACE,
+                                },
+                                // Vertical hairline between the sidebar and
+                                // the editor content area.
+                                selection::SelectionRect {
+                                    x: text::SIDEBAR_WIDTH,
+                                    y: 0.0,
+                                    width: theme::BORDER_WIDTH_PX,
+                                    height: window_h,
+                                    color: theme::BORDER,
+                                },
+                                // Horizontal hairline beneath the tab bar.
+                                selection::SelectionRect {
+                                    x: text::SIDEBAR_WIDTH,
+                                    y: text::TAB_BAR_HEIGHT,
+                                    width: (window_w - text::SIDEBAR_WIDTH).max(0.0),
+                                    height: theme::BORDER_WIDTH_PX,
+                                    color: theme::BORDER,
+                                },
+                            ];
+                            chrome_renderer.update(
+                                &gpu_state.device,
+                                &gpu_state.queue,
+                                &chrome_rects,
+                                &cursor::ScreenSize {
+                                    width: window_w,
+                                    height: window_h,
+                                },
+                            );
+
                             // Real active-tab highlight rect (§75.21), via the
                             // real char range `build_tab_bar_text` already
                             // computed for the active file's tab and the same
@@ -3116,15 +3166,36 @@ fn main() {
                                     let x_start = text_state.tab_bar_pixel_pos(hit.tab_range.start)?;
                                     let x_end = text_state.tab_bar_pixel_pos(hit.tab_range.end)?;
                                     let scroll = text_state.tab_bar_scroll();
-                                    Some(selection::SelectionRect {
-                                        x: text::TEXT_ORIGIN_X + x_start - scroll,
-                                        y: 0.0,
-                                        width: x_end - x_start,
-                                        height: text::TAB_BAR_HEIGHT,
-                                        color: selection::ACCENT_HIGHLIGHT,
-                                    })
+                                    let x = text::TEXT_ORIGIN_X + x_start - scroll;
+                                    let width = x_end - x_start;
+                                    Some([
+                                        selection::SelectionRect {
+                                            x,
+                                            y: 0.0,
+                                            width,
+                                            height: text::TAB_BAR_HEIGHT,
+                                            color: selection::ACCENT_HIGHLIGHT,
+                                        },
+                                        // Real §75.54 "Spartan Coding
+                                        // futuristic" accent underline --
+                                        // a solid, full-opacity strip
+                                        // beneath the translucent
+                                        // highlight above, distinguishing
+                                        // the active tab with a sharp
+                                        // accent line rather than flat
+                                        // Antigravity-style minimalism
+                                        // alone.
+                                        selection::SelectionRect {
+                                            x,
+                                            y: text::TAB_BAR_HEIGHT - selection::ACCENT_UNDERLINE_PX,
+                                            width,
+                                            height: selection::ACCENT_UNDERLINE_PX,
+                                            color: selection::ACCENT_SOLID,
+                                        },
+                                    ])
                                 })
                                 .into_iter()
+                                .flatten()
                                 .collect();
                             tab_bar_renderer.update(
                                 &gpu_state.device,
@@ -3269,12 +3340,12 @@ fn main() {
                                                 view: &view,
                                                 resolve_target: None,
                                                 ops: wgpu::Operations {
-                                                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                                                        r: srgb_to_linear(0.08),
-                                                        g: srgb_to_linear(0.08),
-                                                        b: srgb_to_linear(0.09),
-                                                        a: 1.0,
-                                                    }),
+                                                    // Real §75.54 Antigravity-researched `bg`
+                                                    // token (§50.3, `theme::BG_LINEAR`) --
+                                                    // previously an unrelated, lighter,
+                                                    // undifferentiated color used for every
+                                                    // region in this renderer.
+                                                    load: wgpu::LoadOp::Clear(theme::BG_LINEAR),
                                                     store: wgpu::StoreOp::Store,
                                                 },
                                             },
@@ -3283,6 +3354,7 @@ fn main() {
                                         timestamp_writes: None,
                                         occlusion_query_set: None,
                                     });
+                                chrome_renderer.render(&mut pass);
                                 tab_bar_renderer.render(&mut pass);
                                 selection_renderer.render(&mut pass);
                                 modal_renderer.render(&mut pass);

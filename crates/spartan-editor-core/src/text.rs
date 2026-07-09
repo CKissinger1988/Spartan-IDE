@@ -244,7 +244,7 @@ impl TextState {
     /// one to accent.
     pub fn set_mode_toggle_text(&mut self, text: &str, active_range: std::ops::Range<usize>) {
         const ACCENT: Color = Color::rgb(0xC4, 0x43, 0x2B);
-        const DIM: Color = Color::rgb(0x8A, 0x8A, 0x8E);
+        const DIM: Color = crate::theme::TEXT_DIM;
         let default_attrs = Attrs::new().family(Family::Monospace);
         let active_start_byte = text
             .char_indices()
@@ -412,7 +412,7 @@ impl TextState {
                         right: width as i32,
                         bottom: height as i32,
                     },
-                    default_color: Color::rgb(0xE9, 0xE7, 0xE4),
+                    default_color: crate::theme::TEXT,
                 },
                 TextArea {
                     buffer: &self.tab_bar_buffer,
@@ -436,7 +436,7 @@ impl TextState {
                         right: (width as i32 - MODE_TOGGLE_WIDTH as i32).max(SIDEBAR_WIDTH as i32),
                         bottom: TAB_BAR_HEIGHT as i32,
                     },
-                    default_color: Color::rgb(0xE9, 0xE7, 0xE4),
+                    default_color: crate::theme::TEXT,
                 },
                 // Real Agent/Editor/Design mode toggle (§8, §16.1, task
                 // #3) -- a fixed-width strip anchored to the tab bar row's
@@ -453,7 +453,7 @@ impl TextState {
                         right: width as i32,
                         bottom: TAB_BAR_HEIGHT as i32,
                     },
-                    default_color: Color::rgb(0xE9, 0xE7, 0xE4),
+                    default_color: crate::theme::TEXT,
                 },
                 // Real unsaved-changes modal text (§75.23) -- roughly
                 // vertically centered in the real current window height
@@ -475,7 +475,7 @@ impl TextState {
                         right: width as i32,
                         bottom: height as i32,
                     },
-                    default_color: Color::rgb(0xE9, 0xE7, 0xE4),
+                    default_color: crate::theme::TEXT,
                 },
                 // Real file tree sidebar text (§75.26) -- its own
                 // coordinate space starting at the window's left edge (not
@@ -496,7 +496,7 @@ impl TextState {
                         right: SIDEBAR_WIDTH as i32,
                         bottom: height as i32,
                     },
-                    default_color: Color::rgb(0xE9, 0xE7, 0xE4),
+                    default_color: crate::theme::TEXT,
                 },
             ],
             &mut self.swash_cache,
