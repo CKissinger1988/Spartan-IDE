@@ -23,6 +23,17 @@
 //! spawn_apply_edit_request` against the real live buffer. Still no
 //! click-to-select-on-a-visual-canvas (there is no visual canvas) -- this
 //! is a real, structural, text-tree-driven edit UI, not WYSIWYG.
+//!
+//! As of §75.52, there **is** a real visual canvas: a real `<iframe>`
+//! showing the real, live-rendered output of `gui_bridge::
+//! spawn_bundle_request`'s real esbuild bundle, set via `srcdoc` (so its
+//! own DOM/CSS/JS execution is genuinely isolated from this outer page's
+//! own DOM, the standard, correct way to embed arbitrary rendered
+//! content rather than injecting it into the same document). The
+//! structural text-tree editor above stays as-is -- this is an addition,
+//! not a replacement -- so Canvas -> Code editing keeps working exactly
+//! as before while the iframe gives real visual confirmation of the
+//! result.
 
 use serde::Deserialize;
 use std::cell::RefCell;
@@ -44,6 +55,12 @@ const HTML: &str = r#"<!DOCTYPE html>
     &sect;6.2 step 1's remaining scope).
   </p>
   <p id="ipcStatus" style="color:#6E6D73;">IPC bridge: connecting&hellip;</p>
+  <div id="livePreviewWrap" style="margin-top:1em;">
+    <p id="livePreviewStatus" style="color:#84838A;font-size:0.9em;margin-bottom:0.3em;"></p>
+    <iframe id="livePreview" title="Live component preview"
+      style="width:100%;height:320px;border:1px solid #333;background:#fff;display:none;"
+      sandbox="allow-scripts"></iframe>
+  </div>
   <div id="componentTree" style="margin-top:1em;white-space:pre;font-size:0.95em;"></div>
   <div id="editPanel" style="display:none;margin-top:1em;padding:0.75em;border:1px solid #333;max-width:520px;">
     <div id="editPanelTitle" style="color:#E9E7E4;margin-bottom:0.5em;font-size:0.9em;"></div>
@@ -86,6 +103,29 @@ const HTML: &str = r#"<!DOCTYPE html>
     function componentTreeNotApplicable() {
       document.getElementById('componentTree').textContent = '';
       hideEditPanel();
+    }
+    function bundleLoading() {
+      document.getElementById('livePreviewStatus').textContent = 'Rendering live preview…';
+      document.getElementById('livePreview').style.display = 'none';
+    }
+    function bundleNotApplicable() {
+      document.getElementById('livePreviewStatus').textContent = '';
+      document.getElementById('livePreview').style.display = 'none';
+    }
+    function showBundle(code) {
+      const doc = '<!DOCTYPE html><html><head><meta charset="utf-8"></head>' +
+        '<body style="margin:0;padding:8px;font-family:sans-serif;">' +
+        '<div id="spartan-root"></div><script>' + code + '<' + '/script>' +
+        '</body></html>';
+      const frame = document.getElementById('livePreview');
+      frame.srcdoc = doc;
+      frame.style.display = 'block';
+      document.getElementById('livePreviewStatus').textContent =
+        'Live preview (real esbuild bundle, sandboxed iframe)';
+    }
+    function bundleError(message) {
+      document.getElementById('livePreview').style.display = 'none';
+      document.getElementById('livePreviewStatus').textContent = 'Live preview error: ' + message;
     }
     function propsSummaryOf(props) {
       const keys = Object.keys(props);
@@ -296,6 +336,47 @@ impl WebviewBridge {
                 .replace('\'', "\\'")
                 .replace('\n', " ");
             let _ = wv.evaluate_script(&format!("componentTreeError('{escaped}');"));
+        }
+    }
+
+    /// Real §75.52 live-preview loading state, shown immediately on spawn
+    /// (the real esbuild bundle subprocess hasn't returned yet).
+    pub fn push_bundle_loading(&self) {
+        if let Some(wv) = self.webview.borrow().as_ref() {
+            let _ = wv.evaluate_script("bundleLoading();");
+        }
+    }
+
+    /// Hides the live preview entirely (not a component file, or no real
+    /// project root) -- same "empty is the ordinary state" rule
+    /// `push_component_tree_not_applicable` already established.
+    pub fn push_bundle_not_applicable(&self) {
+        if let Some(wv) = self.webview.borrow().as_ref() {
+            let _ = wv.evaluate_script("bundleNotApplicable();");
+        }
+    }
+
+    /// Renders the real, live esbuild bundle (§75.52) into the sandboxed
+    /// `<iframe>`. `code` is real, arbitrary JS text (not JSON) -- passed
+    /// through `serde_json::to_string` to get a real, correctly escaped JS
+    /// string literal (JSON string encoding is a valid subset of JS string
+    /// literal syntax), never spliced raw the way the already-JSON tree
+    /// payload is.
+    pub fn push_bundle(&self, code: &str) {
+        if let Some(wv) = self.webview.borrow().as_ref() {
+            let encoded = serde_json::to_string(code).unwrap_or_else(|_| "\"\"".to_string());
+            let _ = wv.evaluate_script(&format!("showBundle({encoded});"));
+        }
+    }
+
+    /// Real, human-readable live-preview failure (a real missing
+    /// dependency in the target project, a real syntax error, subprocess
+    /// spawn failure) -- shown instead of silently leaving a stale
+    /// previous render on screen.
+    pub fn push_bundle_error(&self, message: &str) {
+        if let Some(wv) = self.webview.borrow().as_ref() {
+            let encoded = serde_json::to_string(message).unwrap_or_else(|_| "\"\"".to_string());
+            let _ = wv.evaluate_script(&format!("bundleError({encoded});"));
         }
     }
 

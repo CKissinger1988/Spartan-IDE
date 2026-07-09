@@ -15,6 +15,7 @@
     "@babel/parser": "^7.26.0",
     "@babel/types": "^7.26.0",
     "ast-types": "^0.14.2",
+    "esbuild": "^0.28.1",
     "recast": "^0.23.9"
   },
   "devDependencies": {

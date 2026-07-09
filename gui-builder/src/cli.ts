@@ -10,6 +10,7 @@
  * Usage:
  *   node dist/cli.js <path-to-jsx-or-tsx-file>       (Code -> Canvas, §75.41)
  *   node dist/cli.js apply <editJson>                (Canvas -> Code, §75.42)
+ *   node dist/cli.js bundle <path-to-jsx-or-tsx-file> (live visual render, §75.52)
  *
  * "parse" mode reads the file at `<path>` from disk (§6.2 step 1 -- there is
  * no live buffer on this side, so it always reflects what's actually on
@@ -32,6 +33,7 @@
 import { readFileSync } from "node:fs";
 import { parseComponent } from "./parse.js";
 import { applyCanvasEdit } from "./edit.js";
+import { bundleComponent } from "./bundle.js";
 import type { CanvasEdit } from "./types.js";
 
 function fail(message: string): never {
@@ -90,10 +92,23 @@ function runApply(editJson: string | undefined): void {
   }
 }
 
-function main(): void {
+async function runBundle(path: string | undefined): Promise<void> {
+  if (!path) {
+    fail("usage: cli.js bundle <path-to-jsx-or-tsx-file>");
+  }
+  const result = await bundleComponent(path);
+  if ("error" in result) {
+    fail(result.error);
+  }
+  process.stdout.write(JSON.stringify({ code: result.code }));
+}
+
+async function main(): Promise<void> {
   const mode = process.argv[2];
   if (mode === "apply") {
     runApply(process.argv[3]);
+  } else if (mode === "bundle") {
+    await runBundle(process.argv[3]);
   } else {
     runParse(mode);
   }

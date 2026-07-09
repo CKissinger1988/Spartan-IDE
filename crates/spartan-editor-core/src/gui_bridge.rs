@@ -24,6 +24,14 @@ pub struct ComponentTreeRequest {
     pub receiver: mpsc::Receiver<Result<String, String>>,
 }
 
+/// A real, in-flight `bundle` request (§75.52) -- `Ok(code)` is the real,
+/// self-contained JS bundle text `gui-builder`'s own `bundleComponent`
+/// produced (esbuild-bundled, ready to embed in a real HTML page and
+/// run). Never written to disk.
+pub struct BundleRequest {
+    pub receiver: mpsc::Receiver<Result<String, String>>,
+}
+
 /// A real, in-flight `CanvasEdit` application (§75.42) -- `Ok(new_source)`
 /// is the real, regenerated whole-file source `gui-builder`'s own
 /// `applyCanvasEdit` produced (never written to disk by the CLI itself;
@@ -105,6 +113,55 @@ fn run_cli(file_path: &Path) -> Result<String, String> {
         return Err("gui-builder CLI produced invalid JSON".to_string());
     }
     Ok(stdout)
+}
+
+/// Spawns the real `node <cli.js> bundle <file>` subprocess on its own
+/// thread (§75.52, the real live-visual-rendering mechanism) -- same
+/// non-blocking-poll contract as `spawn_component_tree_request`.
+/// `Ok(code)` is the real, self-contained JS bundle text; `Err(message)`
+/// covers every real failure (missing dependency in the target project,
+/// a real syntax error, subprocess spawn failure) with the real,
+/// unmodified `gui-builder` error text.
+pub fn spawn_bundle_request(file_path: &Path) -> BundleRequest {
+    let (sender, receiver) = mpsc::channel();
+    let file_path = file_path.to_path_buf();
+    std::thread::spawn(move || {
+        let result = run_bundle_cli(&file_path);
+        let _ = sender.send(result);
+    });
+    BundleRequest { receiver }
+}
+
+fn run_bundle_cli(file_path: &Path) -> Result<String, String> {
+    let Some(cli_path) = locate_cli() else {
+        return Err(
+            "gui-builder CLI not found (set SPARTAN_GUI_BUILDER_DIR or run from the repo root, \
+             after `cd gui-builder && npm install && npm run build`)"
+                .to_string(),
+        );
+    };
+    let output = Command::new("node")
+        .arg(&cli_path)
+        .arg("bundle")
+        .arg(file_path)
+        .output();
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => return Err(format!("failed to spawn node: {e}")),
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("gui-builder CLI bundle failed: {stderr}"));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let value: serde_json::Value = match serde_json::from_str(&stdout) {
+        Ok(v) => v,
+        Err(_) => return Err("gui-builder CLI bundle produced invalid JSON".to_string()),
+    };
+    match value.get("code").and_then(|s| s.as_str()) {
+        Some(s) => Ok(s.to_string()),
+        None => Err("gui-builder CLI bundle response missing a 'code' field".to_string()),
+    }
 }
 
 /// Spawns the real `node <cli.js> apply <editJson>` subprocess on its own

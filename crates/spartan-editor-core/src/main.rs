@@ -100,6 +100,7 @@ fn design_hidden_bounds() -> Rect {
 fn sync_webview_for_mode(
     bridge: &mut Option<webview_bridge::WebviewBridge>,
     component_tree_request: &mut Option<gui_bridge::ComponentTreeRequest>,
+    pending_bundle_request: &mut Option<gui_bridge::BundleRequest>,
     mode: AppMode,
     window: &winit::window::Window,
     size: winit::dpi::PhysicalSize<u32>,
@@ -110,7 +111,7 @@ fn sync_webview_for_mode(
             webview_bridge::WebviewBridge::new(window, design_content_bounds(window, size))
         });
         b.set_bounds(design_content_bounds(window, size));
-        sync_webview_content(b, component_tree_request, file);
+        sync_webview_content(b, component_tree_request, pending_bundle_request, file);
     } else if let Some(b) = bridge {
         b.set_bounds(design_hidden_bounds());
     }
@@ -130,6 +131,7 @@ fn sync_webview_for_mode(
 fn sync_webview_content(
     bridge: &webview_bridge::WebviewBridge,
     component_tree_request: &mut Option<gui_bridge::ComponentTreeRequest>,
+    pending_bundle_request: &mut Option<gui_bridge::BundleRequest>,
     file: &OpenFile,
 ) {
     let is_component_file = gui_bridge::is_component_file(&file.label);
@@ -139,6 +141,12 @@ fn sync_webview_content(
         *component_tree_request = Some(gui_bridge::spawn_component_tree_request(Path::new(
             &file.label,
         )));
+        // Real §75.52 live-preview trigger -- fired alongside the
+        // structural tree fetch above, at exactly the same "active file
+        // changed" sites, since both are real reflections of the same
+        // active file.
+        bridge.push_bundle_loading();
+        *pending_bundle_request = Some(gui_bridge::spawn_bundle_request(Path::new(&file.label)));
     } else {
         // Real, live bug fixed here, found only by testing a real
         // file-switch away from a component file, not by inspection: an
@@ -148,6 +156,8 @@ fn sync_webview_content(
         // now-updated file-info line.
         *component_tree_request = None;
         bridge.push_component_tree_not_applicable();
+        *pending_bundle_request = None;
+        bridge.push_bundle_not_applicable();
     }
 }
 
@@ -157,6 +167,7 @@ fn sync_webview_content(
 fn sync_webview_file_info(
     bridge: &Option<webview_bridge::WebviewBridge>,
     component_tree_request: &mut Option<gui_bridge::ComponentTreeRequest>,
+    pending_bundle_request: &mut Option<gui_bridge::BundleRequest>,
     mode: AppMode,
     file: &OpenFile,
 ) {
@@ -164,7 +175,7 @@ fn sync_webview_file_info(
         return;
     }
     if let Some(bridge) = bridge {
-        sync_webview_content(bridge, component_tree_request, file);
+        sync_webview_content(bridge, component_tree_request, pending_bundle_request, file);
     }
 }
 
@@ -1171,6 +1182,11 @@ fn main() {
     // non-blockingly in `AboutToWait` below (matching `pending_build`'s
     // own established pattern for a different real subprocess).
     let mut component_tree_request: Option<gui_bridge::ComponentTreeRequest> = None;
+    // Real §75.52 live-visual-preview in-flight bundle request, if any --
+    // a real `node`/`gui-builder bundle` subprocess (real esbuild),
+    // spawned alongside `component_tree_request` at every "active file
+    // changed" site, polled non-blockingly in `AboutToWait` below.
+    let mut pending_bundle_request: Option<gui_bridge::BundleRequest> = None;
     // Real §75.42 Canvas -> Code in-flight request, if any -- a real
     // `node`/`gui-builder apply` subprocess spawned on its own thread when
     // the WebView's edit form posts a real `CanvasEdit` over IPC, polled
@@ -1410,6 +1426,7 @@ fn main() {
                                         sync_webview_file_info(
                                             &webview_bridge,
                                             &mut component_tree_request,
+                                            &mut pending_bundle_request,
                                             mode,
                                             &files[active],
                                         );
@@ -1536,6 +1553,7 @@ fn main() {
                                         sync_webview_file_info(
                                             &webview_bridge,
                                             &mut component_tree_request,
+                                            &mut pending_bundle_request,
                                             mode,
                                             &files[active],
                                         );
@@ -1574,6 +1592,7 @@ fn main() {
                                     sync_webview_for_mode(
                                         &mut webview_bridge,
                                         &mut component_tree_request,
+                                        &mut pending_bundle_request,
                                         mode,
                                         &window,
                                         gpu_state.size,
@@ -1713,6 +1732,7 @@ fn main() {
                                         sync_webview_file_info(
                                             &webview_bridge,
                                             &mut component_tree_request,
+                                            &mut pending_bundle_request,
                                             mode,
                                             &files[active],
                                         );
@@ -2043,6 +2063,7 @@ fn main() {
                                         sync_webview_for_mode(
                                             &mut webview_bridge,
                                             &mut component_tree_request,
+                                            &mut pending_bundle_request,
                                             mode,
                                             &window,
                                             gpu_state.size,
@@ -2266,6 +2287,7 @@ fn main() {
                             sync_webview_for_mode(
                                 &mut webview_bridge,
                                 &mut component_tree_request,
+                                &mut pending_bundle_request,
                                 mode,
                                 &window,
                                 gpu_state.size,
@@ -2513,6 +2535,7 @@ fn main() {
                                 sync_webview_file_info(
                                     &webview_bridge,
                                     &mut component_tree_request,
+                                    &mut pending_bundle_request,
                                     mode,
                                     &files[active],
                                 );
@@ -3587,6 +3610,22 @@ fn main() {
                         }
                     }
 
+                    // Real §75.52 live-preview bundle poll -- same
+                    // non-blocking shape, spawned alongside
+                    // `component_tree_request` at every "active file
+                    // changed" site (`sync_webview_content`).
+                    if let Some(request) = &pending_bundle_request {
+                        if let Ok(result) = request.receiver.try_recv() {
+                            if let Some(bridge) = &webview_bridge {
+                                match result {
+                                    Ok(code) => bridge.push_bundle(&code),
+                                    Err(message) => bridge.push_bundle_error(&message),
+                                }
+                            }
+                            pending_bundle_request = None;
+                        }
+                    }
+
                     // Real §75.42 Canvas -> Code poll: the moment the
                     // WebView's edit form posts a real `CanvasEdit` over
                     // IPC, spawn a real apply-edit subprocess fed the
@@ -3653,9 +3692,20 @@ fn main() {
                                     if let Some(bridge) = &webview_bridge {
                                         bridge.push_edit_applied();
                                         bridge.push_component_tree_loading();
+                                        bridge.push_bundle_loading();
                                     }
                                     component_tree_request =
                                         Some(gui_bridge::spawn_component_tree_request(Path::new(
+                                            &files[active].label,
+                                        )));
+                                    // Real §75.52: a canvas edit changes
+                                    // the real rendered output too, not
+                                    // just the structural tree -- refresh
+                                    // the live preview from the same
+                                    // freshly-written file the tree
+                                    // refetch above already targets.
+                                    pending_bundle_request =
+                                        Some(gui_bridge::spawn_bundle_request(Path::new(
                                             &files[active].label,
                                         )));
                                     window.request_redraw();

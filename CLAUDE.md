@@ -1302,6 +1302,37 @@ first — it's the parity reference until each row there is actually reimplement
   or live-exercised (LSP/DAP wiring is real and structurally correct but not live-proven the way
   Rust/Python/Go/Kotlin's own dual-adapter verification is), no `.NET` build-system integration
   (F5 remains Cargo-only), no injections/locals queries for C#.
+- **Real, working code — real live visual rendering canvas, first step of a "full web design
+  suite," task #12 (§75.52)**: closes the single largest missing GUI Builder prerequisite --
+  before this pass, the "canvas" had never shown anything but an indented text tree of tag names.
+  New `gui-builder/src/bundle.ts` uses `esbuild` (a real, newly-added dependency) to bundle a real
+  component file, plus every real import it makes, into one self-contained browser-ready JS file,
+  resolving modules from the *target file's own directory* (the real project the user has open,
+  never `gui-builder`'s own `node_modules`) -- the technically correct behavior, matching a real
+  `vite`/`webpack` dev server. A real finding changed the design mid-implementation: a missing
+  default export turned out to be a real esbuild *build-time* error (static ES module resolution),
+  not the planned runtime-only check -- caught by running the first test against it, fixed by
+  correcting the test, not the code; the runtime check still covers the one case static analysis
+  can't (a default export that exists but isn't a component). `gui_bridge.rs` gained
+  `spawn_bundle_request` (same spawn-thread/channel/poll shape as the existing tree fetch);
+  `webview_bridge.rs`'s HTML gained a real `<iframe sandbox="allow-scripts">` (deliberately no
+  `allow-same-origin` -- a real, deliberate security boundary keeping arbitrary rendered component
+  code out of the outer editor page's own DOM, consistent with §9/§36) alongside the existing
+  structural tree, an addition not a replacement, so Canvas -> Code editing keeps working
+  unchanged. `main.rs` threads the new request through the same seven call sites that already
+  trigger a tree fetch on every active-file-changed event, and refreshes it after a Canvas -> Code
+  edit too. 7 new `gui-builder` tests (38 total), 2 new self-skipping Rust integration tests, 372
+  tests total workspace-wide, full clippy/fmt clean. Live, through the real binary: a real
+  `Card.jsx` fixture (real `npm install`ed react/react-dom) opened in Design mode showed a
+  genuinely rendered visual component for the first time in this project's history -- a real
+  styled card with heading, paragraph, and button, screenshotted -- with the structural tree still
+  rendering correctly underneath, unaffected. **What this does not confirm, and the real remaining
+  "full web design suite" scope**: no click-to-select on the visual canvas itself (selection still
+  only works through the text-tree list), no drag-and-drop, no visual style editing (color
+  pickers/spacing/typography controls -- still a raw key/value form), no component palette, no
+  responsive/breakpoint preview, no asset management, no live-reload while typing (refreshes on
+  file-switch/edit-apply only, matching the tree's own existing cadence). This closes the largest
+  prerequisite gap; the rest of "full web design suite" is real, substantial, and unstarted.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1359,7 +1390,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 370 tests: 6 spikes + 11 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 372 tests: 6 spikes + 11 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-editor-core, xtask)
@@ -1397,8 +1428,9 @@ cargo test --workspace --release   # 370 tests: 6 spikes + 11 real crates + xtas
 # --workspace`/`cargo test --workspace` from the repo root never touch them; build them with
 # `cargo component build` from inside crates/plugins/<name> instead.
 # gui-builder/ (task #12, §75.38) is a real, separate npm/TypeScript project, not part of the
-# Cargo workspace at all -- `cd gui-builder && npm install && npm test` (21 tests, Node's built-in
-# `node:test` runner).
+# Cargo workspace at all -- `cd gui-builder && npm install && npm test` (38 tests, Node's built-in
+# `node:test` runner). Two of its own tests (§75.52) perform a real `npm install` of a temp
+# react/react-dom fixture and self-skip if that install fails (no network reachable).
 # spartan-editor-core's Design mode now embeds a real wry WebView (§6.1, §75.39) -- on Linux, live
 # `cargo run`/manual testing in a minimal/headless environment (no real desktop D-Bus session, e.g.
 # this project's own Xvfb+fluxbox verification setup) needs `GSETTINGS_BACKEND=memory` set or

@@ -152,3 +152,98 @@ fn an_unknown_node_id_produces_a_real_error() {
         "an unknown node id should produce a real Err, not Ok"
     );
 }
+
+/// Real fixture with real `react`/`react-dom` actually `npm install`ed --
+/// proves `spawn_bundle_request` (§75.52) really resolves modules from
+/// the *target* project's own directory, not `gui-builder`'s own
+/// `node_modules`. Returns `None` (self-skip) if the real install fails
+/// (no network reachable), matching this test file's own established
+/// convention for every other real-external-dependency case.
+fn real_fixture_with_react_installed(name: &str) -> Option<PathBuf> {
+    let dir = work_dir(name);
+    std::fs::write(
+        dir.join("package.json"),
+        r#"{"name":"fixture","private":true,"dependencies":{"react":"^18.3.1","react-dom":"^18.3.1"}}"#,
+    )
+    .unwrap();
+    let status = std::process::Command::new("npm")
+        .args(["install", "--no-audit", "--no-fund"])
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    match status {
+        Ok(s) if s.success() => Some(dir),
+        _ => {
+            let _ = std::fs::remove_dir_all(&dir);
+            None
+        }
+    }
+}
+
+#[test]
+fn a_real_component_with_real_dependencies_produces_a_real_bundle() {
+    if !cli_available() {
+        eprintln!("SKIP: node or gui-builder/dist/cli.js not available");
+        return;
+    }
+    std::env::set_var("SPARTAN_GUI_BUILDER_DIR", gui_builder_dir());
+
+    let Some(dir) = real_fixture_with_react_installed("real_bundle") else {
+        eprintln!("SKIP: could not npm install a real react/react-dom fixture (no network?)");
+        return;
+    };
+
+    let file = dir.join("Hello.jsx");
+    std::fs::write(
+        &file,
+        r#"export default function Hello() { return <div>Hello from a real bundle</div>; }"#,
+    )
+    .unwrap();
+
+    let request = gui_bridge::spawn_bundle_request(&file);
+    let result = request
+        .receiver
+        .recv_timeout(Duration::from_secs(60))
+        .expect("gui-builder CLI bundle subprocess should respond within 60s");
+
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let code = result.expect("a real component with real deps installed should produce Ok(code)");
+    assert!(
+        code.contains("Hello from a real bundle"),
+        "the real bundle should contain the component's own real text"
+    );
+    assert!(code.len() > 1000, "a real react bundle should not be tiny");
+}
+
+#[test]
+fn a_missing_dependency_produces_a_real_bundle_error_not_a_panic() {
+    if !cli_available() {
+        eprintln!("SKIP: node or gui-builder/dist/cli.js not available");
+        return;
+    }
+    std::env::set_var("SPARTAN_GUI_BUILDER_DIR", gui_builder_dir());
+
+    let dir = work_dir("bundle_missing_dep");
+    let file = dir.join("Broken.jsx");
+    std::fs::write(
+        &file,
+        r#"import { thing } from "a-package-that-does-not-really-exist-anywhere";
+export default function Broken() { return <div>{thing}</div>; }"#,
+    )
+    .unwrap();
+
+    let request = gui_bridge::spawn_bundle_request(&file);
+    let result = request
+        .receiver
+        .recv_timeout(Duration::from_secs(30))
+        .expect("gui-builder CLI bundle subprocess should respond within 30s");
+
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        result.is_err(),
+        "a real missing dependency should produce a real Err, not Ok"
+    );
+}
