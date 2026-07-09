@@ -321,15 +321,42 @@ fn open_file(label: &str, debug_binary_path: Option<&PathBuf>) -> OpenFile {
                         );
                     }
                 }
-                if profile.tree_sitter_grammar == "tree-sitter-rust" {
-                    println!("Syntax highlighting: real tree-sitter-rust (windowed, see §75.11)");
-                    highlighter = Some(highlight::Highlighter::rust());
-                } else {
-                    println!(
-                        "No real tree-sitter wiring for grammar {:?} yet -- only tree-sitter-rust \
-                         is wired (§75.11)",
-                        profile.tree_sitter_grammar
-                    );
+                match profile.tree_sitter_grammar.as_str() {
+                    "tree-sitter-rust" => {
+                        println!(
+                            "Syntax highlighting: real tree-sitter-rust (windowed, see §75.11)"
+                        );
+                        highlighter = Some(highlight::Highlighter::rust());
+                    }
+                    "tree-sitter-typescript" => {
+                        println!(
+                            "Syntax highlighting: real tree-sitter-typescript (windowed, see §75.29)"
+                        );
+                        highlighter = Some(highlight::Highlighter::typescript());
+                    }
+                    "tree-sitter-python" => {
+                        println!(
+                            "Syntax highlighting: real tree-sitter-python (windowed, see §75.29)"
+                        );
+                        highlighter = Some(highlight::Highlighter::python());
+                    }
+                    "tree-sitter-java" => {
+                        println!(
+                            "Syntax highlighting: real tree-sitter-java (windowed, see §75.29)"
+                        );
+                        highlighter = Some(highlight::Highlighter::java());
+                    }
+                    "tree-sitter-go" => {
+                        println!("Syntax highlighting: real tree-sitter-go (windowed, see §75.29)");
+                        highlighter = Some(highlight::Highlighter::go());
+                    }
+                    other => {
+                        println!(
+                            "No real tree-sitter wiring for grammar {other:?} yet -- Kotlin is a \
+                             real, blocked gap (see §75.29): no available tree-sitter-0.25-compatible \
+                             Kotlin grammar crate ships a bundled highlights query"
+                        );
+                    }
                 }
             }
             None => println!("No language profile detected for {label}"),

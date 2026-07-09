@@ -1,7 +1,8 @@
-//! Real tree-sitter syntax highlighting -- Rust only, for now (§75.11).
-//! Every `LanguageProfile` has carried an unused `tree_sitter_grammar`
-//! field since §75.5; this is the first real wiring of it. Deliberately
-//! windowed, not whole-document (see the crate README/§75.11 for why):
+//! Real tree-sitter syntax highlighting (§75.11 for Rust; §75.29 extends
+//! this to TypeScript/JavaScript, Python, Java, and Go). Every
+//! `LanguageProfile` has carried an unused `tree_sitter_grammar` field
+//! since §75.5; this is the real wiring of it. Deliberately windowed, not
+//! whole-document (see the crate README/§75.11 for why):
 //! `tree_sitter_highlight::Highlighter::highlight()`'s public API always
 //! scans its entire input (confirmed by reading the real installed
 //! `tree-sitter-highlight-0.25.10` source: the byte range is hardcoded to
@@ -11,6 +12,27 @@
 //! construct (a block comment, a raw string) that starts above the visible
 //! window will be misinterpreted within it, since the parser has no
 //! context above the window's first line.
+//!
+//! TypeScript is a real special case, found by reading the actual
+//! installed `tree-sitter-typescript-0.23.2` source rather than assumed:
+//! its own bundled `HIGHLIGHTS_QUERY` only covers TypeScript's *additions*
+//! over JavaScript (types, `interface`/`enum`/`namespace`/... keywords) --
+//! it has no captures at all for strings, comments, numbers, or function
+//! declarations, since the grammar itself is built as a superset of the
+//! JS grammar and its query is designed to be layered on top of
+//! `tree-sitter-javascript`'s own comprehensive query (the same real
+//! convention other editors that bundle both grammars use). Confirmed by
+//! writing and running `typescript_highlighting_covers_both_ts_specific_and_js_base_syntax`
+//! below: parsing with `tree_sitter_typescript::LANGUAGE_TYPESCRIPT` and
+//! querying with the two query strings concatenated (JS query first, TS
+//! query second) correctly highlights both a base-JS string literal and a
+//! TS-only `interface` keyword in the same source. Kotlin is a real,
+//! named gap, not attempted this pass: the only tree-sitter-0.25-compatible
+//! Kotlin grammar crate (`tree-sitter-kotlin-ng`) ships no bundled
+//! highlights query at all (confirmed via a full file listing of the
+//! published crate), and the one alternate crate that does bundle a query
+//! (`tree-sitter-kotlin` 0.3.8) pins `tree-sitter = "0.22"`, a real,
+//! hard version incompatibility with this workspace's `tree-sitter = "0.25"`.
 
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter as TsHighlighter};
 
@@ -20,21 +42,25 @@ use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter 
 /// default), matching `tree_sitter_highlight`'s documented behavior for
 /// capture names a `HighlightConfiguration` wasn't `configure()`d with.
 ///
-/// `"constant"`, not `"number"`, is deliberate: a real visual-verification
-/// screenshot (§75.11) showed integer/float literals rendering in the
-/// default color, uncolored. Reading tree-sitter-rust's actual bundled
-/// `queries/highlights.scm` (not assumed from the capture name's obvious
-/// English meaning) showed why -- it captures numeric literals as
-/// `@constant.builtin`, never `@number`. `tree_sitter_highlight::
+/// `"constant"`, not `"number"`, was the first real finding (§75.11): a
+/// visual-verification screenshot showed integer/float literals rendering
+/// in the default color, uncolored, traced to tree-sitter-rust's bundled
+/// query capturing numeric literals as `@constant.builtin`, never
+/// `@number`. `"number"` was added as its own separate entry in §75.29
+/// after the *same* discipline (run it, don't assume) caught a second,
+/// different real finding: Python's and Go's own bundled queries capture
+/// numeric literals as plain `@number` instead, never `@constant.builtin`
+/// -- confirmed by grepping their real installed `queries/highlights.scm`
+/// files, not guessed from Rust's precedent. `tree_sitter_highlight::
 /// HighlightConfiguration::configure()`'s real matching rule (read from its
 /// installed source) is: a configured name matches a query capture if every
 /// dot-separated part of the configured name is present among the parts of
 /// the capture name -- so `"constant"` (one part) matches both plain
 /// `@constant` (SCREAMING_CASE identifiers) and `@constant.builtin`
-/// (numeric/bool literals), the same way this module's existing
+/// (Rust's numeric/bool literals), the same way this module's existing
 /// `"function"` entry already matched `@function.macro` for `println!`.
 const HIGHLIGHT_NAMES: &[&str] = &[
-    "keyword", "string", "comment", "function", "type", "constant",
+    "keyword", "string", "comment", "function", "type", "constant", "number",
 ];
 
 fn color_for(name: &str) -> glyphon::Color {
@@ -45,6 +71,10 @@ fn color_for(name: &str) -> glyphon::Color {
         "function" => glyphon::Color::rgb(0x7A, 0xA2, 0xF7),
         "type" => glyphon::Color::rgb(0xE0, 0xAF, 0x68),
         "constant" => glyphon::Color::rgb(0xFF, 0x9E, 0x64),
+        // Same color family as "constant" -- both are literal values,
+        // just captured under different names by different grammars'
+        // bundled queries (see this constant's own doc comment above).
+        "number" => glyphon::Color::rgb(0xFF, 0x9E, 0x64),
         // Matches `TextState::prepare`'s existing `default_color`.
         _ => glyphon::Color::rgb(0xE9, 0xE7, 0xE4),
     }
@@ -57,9 +87,9 @@ pub struct HighlightSpan {
     pub color: glyphon::Color,
 }
 
-/// Owns a real tree-sitter parser configuration for one language. Only
-/// Rust is wired up in this pass -- matching every prior pass's own
-/// precedent (LSP started with `rust-analyzer`, DAP with `lldb-dap`).
+/// Owns a real tree-sitter parser configuration for one language. Rust
+/// (§75.11), TypeScript/JavaScript, Python, Java, and Go (§75.29) are
+/// wired; Kotlin is a real, named gap (see this module's doc comment).
 pub struct Highlighter {
     inner: TsHighlighter,
     config: HighlightConfiguration,
@@ -80,6 +110,83 @@ impl Highlighter {
             "",
         )
         .expect("tree-sitter-rust's own bundled highlights query must be valid");
+        config.configure(HIGHLIGHT_NAMES);
+        Self {
+            inner: TsHighlighter::new(),
+            config,
+        }
+    }
+
+    /// Real `tree-sitter-typescript` config. Parses with
+    /// `LANGUAGE_TYPESCRIPT` (not `LANGUAGE_TSX` -- matching
+    /// `languages.toml`'s single `"typescript"` profile covering
+    /// `.ts`/`.tsx`/`.js`/`.jsx`; a real, named simplification since a
+    /// `.tsx`/`.jsx` file's JSX syntax will not parse correctly under the
+    /// plain TypeScript grammar). See this module's doc comment for why
+    /// the query text is `tree-sitter-javascript`'s query concatenated
+    /// with `tree-sitter-typescript`'s own delta query, in that order.
+    pub fn typescript() -> Self {
+        let language: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+        let combined_query = format!(
+            "{}\n{}",
+            tree_sitter_javascript::HIGHLIGHT_QUERY,
+            tree_sitter_typescript::HIGHLIGHTS_QUERY
+        );
+        let mut config =
+            HighlightConfiguration::new(language, "typescript", &combined_query, "", "").expect(
+                "tree-sitter-javascript + tree-sitter-typescript's combined query must be valid",
+            );
+        config.configure(HIGHLIGHT_NAMES);
+        Self {
+            inner: TsHighlighter::new(),
+            config,
+        }
+    }
+
+    /// Real `tree-sitter-python` config -- its own bundled query is
+    /// self-sufficient (comment/string/keyword/function/number/constant
+    /// all present), unlike TypeScript's.
+    pub fn python() -> Self {
+        let language: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
+        let mut config = HighlightConfiguration::new(
+            language,
+            "python",
+            tree_sitter_python::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        )
+        .expect("tree-sitter-python's own bundled highlights query must be valid");
+        config.configure(HIGHLIGHT_NAMES);
+        Self {
+            inner: TsHighlighter::new(),
+            config,
+        }
+    }
+
+    /// Real `tree-sitter-java` config -- self-sufficient bundled query.
+    pub fn java() -> Self {
+        let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
+        let mut config = HighlightConfiguration::new(
+            language,
+            "java",
+            tree_sitter_java::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        )
+        .expect("tree-sitter-java's own bundled highlights query must be valid");
+        config.configure(HIGHLIGHT_NAMES);
+        Self {
+            inner: TsHighlighter::new(),
+            config,
+        }
+    }
+
+    /// Real `tree-sitter-go` config -- self-sufficient bundled query.
+    pub fn go() -> Self {
+        let language: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
+        let mut config =
+            HighlightConfiguration::new(language, "go", tree_sitter_go::HIGHLIGHTS_QUERY, "", "")
+                .expect("tree-sitter-go's own bundled highlights query must be valid");
         config.configure(HIGHLIGHT_NAMES);
         Self {
             inner: TsHighlighter::new(),
@@ -190,5 +297,145 @@ mod tests {
             .find(|s| s.start_byte == number_start && s.end_byte == number_start + 2)
             .unwrap_or_else(|| panic!("expected a span covering the literal '42', got: {spans:?}"));
         assert_eq!(number_span.color, color_for("constant"));
+    }
+
+    #[test]
+    fn typescript_highlighting_covers_both_ts_specific_and_js_base_syntax() {
+        // Real, load-bearing test for the finding in this module's doc
+        // comment: tree-sitter-typescript's own bundled query alone has no
+        // captures for base-JS syntax (strings, keywords like "const") --
+        // only the JS+TS combined query correctly highlights both.
+        let mut hl = Highlighter::typescript();
+        let source = r#"interface Foo { x: string } const s = "hi";"#;
+        let spans = hl.highlight(source);
+
+        let interface_span = spans
+            .iter()
+            .find(|s| s.start_byte == 0 && s.end_byte == "interface".len())
+            .unwrap_or_else(|| panic!("expected an 'interface' keyword span, got: {spans:?}"));
+        assert_eq!(interface_span.color, color_for("keyword"));
+
+        let string_start = source.find('"').unwrap();
+        let string_end = source.rfind('"').unwrap() + 1;
+        let string_span = spans
+            .iter()
+            .find(|s| s.start_byte == string_start && s.end_byte == string_end)
+            .unwrap_or_else(|| {
+                panic!("expected a string span at {string_start}..{string_end}, got: {spans:?}")
+            });
+        assert_eq!(string_span.color, color_for("string"));
+
+        let const_start = source.find("const").unwrap();
+        let const_span = spans
+            .iter()
+            .find(|s| s.start_byte == const_start && s.end_byte == const_start + "const".len())
+            .unwrap_or_else(|| panic!("expected a 'const' keyword span, got: {spans:?}"));
+        assert_eq!(const_span.color, color_for("keyword"));
+    }
+
+    #[test]
+    fn python_keyword_string_comment_and_number_all_get_real_spans() {
+        let mut hl = Highlighter::python();
+        let source = "# a comment\ndef f():\n    x = 42\n    return \"hi\"";
+        let spans = hl.highlight(source);
+
+        let def_span = spans
+            .iter()
+            .find(|s| {
+                s.start_byte == source.find("def").unwrap()
+                    && s.end_byte == source.find("def").unwrap() + 3
+            })
+            .unwrap_or_else(|| panic!("expected a 'def' keyword span, got: {spans:?}"));
+        assert_eq!(def_span.color, color_for("keyword"));
+
+        let comment_span = spans
+            .iter()
+            .find(|s| s.start_byte == 0 && s.end_byte == "# a comment".len())
+            .unwrap_or_else(|| panic!("expected a comment span, got: {spans:?}"));
+        assert_eq!(comment_span.color, color_for("comment"));
+
+        let number_start = source.find("42").unwrap();
+        let number_span = spans
+            .iter()
+            .find(|s| s.start_byte == number_start && s.end_byte == number_start + 2)
+            .unwrap_or_else(|| panic!("expected a span covering '42', got: {spans:?}"));
+        // Real finding (see HIGHLIGHT_NAMES's doc comment): Python's own
+        // bundled query captures numeric literals as plain `@number`, not
+        // `@constant.builtin` the way Rust's does.
+        assert_eq!(number_span.color, color_for("number"));
+
+        let string_start = source.find('"').unwrap();
+        let string_end = source.rfind('"').unwrap() + 1;
+        let string_span = spans
+            .iter()
+            .find(|s| s.start_byte == string_start && s.end_byte == string_end)
+            .unwrap_or_else(|| panic!("expected a string span, got: {spans:?}"));
+        assert_eq!(string_span.color, color_for("string"));
+    }
+
+    #[test]
+    fn java_keyword_string_and_comment_all_get_real_spans() {
+        let mut hl = Highlighter::java();
+        let source = "// a comment\nclass Foo {\n  String s = \"hi\";\n}";
+        let spans = hl.highlight(source);
+
+        let class_start = source.find("class").unwrap();
+        let class_span = spans
+            .iter()
+            .find(|s| s.start_byte == class_start && s.end_byte == class_start + "class".len())
+            .unwrap_or_else(|| panic!("expected a 'class' keyword span, got: {spans:?}"));
+        assert_eq!(class_span.color, color_for("keyword"));
+
+        let comment_span = spans
+            .iter()
+            .find(|s| s.start_byte == 0 && s.end_byte == "// a comment".len())
+            .unwrap_or_else(|| panic!("expected a comment span, got: {spans:?}"));
+        assert_eq!(comment_span.color, color_for("comment"));
+
+        let string_start = source.find('"').unwrap();
+        let string_end = source.rfind('"').unwrap() + 1;
+        let string_span = spans
+            .iter()
+            .find(|s| s.start_byte == string_start && s.end_byte == string_end)
+            .unwrap_or_else(|| panic!("expected a string span, got: {spans:?}"));
+        assert_eq!(string_span.color, color_for("string"));
+    }
+
+    #[test]
+    fn go_keyword_string_comment_and_number_all_get_real_spans() {
+        let mut hl = Highlighter::go();
+        let source = "// a comment\nfunc main() {\n\tx := 42\n\ts := \"hi\"\n}";
+        let spans = hl.highlight(source);
+
+        let func_start = source.find("func").unwrap();
+        let func_span = spans
+            .iter()
+            .find(|s| s.start_byte == func_start && s.end_byte == func_start + "func".len())
+            .unwrap_or_else(|| panic!("expected a 'func' keyword span, got: {spans:?}"));
+        assert_eq!(func_span.color, color_for("keyword"));
+
+        let comment_span = spans
+            .iter()
+            .find(|s| s.start_byte == 0 && s.end_byte == "// a comment".len())
+            .unwrap_or_else(|| panic!("expected a comment span, got: {spans:?}"));
+        assert_eq!(comment_span.color, color_for("comment"));
+
+        let number_start = source.find("42").unwrap();
+        let number_span = spans
+            .iter()
+            .find(|s| s.start_byte == number_start && s.end_byte == number_start + 2)
+            .unwrap_or_else(|| panic!("expected a span covering '42', got: {spans:?}"));
+        // Real finding (see HIGHLIGHT_NAMES's doc comment): Go's own
+        // bundled query captures numeric literals as plain `@number`, not
+        // `@constant.builtin` the way Rust's does.
+        assert_eq!(number_span.color, color_for("number"));
+
+        let string_start = source.find('"').unwrap();
+        let string_end = source.rfind('"').unwrap() + 1;
+        let string_span = spans
+            .iter()
+            .find(|s| s.start_byte == string_start && s.end_byte == string_end)
+            .unwrap_or_else(|| panic!("expected a string span, got: {spans:?}"));
+        assert_eq!(string_span.color, color_for("string"));
     }
 }
