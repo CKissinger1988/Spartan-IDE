@@ -541,6 +541,31 @@ first — it's the parity reference until each row there is actually reimplement
   1st dragged onto 3rd) produced the exact hand-verified position result `[lib.rs, nested.rs,
   main.rs]` and surfaced the live-unreachability finding above. 50k-line benchmark re-run, no
   regression. Tab overflow handling remains the one open piece of task #25.
+- **Real, working code — tab bar overflow handling, closing task #25 (§75.28)**: closes the last
+  open piece of task #25 (Ctrl+W and reorder shipped in §75.24/§75.27). Overflowing tabs used to
+  just be clipped off-screen with no way to reach them. `TextState` gained a real pixel-space
+  `tab_bar_scroll` field + `ensure_tab_visible()`, the horizontal analogue of `Viewport::
+  ensure_visible`, run every frame right after the tab bar's text is rebuilt. A real bug was found
+  only by testing overflow with enough tabs open, not by inspection: cosmic-text's default
+  `Wrap::Word` had silently been in effect on the tab bar buffer since §75.21 -- harmless until real
+  scrolling started depending on `tab_bar_pixel_pos`'s "only ever reads the first layout run"
+  assumption, which a word-wrapped second run broke, silently under-scrolling and never reaching the
+  real last tab (confirmed live: opening tab 12 of 12 only scrolled far enough to reveal tab 9).
+  Fixed with one line, `set_wrap(&mut font_system, Wrap::None)`, right after the buffer is built --
+  the tab bar is conceptually always exactly one real line no matter how wide it gets. Every existing
+  tab-bar hit-testing and rendering call site needed the matching one-line scroll adjustment (the
+  active-tab rect subtracts `tab_bar_scroll()`, both click-resolution sites add it back), and the tab
+  bar's clip bounds were tightened to `SIDEBAR_WIDTH` on the left so a scrolled-off tab can never
+  bleed into the sidebar. No new headless tests (GPU/rendering/input-facing, same category as
+  §75.14/§75.21/§75.27). Live, with 12 real files open in a 1000px window: raw overflow confirmed
+  (file12.rs's tab entirely invisible); the wrap bug caught mid-fix (only scrolled to tab 9); after
+  the fix, opening tab 12 scrolled all the way to reveal it, fully visible and highlighted; scrolling
+  back to tab 1 worked symmetrically; a direct click on a visible tab while scrolled resolved
+  correctly (not just via the sidebar); closing a tab while scrolled also resolved correctly. Full
+  test/clippy/fmt clean, 50k-line benchmark re-run with normal p50/p95/p99 (two isolated `max`
+  outliers matched this project's own previously-documented rebuild-cycle noise, not a regression).
+  No mouse-wheel tab bar scrolling (this crate has no `MouseWheel` handling anywhere yet), no visual
+  overflow indicator, not stress-tested past 12 tabs.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

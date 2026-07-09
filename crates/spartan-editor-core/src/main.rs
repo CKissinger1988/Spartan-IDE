@@ -967,7 +967,13 @@ fn main() {
                             // same real cosmic-text hit-testing technique as
                             // the main editor, not a pixel-guessing geometry
                             // model (see `tab_bar.rs`'s own doc comment).
-                            let local_x = last_cursor_pos.0 - text::TEXT_ORIGIN_X;
+                            // `+ tab_bar_scroll()` undoes the real horizontal
+                            // scroll offset (§75.28) the tab bar may
+                            // currently be rendered at, translating a
+                            // screen-space click back into the tab bar
+                            // buffer's own unscrolled coordinate space.
+                            let local_x =
+                                last_cursor_pos.0 - text::TEXT_ORIGIN_X + text_state.tab_bar_scroll();
                             let local_y = last_cursor_pos.1 - text::TAB_BAR_TEXT_TOP;
                             if let Some(char_index) = text_state.hit_test_tab_bar(local_x, local_y)
                             {
@@ -1098,7 +1104,8 @@ fn main() {
                                     && last_cursor_pos.0 >= text::SIDEBAR_WIDTH
                                     && last_cursor_pos.1 < text::TAB_BAR_HEIGHT
                                 {
-                                    let local_x = last_cursor_pos.0 - text::TEXT_ORIGIN_X;
+                                    let local_x = last_cursor_pos.0 - text::TEXT_ORIGIN_X
+                                        + text_state.tab_bar_scroll();
                                     let local_y = last_cursor_pos.1 - text::TAB_BAR_TEXT_TOP;
                                     if let Some(char_index) =
                                         text_state.hit_test_tab_bar(local_x, local_y)
@@ -1650,6 +1657,25 @@ fn main() {
                             tab_hits = new_tab_hits;
                             text_state.set_tab_bar_text(&tab_bar_text);
 
+                            // Real tab bar horizontal auto-scroll (§75.28,
+                            // task #25's overflow half): scrolls minimally
+                            // so the active tab is always reachable, even
+                            // once enough tabs are open to overflow the
+                            // window's width -- the horizontal analogue of
+                            // `Viewport::ensure_visible`, run every frame
+                            // just like the tab bar's own text is rebuilt
+                            // every frame above.
+                            let tab_bar_visible_width =
+                                (gpu_state.size.width as f32 - text::TEXT_ORIGIN_X).max(0.0);
+                            if let Some(active_hit) =
+                                tab_hits.iter().find(|hit| hit.file_index == active)
+                            {
+                                text_state.ensure_tab_visible(
+                                    active_hit.tab_range.clone(),
+                                    tab_bar_visible_width,
+                                );
+                            }
+
                             // Real file tree sidebar text (§75.26), rebuilt
                             // from a fresh real directory read every frame
                             // just like the tab bar's own text above --
@@ -1694,8 +1720,9 @@ fn main() {
                                 .and_then(|hit| {
                                     let x_start = text_state.tab_bar_pixel_pos(hit.tab_range.start)?;
                                     let x_end = text_state.tab_bar_pixel_pos(hit.tab_range.end)?;
+                                    let scroll = text_state.tab_bar_scroll();
                                     Some(selection::SelectionRect {
-                                        x: text::TEXT_ORIGIN_X + x_start,
+                                        x: text::TEXT_ORIGIN_X + x_start - scroll,
                                         y: 0.0,
                                         width: x_end - x_start,
                                         height: text::TAB_BAR_HEIGHT,

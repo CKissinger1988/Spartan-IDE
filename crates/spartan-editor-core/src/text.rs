@@ -1,6 +1,6 @@
 use glyphon::{
     Attrs, AttrsList, Buffer, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
-    TextArea, TextAtlas, TextBounds, TextRenderer,
+    TextArea, TextAtlas, TextBounds, TextRenderer, Wrap,
 };
 use spartan_editor_core::highlight::HighlightSpan;
 
@@ -42,6 +42,17 @@ pub struct TextState {
     /// clicked line index, not a per-row char-range list the way the tab
     /// bar's single-line-many-tabs layout needs.
     pub sidebar_buffer: Buffer,
+    /// Real tab bar horizontal scroll (§75.28, the overflow half of task
+    /// #25) -- the pixel offset the tab bar's rendered text and
+    /// hit-testing are both shifted by, so tabs beyond the visible strip's
+    /// right edge can still be reached once enough tabs are open to
+    /// overflow the window's width. The horizontal analogue of
+    /// `Viewport::scroll_line`, but in real pixels (tabs have variable
+    /// width) rather than line counts. Kept private -- `ensure_tab_visible`
+    /// is the only way to change it, and `tab_bar_scroll()` the only way to
+    /// read it, the same encapsulation `Viewport` itself uses for
+    /// `scroll_line`.
+    tab_bar_scroll: f32,
 }
 
 pub const FONT_SIZE: f32 = 16.0;
@@ -113,6 +124,21 @@ impl TextState {
             Metrics::new(TAB_BAR_FONT_SIZE, TAB_BAR_LINE_HEIGHT),
         );
         tab_bar_buffer.set_size(&mut font_system, width, TAB_BAR_HEIGHT);
+        // Real bug found only by testing tab overflow with enough tabs open
+        // (§75.28), not by inspection: cosmic-text's default `Wrap::Word`
+        // silently word-wraps text onto additional internal layout runs
+        // once it exceeds the buffer's configured *width* -- which,
+        // pre-§75.28, never mattered (the tab bar was never scrolled, and
+        // wrapped-off tabs were simply invisible either way), but broke
+        // `tab_bar_pixel_pos`'s "always exactly one layout run" assumption
+        // once real horizontal scrolling started depending on it: a tab
+        // past the wrap point resolved to a wrong, too-small pixel position
+        // (silently clamped to the *first* run's own end, not its real
+        // position), which under-scrolled and could never actually bring
+        // it into view. The tab bar is conceptually always exactly one
+        // real line, regardless of how wide it gets -- `Wrap::None` makes
+        // that real, not just assumed.
+        tab_bar_buffer.set_wrap(&mut font_system, Wrap::None);
 
         let mut modal_buffer = Buffer::new(&mut font_system, Metrics::new(FONT_SIZE, LINE_HEIGHT));
         modal_buffer.set_size(&mut font_system, width, height);
@@ -132,6 +158,7 @@ impl TextState {
             tab_bar_buffer,
             modal_buffer,
             sidebar_buffer,
+            tab_bar_scroll: 0.0,
         }
     }
 
@@ -310,11 +337,18 @@ impl TextState {
                 },
                 TextArea {
                     buffer: &self.tab_bar_buffer,
-                    left: TEXT_ORIGIN_X,
+                    // Real tab bar horizontal scroll (§75.28): shifting
+                    // `left` while `bounds` stays fixed to the visible
+                    // strip is what makes the tab bar scroll -- glyphon
+                    // clips anything outside `bounds` regardless of where
+                    // `left` puts it, so a large `tab_bar_scroll` slides
+                    // earlier tabs out of view to the left without them
+                    // reappearing anywhere they shouldn't.
+                    left: TEXT_ORIGIN_X - self.tab_bar_scroll,
                     top: TAB_BAR_TEXT_TOP,
                     scale: 1.0,
                     bounds: TextBounds {
-                        left: 0,
+                        left: SIDEBAR_WIDTH as i32,
                         top: 0,
                         right: width as i32,
                         bottom: TAB_BAR_HEIGHT as i32,
@@ -504,5 +538,55 @@ impl TextState {
             .map(|g| g.x)
             .unwrap_or_else(|| run.glyphs.last().map(|g| g.x + g.w).unwrap_or(0.0));
         Some(x)
+    }
+
+    /// The current tab bar horizontal scroll offset, in real pixels --
+    /// callers (main.rs's rendering and hit-testing) both need to read
+    /// this, so it can't stay purely internal the way `Viewport::
+    /// scroll_line` mostly can.
+    pub fn tab_bar_scroll(&self) -> f32 {
+        self.tab_bar_scroll
+    }
+
+    /// Real tab bar horizontal auto-scroll (§75.28) -- the pixel analogue
+    /// of `Viewport::ensure_visible`, scrolling minimally so the tab
+    /// spanning `active_range` (a real char-column range, from `tab_bar::
+    /// TabHit::tab_range`) is fully visible within a strip `visible_width`
+    /// pixels wide. A no-op if it already is, or if either end of the
+    /// range can't be resolved to a pixel position (e.g. no tabs at all).
+    /// Clamped so scrolling can never reveal empty space past the last
+    /// tab's own right edge, the same `max_scroll` clamp `Viewport::
+    /// ensure_visible` applies in line-count space, computed here instead
+    /// from the tab bar's own real laid-out width. Returns whether the
+    /// scroll position actually changed.
+    pub fn ensure_tab_visible(
+        &mut self,
+        active_range: std::ops::Range<usize>,
+        visible_width: f32,
+    ) -> bool {
+        let Some(x_start) = self.tab_bar_pixel_pos(active_range.start) else {
+            return false;
+        };
+        let Some(x_end) = self.tab_bar_pixel_pos(active_range.end) else {
+            return false;
+        };
+        let new_scroll = if x_start < self.tab_bar_scroll {
+            x_start
+        } else if x_end > self.tab_bar_scroll + visible_width {
+            x_end - visible_width
+        } else {
+            self.tab_bar_scroll
+        };
+        let total_width = self
+            .tab_bar_buffer
+            .layout_runs()
+            .next()
+            .and_then(|run| run.glyphs.last().map(|g| g.x + g.w))
+            .unwrap_or(0.0);
+        let max_scroll = (total_width - visible_width).max(0.0);
+        let new_scroll = new_scroll.clamp(0.0, max_scroll);
+        let changed = new_scroll != self.tab_bar_scroll;
+        self.tab_bar_scroll = new_scroll;
+        changed
     }
 }
