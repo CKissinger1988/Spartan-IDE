@@ -311,6 +311,28 @@ first — it's the parity reference until each row there is actually reimplement
   there), then Up+Left landed on line 2 col 4. Shift+Arrow does not extend a selection yet -- no
   selection concept exists (task #15 remains, now correctly blocked only on selection itself). No
   Home/End, Ctrl+Arrow word jumps, or Ctrl+Home/End yet either.
+- **Real, working code — real text selection, click-drag/shift-click/shift-arrow/type-over-replace
+  (§75.18)**: closes task #15. `EditorView` gained a real `selection_anchor` + `selection_range()`
+  (normalized, click-with-no-drag isn't a real selection); `insert_at_cursor`/`backspace` now
+  replace/delete an active selection instead of operating alongside it. `viewport::
+  selection_line_spans` is new, pure, headlessly-tested logic turning a selection range into
+  per-line column spans; `main.rs` turns those into real pixel rects via the same
+  `cursor_pixel_pos` lookup the caret uses, rendered by a new `SelectionRenderer`
+  (`selection.rs`/`.wgsl`) -- its own type, not a generalized `CursorRenderer`, since selection
+  needs a variable count of semi-transparent quads rendered *before* the glyph pass, the opposite
+  of the caret's single opaque quad on top. Mouse drag extends from press to release; Shift+click
+  extends from the existing anchor; a new `handle_arrow_key` makes Shift+Arrow extend and a plain
+  arrow with a selection active collapse it (Left/Right to the exact start/end, Up/Down clear-and-
+  still-move) instead of moving further; Escape clears a selection. 13 new headless tests -- one
+  real test-writing mistake caught by running it (miscounted which chars a range covered), fixed by
+  recounting, not by changing the correct implementation. Live verification: a real drag produced a
+  genuine multi-line highlight (screenshotted); typing over it replaced the range (screenshotted,
+  also incidentally surfacing that Ctrl+Z inserts a literal "z" rather than undoing -- no undo
+  keybinding exists, tracked separately); shift-click extend, plain-Left collapse, shift-arrow
+  re-extend, and Escape-clear were each screenshotted in sequence. Full test/clippy/fmt suite clean;
+  50k-line benchmark re-run, no regression. No clipboard (copy/cut/paste) yet -- deferred as its own
+  complete feature, needs a real clipboard crate dependency. No double/triple-click. An empty
+  selected line renders with zero width (invisible) -- a real, named, minor gap.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

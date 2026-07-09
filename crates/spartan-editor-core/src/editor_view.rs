@@ -31,6 +31,13 @@ pub enum EditEffect {
 pub struct EditorView {
     pub document: Document,
     pub cursor: usize,
+    /// Document-absolute char index the active selection is anchored at, if
+    /// any (§75.18) -- `self.cursor` is always the *other*, moving end.
+    /// `Some(anchor) == Some(cursor)` (a real click with no drag, or a
+    /// selection collapsed back to zero width) is treated as "no selection"
+    /// by `selection_range()`, not a real empty one, matching how a mouse
+    /// click naturally arms an anchor before any actual drag has happened.
+    pub selection_anchor: Option<usize>,
 }
 
 impl EditorView {
@@ -45,19 +52,80 @@ impl EditorView {
     pub fn new(initial_text: &str) -> Self {
         let document = Document::new(initial_text);
         let cursor = 0;
-        Self { document, cursor }
+        Self {
+            document,
+            cursor,
+            selection_anchor: None,
+        }
     }
 
     pub fn text(&self) -> String {
         self.document.text()
     }
 
-    /// Inserts at the cursor and advances it past the inserted text.
+    /// Real, document-absolute `[start, end)` selection range (§75.18),
+    /// normalized (`start <= end`) regardless of which direction the user
+    /// dragged/extended from -- `None` if there's no active selection or
+    /// the anchor and cursor coincide.
+    pub fn selection_range(&self) -> Option<(usize, usize)> {
+        let anchor = self.selection_anchor?;
+        if anchor == self.cursor {
+            return None;
+        }
+        Some((anchor.min(self.cursor), anchor.max(self.cursor)))
+    }
+
+    /// Arms a new selection anchored at the cursor's current position, if
+    /// one isn't already active -- used by Shift+Arrow so extending an
+    /// already-active selection doesn't silently reset its anchor back to
+    /// wherever the cursor happens to be *now*.
+    pub fn start_selection_if_needed(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor);
+        }
+    }
+
+    /// Deletes the active selection (if any) and moves the cursor to its
+    /// start, clearing the anchor. `EditEffect::None` if there's no active
+    /// selection to delete.
+    pub fn delete_selection(&mut self) -> EditEffect {
+        let Some((start, end)) = self.selection_range() else {
+            return EditEffect::None;
+        };
+        let line_start = self.document.char_to_line(start).ok();
+        let line_end = self.document.char_to_line(end).ok();
+        let structural = line_start != line_end;
+        if self.document.delete(start..end).is_ok() {
+            self.cursor = start;
+            self.selection_anchor = None;
+            if structural {
+                EditEffect::Structural
+            } else {
+                line_start.map_or(EditEffect::Structural, EditEffect::Line)
+            }
+        } else {
+            EditEffect::None
+        }
+    }
+
+    /// Inserts at the cursor and advances it past the inserted text. If a
+    /// selection is active, it's real "typing over a selection" behavior
+    /// (§75.18): the selection is deleted first and the new text takes its
+    /// place, rather than being inserted alongside it. Replacing a
+    /// selection always reports `Structural` regardless of what the
+    /// deletion/insertion would individually have reported -- a real,
+    /// deliberate simplification (a full windowed reshape is always
+    /// correct, just not maximally cheap) rather than reasoning through
+    /// every combination of the two effects.
     pub fn insert_at_cursor(&mut self, text: &str) -> EditEffect {
+        let had_selection = self.selection_range().is_some();
+        if had_selection {
+            self.delete_selection();
+        }
         let line_before = self.document.char_to_line(self.cursor).ok();
         if self.document.insert(self.cursor, text).is_ok() {
             self.cursor += text.chars().count();
-            if text.contains('\n') {
+            if had_selection || text.contains('\n') {
                 EditEffect::Structural
             } else {
                 line_before.map_or(EditEffect::Structural, EditEffect::Line)
@@ -67,8 +135,14 @@ impl EditorView {
         }
     }
 
-    /// Deletes the character immediately before the cursor (Backspace).
+    /// Deletes the character immediately before the cursor (Backspace) --
+    /// or, if a selection is active, deletes exactly the selection instead
+    /// of the selection *plus* one more character before it, matching
+    /// conventional editor behavior.
     pub fn backspace(&mut self) -> EditEffect {
+        if self.selection_range().is_some() {
+            return self.delete_selection();
+        }
         if self.cursor == 0 {
             return EditEffect::None;
         }

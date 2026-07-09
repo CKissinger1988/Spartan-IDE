@@ -112,6 +112,51 @@ pub fn to_local_line(doc_line: usize, viewport: &Viewport, doc_len_lines: usize)
     }
 }
 
+/// For a selection's document-absolute `[start, end)` char range (already
+/// normalized, `start <= end`), returns one `(doc_line, start_col, end_col)`
+/// triple per line the selection touches, in char-column units matching
+/// this crate's convention everywhere else (`EditorView::cursor_line_col`,
+/// `set_cursor_to_line_col`). `end_col` is `None` to mean "through the end
+/// of this line's actual content" (every touched line except the one
+/// containing `end` itself) -- the renderer (`main.rs`, GPU-facing, not
+/// tested here) resolves that via `TextState::cursor_pixel_pos` with an
+/// out-of-range column, the same fallback-to-end-of-line behavior it
+/// already has. Returns an empty `Vec` for a collapsed (`start == end`)
+/// range, matching `EditorView::selection_range`'s own "not a real
+/// selection" convention.
+pub fn selection_line_spans(
+    document: &Document,
+    start: usize,
+    end: usize,
+) -> Vec<(usize, usize, Option<usize>)> {
+    if start >= end {
+        return Vec::new();
+    }
+    let (Ok(first_line), Ok(last_line)) =
+        (document.char_to_line(start), document.char_to_line(end))
+    else {
+        return Vec::new();
+    };
+    let mut spans = Vec::with_capacity(last_line - first_line + 1);
+    for line in first_line..=last_line {
+        let Ok(line_start_char) = document.line_to_char(line) else {
+            continue;
+        };
+        let start_col = if line == first_line {
+            start - line_start_char
+        } else {
+            0
+        };
+        let end_col = if line == last_line {
+            Some(end - line_start_char)
+        } else {
+            None
+        };
+        spans.push((line, start_col, end_col));
+    }
+    spans
+}
+
 /// Inverse of `to_local_line`: translates a window-local line index (e.g.
 /// from `TextState::hit_test`, which only ever sees the windowed slice) back
 /// into a document-absolute one. Always valid -- unlike `to_local_line`,

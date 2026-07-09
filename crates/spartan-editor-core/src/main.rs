@@ -3,6 +3,7 @@ mod fixture;
 mod gpu;
 mod input;
 mod latency;
+mod selection;
 mod text;
 
 use spartan_editor_core::viewport::{self, Viewport};
@@ -117,6 +118,49 @@ fn apply_edit_effect(
         }
         editor_view::EditEffect::None => false,
     }
+}
+
+/// Real navigation-and-selection interaction rule (§75.18), matching
+/// conventional editor behavior: Shift+Arrow extends the active selection
+/// (arming one at the current cursor first if none exists yet); a plain
+/// (non-Shift) arrow press while a selection exists collapses it instead of
+/// moving further from wherever the cursor last was -- Left/Right jump
+/// straight to the selection's start/end, Up/Down clear the selection and
+/// still move from the (now-collapsed) cursor, since there's no single
+/// "correct" vertical collapse target the way there is a horizontal one.
+/// Returns whether anything visually changed (cursor position or selection
+/// state), so the caller knows whether a redraw is warranted.
+fn handle_arrow_key(editor: &mut editor_view::EditorView, key: NamedKey, shift: bool) -> bool {
+    let do_move = |editor: &mut editor_view::EditorView| match key {
+        NamedKey::ArrowLeft => editor.move_left(),
+        NamedKey::ArrowRight => editor.move_right(),
+        NamedKey::ArrowUp => editor.move_up(),
+        NamedKey::ArrowDown => editor.move_down(),
+        _ => unreachable!("handle_arrow_key called with a non-arrow key"),
+    };
+
+    if shift {
+        editor.start_selection_if_needed();
+        return do_move(editor);
+    }
+
+    if let Some((start, end)) = editor.selection_range() {
+        editor.selection_anchor = None;
+        return match key {
+            NamedKey::ArrowLeft => {
+                editor.cursor = start;
+                true
+            }
+            NamedKey::ArrowRight => {
+                editor.cursor = end;
+                true
+            }
+            NamedKey::ArrowUp | NamedKey::ArrowDown => do_move(editor),
+            _ => unreachable!("handle_arrow_key called with a non-arrow key"),
+        };
+    }
+
+    do_move(editor)
 }
 
 /// One open file's full editing state -- everything that used to be flat
@@ -453,6 +497,8 @@ fn main() {
 
     let cursor_renderer = cursor::CursorRenderer::new(&gpu_state.device, gpu_state.config.format);
     let t_cursor_renderer = Instant::now();
+    let mut selection_renderer =
+        selection::SelectionRenderer::new(&gpu_state.device, gpu_state.config.format);
 
     // 150ms idle default per spec §2.3, now one debouncer per open file
     // (`OpenFile::lsp_debouncer`) rather than a single global one -- see
@@ -497,6 +543,11 @@ fn main() {
     // and Ctrl+Shift+Tab (previous file) can be detected in the
     // `KeyboardInput` handler below, which only ever sees the key itself.
     let mut modifiers = ModifiersState::empty();
+    // Real click-drag text selection (§75.18): true between a left
+    // `MouseInput` press and its matching release, so `CursorMoved` in
+    // between knows to extend the selection rather than just remembering
+    // the position.
+    let mut mouse_button_down = false;
 
     event_loop
         .run(move |event, elwt| {
@@ -572,12 +623,32 @@ fn main() {
                         }
                         WindowEvent::CursorMoved { position, .. } => {
                             last_cursor_pos = (position.x as f32, position.y as f32);
+                            // Real click-drag selection (§75.18): while the
+                            // left button is held, every subsequent
+                            // `CursorMoved` extends the selection from
+                            // wherever the button was originally pressed
+                            // (the anchor `MouseInput::Pressed` already
+                            // armed below) to the new hit-tested position.
+                            if mouse_button_down {
+                                let local_x = last_cursor_pos.0 - text::TEXT_ORIGIN_X;
+                                let local_y = last_cursor_pos.1 - text::TEXT_ORIGIN_Y;
+                                if let Some((local_line, col_chars)) =
+                                    text_state.hit_test(local_x, local_y)
+                                {
+                                    let active_file = &mut files[active];
+                                    let doc_line =
+                                        viewport::to_doc_line(local_line, &active_file.viewport);
+                                    active_file.editor.set_cursor_to_line_col(doc_line, col_chars);
+                                    window.request_redraw();
+                                }
+                            }
                         }
                         WindowEvent::MouseInput {
                             state: ElementState::Pressed,
                             button: MouseButton::Left,
                             ..
                         } => {
+                            mouse_button_down = true;
                             // `hit_test` expects coordinates relative to the
                             // text buffer's own origin, the same convention
                             // `cursor_pixel_pos` uses in reverse (see its own
@@ -590,9 +661,36 @@ fn main() {
                             {
                                 let active_file = &mut files[active];
                                 let doc_line = viewport::to_doc_line(local_line, &active_file.viewport);
+                                if modifiers.shift_key() {
+                                    // Shift+click extends the existing
+                                    // selection (or starts one anchored at
+                                    // the cursor's pre-click position) to
+                                    // the click point, rather than starting
+                                    // a fresh one there.
+                                    active_file.editor.start_selection_if_needed();
+                                } else {
+                                    active_file.editor.selection_anchor = None;
+                                }
                                 active_file.editor.set_cursor_to_line_col(doc_line, col_chars);
+                                if !modifiers.shift_key() {
+                                    // A plain click arms a fresh anchor at
+                                    // the click point so a subsequent drag
+                                    // (`CursorMoved` above, while the button
+                                    // stays held) has something to extend
+                                    // from -- `selection_range()` still
+                                    // reports "no selection" until the
+                                    // cursor actually moves away from here.
+                                    active_file.editor.selection_anchor = Some(active_file.editor.cursor);
+                                }
                                 window.request_redraw();
                             }
+                        }
+                        WindowEvent::MouseInput {
+                            state: ElementState::Released,
+                            button: MouseButton::Left,
+                            ..
+                        } => {
+                            mouse_button_down = false;
                         }
                         WindowEvent::KeyboardInput {
                             event:
@@ -775,27 +873,32 @@ fn main() {
                                     session.send_command(dap_session::DapCommand::StepInto);
                                 }
                             }
+                            Key::Named(NamedKey::Escape) => {
+                                // Real, small addition alongside selection
+                                // (§75.18): Escape clears an active
+                                // selection without moving the cursor.
+                                let active_file = &mut files[active];
+                                if active_file.editor.selection_anchor.is_some() {
+                                    active_file.editor.selection_anchor = None;
+                                    window.request_redraw();
+                                }
+                            }
                             Key::Named(
                                 key @ (NamedKey::ArrowLeft
                                 | NamedKey::ArrowRight
                                 | NamedKey::ArrowUp
                                 | NamedKey::ArrowDown),
                             ) => {
-                                // Real, previously entirely missing arrow-key
-                                // navigation (§75.17) -- the cursor could
-                                // only move via mouse click or as a side
-                                // effect of inserting/deleting text before
-                                // this. No selection extension yet even
-                                // with Shift held (task #15) -- Shift is
-                                // simply ignored here for now.
+                                // Real arrow-key navigation (§75.17), now
+                                // Shift-aware for text selection (§75.18) --
+                                // see `handle_arrow_key`'s own doc comment
+                                // for the exact interaction rule.
                                 let active_file = &mut files[active];
-                                let moved = match key {
-                                    NamedKey::ArrowLeft => active_file.editor.move_left(),
-                                    NamedKey::ArrowRight => active_file.editor.move_right(),
-                                    NamedKey::ArrowUp => active_file.editor.move_up(),
-                                    NamedKey::ArrowDown => active_file.editor.move_down(),
-                                    _ => unreachable!(),
-                                };
+                                let moved = handle_arrow_key(
+                                    &mut active_file.editor,
+                                    *key,
+                                    modifiers.shift_key(),
+                                );
                                 if moved {
                                     let (cursor_line, _) = active_file.editor.cursor_line_col();
                                     let doc_len_lines = active_file.editor.document.len_lines();
@@ -902,6 +1005,64 @@ fn main() {
                                 );
                             }
 
+                            // Real selection-highlight rects (§75.18), one per
+                            // visual line the active selection spans -- reuses
+                            // `TextState::cursor_pixel_pos` (the same lookup the
+                            // caret itself uses) to turn each line's char-column
+                            // span into real pixel positions. `usize::MAX` for
+                            // an unbounded `end_col` deliberately leans on
+                            // `cursor_pixel_pos`'s own existing end-of-line
+                            // fallback (an out-of-range column resolves to the
+                            // last laid-out glyph's right edge) rather than
+                            // needing a second, separate "width of this line"
+                            // lookup.
+                            let mut selection_rects: Vec<selection::SelectionRect> = Vec::new();
+                            if let Some((sel_start, sel_end)) = active_file.editor.selection_range()
+                            {
+                                let spans = viewport::selection_line_spans(
+                                    &active_file.editor.document,
+                                    sel_start,
+                                    sel_end,
+                                );
+                                for (doc_line, start_col, end_col) in spans {
+                                    let Some(local_line) = viewport::to_local_line(
+                                        doc_line,
+                                        &active_file.viewport,
+                                        doc_len_lines,
+                                    ) else {
+                                        continue;
+                                    };
+                                    let Some((x_start, y)) =
+                                        text_state.cursor_pixel_pos(local_line, start_col)
+                                    else {
+                                        continue;
+                                    };
+                                    let x_end = match end_col {
+                                        Some(c) => text_state.cursor_pixel_pos(local_line, c),
+                                        None => text_state.cursor_pixel_pos(local_line, usize::MAX),
+                                    }
+                                    .map(|(x, _)| x)
+                                    .unwrap_or(x_start);
+                                    if x_end > x_start {
+                                        selection_rects.push(selection::SelectionRect {
+                                            x: text::TEXT_ORIGIN_X + x_start,
+                                            y: text::TEXT_ORIGIN_Y + y,
+                                            width: x_end - x_start,
+                                            height: text::LINE_HEIGHT,
+                                        });
+                                    }
+                                }
+                            }
+                            selection_renderer.update(
+                                &gpu_state.device,
+                                &gpu_state.queue,
+                                &selection_rects,
+                                &cursor::ScreenSize {
+                                    width: gpu_state.size.width as f32,
+                                    height: gpu_state.size.height as f32,
+                                },
+                            );
+
                             let mut encoder = gpu_state.device.create_command_encoder(
                                 &wgpu::CommandEncoderDescriptor {
                                     label: Some("spartan-editor-core encoder"),
@@ -930,6 +1091,7 @@ fn main() {
                                         timestamp_writes: None,
                                         occlusion_query_set: None,
                                     });
+                                selection_renderer.render(&mut pass);
                                 text_state.render(&mut pass).expect("glyphon render failed");
                                 if cursor_pixel_pos.is_some() {
                                     cursor_renderer.render(&mut pass);

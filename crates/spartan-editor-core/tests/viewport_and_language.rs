@@ -1,7 +1,9 @@
 use spartan_buffer::Document;
-use spartan_editor_core::editor_view::EditorView;
+use spartan_editor_core::editor_view::{self, EditorView};
 use spartan_editor_core::language::detect_language_for_file;
-use spartan_editor_core::viewport::{to_doc_line, to_local_line, windowed_text, Viewport};
+use spartan_editor_core::viewport::{
+    selection_line_spans, to_doc_line, to_local_line, windowed_text, Viewport,
+};
 use std::path::Path;
 
 // Runs headless -- no wgpu device, no window, no display -- exercising only
@@ -52,6 +54,35 @@ fn windowed_text_after_scrolling_reflects_the_new_window() {
     let mut viewport = Viewport::new(2);
     viewport.scroll_line = 2;
     assert_eq!(windowed_text(&doc, &viewport), "line2\nline3\n");
+}
+
+#[test]
+fn selection_line_spans_within_a_single_line() {
+    let doc = five_line_doc();
+    // "line0\n..." -- chars 2..5 covers "ne0" on line 0.
+    assert_eq!(selection_line_spans(&doc, 2, 5), vec![(0, 2, Some(5))]);
+}
+
+#[test]
+fn selection_line_spans_across_two_lines() {
+    let doc = five_line_doc();
+    // char 2 = line 0 col 2; char 8 = line 1 (starts at char 6) col 2.
+    assert_eq!(
+        selection_line_spans(&doc, 2, 8),
+        vec![(0, 2, None), (1, 0, Some(2))]
+    );
+}
+
+#[test]
+fn selection_line_spans_is_empty_for_a_collapsed_range() {
+    let doc = five_line_doc();
+    assert_eq!(selection_line_spans(&doc, 4, 4), Vec::new());
+}
+
+#[test]
+fn selection_line_spans_is_empty_for_an_inverted_range() {
+    let doc = five_line_doc();
+    assert_eq!(selection_line_spans(&doc, 5, 2), Vec::new());
 }
 
 #[test]
@@ -223,6 +254,71 @@ fn move_down_at_last_line_is_a_no_op_and_reports_no_change() {
     let before = editor.cursor_line_col();
     assert!(!editor.move_down());
     assert_eq!(editor.cursor_line_col(), before);
+}
+
+#[test]
+fn selection_range_is_none_with_no_anchor() {
+    let editor = EditorView::new("hello world");
+    assert_eq!(editor.selection_range(), None);
+}
+
+#[test]
+fn selection_range_is_none_when_anchor_equals_cursor() {
+    let mut editor = EditorView::new("hello world");
+    editor.selection_anchor = Some(editor.cursor);
+    assert_eq!(editor.selection_range(), None);
+}
+
+#[test]
+fn selection_range_normalizes_regardless_of_drag_direction() {
+    let mut editor = EditorView::new("hello world");
+    editor.selection_anchor = Some(8);
+    editor.cursor = 2;
+    assert_eq!(editor.selection_range(), Some((2, 8)));
+}
+
+#[test]
+fn start_selection_if_needed_does_not_reset_an_existing_anchor() {
+    let mut editor = EditorView::new("hello world");
+    editor.selection_anchor = Some(1);
+    editor.cursor = 5;
+    editor.start_selection_if_needed();
+    assert_eq!(editor.selection_anchor, Some(1));
+}
+
+#[test]
+fn delete_selection_removes_the_range_and_moves_cursor_to_its_start() {
+    let mut editor = EditorView::new("hello world");
+    editor.selection_anchor = Some(0);
+    editor.cursor = 5;
+    let effect = editor.delete_selection();
+    assert_eq!(editor.text(), " world");
+    assert_eq!(editor.cursor, 0);
+    assert_eq!(editor.selection_anchor, None);
+    assert_ne!(effect, editor_view::EditEffect::None);
+}
+
+#[test]
+fn insert_at_cursor_replaces_an_active_selection_instead_of_inserting_alongside_it() {
+    let mut editor = EditorView::new("hello world");
+    editor.selection_anchor = Some(0);
+    editor.cursor = 5;
+    let effect = editor.insert_at_cursor("HI");
+    assert_eq!(editor.text(), "HI world");
+    assert_eq!(editor.selection_anchor, None);
+    assert_eq!(effect, editor_view::EditEffect::Structural);
+}
+
+#[test]
+fn backspace_with_an_active_selection_deletes_only_the_selection() {
+    // "hello world"[2..7) is "llo w" (l,l,o,' ',w) -- removing it leaves
+    // "he" + "orld".
+    let mut editor = EditorView::new("hello world");
+    editor.selection_anchor = Some(2);
+    editor.cursor = 7;
+    editor.backspace();
+    assert_eq!(editor.text(), "heorld");
+    assert_eq!(editor.selection_anchor, None);
 }
 
 #[test]
