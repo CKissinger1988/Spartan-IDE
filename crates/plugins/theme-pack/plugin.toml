@@ -1,0 +1,8 @@
+[plugin]
+name = "spartan-theme-pack"
+version = "0.1.0"
+
+[capabilities]
+filesystem = []
+network = false
+editor_api = []

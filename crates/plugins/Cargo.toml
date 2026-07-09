@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = [
+    "linter-bridge",
+    "theme-pack",
+]
+
+# Deliberately a separate workspace root from the main
+# `/home/user/Spartan-IDE/Cargo.toml` (§5, task #10) -- these are real
+# WASM Component-Model guest crates targeting `wasm32-wasip1`, built via
+# `cargo component build`, an entirely different toolchain/output shape
+# than every native crate in the main workspace.

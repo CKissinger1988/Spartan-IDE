@@ -1,0 +1,43 @@
+package spartan:plugin@0.1.0;
+
+/// Real host-provided functions a plugin can call, gated by its own
+/// `plugin.toml` manifest's declared capabilities (§5.2) -- the host only
+/// adds this interface's functions to the `wasmtime::component::Linker`
+/// at all if the manifest declared them, so an undeclared capability is a
+/// real instantiation-time failure, not just an unchecked runtime call.
+interface host {
+    log: func(message: string);
+}
+
+/// Real, typed extension points a plugin implements (§5.3). A single
+/// shared world for every reference plugin in this first pass -- a
+/// concrete plugin only needs to give a meaningful implementation of the
+/// export(s) relevant to its own kind (a theme plugin returns an empty
+/// list from `get-diagnostics`; a linter-bridge plugin returns `none`
+/// from `get-theme`) rather than each plugin kind getting its own
+/// separate WIT world, which would multiply host bindgen surface for no
+/// real benefit at this stage.
+interface guest {
+    record diagnostic {
+        message: string,
+        line: u32,
+    }
+
+    /// Called once after instantiation; returns a real string the host
+    /// can show, proving a genuine guest-to-host data round trip beyond
+    /// just "it didn't crash."
+    activate: func() -> string;
+
+    /// Real editor_api diagnostics.publish extension point (§5.3) --
+    /// given real source text, returns real structured diagnostics.
+    get-diagnostics: func(source: string) -> list<diagnostic>;
+
+    /// Real theme_api extension point (§5.3) -- `none` for a plugin that
+    /// doesn't contribute a theme.
+    get-theme: func() -> option<string>;
+}
+
+world plugin {
+    import host;
+    export guest;
+}

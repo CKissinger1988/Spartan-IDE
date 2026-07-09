@@ -674,6 +674,38 @@ first — it's the parity reference until each row there is actually reimplement
   already-reported scan cost. No upload path of any kind yet (an explicit user-initiated upload is
   real future work), no UI for browsing/deleting past reports (unbounded local accumulation, a real
   named gap), no OS-level segfault/native-crash capture (Rust panics only).
+- **Real, working code — WASM Component Model plugin host + two real reference plugins, closing
+  most of §5, task #10 (§75.33)**: the first real WASM plugin infrastructure in this workspace. New
+  `crates/spartan-plugin-host` (real `wasmtime::component`, a real WIT world at `wit/plugin.wit`)
+  loads a real compiled `.wasm` component and calls its real exports. `wasm-tools`/`cargo-component`
+  were installed from crates.io this session (no prebuilt binary reachable through this session's
+  egress policy). A real, load-bearing finding refined the original plan mid-implementation: every
+  real compiled plugin unconditionally imports WASI CLI/filesystem interfaces (confirmed via
+  `wasm-tools component wit`, not assumed) purely because Rust's `wasm32-wasip1` std runtime links
+  against them regardless of what a plugin calls -- so §5.2's "undeclared capability, no import"
+  holds strictly only for this crate's own custom `host.log` interface (gated at the real
+  `Linker`-binding level, confirmed by a real test that an undeclared capability makes real
+  instantiation fail); the built-in WASI capabilities are gated one layer down via
+  `wasmtime-wasi`'s own deny-by-default `WasiCtx` instead (confirmed via its installed source), so
+  the mandatory imports resolve but every filesystem/network op stays inert. Two real reference
+  plugins, `crates/plugins/linter-bridge` (real TODO/FIXME + line-length linting, uses the `log`
+  capability) and `crates/plugins/theme-pack` (contributes a real JSON theme, declares zero
+  capabilities, and its compiled binary provably imports no `spartan:plugin/host` at all) -- each
+  its own real compiled `.wasm` component, deliberately in a *separate* cargo workspace
+  (`crates/plugins/Cargo.toml`) after `cargo component new` was caught auto-registering the first
+  one into the main workspace (which would have broken `cargo build --workspace` for the native
+  target) and fixed before it shipped. A real test-writing mistake was caught by running the test,
+  not by inspection (a fixture line didn't match the plugin's own rule); fixed by making the
+  plugin's linting rule more realistic (substring match, not exact-line match), not by weakening
+  the test. 9 new tests (3 manifest unit tests + 6 real subprocess-building end-to-end tests that
+  each run a real `cargo component build`, self-skipping if the tool isn't on `PATH`), all passing.
+  Full `cargo build --release --workspace` (226 tests total workspace-wide, 0 failures),
+  clippy/fmt clean natively and in the separate plugins workspace. No third reference plugin
+  (`agent_api`/"custom Leo tool" needs a real Leo tool-execution loop that doesn't exist yet --
+  deferred for the same reason as task #6's approval gating), no UI wiring into
+  `spartan-editor-core` (no plugin discovery/enable panel, no real editor-loop call site for
+  `get_diagnostics`), no per-plugin resource budget (§36.4.9), no marketplace/signing (§5.4), no
+  real manifest-to-`WasiCtx` capability grant mapping for filesystem/network.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -721,9 +753,9 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 217 tests: 6 spikes + 6 real crates (spartan-buffer,
+cargo test --workspace --release   # 226 tests: 6 spikes + 7 real crates (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
-                                    # spartan-crash, spartan-editor-core)
+                                    # spartan-crash, spartan-plugin-host, spartan-editor-core)
 # dap-spike and spartan-editor-core's own dap_integration.rs need `lldb-dap` (or `lldb-dap-18`) +
 # `rustc`; lsp-spike and spartan-editor-core's own lsp_integration.rs need `rust-analyzer` +
 # `rustc`; spartan-editor-core's dap_python_cross_language.rs needs python + the debugpy package.
@@ -743,6 +775,13 @@ cargo test --workspace --release   # 217 tests: 6 spikes + 6 real crates (sparta
 # <-> render-input mapping) run fine under `cargo test` with neither.
 # ui-shell-spike needs a real GPU + display + the WebView2 Runtime to `cargo run`; it has no
 # headless tests of its own (everything it does is GPU/WebView-facing by nature).
+# spartan-plugin-host's own integration tests (linter_bridge_integration.rs,
+# theme_pack_integration.rs) need `cargo-component` on $PATH (real subprocess `cargo component
+# build` calls against crates/plugins/*) -- self-skip with a printed message if it isn't installed.
+# crates/plugins/* (the real reference WASM plugins) are their own separate cargo workspace
+# (crates/plugins/Cargo.toml), excluded from the main workspace on purpose -- `cargo build
+# --workspace`/`cargo test --workspace` from the repo root never touch them; build them with
+# `cargo component build` from inside crates/plugins/<name> instead.
 cargo build --release --workspace
 ```
 

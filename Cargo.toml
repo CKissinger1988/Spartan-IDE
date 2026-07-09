@@ -12,5 +12,14 @@ members = [
     "crates/spartan-git",
     "crates/spartan-security",
     "crates/spartan-crash",
+    "crates/spartan-plugin-host",
     "crates/spartan-editor-core",
 ]
+
+# `crates/plugins/*` are real WASM Component-Model guest crates (§5, task
+# #10) -- deliberately their own separate cargo workspace, not members
+# here. They target `wasm32-wasip1` and are built via `cargo component
+# build`, an entirely different toolchain/output shape than every native
+# crate in this workspace; folding them in here would make a plain `cargo
+# build --workspace` try (and fail) to compile them for the host target.
+exclude = ["crates/plugins"]
