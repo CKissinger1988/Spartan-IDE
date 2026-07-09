@@ -1,6 +1,7 @@
 use spartan_buffer::Document;
+use spartan_editor_core::editor_view::EditorView;
 use spartan_editor_core::language::detect_language_for_file;
-use spartan_editor_core::viewport::{to_local_line, windowed_text, Viewport};
+use spartan_editor_core::viewport::{to_doc_line, to_local_line, windowed_text, Viewport};
 use std::path::Path;
 
 // Runs headless -- no wgpu device, no window, no display -- exercising only
@@ -110,6 +111,45 @@ fn to_local_line_returns_none_for_a_line_scrolled_above_the_window() {
     let mut viewport = Viewport::new(2);
     viewport.scroll_line = 3; // shows lines 3..5
     assert_eq!(to_local_line(0, &viewport, doc.len_lines()), None);
+}
+
+#[test]
+fn to_doc_line_is_the_inverse_of_to_local_line() {
+    let doc = five_line_doc();
+    let mut viewport = Viewport::new(2);
+    viewport.scroll_line = 2;
+    let local = to_local_line(3, &viewport, doc.len_lines()).unwrap();
+    assert_eq!(to_doc_line(local, &viewport), 3);
+}
+
+#[test]
+fn to_doc_line_at_zero_scroll_is_the_identity() {
+    let viewport = Viewport::new(3);
+    assert_eq!(to_doc_line(2, &viewport), 2);
+}
+
+#[test]
+fn set_cursor_to_line_col_places_the_cursor_at_the_requested_position() {
+    let mut editor = EditorView::new("line0\nline1\nline2\n");
+    editor.set_cursor_to_line_col(1, 3);
+    assert_eq!(editor.cursor_line_col(), (1, 3));
+}
+
+#[test]
+fn set_cursor_to_line_col_clamps_a_column_past_end_of_a_short_line() {
+    let mut editor = EditorView::new("hi\nlonger line\n");
+    // Line 0 ("hi") is only 2 chars -- clicking far past its end should
+    // land at end-of-line, not panic or wrap into the next line.
+    editor.set_cursor_to_line_col(0, 50);
+    assert_eq!(editor.cursor_line_col(), (0, 2));
+}
+
+#[test]
+fn set_cursor_to_line_col_clamps_a_line_past_end_of_document() {
+    let mut editor = EditorView::new("only one line\n");
+    editor.set_cursor_to_line_col(99, 0);
+    let (line, _) = editor.cursor_line_col();
+    assert_eq!(line, editor.document.len_lines() - 1);
 }
 
 #[test]

@@ -124,4 +124,33 @@ impl EditorView {
         let line_start = self.document.line_to_char(line).unwrap_or(0);
         (line, self.cursor - line_start)
     }
+
+    /// Sets the cursor to a document-absolute `(line, column-in-chars)`
+    /// position -- the inverse of `cursor_line_col`, used by mouse
+    /// click-to-position (`TextState::hit_test` + `viewport::to_doc_line`
+    /// produce the position this takes). Both `line` and `col_chars` are
+    /// clamped rather than trusted: `line` to the document's last real line
+    /// (a click below the last line of a short file should still land
+    /// somewhere valid), `col_chars` to that line's own length excluding its
+    /// terminator (a click past the end of a short line lands at
+    /// end-of-line, not out-of-bounds mid-terminator).
+    pub fn set_cursor_to_line_col(&mut self, line: usize, col_chars: usize) {
+        let doc_len_lines = self.document.len_lines();
+        let line = line.min(doc_len_lines.saturating_sub(1));
+        let Ok(line_start) = self.document.line_to_char(line) else {
+            return;
+        };
+        let line_len_chars = self
+            .document
+            .line(line)
+            .map(|l| {
+                l.strip_suffix("\r\n")
+                    .or_else(|| l.strip_suffix('\n'))
+                    .unwrap_or(&l)
+                    .chars()
+                    .count()
+            })
+            .unwrap_or(0);
+        self.cursor = line_start + col_chars.min(line_len_chars);
+    }
 }

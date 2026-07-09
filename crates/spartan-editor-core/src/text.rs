@@ -247,4 +247,27 @@ impl TextState {
             None
         }
     }
+
+    /// Inverse of `cursor_pixel_pos`: converts a pixel-space `(x, y)`
+    /// position -- relative to the buffer's own origin, same convention
+    /// `cursor_pixel_pos` uses (callers subtract `TEXT_ORIGIN_X`/
+    /// `TEXT_ORIGIN_Y` first) -- into a `(window-local-line,
+    /// column-in-chars)` position, via cosmic-text's own real `Buffer::hit`
+    /// hit-testing (confirmed against the actual installed
+    /// `cosmic-text-0.10.0` source before writing this, not assumed from
+    /// docs). `hit`'s returned `Cursor::index` is a *byte* offset within the
+    /// line, while this crate's cursor positions are char-based (matching
+    /// `cursor_pixel_pos`'s own `col_chars`), so it's converted by counting
+    /// chars up to that byte offset in the line's own text. `None` if the
+    /// click landed outside any laid-out line (e.g. below the last visible
+    /// line, in the empty space past end-of-window).
+    pub fn hit_test(&self, x: f32, y: f32) -> Option<(usize, usize)> {
+        let cursor = self.buffer.hit(x, y)?;
+        let line_text = self.buffer.lines.get(cursor.line)?.text();
+        let col_chars = line_text
+            .get(..cursor.index)
+            .map(|s| s.chars().count())
+            .unwrap_or(0);
+        Some((cursor.line, col_chars))
+    }
 }

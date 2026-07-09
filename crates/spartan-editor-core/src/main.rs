@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
-use winit::event::{ElementState, Event, KeyEvent, WindowEvent};
+use winit::event::{ElementState, Event, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowBuilder;
@@ -398,6 +398,11 @@ fn main() {
     let mut edit_bench_reported = false;
     let mut cursor_bench_reported = false;
     let mut scroll_bench_reported = false;
+    // `WindowEvent::MouseInput` carries no position of its own (winit
+    // reports cursor position and button state as separate events), so the
+    // most recent `CursorMoved` position is tracked here for a click to
+    // read back.
+    let mut last_cursor_pos: (f32, f32) = (0.0, 0.0);
 
     event_loop
         .run(move |event, elwt| {
@@ -447,6 +452,29 @@ fn main() {
                                     &viewport,
                                     highlighter.as_mut(),
                                 );
+                                window.request_redraw();
+                            }
+                        }
+                        WindowEvent::CursorMoved { position, .. } => {
+                            last_cursor_pos = (position.x as f32, position.y as f32);
+                        }
+                        WindowEvent::MouseInput {
+                            state: ElementState::Pressed,
+                            button: MouseButton::Left,
+                            ..
+                        } => {
+                            // `hit_test` expects coordinates relative to the
+                            // text buffer's own origin, the same convention
+                            // `cursor_pixel_pos` uses in reverse (see its own
+                            // doc comment) -- so the window-space position
+                            // needs the same offset subtracted first.
+                            let local_x = last_cursor_pos.0 - text::TEXT_ORIGIN_X;
+                            let local_y = last_cursor_pos.1 - text::TEXT_ORIGIN_Y;
+                            if let Some((local_line, col_chars)) =
+                                text_state.hit_test(local_x, local_y)
+                            {
+                                let doc_line = viewport::to_doc_line(local_line, &viewport);
+                                editor.set_cursor_to_line_col(doc_line, col_chars);
                                 window.request_redraw();
                             }
                         }

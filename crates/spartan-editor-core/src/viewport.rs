@@ -111,3 +111,12 @@ pub fn to_local_line(doc_line: usize, viewport: &Viewport, doc_len_lines: usize)
         None
     }
 }
+
+/// Inverse of `to_local_line`: translates a window-local line index (e.g.
+/// from `TextState::hit_test`, which only ever sees the windowed slice) back
+/// into a document-absolute one. Always valid -- unlike `to_local_line`,
+/// there's no "off-screen" case to report, since a `local_line` by
+/// definition came from something that was actually laid out on screen.
+pub fn to_doc_line(local_line: usize, viewport: &Viewport) -> usize {
+    viewport.scroll_line + local_line
+}

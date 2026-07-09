@@ -254,6 +254,19 @@ first — it's the parity reference until each row there is actually reimplement
   Windows. Cold-open/edit/scroll latency were not benchmarked here (functional verification only);
   Backspace/Enter/arrows/scroll were not separately exercised live; whether `wry`'s Linux WebKitGTK
   backend has an analogous focus-stealing bug to the Windows one is unexplored.
+- **Real, working code — real mouse input, click-to-position-cursor (§75.14)**: first increment of
+  a real push through §35.4's remaining Tier 1 gaps (UI shell, multi-file editing, Leo, Android,
+  GUI Builder — all still reference-only as of this bullet). Picked first because `spartan-editor-
+  core` had zero mouse handling at all before this — a hard dependency for any further clickable
+  UI. Real `TextState::hit_test` (cosmic-text's own `Buffer::hit`, confirmed against installed
+  source), `viewport::to_doc_line`, and `EditorView::set_cursor_to_line_col` (clamped) chain
+  together in `main.rs`'s new `CursorMoved`/`MouseInput` handling. 7 new headless tests for the
+  clamped setter and the line-translation inverse; `hit_test` itself needs a real GPU device so
+  can only be verified live — confirmed via two screenshotted clicks at different coordinates each
+  landing the caret exactly where clicked, plus a follow-up Backspace deleting at the new position,
+  proving the click and keyboard paths share one real cursor. No text selection yet (no selection
+  concept exists in `EditorView` at all -- scoped out as its own increment), no double/triple-click,
+  no context menu, no scrollbar-drag.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
