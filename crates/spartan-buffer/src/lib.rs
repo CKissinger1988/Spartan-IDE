@@ -138,6 +138,17 @@ impl Document {
         Ok(())
     }
 
+    /// Extracts the text within a char range without mutating the document
+    /// -- real, minimal addition for clipboard copy (spartan-editor-core
+    /// §75.20), since no substring accessor existed before this: only the
+    /// whole-document `text()` and per-line `line()`. `Rope::slice` is a
+    /// cheap structural view, not a copy, until `.to_string()` actually
+    /// materializes the substring.
+    pub fn text_between(&self, char_range: Range<usize>) -> Result<String, BufferError> {
+        self.check_range(&char_range)?;
+        Ok(self.current.slice(char_range).to_string())
+    }
+
     fn check_range(&self, r: &Range<usize>) -> Result<(), BufferError> {
         if r.start > r.end {
             return Err(BufferError::InvalidRange {
@@ -317,6 +328,27 @@ mod tests {
         let mut doc = Document::new("hello world");
         doc.replace(6..11, "there").unwrap();
         assert_eq!(doc.text(), "hello there");
+    }
+
+    #[test]
+    fn text_between_extracts_a_substring_without_mutating() {
+        let doc = Document::new("hello world");
+        assert_eq!(doc.text_between(6..11).unwrap(), "world");
+        assert_eq!(doc.text(), "hello world");
+    }
+
+    #[test]
+    fn text_between_out_of_bounds_returns_error_not_panic() {
+        let doc = Document::new("hi");
+        let err = doc.text_between(0..99).unwrap_err();
+        assert_eq!(err, BufferError::OutOfBounds { index: 99, len: 2 });
+    }
+
+    #[test]
+    fn text_between_inverted_range_returns_error_not_panic() {
+        let doc = Document::new("hello world");
+        let err = doc.text_between(5..2).unwrap_err();
+        assert_eq!(err, BufferError::InvalidRange { start: 5, end: 2 });
     }
 
     #[test]

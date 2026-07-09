@@ -278,6 +278,20 @@ fn selection_range_normalizes_regardless_of_drag_direction() {
 }
 
 #[test]
+fn selected_text_returns_the_real_selected_substring() {
+    let mut editor = EditorView::new("hello world");
+    editor.selection_anchor = Some(6);
+    editor.cursor = 11;
+    assert_eq!(editor.selected_text().as_deref(), Some("world"));
+}
+
+#[test]
+fn selected_text_is_none_with_no_active_selection() {
+    let editor = EditorView::new("hello world");
+    assert_eq!(editor.selected_text(), None);
+}
+
+#[test]
 fn start_selection_if_needed_does_not_reset_an_existing_anchor() {
     let mut editor = EditorView::new("hello world");
     editor.selection_anchor = Some(1);

@@ -348,6 +348,24 @@ first — it's the parity reference until each row there is actually reimplement
   original content, 10 Ctrl+Y presses then restored the typed text exactly -- each step
   screenshot-confirmed. No undo coalescing (ten keystrokes need ten undos, tracked as a follow-up),
   no undo/redo UI, no explicit LSP re-notification path beyond the normal debounced one.
+- **Real, working code — real clipboard integration, Ctrl+C/X/V, and a real live selection bug
+  found and fixed (§75.20)**: closes task #22 (deferred out of §75.18). New `arboard` dependency for
+  real OS clipboard access; new `Document::text_between()` in `spartan-buffer` itself (no substring
+  accessor existed before -- only whole-document `text()` and per-line `line()`). Ctrl+C/X/V copy,
+  cut, and paste the active selection's real text, matched via `physical_key` like Ctrl+S/Z/Y.
+  **A real, live bug was found only by testing paste-after-a-plain-click** (never exercised by
+  §75.18's own live testing, which always drag-selected, shift-clicked, or stayed keyboard-only):
+  a plain click armed `selection_anchor` unconditionally "in case of a drag," but since
+  `selection_range()` only checks whether anchor and cursor differ, *any* later cursor movement --
+  typing, pasting, undo/redo, not just an actual drag -- silently became a visible selection.
+  Reproduced live (screenshotted: pasted text incorrectly shown highlighted) and fixed by no longer
+  arming the anchor on press at all -- a new `drag_anchor_pos` local remembers only where the button
+  was pressed, and `CursorMoved` arms the real anchor lazily, only once real movement is observed.
+  Re-verified live after the fix: identical paste sequence now shows no stray highlight
+  (screenshotted), plus a full cut-then-paste-back round trip (screenshotted at each step). 5 new
+  tests (3 for `text_between`, 2 for `selected_text`), full test/clippy/fmt suite clean before and
+  after the fix, 50k-line benchmark re-run with no regression. No rich-text/image clipboard formats,
+  no X11 PRIMARY-selection middle-click paste, no clipboard history.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

@@ -548,6 +548,26 @@ fn main() {
     // between knows to extend the selection rather than just remembering
     // the position.
     let mut mouse_button_down = false;
+    // The document-absolute char position the left button was pressed at,
+    // if any -- deliberately *not* the same thing as an armed
+    // `EditorView::selection_anchor` (a real, live bug fixed in §75.20 came
+    // from conflating the two: see `WindowEvent::MouseInput`'s own comment
+    // for the full story). `CursorMoved` arms a real selection anchor from
+    // this lazily, only once the cursor has actually moved away from it.
+    let mut drag_anchor_pos: Option<usize> = None;
+    // Real OS clipboard integration (§75.20). Construction can genuinely
+    // fail (no X11/Wayland clipboard manager reachable, etc.) -- printed
+    // once and handled gracefully rather than treated as fatal, matching
+    // this crate's existing pattern for LSP/DAP spawn failures: Ctrl+C/X/V
+    // simply report "clipboard unavailable" for the rest of the session
+    // rather than panicking or silently doing nothing.
+    let mut clipboard = match arboard::Clipboard::new() {
+        Ok(c) => Some(c),
+        Err(e) => {
+            println!("Clipboard unavailable ({e}) -- Ctrl+C/X/V will not work this session");
+            None
+        }
+    };
 
     event_loop
         .run(move |event, elwt| {
@@ -625,10 +645,13 @@ fn main() {
                             last_cursor_pos = (position.x as f32, position.y as f32);
                             // Real click-drag selection (§75.18): while the
                             // left button is held, every subsequent
-                            // `CursorMoved` extends the selection from
-                            // wherever the button was originally pressed
-                            // (the anchor `MouseInput::Pressed` already
-                            // armed below) to the new hit-tested position.
+                            // `CursorMoved` moves the cursor to the new
+                            // hit-tested position and, the first time it
+                            // actually differs from where the button was
+                            // pressed (`drag_anchor_pos`), arms a real
+                            // selection anchor there -- see `drag_anchor_pos`'s
+                            // own declaration comment for why this is
+                            // deliberately lazy rather than armed on press.
                             if mouse_button_down {
                                 let local_x = last_cursor_pos.0 - text::TEXT_ORIGIN_X;
                                 let local_y = last_cursor_pos.1 - text::TEXT_ORIGIN_Y;
@@ -639,6 +662,11 @@ fn main() {
                                     let doc_line =
                                         viewport::to_doc_line(local_line, &active_file.viewport);
                                     active_file.editor.set_cursor_to_line_col(doc_line, col_chars);
+                                    if let Some(anchor) = drag_anchor_pos {
+                                        if active_file.editor.cursor != anchor {
+                                            active_file.editor.selection_anchor = Some(anchor);
+                                        }
+                                    }
                                     window.request_redraw();
                                 }
                             }
@@ -672,16 +700,28 @@ fn main() {
                                     active_file.editor.selection_anchor = None;
                                 }
                                 active_file.editor.set_cursor_to_line_col(doc_line, col_chars);
-                                if !modifiers.shift_key() {
-                                    // A plain click arms a fresh anchor at
-                                    // the click point so a subsequent drag
-                                    // (`CursorMoved` above, while the button
-                                    // stays held) has something to extend
-                                    // from -- `selection_range()` still
-                                    // reports "no selection" until the
-                                    // cursor actually moves away from here.
-                                    active_file.editor.selection_anchor = Some(active_file.editor.cursor);
-                                }
+                                // Real, live bug fixed here, found only by
+                                // testing paste-after-click, not by
+                                // inspection: an earlier version armed
+                                // `selection_anchor` unconditionally on
+                                // every plain click "in case of a drag."
+                                // But `selection_range()` only checks
+                                // whether the anchor and cursor differ, so
+                                // *any* later cursor movement by *any*
+                                // means (typing, pasting, undo/redo, not
+                                // just a real drag) silently turned into
+                                // what looked like a real, visible
+                                // selection. Fixed by only *remembering*
+                                // the press position here
+                                // (`drag_anchor_pos`) and arming the real
+                                // anchor lazily in `CursorMoved`, above,
+                                // the first time the cursor actually moves
+                                // during this drag.
+                                drag_anchor_pos = if modifiers.shift_key() {
+                                    None
+                                } else {
+                                    Some(active_file.editor.cursor)
+                                };
                                 window.request_redraw();
                             }
                         }
@@ -691,6 +731,7 @@ fn main() {
                             ..
                         } => {
                             mouse_button_down = false;
+                            drag_anchor_pos = None;
                         }
                         WindowEvent::KeyboardInput {
                             event:
@@ -780,6 +821,82 @@ fn main() {
                                     "Nothing to {}",
                                     if is_redo { "redo" } else { "undo" }
                                 );
+                            }
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } if modifiers.control_key()
+                            && matches!(
+                                key_event.physical_key,
+                                PhysicalKey::Code(KeyCode::KeyC)
+                                    | PhysicalKey::Code(KeyCode::KeyX)
+                                    | PhysicalKey::Code(KeyCode::KeyV)
+                            ) =>
+                        {
+                            // Real OS clipboard integration (§75.20):
+                            // Ctrl+C copies the active selection, Ctrl+X
+                            // cuts it (copy + delete), Ctrl+V pastes
+                            // clipboard content at the cursor (replacing an
+                            // active selection, via `insert_at_cursor`'s
+                            // existing §75.18 behavior). Matched via
+                            // `physical_key`, same reasoning as Ctrl+S.
+                            let Some(clip) = clipboard.as_mut() else {
+                                println!("Clipboard unavailable this session");
+                                return;
+                            };
+                            let active_file = &mut files[active];
+                            let mut edited = false;
+                            if key_event.physical_key == PhysicalKey::Code(KeyCode::KeyC)
+                                || key_event.physical_key == PhysicalKey::Code(KeyCode::KeyX)
+                            {
+                                match active_file.editor.selected_text() {
+                                    Some(text) => {
+                                        if let Err(e) = clip.set_text(&text) {
+                                            println!("Failed to copy to clipboard: {e}");
+                                        } else if key_event.physical_key
+                                            == PhysicalKey::Code(KeyCode::KeyX)
+                                        {
+                                            let effect = active_file.editor.delete_selection();
+                                            edited = effect != editor_view::EditEffect::None;
+                                        }
+                                    }
+                                    None => println!("Nothing selected to copy"),
+                                }
+                            } else {
+                                match clip.get_text() {
+                                    Ok(text) if !text.is_empty() => {
+                                        let effect = active_file.editor.insert_at_cursor(&text);
+                                        edited = effect != editor_view::EditEffect::None;
+                                    }
+                                    Ok(_) => {}
+                                    Err(e) => println!("Failed to paste from clipboard: {e}"),
+                                }
+                            }
+                            if edited {
+                                edit_latency.note_key_event();
+                                active_file.lsp_debouncer.on_edit();
+                                if !active_file.dirty {
+                                    active_file.dirty = true;
+                                    window.set_title(&window_title(active_file));
+                                }
+                                let (cursor_line, _) = active_file.editor.cursor_line_col();
+                                let doc_len_lines = active_file.editor.document.len_lines();
+                                active_file.viewport.ensure_visible(cursor_line, doc_len_lines);
+                                // A pasted string can be any length and a cut can
+                                // span multiple lines -- always a full reshape,
+                                // same reasoning as undo/redo just above.
+                                reshape_window(
+                                    &mut text_state,
+                                    &active_file.editor,
+                                    &active_file.viewport,
+                                    active_file.highlighter.as_mut(),
+                                );
+                                window.request_redraw();
                             }
                         }
                         WindowEvent::KeyboardInput {

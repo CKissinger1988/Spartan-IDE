@@ -86,6 +86,14 @@ impl EditorView {
         Some((anchor.min(self.cursor), anchor.max(self.cursor)))
     }
 
+    /// The active selection's real text content, if any -- real clipboard
+    /// copy support (§75.20) needed this and no substring accessor existed
+    /// on `Document` before that pass added `text_between`.
+    pub fn selected_text(&self) -> Option<String> {
+        let (start, end) = self.selection_range()?;
+        self.document.text_between(start..end).ok()
+    }
+
     /// Arms a new selection anchored at the cursor's current position, if
     /// one isn't already active -- used by Shift+Arrow so extending an
     /// already-active selection doesn't silently reset its anchor back to
