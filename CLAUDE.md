@@ -226,6 +226,34 @@ first — it's the parity reference until each row there is actually reimplement
   install at once. Fixed by restoring `dap-spike`'s original platform split verbatim; re-ran clean,
   including the `StepOver`/`Continue`-to-exit assertions the test already had but had never
   actually exercised end-to-end. clippy and fmt both re-confirmed clean after the fix.
+- **Real, working code — first live-GUI verification of `spartan-editor-core` on Linux, a real
+  X11 keyboard-focus finding, a second real cross-platform build bug found and fixed (§75.13)**:
+  §75.12 assumed no GPU meant no GUI verification was possible; this pass found and installed a
+  real software Vulkan device (Mesa lavapipe, `PHYSICAL_DEVICE_TYPE_CPU`, confirmed via
+  `vulkaninfo`) that's enough to actually launch the real product binary end-to-end for the first
+  time outside a Windows/real-GPU machine. Three more real environment gaps were found and fixed
+  (`libxkbcommon-x11-0`, `mesa-vulkan-drivers`, `Xvfb` for a display) before the window would even
+  open. A real X11/ICCCM finding, confirmed with temporary debug instrumentation added and then
+  fully reverted before committing anything: without a window manager, winit's X11 backend never
+  reports `Focused(true)` and never receives a single `KeyboardInput` event, even though mouse
+  events and direct `XSetInputFocus` calls both work fine — not a product bug, fixed by running a
+  minimal window manager (`fluxbox`), after which real keypresses flowed correctly end-to-end. A
+  second real cross-platform build bug was found by actually running `cargo build --release
+  --workspace` (not `cargo test`, which never linked the offending code path at all):
+  `ui-shell-spike`'s real Win32 `SetFocus` focus-stealing fix (§47.11) had no `#[cfg(windows)]`
+  guard, so the full workspace build failed to link on Linux with `undefined symbol: SetFocus`.
+  Fixed by gating the `windows`/`raw_window_handle` imports and the call site behind
+  `#[cfg(windows)]`, no Windows behavior change, re-confirmed clippy/fmt/full-test-suite clean
+  afterward. Live, through the real product binary: real language detection, LSP/DAP
+  startup, and tree-sitter highlighting all initialized correctly; a real cold-open of 116-118ms
+  (this software-rendering stack only — explicitly not compared to the GPU-hardware cold-open
+  numbers elsewhere in this file, different backend entirely); a screenshot confirmed real,
+  correct rendering, and a second screenshot after sending real `Space`/`a`/`b` keypresses through
+  the X server confirmed the literal characters `ab` genuinely inserted with the cursor positioned
+  correctly after them — the first live, keyboard-driven edit of this crate's real binary outside
+  Windows. Cold-open/edit/scroll latency were not benchmarked here (functional verification only);
+  Backspace/Enter/arrows/scroll were not separately exercised live; whether `wry`'s Linux WebKitGTK
+  backend has an analogous focus-stealing bug to the Windows one is unexplored.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

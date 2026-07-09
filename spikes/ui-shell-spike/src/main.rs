@@ -3,10 +3,13 @@ mod latency;
 mod panel;
 mod webview_bridge;
 
+#[cfg(windows)]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+#[cfg(windows)]
 use windows::Win32::Foundation::HWND;
+#[cfg(windows)]
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use winit::event::{ElementState, Event, KeyEvent, WindowEvent};
 use winit::event_loop::EventLoop;
@@ -29,6 +32,15 @@ use wry::Rect;
 /// app" risk §39.4/§35.9 name as Spike 0.4's central uncertainty -- not a
 /// cosmetic seam, but keyboard input ownership silently getting stuck on
 /// the WebView.
+///
+/// Windows/WebView2-only, matching this whole spike's scope (`wry` uses
+/// WebView2 on Windows, a different backend -- WebKitGTK -- on Linux, where
+/// this exact focus-stealing bug, if it exists at all, hasn't been
+/// investigated). Gated with `#[cfg(windows)]` rather than left unguarded --
+/// found by actually running `cargo build --workspace` on Linux, where the
+/// unconditional `windows`-crate FFI call failed to link (`undefined symbol:
+/// SetFocus`), not by inspection.
+#[cfg(windows)]
 fn win32_hwnd(window: &winit::window::Window) -> HWND {
     match window
         .window_handle()
@@ -195,7 +207,9 @@ fn main() {
                         } => {
                             // Only fires for clicks in the native (non-WebView)
                             // area -- see `win32_hwnd`'s doc comment for why this
-                            // is necessary at all.
+                            // is necessary on Windows. Windows/WebView2-only;
+                            // a no-op on other platforms (unverified there).
+                            #[cfg(windows)]
                             unsafe {
                                 let _ = SetFocus(win32_hwnd(&window));
                             }
