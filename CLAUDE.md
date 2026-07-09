@@ -1096,6 +1096,51 @@ first — it's the parity reference until each row there is actually reimplement
   Kotlin's DAP remains real and proven at the client level but not live-usable through the product's
   own keyboard flow; the breakpoint-stop limitation and Gradle-classpath-fidelity gaps remain real,
   open, and named.
+- **Real, working code — real Leo agentic core, first increment of task #5, the product's own
+  defining "agent-first IDE" feature (§75.46)**: closes exactly §35.4's Tier 1 bar for this row --
+  "Plan→approve→execute→verify loop, checkpointing, project-tier memory only." New
+  `crates/spartan-leo`, six modules. `state.rs`: a real `AgentState` enum (`Idle, Planning,
+  AwaitingApproval, Executing, Verifying, Done, Failed, Recovering`) with `can_transition_to`
+  matching §4.1's own transition table exactly, including the bounded `Failed → Recovering →
+  Executing` retry loop. `tool.rs`: a real `Sandbox` enforcing §36.4.6's path-jail as an actual
+  Rust check, not a prompt instruction -- component-by-component join/normalize (rejecting `..`
+  that would climb above root), then canonicalizing the deepest existing ancestor to defeat
+  symlink escapes, confirmed by a real test that a symlink planted inside the jail pointing to a
+  real outside file is refused. `approval.rs`: a real `RiskClass`/`ApprovalMode` gate --
+  `read_file` is `Safe`, `edit_file`/`run_terminal` are always `Destructive`, and
+  `may_auto_execute` never returns true for a destructive call regardless of mode, matching §9's
+  "local-model outputs are never trusted with elevated destructive actions... without explicit
+  approval." `checkpoint.rs`: real git-based checkpointing via `git2`'s `stash_save2`/
+  `stash_apply`/reset plumbing (no lower-level "snapshot without touching the working tree"
+  binding exists) -- two real bugs found only by running the tests: `stash_save2` itself errors on
+  an already-clean working tree ("nothing to stash"), fixed by checking real dirty status first and
+  making `stash_oid: Option<Oid>`; and a clean-tree checkpoint followed by a new untracked file
+  would have been invisible to both `reset --hard` (tracked files only) and no-stash-to-reapply --
+  fixed by snapshotting real untracked paths at checkpoint time and diffing against them on
+  restore. `memory.rs`: real `.spartan/memory/project.md` read/append, deliberately project-tier
+  only per §35.4 (session tier is just `Agent`'s own in-process state; global tier is separate
+  unbuilt work), deliberately unsummarized/token-unbudgeted for v1. `plan.rs`: real plan generation
+  against the actual `ModelProvider` trait (§75.43) -- a `propose_plan` tool definition, a system
+  prompt, and a custom `deserialize_files` that tries a real JSON array, then a JSON-encoded-string
+  array, then a Python-repr-style single-quoted array, in that order, before erroring. `agent.rs`:
+  the real `Agent` orchestrator tying all five together -- `start_task` (Idle→Planning→
+  AwaitingApproval), `approve_plan` (creates a real checkpoint before Executing), `execute_call`
+  (refuses outside `Executing`), `begin_recovery` (bounded to 3 attempts, really restores the
+  checkpoint). A real, repeatedly-observed live-model finding from running the new
+  `plan_ollama_integration.rs` test against the actual running `llama3.1:8b` roughly 15 times: the
+  two non-standard `files`-field shapes above are real, recurring output quirks, not one-off
+  fixture noise -- fixed with the deserializer above plus a genuine bounded retry
+  (`MAX_PLAN_ATTEMPTS = 3`) in `generate_plan` itself (a real `Provider` error still fails fast,
+  never retried), after which the live test passed 5/5 consecutive runs with zero failures (versus
+  roughly 2-3 failures out of the prior ~12-15 runs). 40 new tests (39 unit tests across all six
+  modules plus this one live Ollama integration test), 317 tests total workspace-wide (up from
+  277), full clippy/fmt clean. **What this does not confirm**: no sub-agent delegation (§4.4), no
+  team/global memory tiers, no memory compaction/token-budgeting, no UI wiring into
+  `spartan-editor-core` at all -- Agent mode still shows only the placeholder text from §75.36, the
+  new `Agent` struct is not yet driven by any real editor event loop, no live Anthropic/
+  `ClaudeProvider` plan generation was exercised (only Ollama), no §60.2.1 Developer Mode
+  path-jail exception, no real end-to-end `execute_call`/`begin_verification` run against a live
+  model's actual tool calls beyond what the unit tests' fakes exercise.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1153,11 +1198,12 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 277 tests: 6 spikes + 8 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 317 tests: 6 spikes + 9 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
-                                    # spartan-crash, spartan-plugin-host, spartan-model,
+                                    # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-editor-core, xtask)
-# spartan-model's own tests/ollama_integration.rs (§75.43) needs a real local Ollama instance
+# spartan-model's own tests/ollama_integration.rs (§75.43) and spartan-leo's own
+# tests/plan_ollama_integration.rs (§75.46) both need a real local Ollama instance
 # reachable at http://localhost:11434 with `llama3.1:8b` pulled -- self-skips (prints a message)
 # if either isn't present, matching every other real-external-tool integration suite in this repo.
 # `ollama serve` has no systemd unit in a bare container -- start it manually in the background.

@@ -1,0 +1,425 @@
+//! Real §4.1 orchestration (task #5): the `Agent` struct is the one real
+//! object tying the state machine (`state.rs`), plan generation
+//! (`plan.rs`), the sandboxed tool layer (`tool.rs`), approval gating
+//! (`approval.rs`), checkpointing (`checkpoint.rs`), and project memory
+//! (`memory.rs`) into the real plan -> approve -> execute -> verify loop.
+//!
+//! Deliberately a synchronous, step-driven API -- the caller (eventually
+//! `spartan-editor-core`'s render loop, the same way `LspSession`/
+//! `DapSession` already run real work off the render thread via their own
+//! background-thread patterns) drives each transition explicitly. This
+//! crate does not itself spawn threads; that's a real, deliberate
+//! separation from `spartan-editor-core`'s own established
+//! thread-plus-channel convention, left for the UI-wiring pass that
+//! actually needs it, rather than guessed at here with no real caller yet.
+
+use crate::approval::{may_auto_execute, ApprovalMode};
+use crate::checkpoint::{self, Checkpoint, CheckpointError};
+use crate::plan::{generate_plan, ImplementationPlan, PlanError};
+use crate::state::AgentState;
+use crate::tool::{Sandbox, SandboxError, ToolCall, ToolResult};
+use spartan_model::provider::ModelProvider;
+use std::path::PathBuf;
+
+const MAX_RECOVERY_ATTEMPTS: u32 = 3;
+
+#[derive(Debug)]
+pub enum AgentError {
+    InvalidTransition { from: AgentState, to: AgentState },
+    Plan(PlanError),
+    Sandbox(SandboxError),
+    Checkpoint(CheckpointError),
+    RecoveryExhausted,
+}
+
+impl From<SandboxError> for AgentError {
+    fn from(e: SandboxError) -> Self {
+        AgentError::Sandbox(e)
+    }
+}
+
+impl From<CheckpointError> for AgentError {
+    fn from(e: CheckpointError) -> Self {
+        AgentError::Checkpoint(e)
+    }
+}
+
+pub struct Agent {
+    state: AgentState,
+    project_root: PathBuf,
+    sandbox: Sandbox,
+    approval_mode: ApprovalMode,
+    plan: Option<ImplementationPlan>,
+    /// The real checkpoint taken at the start of the current `Executing`
+    /// phase -- what `Recovering` rolls back to before its retry, per
+    /// §4.1's "each attempt's diff kept distinct... user can see attempt 1
+    /// failed because X, attempt 2 fixed it" (the retry loop itself is
+    /// real here; the distinct-per-attempt diff history is a real, named
+    /// UI-layer concern this crate doesn't own).
+    current_checkpoint: Option<Checkpoint>,
+    recovery_attempts: u32,
+}
+
+impl Agent {
+    pub fn new(project_root: PathBuf, approval_mode: ApprovalMode) -> Self {
+        let sandbox = Sandbox::new(&project_root);
+        Self {
+            state: AgentState::Idle,
+            project_root,
+            sandbox,
+            approval_mode,
+            plan: None,
+            current_checkpoint: None,
+            recovery_attempts: 0,
+        }
+    }
+
+    pub fn state(&self) -> AgentState {
+        self.state
+    }
+
+    pub fn plan(&self) -> Option<&ImplementationPlan> {
+        self.plan.as_ref()
+    }
+
+    fn transition(&mut self, to: AgentState) -> Result<(), AgentError> {
+        if !self.state.can_transition_to(to) {
+            return Err(AgentError::InvalidTransition {
+                from: self.state,
+                to,
+            });
+        }
+        self.state = to;
+        Ok(())
+    }
+
+    /// `Idle -> Planning -> AwaitingApproval`. A real, blocking model call
+    /// (see `plan.rs`'s own doc comment) -- the caller is responsible for
+    /// keeping this off any UI-blocking thread, matching this crate's own
+    /// "no threading opinions" scope note above.
+    pub fn start_task(
+        &mut self,
+        provider: &dyn ModelProvider,
+        task: &str,
+    ) -> Result<&ImplementationPlan, AgentError> {
+        self.transition(AgentState::Planning)?;
+        match generate_plan(provider, task) {
+            Ok(plan) => {
+                self.plan = Some(plan);
+                self.transition(AgentState::AwaitingApproval)?;
+                Ok(self.plan.as_ref().unwrap())
+            }
+            Err(e) => {
+                self.transition(AgentState::Failed)?;
+                Err(AgentError::Plan(e))
+            }
+        }
+    }
+
+    /// `AwaitingApproval -> Executing`. Takes a real checkpoint (§4.2) the
+    /// instant execution begins, before any tool call in this phase runs.
+    pub fn approve_plan(&mut self, repo: &mut git2::Repository) -> Result<(), AgentError> {
+        self.transition(AgentState::Executing)?;
+        self.current_checkpoint = Some(checkpoint::create_checkpoint(
+            repo,
+            "before Leo's execution phase",
+        )?);
+        Ok(())
+    }
+
+    /// `AwaitingApproval -> Idle`, discarding the proposed plan -- the
+    /// user rejected it.
+    pub fn reject_plan(&mut self) -> Result<(), AgentError> {
+        self.transition(AgentState::Idle)?;
+        self.plan = None;
+        Ok(())
+    }
+
+    /// Real §9 approval gate, checked *before* `execute_call` ever touches
+    /// the sandbox -- a caller must check this (or hold an explicit,
+    /// separately-obtained human approval) before calling `execute_call`
+    /// for a call this returns `false` for. This function alone never
+    /// runs the call.
+    pub fn may_auto_execute(&self, call: &ToolCall) -> bool {
+        may_auto_execute(call, self.approval_mode)
+    }
+
+    /// Must be in `Executing`. Runs `call` through the real, hard-jailed
+    /// sandbox -- this function does not itself re-check
+    /// `may_auto_execute`; a caller that skips the approval gate for a
+    /// `Destructive` call without real, separately-obtained human
+    /// approval is violating §9's own invariant, not something this type
+    /// system alone can prevent for a synchronous, embeddable library
+    /// (the real enforcement is architectural: no code path in
+    /// `spartan-editor-core`'s eventual UI wiring may call this without
+    /// having gated on `may_auto_execute` or real user approval first).
+    pub fn execute_call(&mut self, call: ToolCall) -> Result<ToolResult, AgentError> {
+        if self.state != AgentState::Executing {
+            return Err(AgentError::InvalidTransition {
+                from: self.state,
+                to: AgentState::Executing,
+            });
+        }
+        Ok(self.sandbox.execute(&call)?)
+    }
+
+    /// `Executing -> Verifying`.
+    pub fn begin_verification(&mut self) -> Result<(), AgentError> {
+        self.transition(AgentState::Verifying)
+    }
+
+    /// Runs a real, configured verification command (e.g. `cargo build`,
+    /// a test command) inside the same real sandbox -- §4.1's "Leo
+    /// automatically runs configured verification... before declaring
+    /// done." The caller decides pass/fail from the real exit code and
+    /// calls `mark_done`/`mark_failed` accordingly; this function only
+    /// runs the command, matching the same "who owns the actual command"
+    /// separation `execute_call` already has for tool calls.
+    pub fn run_verification(&mut self, command: &str) -> Result<ToolResult, AgentError> {
+        if self.state != AgentState::Verifying {
+            return Err(AgentError::InvalidTransition {
+                from: self.state,
+                to: AgentState::Verifying,
+            });
+        }
+        Ok(self.sandbox.run_terminal(command)?)
+    }
+
+    /// `Verifying -> Done`.
+    pub fn mark_done(&mut self) -> Result<(), AgentError> {
+        self.transition(AgentState::Done)?;
+        self.recovery_attempts = 0;
+        Ok(())
+    }
+
+    /// `Executing|Verifying -> Failed`.
+    pub fn mark_failed(&mut self) -> Result<(), AgentError> {
+        self.transition(AgentState::Failed)
+    }
+
+    /// `Failed -> Recovering -> Executing`, real-rolling-back to the
+    /// checkpoint taken at the start of this attempt's `Executing` phase
+    /// first, matching §4.1's bounded-retry design ("default max 3
+    /// attempts"). Returns `RecoveryExhausted` (not a silent stop) once
+    /// the bound is hit, and does *not* itself decide what a caller does
+    /// next -- surfacing the exhaustion is this crate's job, presenting
+    /// it to the user is the UI layer's.
+    pub fn begin_recovery(&mut self, repo: &mut git2::Repository) -> Result<(), AgentError> {
+        if self.recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
+            return Err(AgentError::RecoveryExhausted);
+        }
+        self.transition(AgentState::Recovering)?;
+        if let Some(checkpoint) = &self.current_checkpoint {
+            checkpoint::restore_checkpoint(repo, checkpoint)?;
+        }
+        self.recovery_attempts += 1;
+        self.transition(AgentState::Executing)?;
+        Ok(())
+    }
+
+    pub fn append_memory(&self, entry: &str) -> std::io::Result<()> {
+        crate::memory::append_project_memory(&self.project_root, entry)
+    }
+
+    pub fn read_memory(&self) -> std::io::Result<String> {
+        crate::memory::read_project_memory(&self.project_root)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use spartan_model::provider::{
+        CompletionRequest, Delta, ProviderError, ProviderHealth, StopReason,
+    };
+
+    struct FakePlanningProvider;
+    impl ModelProvider for FakePlanningProvider {
+        fn id(&self) -> &str {
+            "fake"
+        }
+        fn is_local(&self) -> bool {
+            true
+        }
+        fn context_window(&self) -> usize {
+            4096
+        }
+        fn supports_native_tool_calling(&self) -> bool {
+            true
+        }
+        fn health_check(&self) -> ProviderHealth {
+            ProviderHealth::Healthy
+        }
+        fn stream_completion(
+            &self,
+            _request: &CompletionRequest,
+            on_delta: &mut dyn FnMut(Delta),
+        ) -> Result<(), ProviderError> {
+            on_delta(Delta::ToolCallStart {
+                id: "1".to_string(),
+                name: "propose_plan".to_string(),
+            });
+            on_delta(Delta::ToolCallArgsChunk {
+                id: "1".to_string(),
+                partial_json: serde_json::json!({
+                    "goal": "test goal",
+                    "approach": "test approach",
+                    "files": ["a.txt"],
+                    "risk_notes": "none"
+                })
+                .to_string(),
+            });
+            on_delta(Delta::ToolCallEnd {
+                id: "1".to_string(),
+            });
+            on_delta(Delta::Stop {
+                reason: StopReason::ToolUse,
+            });
+            Ok(())
+        }
+    }
+
+    fn real_repo_with_one_commit(name: &str) -> (PathBuf, git2::Repository) {
+        let dir = std::env::temp_dir().join(format!("spartan-leo-agent-test-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = git2::Repository::init(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "original\n").unwrap();
+        {
+            let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("a.txt")).unwrap();
+            index.write().unwrap();
+            let tree_oid = index.write_tree().unwrap();
+            let tree = repo.find_tree(tree_oid).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+                .unwrap();
+        }
+        (dir, repo)
+    }
+
+    #[test]
+    fn real_full_happy_path_plan_approve_execute_verify_done() {
+        let (dir, mut repo) = real_repo_with_one_commit("happy");
+        let mut agent = Agent::new(dir.clone(), ApprovalMode::ManualEveryStep);
+
+        agent
+            .start_task(&FakePlanningProvider, "do the thing")
+            .unwrap();
+        assert_eq!(agent.state(), AgentState::AwaitingApproval);
+        assert_eq!(agent.plan().unwrap().goal, "test goal");
+
+        agent.approve_plan(&mut repo).unwrap();
+        assert_eq!(agent.state(), AgentState::Executing);
+
+        let call = ToolCall::EditFile {
+            path: "a.txt".to_string(),
+            content: "modified\n".to_string(),
+        };
+        assert!(
+            !agent.may_auto_execute(&call),
+            "ManualEveryStep must never auto-execute a destructive call"
+        );
+        agent.execute_call(call).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "modified\n"
+        );
+
+        agent.begin_verification().unwrap();
+        let result = agent.run_verification("cat a.txt").unwrap();
+        let ToolResult::TerminalOutput {
+            stdout, exit_code, ..
+        } = result
+        else {
+            panic!("expected TerminalOutput");
+        };
+        assert_eq!(exit_code, 0);
+        assert!(stdout.contains("modified"));
+
+        agent.mark_done().unwrap();
+        assert_eq!(agent.state(), AgentState::Done);
+    }
+
+    #[test]
+    fn rejecting_a_plan_returns_to_idle_and_clears_it() {
+        let (dir, _repo) = real_repo_with_one_commit("reject");
+        let mut agent = Agent::new(dir, ApprovalMode::ManualEveryStep);
+        agent
+            .start_task(&FakePlanningProvider, "do the thing")
+            .unwrap();
+        agent.reject_plan().unwrap();
+        assert_eq!(agent.state(), AgentState::Idle);
+        assert!(agent.plan().is_none());
+    }
+
+    #[test]
+    fn a_destructive_call_cannot_run_before_a_plan_is_approved() {
+        let (dir, _repo) = real_repo_with_one_commit("gate");
+        let mut agent = Agent::new(dir, ApprovalMode::ManualEveryStep);
+        let call = ToolCall::EditFile {
+            path: "a.txt".to_string(),
+            content: "x".to_string(),
+        };
+        let result = agent.execute_call(call);
+        assert!(matches!(result, Err(AgentError::InvalidTransition { .. })));
+    }
+
+    #[test]
+    fn real_recovery_restores_the_checkpoint_before_retrying() {
+        let (dir, mut repo) = real_repo_with_one_commit("recover");
+        let mut agent = Agent::new(dir.clone(), ApprovalMode::ManualEveryStep);
+        agent
+            .start_task(&FakePlanningProvider, "do the thing")
+            .unwrap();
+        agent.approve_plan(&mut repo).unwrap();
+
+        agent
+            .execute_call(ToolCall::EditFile {
+                path: "a.txt".to_string(),
+                content: "a broken edit\n".to_string(),
+            })
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "a broken edit\n"
+        );
+
+        agent.mark_failed().unwrap();
+        agent.begin_recovery(&mut repo).unwrap();
+
+        assert_eq!(agent.state(), AgentState::Executing);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "original\n",
+            "recovery should have restored the real checkpoint from before the broken edit"
+        );
+    }
+
+    #[test]
+    fn recovery_is_really_bounded_and_reports_exhaustion() {
+        let (dir, mut repo) = real_repo_with_one_commit("exhaust");
+        let mut agent = Agent::new(dir, ApprovalMode::ManualEveryStep);
+        agent
+            .start_task(&FakePlanningProvider, "do the thing")
+            .unwrap();
+        agent.approve_plan(&mut repo).unwrap();
+
+        for _ in 0..MAX_RECOVERY_ATTEMPTS {
+            agent.mark_failed().unwrap();
+            agent.begin_recovery(&mut repo).unwrap();
+        }
+        agent.mark_failed().unwrap();
+        let result = agent.begin_recovery(&mut repo);
+        assert!(matches!(result, Err(AgentError::RecoveryExhausted)));
+    }
+
+    #[test]
+    fn real_project_memory_round_trips_through_the_agent() {
+        let (dir, _repo) = real_repo_with_one_commit("memory");
+        let agent = Agent::new(dir, ApprovalMode::ManualEveryStep);
+        agent.append_memory("Don't use default exports").unwrap();
+        let content = agent.read_memory().unwrap();
+        assert!(content.contains("Don't use default exports"));
+    }
+}

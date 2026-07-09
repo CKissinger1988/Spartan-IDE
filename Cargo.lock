@@ -4658,6 +4658,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "spartan-leo"
+version = "0.1.0"
+dependencies = [
+ "git2",
+ "serde",
+ "serde_json",
+ "spartan-git",
+ "spartan-model",
+ "spartan-security",
+]
+
+[[package]]
 name = "spartan-model"
 version = "0.1.0"
 dependencies = [
