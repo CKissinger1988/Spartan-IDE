@@ -847,6 +847,41 @@ first — it's the parity reference until each row there is actually reimplement
   `ui-shell-spike`'s wgpu+WebView shell promoted into `spartan-editor-core` first), no dev-server/
   HMR, no Figma import, no screenshot-to-component, no design-token file I/O. Task #12 remains
   `in_progress` -- a real first increment, not the full MVP.
+- **Real, working code — real embedded WebView bridge for Design mode, second increment of task
+  #12 (§75.39)**: promotes `spikes/ui-shell-spike`'s already-proven wgpu+WebView shell (§47.11)
+  into the real product for the first time. Design mode now shows a real, live, bidirectional
+  `wry` WebView (lazily created on first use, hidden via a zero-size `Rect` when leaving Design
+  mode rather than destroyed) instead of static placeholder text -- real active-file path, a real
+  component-file check, and a real IPC self-check ("connected, real round-trip confirmed"), still
+  honestly not a live React/JSX canvas (needs §75.38's dev-server bridge, not yet wired to this
+  WebView at all). Three real, environment-specific bugs found only by running this live, not by
+  inspection: (1) `wry` needs `gtk::init()` called and `gtk::main_iteration_do` pumped every frame
+  on Linux/BSD (winit doesn't drive GTK's own loop) -- fixed per wry's own documented recipe,
+  gated to the exact platform set wry's own `Cargo.toml` uses, plus a promoted `build.rs` for the
+  matching Windows `WebView2Loader.dll` deployment gap; (2) this specific container hung
+  indefinitely in `gtk::init()` itself, isolated (via a minimal Python GTK3 repro, independent of
+  any Rust code) to GTK's GSettings/dconf backend blocking on a D-Bus session this minimal
+  container doesn't run -- `GSETTINGS_BACKEND=memory` fixes it, documented as a verification-
+  environment-only recipe note, not baked into the shipped binary (a real desktop always has a
+  working D-Bus session); (3) a real click landing *inside* the WebView's own content silently
+  stops native keyboard shortcuts from reaching winit afterward -- `ui-shell-spike`'s own README
+  had already found and fixed this on Windows/WebView2 but named the Linux/WebKitGTK case
+  "unexplored"; no longer unexplored, fixed with `window.focus_window()` (winit's cross-platform
+  method) on every native mouse press, alongside the existing Windows-specific raw `SetFocus` call
+  each platform actually needs. A real, named residual: a click *inside* the WebView still needs a
+  follow-up *native* click (any sidebar/tab bar/mode-toggle click, including "Editor" itself) to
+  restore keyboard shortcuts -- confirmed live to reliably work as the escape hatch. Full
+  workspace build/clippy/fmt/test clean; no new headless tests (GPU/WebView-facing, matching
+  `mode_toggle.rs`'s own precedent), but its existing placeholder test was updated since Design
+  mode's `placeholder_message()` now correctly returns `None`. Live, through the real binary:
+  Design mode's real WebView content screenshotted; Ctrl+2 round-trips (both immediate and after a
+  longer settle) confirmed reliable; the WebView-click focus-steal and its "Editor" label
+  escape-hatch fix were both confirmed live; ordinary Editor-mode editing confirmed unaffected. The
+  50k-line benchmark (never enters Design mode) was re-run and shows no attributable regression.
+  Still no real React/JSX rendering, no `gui-builder` AST engine wired to this WebView at all, no
+  macOS testing (none available in this project's history), CPU cost while Design mode is open not
+  precisely benchmarked. Task #12 remains `in_progress` -- connecting `gui-builder`'s real AST
+  engine to this real WebView shell via a real dev-server bridge is the natural next increment.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -928,6 +963,12 @@ cargo test --workspace --release   # 249 tests: 6 spikes + 7 real crates + xtask
 # gui-builder/ (task #12, §75.38) is a real, separate npm/TypeScript project, not part of the
 # Cargo workspace at all -- `cd gui-builder && npm install && npm test` (21 tests, Node's built-in
 # `node:test` runner).
+# spartan-editor-core's Design mode now embeds a real wry WebView (§6.1, §75.39) -- on Linux, live
+# `cargo run`/manual testing in a minimal/headless environment (no real desktop D-Bus session, e.g.
+# this project's own Xvfb+fluxbox verification setup) needs `GSETTINGS_BACKEND=memory` set or
+# `gtk::init()` hangs indefinitely trying to reach a dconf service that isn't there -- a real
+# environment-only requirement, not something the binary sets itself (a real desktop always has a
+# working D-Bus session). See §75.39 for the full diagnosis.
 # spartan-editor-core's real accessibility tree (§16.3, §75.34) only has headless tests for its
 # own pure tree-building logic (accessibility.rs) -- live AT-SPI registration needs a real Linux
 # desktop accessibility stack (at-spi2-core's `at-spi-bus-launcher`, a real D-Bus session, and

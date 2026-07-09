@@ -5,8 +5,11 @@ mod input;
 mod latency;
 mod selection;
 mod text;
+mod webview_bridge;
 
 use mode_toggle::AppMode;
+#[cfg(windows)]
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use spartan_editor_core::viewport::{self, Viewport};
 use spartan_editor_core::{
     accessibility, build, command_palette, dap_session, editor_view, file_tree, git_panel,
@@ -17,10 +20,124 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
+#[cfg(windows)]
+use windows::Win32::Foundation::HWND;
+#[cfg(windows)]
+use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use winit::event::{ElementState, Event, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::EventLoopBuilder;
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::WindowBuilder;
+use wry::dpi::{LogicalPosition, LogicalSize};
+use wry::Rect;
+
+/// Promoted verbatim from `spikes/ui-shell-spike/src/main.rs` (§47.11): a
+/// real, documented fix for a real bug that spike found only by testing
+/// keyboard input after clicking the embedded WebView, not predicted in
+/// advance -- once wry's child `WebView2` control takes keyboard focus,
+/// clicking elsewhere in this *same top-level window's* native area does
+/// not return keyboard focus to winit on Windows. `winit::window::Window::
+/// focus_window()` alone does not fix this (tested in that spike); a
+/// direct Win32 `SetFocus` call does. Windows/WebView2-only, matching this
+/// whole bridge's scope (`wry` uses a different backend -- WebKitGTK -- on
+/// Linux, where this exact focus-stealing bug, if it exists at all, hasn't
+/// been investigated in this project).
+#[cfg(windows)]
+fn win32_hwnd(window: &winit::window::Window) -> HWND {
+    match window
+        .window_handle()
+        .expect("window should have a valid handle")
+        .as_raw()
+    {
+        RawWindowHandle::Win32(h) => HWND(h.hwnd.get()),
+        other => panic!("unexpected window handle type: {other:?}"),
+    }
+}
+
+/// The real screen-space region Design mode's embedded WebView occupies
+/// (§6.1, task #12) -- exactly the main editor's own content area (right
+/// of the sidebar, below the tab bar/mode-toggle row), so switching modes
+/// swaps *what* fills that region without moving or resizing it.
+fn design_content_bounds(
+    window: &winit::window::Window,
+    size: winit::dpi::PhysicalSize<u32>,
+) -> Rect {
+    let scale = window.scale_factor();
+    Rect {
+        position: LogicalPosition::new(text::TEXT_ORIGIN_X as f64, text::TAB_BAR_HEIGHT as f64)
+            .into(),
+        size: LogicalSize::new(
+            (size.width as f64 / scale - text::TEXT_ORIGIN_X as f64).max(0.0),
+            (size.height as f64 / scale - text::TAB_BAR_HEIGHT as f64).max(0.0),
+        )
+        .into(),
+    }
+}
+
+/// A zero-size `Rect` at the same position `design_content_bounds` uses --
+/// used to effectively hide the WebView while leaving Design mode, rather
+/// than destroying and recreating it on every mode switch. A real,
+/// deliberate cost/complexity tradeoff: a hidden, zero-size WebView still
+/// exists as a real child control, but occupies no screen space and can't
+/// be clicked or receive real input.
+fn design_hidden_bounds() -> Rect {
+    Rect {
+        position: LogicalPosition::new(text::TEXT_ORIGIN_X as f64, text::TAB_BAR_HEIGHT as f64)
+            .into(),
+        size: LogicalSize::new(0.0, 0.0).into(),
+    }
+}
+
+/// Ensures a WebView exists and is shown at the real content-area bounds
+/// (creating it lazily on first use), then refreshes its file info, if
+/// `mode` is `Design`; otherwise hides an already-existing one. Called
+/// after every real mode assignment (Ctrl+1/2/3, a mode-toggle click, a
+/// command-palette mode-switch command) -- not just ones that specifically
+/// target Design -- so leaving Design mode reliably hides the WebView
+/// again via this one shared code path, not a separate hide call at every
+/// site that could possibly change `mode` away from it.
+fn sync_webview_for_mode(
+    bridge: &mut Option<webview_bridge::WebviewBridge>,
+    mode: AppMode,
+    window: &winit::window::Window,
+    size: winit::dpi::PhysicalSize<u32>,
+    file: &OpenFile,
+) {
+    if mode == AppMode::Design {
+        let b = bridge.get_or_insert_with(|| {
+            webview_bridge::WebviewBridge::new(window, design_content_bounds(window, size))
+        });
+        b.set_bounds(design_content_bounds(window, size));
+        let is_component_file = file.label.ends_with(".jsx") || file.label.ends_with(".tsx");
+        b.push_file_info(&file.label, is_component_file);
+    } else if let Some(b) = bridge {
+        b.set_bounds(design_hidden_bounds());
+    }
+}
+
+/// Pushes the real active file's path (and a real, simple extension-based
+/// component-file check -- deliberately not the full `LanguageProfile`
+/// registry lookup, since this is specifically about what `gui-builder`
+/// itself can parse, a narrower question than "is this a JS-family file at
+/// all") into the WebView, if one exists and Design mode is currently
+/// showing. A real, named limitation: this must be called explicitly at
+/// every "active file changed while potentially still in Design mode"
+/// site (tab bar click, sidebar click, closing a file bringing a different
+/// one to the front) -- there's no generic "on active file changed" hook
+/// in this crate to hang it off of instead.
+fn sync_webview_file_info(
+    bridge: &Option<webview_bridge::WebviewBridge>,
+    mode: AppMode,
+    file: &OpenFile,
+) {
+    if mode != AppMode::Design {
+        return;
+    }
+    if let Some(bridge) = bridge {
+        let is_component_file = file.label.ends_with(".jsx") || file.label.ends_with(".tsx");
+        bridge.push_file_info(&file.label, is_component_file);
+    }
+}
 
 /// `wgpu::Color` clear values are specified in linear space, but the chosen
 /// surface format is sRGB -- passing a perceptual/sRGB value straight
@@ -595,6 +712,29 @@ fn main() {
     // setup completes.
     spartan_crash::install_hook(crash_dir());
 
+    // Real GTK initialization (§6.1, task #12) -- a real bug found only by
+    // running this crate live on Linux, not by inspection: `wry`'s own
+    // documented contract requires `gtk::init()` to have already run
+    // before *any* `WebViewBuilder::build()` call on Linux/BSD (winit
+    // doesn't initialize GTK itself, unlike a GTK-native windowing
+    // toolkit), or it panics with "GDK has not been initialized." Called
+    // unconditionally and early, even though Design mode's WebView itself
+    // is created lazily on first use (§75.39) -- `gtk::init()` is cheap
+    // and harmless if no WebView is ever created this session, and this
+    // avoids any ordering hazard between lazy WebView creation and GTK
+    // init that a lazier call site would risk. See the `AboutToWait`
+    // handler below for the other documented half of this same contract
+    // (pumping GTK's own event loop every frame).
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    ))]
+    gtk::init()
+        .expect("gtk::init() failed -- required by wry's WebKitGTK backend on this platform");
+
     let program_start = Instant::now();
     println!("=== spartan-editor-core -- real Tier 1 core-engine increment ===");
 
@@ -913,6 +1053,13 @@ fn main() {
     // react to input while a modal is up.
     let mut pending_close: Option<PendingClose> = None;
 
+    // Real embedded WebView bridge for Design mode (§6.1, task #12),
+    // promoted from `spikes/ui-shell-spike` (§47.11). `None` until the
+    // first time the user actually switches to Design mode -- a real,
+    // deliberate lazy-creation choice (an app that never opens Design mode
+    // never pays the cost of spawning a child WebKitGTK/WebView2 process).
+    let mut webview_bridge: Option<webview_bridge::WebviewBridge> = None;
+
     event_loop
         .run(move |event, elwt| {
             elwt.set_control_flow(winit::event_loop::ControlFlow::Poll);
@@ -924,6 +1071,44 @@ fn main() {
                     // handling of it, per `Adapter::process_event`'s own
                     // real documented contract.
                     accesskit_adapter.process_event(&window, &event);
+
+                    // Real Design-mode WebView focus fix (§6.1, task #12).
+                    // `spikes/ui-shell-spike`'s own README (§47.11) named
+                    // this exact question as "unexplored" for wry's Linux
+                    // WebKitGTK backend, having only confirmed and fixed
+                    // the Windows/WebView2 case (see `win32_hwnd`'s own
+                    // doc comment). It's no longer unexplored: a real,
+                    // live click-drag test against this crate's actual
+                    // WebKitGTK-backed Design mode confirmed the identical
+                    // symptom on Linux -- once the embedded WebView takes
+                    // keyboard focus, Ctrl+2 (and every other native
+                    // shortcut) silently stops reaching winit's own
+                    // `KeyboardInput` events, with no error of any kind.
+                    // `window.focus_window()` (winit's own cross-platform
+                    // method, backed by a real `XSetInputFocus` call on
+                    // X11) *does* reclaim it here, unlike on Windows where
+                    // that spike's own testing found it insufficient and
+                    // needed the raw Win32 `SetFocus` call instead -- so
+                    // both are applied, each covering the platform where
+                    // it was actually proven to work. Peeked here (by
+                    // reference, before the real `match event` below
+                    // consumes it) so it applies to *every* native mouse
+                    // press, regardless of which specific region's own
+                    // `MouseInput` arm ends up matching.
+                    if matches!(
+                        &event,
+                        WindowEvent::MouseInput {
+                            state: ElementState::Pressed,
+                            ..
+                        }
+                    ) {
+                        window.focus_window();
+                        #[cfg(windows)]
+                        unsafe {
+                            let _ = SetFocus(win32_hwnd(&window));
+                        }
+                    }
+
                     match event {
                         WindowEvent::CloseRequested => {
                             // Real unsaved-changes gating (§75.23, task
@@ -977,6 +1162,19 @@ fn main() {
                         WindowEvent::Resized(new_size) => {
                             gpu_state.resize(new_size);
                             text_state.resize(new_size.width as f32, new_size.height as f32);
+
+                            // Real Design-mode WebView resize (§6.1, task
+                            // #12) -- only meaningful while a bridge exists
+                            // and is actually showing; `sync_webview_for_
+                            // mode`'s own hidden-bounds branch would just
+                            // re-hide it at a stale size otherwise, so this
+                            // only touches the WebView when Design mode is
+                            // the current one.
+                            if mode == AppMode::Design {
+                                if let Some(bridge) = &webview_bridge {
+                                    bridge.set_bounds(design_content_bounds(&window, new_size));
+                                }
+                            }
 
                             // Recomputes how many lines are visible from the new window
                             // height -- previously fixed at startup only (a named
@@ -1089,6 +1287,7 @@ fn main() {
                                             &active_file.viewport,
                                             active_file.highlighter.as_mut(),
                                         );
+                                        sync_webview_file_info(&webview_bridge, mode, &files[active]);
                                         window.request_redraw();
                                     }
                                 }
@@ -1207,6 +1406,7 @@ fn main() {
                                             &active_file.viewport,
                                             active_file.highlighter.as_mut(),
                                         );
+                                        sync_webview_file_info(&webview_bridge, mode, &files[active]);
                                         window.request_redraw();
                                     }
                                 }
@@ -1238,6 +1438,13 @@ fn main() {
                                     mode_toggle::hit_test(&mode_hits, char_index)
                                 {
                                     mode = clicked_mode;
+                                    sync_webview_for_mode(
+                                        &mut webview_bridge,
+                                        mode,
+                                        &window,
+                                        gpu_state.size,
+                                        &files[active],
+                                    );
                                     window.request_redraw();
                                 }
                             }
@@ -1368,6 +1575,7 @@ fn main() {
                                             &active_file.viewport,
                                             active_file.highlighter.as_mut(),
                                         );
+                                        sync_webview_file_info(&webview_bridge, mode, &files[active]);
                                         window.request_redraw();
                                     }
                                     Some(PendingClose::App) => {
@@ -1645,6 +1853,22 @@ fn main() {
                                                 );
                                             }
                                         }
+                                        // Real, single sync point (§6.1,
+                                        // task #12): whatever `mode` ended
+                                        // up settling on above (forced
+                                        // Editor, then possibly overridden
+                                        // by one of the three explicit
+                                        // mode-switch commands) is
+                                        // reconciled with the WebView
+                                        // exactly once here, not at each
+                                        // individual command arm.
+                                        sync_webview_for_mode(
+                                            &mut webview_bridge,
+                                            mode,
+                                            &window,
+                                            gpu_state.size,
+                                            &files[active],
+                                        );
                                     }
                                     window.request_redraw();
                                 }
@@ -1817,6 +2041,13 @@ fn main() {
                                 PhysicalKey::Code(KeyCode::Digit3) => AppMode::Design,
                                 _ => unreachable!(),
                             };
+                            sync_webview_for_mode(
+                                &mut webview_bridge,
+                                mode,
+                                &window,
+                                gpu_state.size,
+                                &files[active],
+                            );
                             window.request_redraw();
                         }
                         WindowEvent::KeyboardInput {
@@ -1915,6 +2146,7 @@ fn main() {
                                     &active_file.viewport,
                                     active_file.highlighter.as_mut(),
                                 );
+                                sync_webview_file_info(&webview_bridge, mode, &files[active]);
                                 window.request_redraw();
                             }
                         }
@@ -2873,6 +3105,30 @@ fn main() {
                     }
                 }
                 Event::AboutToWait => {
+                    // Real GTK event-loop pump (§6.1, task #12), required
+                    // on Linux/BSD by wry's own documented contract: since
+                    // winit doesn't drive GTK's own main loop, WebKitGTK's
+                    // real rendering/input/IPC processing would otherwise
+                    // never actually run, even though the WebView object
+                    // exists. A genuine bug was found here only by running
+                    // this crate live, not by inspection: `wry::
+                    // WebViewBuilder::build()` panics with "GDK has not
+                    // been initialized" the first time a WebView is
+                    // created, unless `gtk::init()` has already run (see
+                    // its call near the top of `main()`) -- this per-frame
+                    // pump is the other documented half of that same real
+                    // contract.
+                    #[cfg(any(
+                        target_os = "linux",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "openbsd",
+                        target_os = "netbsd"
+                    ))]
+                    while gtk::events_pending() {
+                        gtk::main_iteration_do(false);
+                    }
+
                     if edit_bench_remaining > 0 {
                         let bench_file = &mut files[0];
                         let effect = bench_file.editor.insert_random(&mut bench_rng, "x");

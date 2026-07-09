@@ -32,6 +32,11 @@ impl AppMode {
     /// The real, honest placeholder message shown in place of document
     /// content while this mode is active and has no real backing yet.
     /// `Editor` never needs one -- it's the one mode with real content.
+    /// `Design` no longer needs one either as of §75.39/task #12's WebView
+    /// bridge increment -- it now shows a real embedded WebView instead of
+    /// text (still honestly not a live component canvas yet; see
+    /// `webview_bridge.rs`'s own doc comment for exactly what it does
+    /// show).
     pub fn placeholder_message(self) -> Option<&'static str> {
         match self {
             AppMode::Agent => Some(
@@ -44,14 +49,7 @@ impl AppMode {
                  Press Ctrl+2 to return to Editor mode.",
             ),
             AppMode::Editor => None,
-            AppMode::Design => Some(
-                "Design mode\n\n\
-                 The GUI Builder is not implemented in this build (§6, §34).\n\
-                 Real two-way React sync needs a WebView bridge and a\n\
-                 project dev-server integration not yet wired into this\n\
-                 crate.\n\n\
-                 Press Ctrl+2 to return to Editor mode.",
-            ),
+            AppMode::Design => None,
         }
     }
 }
@@ -134,9 +132,12 @@ mod tests {
     }
 
     #[test]
-    fn only_editor_mode_has_no_placeholder_message() {
+    fn only_agent_mode_has_a_placeholder_message() {
+        // Editor always had real content; Design gained a real embedded
+        // WebView in §75.39/task #12, so only Agent (no ModelProvider/Leo)
+        // still needs a placeholder.
         assert!(AppMode::Editor.placeholder_message().is_none());
+        assert!(AppMode::Design.placeholder_message().is_none());
         assert!(AppMode::Agent.placeholder_message().is_some());
-        assert!(AppMode::Design.placeholder_message().is_some());
     }
 }

@@ -28,5 +28,15 @@ arboard = "3"
 tree-sitter-javascript = "0.25.0"
 accesskit_winit = "0.19"
 accesskit = "0.13"
+wry = "0.43"
+raw-window-handle = "0.6"
+windows = { version = "0.56", features = ["Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse"] }
+
+# Real GTK init/event-loop-pump requirement (§6.1, task #12): wry's own
+# WebKitGTK backend needs `gtk::init()` called and `gtk::main_iteration_do`
+# pumped every frame on Linux/BSD, matching exactly the platform set wry's
+# own Cargo.toml gates its GTK dependencies behind.
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
+gtk = "0.18"
 
 [dev-dependencies]

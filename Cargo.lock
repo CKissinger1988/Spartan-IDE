@@ -4615,8 +4615,10 @@ dependencies = [
  "arboard",
  "bytemuck",
  "glyphon",
+ "gtk",
  "pollster",
  "rand 0.8.6",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "spartan-buffer",
@@ -4633,7 +4635,9 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-typescript",
  "wgpu",
+ "windows 0.56.0",
  "winit",
+ "wry",
 ]
 
 [[package]]
