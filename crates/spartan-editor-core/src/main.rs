@@ -7,7 +7,9 @@ mod selection;
 mod text;
 
 use spartan_editor_core::viewport::{self, Viewport};
-use spartan_editor_core::{build, dap_session, editor_view, highlight, language, lsp, lsp_session};
+use spartan_editor_core::{
+    build, dap_session, editor_view, highlight, language, lsp, lsp_session, tab_bar,
+};
 
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc};
@@ -348,6 +350,35 @@ fn window_title(file: &OpenFile) -> String {
     }
 }
 
+/// Real close-tab (§75.21): removes the file at `index`, shutting down its
+/// LSP session first. Refuses to close the last remaining open file --
+/// this crate has no "empty editor" state to fall back to anywhere, and
+/// real editors commonly keep at least one tab open too. Silently
+/// discards unsaved changes on the closed file, matching every other place
+/// a file's in-memory state can go away in this crate right now
+/// (`CloseRequested`, switching files with Ctrl+Tab) -- task #18 tracks
+/// adding a real confirmation prompt everywhere at once, not just here.
+/// Adjusts `active` so it still points at a valid, sensible file
+/// afterward: unaffected if it was before `index`, shifted left by one if
+/// it was after, and left in place (now referring to what used to be the
+/// next file) if it *was* `index` -- unless `index` was the last file, in
+/// which case it's clamped to the new last file.
+fn close_file(files: &mut Vec<OpenFile>, active: &mut usize, index: usize) {
+    if files.len() <= 1 {
+        println!("Cannot close the last open file");
+        return;
+    }
+    let file = files.remove(index);
+    if let Some(session) = file.lsp_session {
+        session.shutdown();
+    }
+    if *active > index {
+        *active -= 1;
+    } else if *active >= files.len() {
+        *active = files.len() - 1;
+    }
+}
+
 fn main() {
     let program_start = Instant::now();
     println!("=== spartan-editor-core -- real Tier 1 core-engine increment ===");
@@ -499,6 +530,14 @@ fn main() {
     let t_cursor_renderer = Instant::now();
     let mut selection_renderer =
         selection::SelectionRenderer::new(&gpu_state.device, gpu_state.config.format);
+    // Real active-tab highlight (§75.21) -- a second, independent instance
+    // of the same `SelectionRenderer` type used for text selection, reused
+    // rather than duplicated: both are just "draw some semi-transparent
+    // accent-colored rects," and sharing the color between "this text is
+    // selected" and "this is the active tab" is a coherent, deliberate
+    // choice, not an accident of reuse.
+    let mut tab_bar_renderer =
+        selection::SelectionRenderer::new(&gpu_state.device, gpu_state.config.format);
 
     // 150ms idle default per spec §2.3, now one debouncer per open file
     // (`OpenFile::lsp_debouncer`) rather than a single global one -- see
@@ -568,6 +607,13 @@ fn main() {
             None
         }
     };
+    // Real tab bar hit-testing state (§75.21) -- rebuilt every
+    // `RedrawRequested` (alongside the tab bar's own display text) from the
+    // real, current `files`/`active`/`dirty` state, then read back by
+    // `MouseInput` to resolve a click to a specific tab (or its close
+    // button). Persists across frames/events, unlike the tab bar text
+    // itself, which `TextState` already owns.
+    let mut tab_hits: Vec<tab_bar::TabHit> = Vec::new();
 
     event_loop
         .run(move |event, elwt| {
@@ -667,6 +713,39 @@ fn main() {
                                             active_file.editor.selection_anchor = Some(anchor);
                                         }
                                     }
+                                    window.request_redraw();
+                                }
+                            }
+                        }
+                        WindowEvent::MouseInput {
+                            state: ElementState::Pressed,
+                            button: MouseButton::Left,
+                            ..
+                        } if last_cursor_pos.1 < text::TAB_BAR_HEIGHT => {
+                            // Real tab bar clicks (§75.21) -- resolved via the
+                            // same real cosmic-text hit-testing technique as
+                            // the main editor, not a pixel-guessing geometry
+                            // model (see `tab_bar.rs`'s own doc comment).
+                            let local_x = last_cursor_pos.0 - text::TEXT_ORIGIN_X;
+                            let local_y = last_cursor_pos.1 - text::TAB_BAR_TEXT_TOP;
+                            if let Some(char_index) = text_state.hit_test_tab_bar(local_x, local_y)
+                            {
+                                if let Some((file_index, is_close)) =
+                                    tab_bar::hit_test_tab_bar(&tab_hits, char_index)
+                                {
+                                    if is_close {
+                                        close_file(&mut files, &mut active, file_index);
+                                    } else {
+                                        active = file_index;
+                                    }
+                                    let active_file = &mut files[active];
+                                    window.set_title(&window_title(active_file));
+                                    reshape_window(
+                                        &mut text_state,
+                                        &active_file.editor,
+                                        &active_file.viewport,
+                                        active_file.highlighter.as_mut(),
+                                    );
                                     window.request_redraw();
                                 }
                             }
@@ -1139,6 +1218,33 @@ fn main() {
                                 .texture
                                 .create_view(&wgpu::TextureViewDescriptor::default());
 
+                            // Real tab bar (§75.21): rebuilt from real, current
+                            // file state every frame -- cheap for a handful of
+                            // short tab labels, and simpler than tracking
+                            // exactly when files/active/dirty last changed.
+                            // Real basenames, not full paths, to keep tabs
+                            // compact -- `--synthetic:` fixtures have no path
+                            // to take a basename of, so their raw label is
+                            // used as-is.
+                            let tab_labels: Vec<(String, bool)> = files
+                                .iter()
+                                .map(|f| {
+                                    let name = if f.label.starts_with("--synthetic:") {
+                                        f.label.clone()
+                                    } else {
+                                        Path::new(&f.label)
+                                            .file_name()
+                                            .map(|n| n.to_string_lossy().into_owned())
+                                            .unwrap_or_else(|| f.label.clone())
+                                    };
+                                    (name, f.dirty)
+                                })
+                                .collect();
+                            let (tab_bar_text, new_tab_hits) =
+                                tab_bar::build_tab_bar_text(&tab_labels);
+                            tab_hits = new_tab_hits;
+                            text_state.set_tab_bar_text(&tab_bar_text);
+
                             text_state
                                 .prepare(
                                     &gpu_state.device,
@@ -1147,6 +1253,36 @@ fn main() {
                                     gpu_state.size.height,
                                 )
                                 .expect("glyphon text prepare failed");
+
+                            // Real active-tab highlight rect (§75.21), via the
+                            // real char range `build_tab_bar_text` already
+                            // computed for the active file's tab and the same
+                            // real pixel lookup the tab bar's own hit-testing
+                            // uses in reverse.
+                            let active_tab_rects: Vec<selection::SelectionRect> = tab_hits
+                                .iter()
+                                .find(|hit| hit.file_index == active)
+                                .and_then(|hit| {
+                                    let x_start = text_state.tab_bar_pixel_pos(hit.tab_range.start)?;
+                                    let x_end = text_state.tab_bar_pixel_pos(hit.tab_range.end)?;
+                                    Some(selection::SelectionRect {
+                                        x: text::TEXT_ORIGIN_X + x_start,
+                                        y: 0.0,
+                                        width: x_end - x_start,
+                                        height: text::TAB_BAR_HEIGHT,
+                                    })
+                                })
+                                .into_iter()
+                                .collect();
+                            tab_bar_renderer.update(
+                                &gpu_state.device,
+                                &gpu_state.queue,
+                                &active_tab_rects,
+                                &cursor::ScreenSize {
+                                    width: gpu_state.size.width as f32,
+                                    height: gpu_state.size.height as f32,
+                                },
+                            );
 
                             let active_file = &files[active];
                             let (cursor_doc_line, cursor_col) = active_file.editor.cursor_line_col();
@@ -1261,6 +1397,7 @@ fn main() {
                                         timestamp_writes: None,
                                         occlusion_query_set: None,
                                     });
+                                tab_bar_renderer.render(&mut pass);
                                 selection_renderer.render(&mut pass);
                                 text_state.render(&mut pass).expect("glyphon render failed");
                                 if cursor_pixel_pos.is_some() {

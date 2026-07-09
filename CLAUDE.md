@@ -366,6 +366,27 @@ first — it's the parity reference until each row there is actually reimplement
   tests (3 for `text_between`, 2 for `selected_text`), full test/clippy/fmt suite clean before and
   after the fix, 50k-line benchmark re-run with no regression. No rich-text/image clipboard formats,
   no X11 PRIMARY-selection middle-click paste, no clipboard history.
+- **Real, working code — real visual tab bar, click to switch, click to close (§75.21)**: closes
+  the visual half of task #16 (file tree sidebar split to task #24 -- different scope). Reading
+  `glyphon-0.5.0`'s actual `TextRenderer::prepare()` source showed it already accepts *multiple*
+  `TextArea`s sharing one `FontSystem`/`TextAtlas` -- so `TextState` gained a second
+  `tab_bar_buffer`, no parallel rendering pipeline needed. `TEXT_ORIGIN_Y` redefined as
+  `8.0 + TAB_BAR_HEIGHT`; every existing call site already used the symbolic constant, so the whole
+  editor shifted down for free. New, pure, headlessly-tested `tab_bar.rs` builds the tab row's
+  display string and each tab's real char-range (plus its `×` close button's narrower range); clicks
+  resolve via the *same* real cosmic-text hit-testing `hit_test` already uses, not a pixel-guessing
+  geometry model. Active-tab highlight reuses `SelectionRenderer` as a second instance rather than a
+  new type. `close_file()` shuts down the closed file's LSP session and keeps `active` pointing at a
+  valid file, refusing to close the last remaining tab (no "empty editor" state exists to fall back
+  to). 8 new headless tests, all passed first run. Live, with three real files open: tab bar
+  rendered correctly (screenshotted), click-to-switch worked (highlight moved, title/content
+  updated), click-×-to-close worked (LSP shutdown confirmed in the log), closing down to one tab and
+  then attempting to close it printed the refusal and left it untouched -- each screenshotted. A
+  real `clippy::reversed_empty_ranges` deny-level lint surfaced on a §75.20 test that hadn't been
+  re-linted since; fixed by matching this same file's own pre-existing precedent for that exact
+  situation. Full test/clippy/fmt suite clean, 50k-line benchmark re-run with no regression. No file
+  tree sidebar yet (files still only open via `--open:` CLI args), no tab reorder, no overflow
+  handling, no Ctrl+W.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

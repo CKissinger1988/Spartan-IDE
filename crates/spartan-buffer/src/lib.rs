@@ -347,7 +347,13 @@ mod tests {
     #[test]
     fn text_between_inverted_range_returns_error_not_panic() {
         let doc = Document::new("hello world");
-        let err = doc.text_between(5..2).unwrap_err();
+        // Built from variables, not a literal `5..2`, matching
+        // `inverted_range_returns_error_not_panic`'s own established
+        // precedent above -- deliberately an inverted range to exercise
+        // this crate's own validation, not a typo clippy's
+        // reversed_empty_ranges lint should flag.
+        let (start, end) = (5, 2);
+        let err = doc.text_between(start..end).unwrap_err();
         assert_eq!(err, BufferError::InvalidRange { start: 5, end: 2 });
     }
 

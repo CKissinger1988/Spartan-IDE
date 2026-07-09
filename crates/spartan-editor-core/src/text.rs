@@ -19,17 +19,39 @@ pub struct TextState {
     pub atlas: TextAtlas,
     pub renderer: TextRenderer,
     pub buffer: Buffer,
+    /// Real tab bar rendering (§75.21) -- a second, independent cosmic-text
+    /// `Buffer` for the tab-label row, sharing this same `FontSystem`/
+    /// `TextAtlas`/`TextRenderer`/`SwashCache` rather than needing a whole
+    /// parallel rendering pipeline: `TextRenderer::prepare` already accepts
+    /// *multiple* `TextArea`s in one call (confirmed against the actual
+    /// installed `glyphon-0.5.0` source before relying on it, not assumed),
+    /// so both buffers are prepared and rendered together in `prepare()`.
+    pub tab_bar_buffer: Buffer,
 }
 
 pub const FONT_SIZE: f32 = 16.0;
 pub const LINE_HEIGHT: f32 = 20.0;
+
+/// Real tab bar row height (§75.21), reserved at the top of the window --
+/// `TEXT_ORIGIN_Y` below is defined in terms of this, so every existing
+/// call site that already uses `TEXT_ORIGIN_Y` symbolically (cursor
+/// position, hit-testing, visible-line count) shifts down to make room for
+/// it automatically, with no other call site needing to change.
+pub const TAB_BAR_HEIGHT: f32 = 28.0;
+pub const TAB_BAR_FONT_SIZE: f32 = 13.0;
+pub const TAB_BAR_LINE_HEIGHT: f32 = 20.0;
+/// Rough vertical centering of the tab bar's own text within
+/// `TAB_BAR_HEIGHT` -- not pixel-perfect typographic centering (that would
+/// need real font-metrics ascent/descent, not attempted here), just visibly
+/// reasonable.
+pub const TAB_BAR_TEXT_TOP: f32 = (TAB_BAR_HEIGHT - TAB_BAR_LINE_HEIGHT) / 2.0;
 
 /// Text origin within the window, in pixels -- kept as constants (rather than
 /// re-typing `8.0` in both `prepare()`'s `TextArea` and the cursor-position
 /// math in `main.rs`) so the two can never drift apart and mis-align the
 /// caret against the glyphs it's supposed to sit next to.
 pub const TEXT_ORIGIN_X: f32 = 8.0;
-pub const TEXT_ORIGIN_Y: f32 = 8.0;
+pub const TEXT_ORIGIN_Y: f32 = 8.0 + TAB_BAR_HEIGHT;
 
 impl TextState {
     /// Takes an already-constructed `FontSystem` rather than building one
@@ -55,13 +77,36 @@ impl TextState {
         let mut buffer = Buffer::new(&mut font_system, Metrics::new(FONT_SIZE, LINE_HEIGHT));
         buffer.set_size(&mut font_system, width, height);
 
+        let mut tab_bar_buffer = Buffer::new(
+            &mut font_system,
+            Metrics::new(TAB_BAR_FONT_SIZE, TAB_BAR_LINE_HEIGHT),
+        );
+        tab_bar_buffer.set_size(&mut font_system, width, TAB_BAR_HEIGHT);
+
         Self {
             font_system,
             swash_cache,
             atlas,
             renderer,
             buffer,
+            tab_bar_buffer,
         }
+    }
+
+    /// Replaces the tab bar's entire content -- always a full reshape
+    /// (there's no windowing/per-line fast path for this, unlike the main
+    /// editor buffer, since the tab bar is always short). No syntax
+    /// highlighting, just the plain monospace text `tab_bar::
+    /// build_tab_bar_text` already produced.
+    pub fn set_tab_bar_text(&mut self, text: &str) {
+        self.tab_bar_buffer.set_text(
+            &mut self.font_system,
+            text,
+            Attrs::new().family(Family::Monospace),
+            Shaping::Advanced,
+        );
+        self.tab_bar_buffer
+            .shape_until_scroll(&mut self.font_system);
     }
 
     /// Replaces the buffer's entire content -- a full reshape, but of
@@ -155,6 +200,8 @@ impl TextState {
 
     pub fn resize(&mut self, width: f32, height: f32) {
         self.buffer.set_size(&mut self.font_system, width, height);
+        self.tab_bar_buffer
+            .set_size(&mut self.font_system, width, TAB_BAR_HEIGHT);
     }
 
     pub fn prepare(
@@ -170,19 +217,34 @@ impl TextState {
             &mut self.font_system,
             &mut self.atlas,
             Resolution { width, height },
-            [TextArea {
-                buffer: &self.buffer,
-                left: TEXT_ORIGIN_X,
-                top: TEXT_ORIGIN_Y,
-                scale: 1.0,
-                bounds: TextBounds {
-                    left: 0,
-                    top: 0,
-                    right: width as i32,
-                    bottom: height as i32,
+            [
+                TextArea {
+                    buffer: &self.buffer,
+                    left: TEXT_ORIGIN_X,
+                    top: TEXT_ORIGIN_Y,
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: 0,
+                        top: TAB_BAR_HEIGHT as i32,
+                        right: width as i32,
+                        bottom: height as i32,
+                    },
+                    default_color: Color::rgb(0xE9, 0xE7, 0xE4),
                 },
-                default_color: Color::rgb(0xE9, 0xE7, 0xE4),
-            }],
+                TextArea {
+                    buffer: &self.tab_bar_buffer,
+                    left: TEXT_ORIGIN_X,
+                    top: TAB_BAR_TEXT_TOP,
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: 0,
+                        top: 0,
+                        right: width as i32,
+                        bottom: TAB_BAR_HEIGHT as i32,
+                    },
+                    default_color: Color::rgb(0xE9, 0xE7, 0xE4),
+                },
+            ],
             &mut self.swash_cache,
         )
     }
@@ -269,5 +331,47 @@ impl TextState {
             .map(|s| s.chars().count())
             .unwrap_or(0);
         Some((cursor.line, col_chars))
+    }
+
+    /// Real hit-testing for the tab bar (§75.21) -- the same real
+    /// cosmic-text `Buffer::hit` technique `hit_test` uses for the main
+    /// editor, applied to `tab_bar_buffer` instead. `x`/`y` are relative to
+    /// the tab bar's own origin (`TEXT_ORIGIN_X`/`TAB_BAR_TEXT_TOP`).
+    /// Returns a *char* index into the tab bar's single line of text,
+    /// matching `tab_bar::build_tab_bar_text`'s own char-counted
+    /// convention (that module resolves this index to a specific tab via
+    /// `tab_bar::hit_test_tab_bar`) -- not a byte offset, and not a
+    /// `(line, col)` pair, since the tab bar is always exactly one line.
+    pub fn hit_test_tab_bar(&self, x: f32, y: f32) -> Option<usize> {
+        let cursor = self.tab_bar_buffer.hit(x, y)?;
+        let line_text = self.tab_bar_buffer.lines.first()?.text();
+        let col_chars = line_text
+            .get(..cursor.index)
+            .map(|s| s.chars().count())
+            .unwrap_or(0);
+        Some(col_chars)
+    }
+
+    /// Real pixel x-position for a char column within the tab bar's single
+    /// line (§75.21) -- the tab-bar equivalent of `cursor_pixel_pos`,
+    /// simplified since the tab bar is always exactly one line (no
+    /// multi-line lookup, no ropey-phantom-line edge case to handle).
+    /// `None` only if the tab bar has no laid-out content at all yet (an
+    /// empty string, e.g. no files open).
+    pub fn tab_bar_pixel_pos(&self, col_chars: usize) -> Option<f32> {
+        let run = self.tab_bar_buffer.layout_runs().next()?;
+        let byte_offset = run
+            .text
+            .char_indices()
+            .nth(col_chars)
+            .map(|(b, _)| b)
+            .unwrap_or(run.text.len());
+        let x = run
+            .glyphs
+            .iter()
+            .find(|g| byte_offset >= g.start && byte_offset < g.end)
+            .map(|g| g.x)
+            .unwrap_or_else(|| run.glyphs.last().map(|g| g.x + g.w).unwrap_or(0.0));
+        Some(x)
     }
 }

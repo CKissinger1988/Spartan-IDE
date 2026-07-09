@@ -18,4 +18,5 @@ pub mod highlight;
 pub mod language;
 pub mod lsp;
 pub mod lsp_session;
+pub mod tab_bar;
 pub mod viewport;
