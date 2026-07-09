@@ -817,6 +817,36 @@ first — it's the parity reference until each row there is actually reimplement
   own list (keyboard-only), no `.gitignore`-aware filtering, no live re-scan while open (list is
   captured once at open time, a deliberate choice), no frecency ranking. Task #3 is now fully
   closed.
+- **Real, working code — GUI Builder two-way AST sync engine, first increment of task #12
+  (§75.38)**: the first real Node/TypeScript project in this workspace's history (every prior
+  increment has been Rust) -- new `gui-builder/`, its own real npm package, deliberately outside
+  the Cargo workspace (§6.2 itself names Babel/SWC, not Rust, as the intended AST layer).
+  `parseComponent()` parses real JSX/TSX into a `ComponentNode` tree (tags, per-prop summaries,
+  text, nested children) via `@babel/parser`; `applyCanvasEdit()` takes a structured `CanvasEdit`
+  (`StyleChange`/`PropChange`, matching §6.2's own Rust enum sketch) and mutates the real AST node
+  directly, regenerating source via `recast.print`, which preserves the original formatting of
+  every untouched node -- the real mechanism behind §6.2's "preserves formatting" requirement, not
+  string templating. Both directions share one canonical traversal so their sequential node ids
+  can't drift apart by construction. Real, honest v1 scope: only `StyleChange`/`PropChange` are
+  implemented (`Reparent`/`ComponentInsert` need a node-identity scheme that survives structural
+  edits, not attempted); `PropChange` always sets a string literal. A real finding while building
+  the style summarizer: real design-token usage (`color: C.text`) mixes literals with variable
+  references within one style object, so summarization is per-key (`literal`/`expression`), not
+  all-or-nothing. A second, more significant real finding, investigated and isolated rather than
+  hidden: editing one attribute can force `recast` to fully reprint the enclosing `JSXElement`,
+  which normalizes `JSXText` whitespace in its children the same way React's JSX runtime does at
+  render time -- a leading newline after a `{expression}` sibling can collapse (rendered output
+  unchanged, source formatting not always byte-identical in this shape). Confirmed as a real
+  upstream `recast`/Babel-JSX-generator behavior via a minimal repro (reproduces even mutating an
+  existing node's value in place), documented in `gui-builder/README.md`, and locked in with a
+  dedicated test that will fail loudly if a future `recast` upgrade changes this. 21 tests (Node's
+  built-in `node:test`, no added test-framework dependency) all pass, including two run directly
+  against this repo's own real `prototypes/*.jsx` files (5,480 real combined lines) -- the first
+  real functional exercise of those files' actual syntax. `npm run build` (tsc) compiles clean; the
+  Rust workspace was rebuilt afterward and confirmed unaffected. No WebView canvas (§6.1, needs
+  `ui-shell-spike`'s wgpu+WebView shell promoted into `spartan-editor-core` first), no dev-server/
+  HMR, no Figma import, no screenshot-to-component, no design-token file I/O. Task #12 remains
+  `in_progress` -- a real first increment, not the full MVP.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -895,6 +925,9 @@ cargo test --workspace --release   # 249 tests: 6 spikes + 7 real crates + xtask
 # (crates/plugins/Cargo.toml), excluded from the main workspace on purpose -- `cargo build
 # --workspace`/`cargo test --workspace` from the repo root never touch them; build them with
 # `cargo component build` from inside crates/plugins/<name> instead.
+# gui-builder/ (task #12, §75.38) is a real, separate npm/TypeScript project, not part of the
+# Cargo workspace at all -- `cd gui-builder && npm install && npm test` (21 tests, Node's built-in
+# `node:test` runner).
 # spartan-editor-core's real accessibility tree (§16.3, §75.34) only has headless tests for its
 # own pure tree-building logic (accessibility.rs) -- live AT-SPI registration needs a real Linux
 # desktop accessibility stack (at-spi2-core's `at-spi-bus-launcher`, a real D-Bus session, and
@@ -904,9 +937,12 @@ cargo test --workspace --release   # 249 tests: 6 spikes + 7 real crates + xtask
 cargo build --release --workspace
 ```
 
-No other build system exists yet. If you're about to run `npm`/`pnpm`/anything else against
-the `.jsx` prototypes, stop — they're standalone React artifacts (Tailwind + lucide-react),
-not a project with its own build config. Don't invent one without discussing it first.
+No other Rust build system exists. `gui-builder/` (task #12, §75.38) is a real, separate npm/
+TypeScript project — see its own README.md and `cd gui-builder && npm install && npm test`. It
+parses/edits `prototypes/*.jsx` as real AST data (proven against both real prototype files); it
+does **not** build or render them as a running app — there is still no dev server, no bundler
+config, no way to actually view either `.jsx` file in a browser. Don't add one without discussing
+it first; that's a separate, larger piece of §6.1's own "Canvas Engine" work, not yet started.
 
 ## Rules, not suggestions
 
