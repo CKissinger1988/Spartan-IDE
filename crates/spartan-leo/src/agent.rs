@@ -103,11 +103,37 @@ impl Agent {
         task: &str,
     ) -> Result<&ImplementationPlan, AgentError> {
         self.transition(AgentState::Planning)?;
-        match generate_plan(provider, task) {
+        let result = generate_plan(provider, task);
+        self.apply_generated_plan(result)?;
+        Ok(self.plan.as_ref().unwrap())
+    }
+
+    /// `Idle -> Planning`, without making the real blocking model call --
+    /// the real §75.47 UI-wiring split of `start_task`'s own two halves, so
+    /// a caller (`spartan-editor-core`'s render loop) can transition state
+    /// immediately, spawn `plan::generate_plan` on its own background
+    /// thread (matching `LspSession`/`DapSession`'s own established
+    /// pattern), and apply just the result later via
+    /// `apply_generated_plan` once the thread reports back -- never
+    /// blocking the render loop on a real model call the way a bare
+    /// `start_task` would.
+    pub fn begin_planning(&mut self) -> Result<(), AgentError> {
+        self.transition(AgentState::Planning)
+    }
+
+    /// `Planning -> AwaitingApproval` (real plan) or `Planning -> Failed`
+    /// (a real `PlanError`) -- the second half of `start_task`, split out
+    /// so it can be called with a result produced off-thread. `start_task`
+    /// itself is now a thin, byte-identical-behavior wrapper around
+    /// `begin_planning` + a blocking `generate_plan` call + this.
+    pub fn apply_generated_plan(
+        &mut self,
+        result: Result<ImplementationPlan, PlanError>,
+    ) -> Result<(), AgentError> {
+        match result {
             Ok(plan) => {
                 self.plan = Some(plan);
-                self.transition(AgentState::AwaitingApproval)?;
-                Ok(self.plan.as_ref().unwrap())
+                self.transition(AgentState::AwaitingApproval)
             }
             Err(e) => {
                 self.transition(AgentState::Failed)?;
@@ -296,6 +322,67 @@ mod tests {
                 .unwrap();
         }
         (dir, repo)
+    }
+
+    #[test]
+    fn begin_planning_and_apply_generated_plan_reach_the_same_state_as_start_task() {
+        // Real §75.47 coverage for the split `start_task` was refactored
+        // into -- the actual async-friendly path `spartan-editor-core`'s UI
+        // wiring uses (transition to `Planning` immediately, do the real
+        // blocking model call off-thread, apply just the result later).
+        let (dir, _repo) = real_repo_with_one_commit("split-happy");
+        let mut agent = Agent::new(dir, ApprovalMode::ManualEveryStep);
+
+        agent.begin_planning().unwrap();
+        assert_eq!(agent.state(), AgentState::Planning);
+
+        let result = generate_plan(&FakePlanningProvider, "do the thing");
+        agent.apply_generated_plan(result).unwrap();
+
+        assert_eq!(agent.state(), AgentState::AwaitingApproval);
+        assert_eq!(agent.plan().unwrap().goal, "test goal");
+    }
+
+    #[test]
+    fn apply_generated_plan_with_a_real_error_lands_in_failed() {
+        struct AlwaysFailsProvider;
+        impl ModelProvider for AlwaysFailsProvider {
+            fn id(&self) -> &str {
+                "fake-fail"
+            }
+            fn is_local(&self) -> bool {
+                true
+            }
+            fn context_window(&self) -> usize {
+                4096
+            }
+            fn supports_native_tool_calling(&self) -> bool {
+                true
+            }
+            fn health_check(&self) -> ProviderHealth {
+                ProviderHealth::Healthy
+            }
+            fn stream_completion(
+                &self,
+                _request: &CompletionRequest,
+                on_delta: &mut dyn FnMut(Delta),
+            ) -> Result<(), ProviderError> {
+                on_delta(Delta::Stop {
+                    reason: StopReason::EndTurn,
+                });
+                Ok(())
+            }
+        }
+
+        let (dir, _repo) = real_repo_with_one_commit("split-error");
+        let mut agent = Agent::new(dir, ApprovalMode::ManualEveryStep);
+        agent.begin_planning().unwrap();
+
+        let result = generate_plan(&AlwaysFailsProvider, "do the thing");
+        let err = agent.apply_generated_plan(result).unwrap_err();
+
+        assert!(matches!(err, AgentError::Plan(PlanError::NoPlanProposed)));
+        assert_eq!(agent.state(), AgentState::Failed);
     }
 
     #[test]

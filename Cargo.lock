@@ -4625,6 +4625,8 @@ dependencies = [
  "spartan-crash",
  "spartan-git",
  "spartan-languages",
+ "spartan-leo",
+ "spartan-model",
  "spartan-security",
  "tree-sitter",
  "tree-sitter-go",

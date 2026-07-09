@@ -11,6 +11,7 @@
 //! plain data type, no device needed to construct one), so they're public
 //! here too.
 pub mod accessibility;
+pub mod agent_panel;
 pub mod build;
 pub mod command_palette;
 pub mod dap;
@@ -21,6 +22,7 @@ pub mod git_panel;
 pub mod gui_bridge;
 pub mod highlight;
 pub mod language;
+pub mod leo_bridge;
 pub mod lsp;
 pub mod lsp_session;
 pub mod mode_toggle;

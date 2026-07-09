@@ -9,6 +9,8 @@ spartan-languages = { path = "../spartan-languages" }
 spartan-git = { path = "../spartan-git" }
 spartan-security = { path = "../spartan-security" }
 spartan-crash = { path = "../spartan-crash" }
+spartan-model = { path = "../spartan-model" }
+spartan-leo = { path = "../spartan-leo" }
 wgpu = "0.19"
 winit = "0.29"
 glyphon = "0.5"

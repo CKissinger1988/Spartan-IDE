@@ -1141,6 +1141,47 @@ first — it's the parity reference until each row there is actually reimplement
   `ClaudeProvider` plan generation was exercised (only Ollama), no §60.2.1 Developer Mode
   path-jail exception, no real end-to-end `execute_call`/`begin_verification` run against a live
   model's actual tool calls beyond what the unit tests' fakes exercise.
+- **Real, working code — real Leo UI wiring, Agent mode is no longer a placeholder (§75.47)**:
+  closes the gap §75.46 itself named as the single largest remaining piece -- `spartan-leo` was
+  fully built and tested but had no caller anywhere in `spartan-editor-core`. First, a small real
+  refactor to `Agent`: `start_task` (which bundled a state transition with a real blocking model
+  call in one function) split into `begin_planning` (real `Idle -> Planning` transition only) and
+  `apply_generated_plan` (applies an already-computed result), so a caller can transition
+  immediately and run the actual blocking call off-thread -- `start_task` itself is now a
+  byte-identical wrapper around both, every existing §75.46 test still passes unmodified, and 2 new
+  tests cover the split path directly. `spartan-git::GitRepo` gained a small `raw_repo_mut()`
+  escape hatch for `spartan-leo`'s checkpointing. New `agent_panel.rs` (pure display-text logic)
+  and `leo_bridge.rs` (a real background-thread bridge -- `spawn_plan_request` runs `generate_plan`
+  against a real `OllamaProvider::local("llama3.1:8b")` on its own thread, reporting back over
+  `mpsc`, the same pattern `LspSession`/`DapSession`/`gui_bridge.rs` already established) in
+  `spartan-editor-core`. A new, dedicated keyboard arm (checked before the pre-existing "swallow
+  everything while non-Editor mode" arm) gives Agent mode real input: type a task, Enter submits it
+  to a real live plan-generation request; Enter on a ready plan calls `approve_plan` against the
+  real git repo (creating a real checkpoint); Escape rejects or resets. `mode_toggle.rs`'s Agent
+  placeholder is now `None`, the same transition Design went through in §75.39. A real, deliberate
+  design choice, not an oversight: every submitted task constructs a **fresh** `Agent` rather than
+  reusing one across tasks -- since no execute/verify loop is wired yet, an approved plan leaves the
+  real state machine sitting in `Executing` forever (no valid transition back to `Idle`), so forcing
+  continuity across tasks would mean fabricating a transition the state machine was never designed
+  for; a fresh `Agent` per task is the honest reflection of this pass's actual scope. Real, live,
+  executed verification via the same Xvfb+fluxbox+real-Ollama setup earlier passes established,
+  against a real scratch git repository: typing a task (screenshotted), a real "Leo is
+  planning..." wait state confirming the render loop stayed responsive, a real plan returned by the
+  actual running `llama3.1:8b` ~20-45s later with correct goal/approach/files/risk-notes
+  (screenshotted), approval producing a real checkpoint independently confirmed via `git log`/
+  `git stash list`/`git status`/the file's own contents directly against the scratch repo (a clean
+  working tree correctly took no stash, and zero accidental file mutation occurred), Escape
+  resetting to a fresh prompt, and returning to Editor mode confirming the real document was
+  completely unaffected throughout. 10 new tests (8 in `agent_panel.rs`, 2 in `spartan-leo::agent`),
+  plus 1 existing `mode_toggle.rs` test rewritten for the new no-placeholder-anywhere reality. Full
+  workspace build/clippy/fmt/test clean, 325 tests total (up from 317). **What this does not
+  confirm**: no execute/verify loop (approving a plan creates a real checkpoint and then has
+  nothing further to run -- `spartan-leo` has no model-facing step yet that turns an approved plan
+  into concrete tool calls), no mouse interaction with the Agent panel (keyboard-only), no live
+  `ClaudeProvider` plan generation (still only Ollama), no task/plan persistence across restart, no
+  real exercise of the `Failed -> Recovering -> Executing` path from this UI (nothing yet drives a
+  real failure to recover from), no long-line text wrapping in the panel (a real, minor, named
+  rendering gap shared with this crate's other modal text).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1198,7 +1239,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 317 tests: 6 spikes + 9 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 325 tests: 6 spikes + 9 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-editor-core, xtask)

@@ -36,18 +36,12 @@ impl AppMode {
     /// bridge increment -- it now shows a real embedded WebView instead of
     /// text (still honestly not a live component canvas yet; see
     /// `webview_bridge.rs`'s own doc comment for exactly what it does
-    /// show).
+    /// show). `Agent` no longer needs one either as of §75.47/task #5's
+    /// real Leo UI wiring -- see `agent_panel.rs`'s own doc comment for
+    /// exactly what it shows and doesn't.
     pub fn placeholder_message(self) -> Option<&'static str> {
         match self {
-            AppMode::Agent => Some(
-                "Agent mode\n\n\
-                 No ModelProvider is configured in this build (§3, §4).\n\
-                 Leo requires a real Claude API key or a running Ollama\n\
-                 instance -- neither is available here, so this mode has\n\
-                 no real functionality to show yet, rather than a\n\
-                 simulated chat interface.\n\n\
-                 Press Ctrl+2 to return to Editor mode.",
-            ),
+            AppMode::Agent => None,
             AppMode::Editor => None,
             AppMode::Design => None,
         }
@@ -132,12 +126,12 @@ mod tests {
     }
 
     #[test]
-    fn only_agent_mode_has_a_placeholder_message() {
+    fn no_mode_has_a_placeholder_message_anymore() {
         // Editor always had real content; Design gained a real embedded
-        // WebView in §75.39/task #12, so only Agent (no ModelProvider/Leo)
-        // still needs a placeholder.
+        // WebView in §75.39/task #12; Agent gained real Leo UI wiring in
+        // §75.47/task #5 -- every mode now shows real content.
         assert!(AppMode::Editor.placeholder_message().is_none());
         assert!(AppMode::Design.placeholder_message().is_none());
-        assert!(AppMode::Agent.placeholder_message().is_some());
+        assert!(AppMode::Agent.placeholder_message().is_none());
     }
 }

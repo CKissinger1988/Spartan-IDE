@@ -86,6 +86,22 @@ pub enum PlanError {
     },
 }
 
+impl std::fmt::Display for PlanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PlanError::Provider(msg) => write!(f, "model provider error: {msg}"),
+            PlanError::NoPlanProposed => {
+                write!(f, "the model never called propose_plan")
+            }
+            PlanError::MalformedPlan { raw, reason } => {
+                write!(f, "malformed plan ({reason}): {raw}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PlanError {}
+
 const PLAN_TOOL_NAME: &str = "propose_plan";
 
 fn plan_tool_definition() -> ToolDefinition {

@@ -90,6 +90,17 @@ impl GitRepo {
         self.repo.workdir()
     }
 
+    /// Real, direct access to the underlying `git2::Repository` -- needed
+    /// by `spartan-leo`'s real checkpointing (§4.2, task #5, §75.47),
+    /// which operates on `git2`'s own stash/reset plumbing directly rather
+    /// than through this crate's own higher-level status/stage/commit API.
+    /// A thin escape hatch, not a second parallel API surface: every other
+    /// real git operation in this workspace still goes through this
+    /// struct's own methods.
+    pub fn raw_repo_mut(&mut self) -> &mut Repository {
+        &mut self.repo
+    }
+
     /// Real working-tree status for every changed/untracked/conflicted
     /// file, sorted by path for a stable, deterministic display order.
     /// Ignored files are excluded (matches `git status`'s own default,

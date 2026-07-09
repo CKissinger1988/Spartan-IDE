@@ -12,8 +12,8 @@ use mode_toggle::AppMode;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use spartan_editor_core::viewport::{self, Viewport};
 use spartan_editor_core::{
-    accessibility, build, command_palette, dap_session, editor_view, file_tree, git_panel,
-    gui_bridge, highlight, language, lsp, lsp_session, mode_toggle, tab_bar,
+    accessibility, agent_panel, build, command_palette, dap_session, editor_view, file_tree,
+    git_panel, gui_bridge, highlight, language, leo_bridge, lsp, lsp_session, mode_toggle, tab_bar,
 };
 
 use std::path::{Path, PathBuf};
@@ -831,12 +831,27 @@ fn main() {
     // almost always at or above the project root LSP/DAP already
     // resolve), `None` if this project isn't inside a real git repo at
     // all (not an error -- an ungit'd project is a normal, valid state).
-    let git_repo = sidebar_root(&fixture_path)
+    let mut git_repo = sidebar_root(&fixture_path)
         .as_deref()
         .and_then(spartan_git::GitRepo::discover);
     let mut sidebar_mode = SidebarMode::FileTree;
     let mut git_rows: Vec<git_panel::PanelRow> = Vec::new();
     let mut commit_message: Option<String> = None;
+
+    // Real Leo agent panel state (§4, task #5, §75.47) -- `agent_project_root`
+    // is the same real project root the file tree/git panel already resolve;
+    // `leo_agent` is recreated fresh (`Agent::new`) each time a task is
+    // submitted rather than reused across tasks, since this pass wires no
+    // execute/verify loop -- every submitted task really is an independent
+    // planning cycle with nothing yet to carry over from a prior one. `None`
+    // for a `--synthetic:` fixture with no real project root, matching every
+    // other real-root-dependent feature in this crate.
+    let agent_project_root: Option<PathBuf> = sidebar_root(&fixture_path);
+    let mut leo_agent: Option<spartan_leo::Agent> = None;
+    let mut agent_panel_state = agent_panel::AgentPanelState::default();
+    let mut plan_request: Option<
+        mpsc::Receiver<Result<spartan_leo::plan::ImplementationPlan, spartan_leo::plan::PlanError>>,
+    > = None;
 
     // Real Agent/Editor/Design mode toggle (§8, §16.1, task #3) -- starts
     // in `Editor`, the one mode with real content behind it.
@@ -2113,6 +2128,146 @@ fn main() {
                         }
                         WindowEvent::KeyboardInput {
                             event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } if pending_close.is_none()
+                            && commit_message.is_none()
+                            && command_palette_state.is_none()
+                            && mode == AppMode::Agent =>
+                        {
+                            // Real Agent mode input (§4, task #5, §75.47) --
+                            // checked before the generic "swallow everything
+                            // while non-Editor" arm just below (match arms
+                            // are tried in order), so Agent mode gets its
+                            // own real keyboard-driven task input/approve/
+                            // reject flow instead of being fully inert like
+                            // Design mode still is.
+                            match &key_event.logical_key {
+                                Key::Named(NamedKey::Enter) => match &agent_panel_state {
+                                    agent_panel::AgentPanelState::EditingTask(task)
+                                        if !task.trim().is_empty() =>
+                                    {
+                                        let task = task.trim().to_string();
+                                        if let Some(root) = &agent_project_root {
+                                            let mut agent = spartan_leo::Agent::new(
+                                                root.clone(),
+                                                spartan_leo::ApprovalMode::ManualEveryStep,
+                                            );
+                                            // Always valid: a freshly
+                                            // constructed `Agent` starts in
+                                            // `Idle`, and `Idle -> Planning`
+                                            // is always a real, allowed
+                                            // transition.
+                                            let _ = agent.begin_planning();
+                                            leo_agent = Some(agent);
+                                            plan_request =
+                                                Some(leo_bridge::spawn_plan_request(task.clone()));
+                                            agent_panel_state =
+                                                agent_panel::AgentPanelState::Planning { task };
+                                        } else {
+                                            agent_panel_state = agent_panel::AgentPanelState::Error {
+                                                message: "No real project root was found for the \
+                                                    open file -- Leo needs one to sandbox tool \
+                                                    calls and create checkpoints (§36.4.6, §4.2)."
+                                                    .to_string(),
+                                            };
+                                        }
+                                        window.request_redraw();
+                                    }
+                                    agent_panel::AgentPanelState::PlanReady { .. } => {
+                                        match (leo_agent.as_mut(), git_repo.as_mut()) {
+                                            (Some(agent), Some(repo)) => {
+                                                match agent.approve_plan(repo.raw_repo_mut()) {
+                                                    Ok(()) => {
+                                                        agent_panel_state =
+                                                            agent_panel::AgentPanelState::Approved;
+                                                    }
+                                                    Err(e) => {
+                                                        agent_panel_state =
+                                                            agent_panel::AgentPanelState::Error {
+                                                                message: format!(
+                                                                    "Could not create a real \
+                                                                     checkpoint: {e:?}"
+                                                                ),
+                                                            };
+                                                    }
+                                                }
+                                            }
+                                            _ => {
+                                                agent_panel_state = agent_panel::AgentPanelState::Error {
+                                                    message: "No real git repository was found at \
+                                                        the project root -- Leo requires one for \
+                                                        checkpointing (§4.2)."
+                                                        .to_string(),
+                                                };
+                                            }
+                                        }
+                                        window.request_redraw();
+                                    }
+                                    _ => {}
+                                },
+                                Key::Named(NamedKey::Escape) => {
+                                    match &agent_panel_state {
+                                        agent_panel::AgentPanelState::PlanReady { .. } => {
+                                            if let Some(agent) = leo_agent.as_mut() {
+                                                let _ = agent.reject_plan();
+                                            }
+                                        }
+                                        agent_panel::AgentPanelState::Planning { .. } => {
+                                            // A real background model call
+                                            // can't be forcibly cancelled --
+                                            // this only stops the render loop
+                                            // from waiting on it. The thread
+                                            // finishes on its own; its result
+                                            // is silently dropped, since
+                                            // `plan_request` is cleared below
+                                            // and nothing else holds the
+                                            // receiver.
+                                            plan_request = None;
+                                        }
+                                        _ => {}
+                                    }
+                                    leo_agent = None;
+                                    agent_panel_state = agent_panel::AgentPanelState::Idle;
+                                    window.request_redraw();
+                                }
+                                Key::Named(NamedKey::Backspace) => {
+                                    if let agent_panel::AgentPanelState::EditingTask(text) =
+                                        &mut agent_panel_state
+                                    {
+                                        text.pop();
+                                        if text.is_empty() {
+                                            agent_panel_state = agent_panel::AgentPanelState::Idle;
+                                        }
+                                        window.request_redraw();
+                                    }
+                                }
+                                _ => {
+                                    if let Some(text) = &key_event.text {
+                                        if !text.is_empty()
+                                            && text.chars().all(|c| !c.is_control())
+                                            && agent_panel::accepts_typing(&agent_panel_state)
+                                        {
+                                            let mut task = match &agent_panel_state {
+                                                agent_panel::AgentPanelState::EditingTask(t) => {
+                                                    t.clone()
+                                                }
+                                                _ => String::new(),
+                                            };
+                                            task.push_str(text);
+                                            agent_panel_state =
+                                                agent_panel::AgentPanelState::EditingTask(task);
+                                            window.request_redraw();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
                                 KeyEvent {
                                     state: ElementState::Pressed,
                                     ..
@@ -2729,14 +2884,20 @@ fn main() {
                                     &palette.filtered,
                                     palette.selected,
                                 )
-                            } else if let Some(placeholder) = mode.placeholder_message() {
-                                // Real Agent/Design mode placeholder (§8,
-                                // task #3) -- reuses this same modal
+                            } else if mode == AppMode::Agent {
+                                // Real Agent mode content (§4, task #5,
+                                // §75.47) -- reuses this same modal
                                 // rendering/dim-overlay infrastructure
                                 // rather than a sixth glyphon `TextArea`,
-                                // the same way the commit modal already
-                                // reused it instead of the unsaved-changes
-                                // modal's own dedicated buffer.
+                                // the same way the commit modal and (before
+                                // it) the mode placeholder already did.
+                                agent_panel::build_panel_text(&agent_panel_state)
+                            } else if let Some(placeholder) = mode.placeholder_message() {
+                                // Real Design mode placeholder, if any (§8,
+                                // task #3/#12) -- currently always `None`
+                                // (Design has real WebView content as of
+                                // §75.39), kept only so a future honestly-
+                                // empty mode has somewhere to plug in.
                                 placeholder.to_string()
                             } else {
                                 String::new()
@@ -3193,6 +3354,37 @@ fn main() {
                     ))]
                     while gtk::events_pending() {
                         gtk::main_iteration_do(false);
+                    }
+
+                    // Real §75.47 Leo plan-generation poll -- same
+                    // non-blocking `try_recv` shape as every other real
+                    // background-thread bridge in this crate. Only
+                    // meaningful while `agent_panel_state` is really
+                    // `Planning` (an Escape press during that state clears
+                    // `plan_request` directly, so a stale result from an
+                    // abandoned request is simply never read here).
+                    if let Some(receiver) = &plan_request {
+                        if let Ok(result) = receiver.try_recv() {
+                            plan_request = None;
+                            match result {
+                                Ok(plan) => {
+                                    if let Some(agent) = leo_agent.as_mut() {
+                                        let _ = agent.apply_generated_plan(Ok(plan.clone()));
+                                    }
+                                    agent_panel_state =
+                                        agent_panel::AgentPanelState::PlanReady { plan };
+                                }
+                                Err(e) => {
+                                    if let Some(agent) = leo_agent.as_mut() {
+                                        let _ = agent.apply_generated_plan(Err(e.clone()));
+                                    }
+                                    agent_panel_state = agent_panel::AgentPanelState::Error {
+                                        message: e.to_string(),
+                                    };
+                                }
+                            }
+                            window.request_redraw();
+                        }
                     }
 
                     // Real §75.41 dev-server bridge poll -- non-blocking
