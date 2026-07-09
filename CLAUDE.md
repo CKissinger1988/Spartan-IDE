@@ -784,9 +784,39 @@ first — it's the parity reference until each row there is actually reimplement
   investigated via a real A/B against a `git worktree` build of the immediately prior commit,
   which showed the same noisy spread (p99 10.4-20.8ms) with an identical stable p50 -- confirming
   session-level noise, not a real regression from this change, per §75.9's/§75.29's own established
-  methodology. No command palette (§16.1's other half of task #3, still open, task stays
-  `in_progress`), no per-arm input isolation (blanket swallow only), no mode-switch transition
-  animation, no persisted last-active mode across restarts.
+  methodology. No command palette (§16.1's other half of task #3, closed by §75.37 below), no
+  per-arm input isolation (blanket swallow only), no mode-switch transition animation, no
+  persisted last-active mode across restarts.
+- **Real, working code — real command palette, closing task #3 (§75.37)**: closes the gap §75.36
+  named. New, pure `command_palette.rs` (`CommandId` enum of 8 real actions -- Save/Undo/Redo/
+  Close Tab/Toggle Sidebar/the three mode switches, every one an already-real keybinding elsewhere
+  in this crate), a real depth-bounded recursive file listing under the project root (skips
+  hidden/`target`/`node_modules`), and a real case-insensitive subsequence fuzzy matcher/ranker.
+  Deliberately not §16.1's full vision -- no natural-language Leo routing (no `ModelProvider`
+  exists), no radial quick-actions, no minimap fusion. Ctrl+P opens it (reachable from any mode,
+  not just Editor); keyboard-only selection (Up/Down/Enter/Escape/typed query) reuses the existing
+  modal/dim-overlay rendering, no new hit-testing needed. Selecting any entry forces `mode =
+  Editor` first so its effect is actually visible, then the three mode-switch commands set their
+  own choice afterward. Five existing mouse-click arms (file tree, source control, tab bar, mode
+  toggle, main editor) gained a `command_palette_state.is_none()` guard; while doing this, a
+  pre-existing gap was found and fixed as an incidental correctness improvement -- the tab bar's
+  own click arm was missing a `commit_message.is_none()` guard entirely, predating this pass. 9 new
+  headless tests (48 total in this crate's `--lib` suite), full workspace test/clippy/fmt clean.
+  Live, through the real binary against a real 3-file scratch project: Ctrl+P opened the palette
+  showing all 8 commands plus 3 real files (screenshotted); fuzzy query `"utl"` correctly filtered
+  to `utils.rs` plus one real, hand-verified non-obvious subsequence match (screenshotted); Enter
+  opened the selected file as a real new tab (screenshotted); Up/Down navigation, Escape-cancel
+  with the document provably unchanged, and executing "Undo" via fuzzy search (correctly undoing a
+  whole coalesced typing run in one step) were each screenshotted; executing "Switch to Agent
+  Mode" via the palette worked, and Ctrl+P was confirmed to still open the palette from within
+  Agent mode itself (screenshotted), returning to Editor via a second palette selection; a direct
+  click on the tab bar while the palette was open was confirmed to do nothing (screenshotted),
+  proving the new mouse guards actually work. The 50k-line benchmark (never exercises this code
+  path) was re-run twice and showed the same noisy-tail pattern already established as this
+  session's baseline, no attributable regression. No mouse-click selection within the palette's
+  own list (keyboard-only), no `.gitignore`-aware filtering, no live re-scan while open (list is
+  captured once at open time, a deliberate choice), no frecency ranking. Task #3 is now fully
+  closed.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -834,7 +864,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 240 tests: 6 spikes + 7 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 249 tests: 6 spikes + 7 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-editor-core, xtask)
 # `cargo run -p xtask -- package` (§75.35) builds a real Linux .tar.gz release package into

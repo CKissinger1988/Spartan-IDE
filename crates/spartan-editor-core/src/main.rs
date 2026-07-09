@@ -9,8 +9,8 @@ mod text;
 use mode_toggle::AppMode;
 use spartan_editor_core::viewport::{self, Viewport};
 use spartan_editor_core::{
-    accessibility, build, dap_session, editor_view, file_tree, git_panel, highlight, language, lsp,
-    lsp_session, mode_toggle, tab_bar,
+    accessibility, build, command_palette, dap_session, editor_view, file_tree, git_panel,
+    highlight, language, lsp, lsp_session, mode_toggle, tab_bar,
 };
 
 use std::path::{Path, PathBuf};
@@ -672,6 +672,23 @@ fn main() {
     let mut mode = AppMode::Editor;
     let mut mode_hits: Vec<mode_toggle::ModeHit> = Vec::new();
 
+    // Real, scoped command palette (§16.1, task #3) -- `None` is the
+    // ordinary closed state. `all_entries` (the static commands plus a
+    // real file listing under the project root) is captured once when the
+    // palette opens, not re-scanned on every keystroke -- a deliberate
+    // difference from `file_tree.rs`'s own always-fresh-read choice, since
+    // the palette's own list should stay stable while a query is typed,
+    // not flicker with concurrent filesystem changes mid-search.
+    // `filtered`/`selected` are recomputed from `all_entries` on every
+    // query edit (open, typed character, Backspace).
+    struct CommandPaletteState {
+        query: String,
+        all_entries: Vec<command_palette::PaletteEntry>,
+        filtered: Vec<command_palette::PaletteEntry>,
+        selected: usize,
+    }
+    let mut command_palette_state: Option<CommandPaletteState> = None;
+
     let mut bench_rng = rand::thread_rng();
     let mut edit_bench_remaining = bench_edit_iters.unwrap_or(0);
     let mut cursor_bench_remaining = bench_cursor_iters.unwrap_or(0);
@@ -1028,6 +1045,7 @@ fn main() {
                             ..
                         } if pending_close.is_none()
                             && commit_message.is_none()
+                            && command_palette_state.is_none()
                             && last_cursor_pos.0 < text::SIDEBAR_WIDTH
                             && sidebar_mode == SidebarMode::FileTree =>
                         {
@@ -1082,6 +1100,7 @@ fn main() {
                             ..
                         } if pending_close.is_none()
                             && commit_message.is_none()
+                            && command_palette_state.is_none()
                             && last_cursor_pos.0 < text::SIDEBAR_WIDTH
                             && sidebar_mode == SidebarMode::SourceControl =>
                         {
@@ -1119,6 +1138,8 @@ fn main() {
                             button: MouseButton::Left,
                             ..
                         } if pending_close.is_none()
+                            && commit_message.is_none()
+                            && command_palette_state.is_none()
                             && last_cursor_pos.0 >= text::SIDEBAR_WIDTH
                             && last_cursor_pos.0
                                 < gpu_state.size.width as f32 - text::MODE_TOGGLE_WIDTH
@@ -1197,6 +1218,7 @@ fn main() {
                             ..
                         } if pending_close.is_none()
                             && commit_message.is_none()
+                            && command_palette_state.is_none()
                             && last_cursor_pos.0
                                 >= gpu_state.size.width as f32 - text::MODE_TOGGLE_WIDTH
                             && last_cursor_pos.1 < text::TAB_BAR_HEIGHT =>
@@ -1224,7 +1246,10 @@ fn main() {
                             state: ElementState::Pressed,
                             button: MouseButton::Left,
                             ..
-                        } if pending_close.is_none() && mode == AppMode::Editor => {
+                        } if pending_close.is_none()
+                            && command_palette_state.is_none()
+                            && mode == AppMode::Editor =>
+                        {
                             mouse_button_down = true;
                             // `hit_test` expects coordinates relative to the
                             // text buffer's own origin, the same convention
@@ -1433,6 +1458,279 @@ fn main() {
                                     }
                                 }
                             }
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } if command_palette_state.is_some() => {
+                            // Real command palette input (§16.1, task #3) --
+                            // same "intercept everything while this state is
+                            // Some" pattern as the unsaved-changes and
+                            // commit-message modals just above (mutually
+                            // exclusive with both: the Ctrl+P arm below that
+                            // opens this can only fire while `pending_close`
+                            // and `commit_message` are both already `None`).
+                            match &key_event.logical_key {
+                                Key::Named(NamedKey::Escape) => {
+                                    command_palette_state = None;
+                                    window.request_redraw();
+                                }
+                                Key::Named(NamedKey::Enter) => {
+                                    // Extract the selected entry (a real,
+                                    // owned clone) and close the palette
+                                    // *before* running its action, not
+                                    // after -- several actions below (e.g.
+                                    // Close Tab on a dirty file) themselves
+                                    // open a *different* modal
+                                    // (`pending_close`), which must not be
+                                    // immediately clobbered by this palette
+                                    // state still being `Some`.
+                                    let entry = command_palette_state
+                                        .as_ref()
+                                        .and_then(|p| p.filtered.get(p.selected).cloned());
+                                    command_palette_state = None;
+                                    if let Some(entry) = entry {
+                                        // Every palette action is
+                                        // document-oriented (or explicitly
+                                        // chooses a mode itself, below) --
+                                        // force `Editor` first so its
+                                        // effect is actually visible
+                                        // instead of happening silently
+                                        // behind an Agent/Design
+                                        // placeholder still being shown.
+                                        mode = AppMode::Editor;
+                                        match entry {
+                                            command_palette::PaletteEntry::Command(id) => match id
+                                            {
+                                                command_palette::CommandId::SaveFile => {
+                                                    let active_file = &mut files[active];
+                                                    if active_file.label.starts_with("--synthetic:")
+                                                    {
+                                                        println!(
+                                                            "Cannot save {} -- a --synthetic: fixture has no real file path",
+                                                            active_file.label
+                                                        );
+                                                    } else {
+                                                        match std::fs::write(
+                                                            &active_file.label,
+                                                            active_file.editor.text(),
+                                                        ) {
+                                                            Ok(()) => {
+                                                                active_file.dirty = false;
+                                                                println!(
+                                                                    "Saved: {}",
+                                                                    active_file.label
+                                                                );
+                                                                window.set_title(&window_title(
+                                                                    active_file,
+                                                                ));
+                                                            }
+                                                            Err(e) => println!(
+                                                                "Failed to save {}: {e}",
+                                                                active_file.label
+                                                            ),
+                                                        }
+                                                    }
+                                                }
+                                                command_palette::CommandId::Undo
+                                                | command_palette::CommandId::Redo => {
+                                                    let active_file = &mut files[active];
+                                                    let is_redo = matches!(
+                                                        id,
+                                                        command_palette::CommandId::Redo
+                                                    );
+                                                    let changed = if is_redo {
+                                                        active_file.editor.redo()
+                                                    } else {
+                                                        active_file.editor.undo()
+                                                    };
+                                                    if changed {
+                                                        if !active_file.dirty {
+                                                            active_file.dirty = true;
+                                                            window.set_title(&window_title(
+                                                                active_file,
+                                                            ));
+                                                        }
+                                                        let (cursor_line, _) =
+                                                            active_file.editor.cursor_line_col();
+                                                        let doc_len_lines =
+                                                            active_file.editor.document.len_lines();
+                                                        active_file
+                                                            .viewport
+                                                            .ensure_visible(cursor_line, doc_len_lines);
+                                                        reshape_window(
+                                                            &mut text_state,
+                                                            &active_file.editor,
+                                                            &active_file.viewport,
+                                                            active_file.highlighter.as_mut(),
+                                                        );
+                                                    } else {
+                                                        println!(
+                                                            "Nothing to {}",
+                                                            if is_redo { "redo" } else { "undo" }
+                                                        );
+                                                    }
+                                                }
+                                                command_palette::CommandId::CloseTab => {
+                                                    if files[active].dirty && files.len() > 1 {
+                                                        pending_close =
+                                                            Some(PendingClose::File(active));
+                                                    } else {
+                                                        let closing = active;
+                                                        close_file(&mut files, &mut active, closing);
+                                                        let active_file = &mut files[active];
+                                                        window.set_title(&window_title(active_file));
+                                                        reshape_window(
+                                                            &mut text_state,
+                                                            &active_file.editor,
+                                                            &active_file.viewport,
+                                                            active_file.highlighter.as_mut(),
+                                                        );
+                                                    }
+                                                }
+                                                command_palette::CommandId::ToggleSidebar => {
+                                                    sidebar_mode = match sidebar_mode {
+                                                        SidebarMode::FileTree => {
+                                                            SidebarMode::SourceControl
+                                                        }
+                                                        SidebarMode::SourceControl => {
+                                                            SidebarMode::FileTree
+                                                        }
+                                                    };
+                                                }
+                                                command_palette::CommandId::SwitchToAgentMode => {
+                                                    mode = AppMode::Agent;
+                                                }
+                                                command_palette::CommandId::SwitchToEditorMode => {
+                                                    mode = AppMode::Editor;
+                                                }
+                                                command_palette::CommandId::SwitchToDesignMode => {
+                                                    mode = AppMode::Design;
+                                                }
+                                            },
+                                            command_palette::PaletteEntry::File(path) => {
+                                                // Mirrors the file tree
+                                                // sidebar's own file-click
+                                                // arm above: switch to an
+                                                // already-open file rather
+                                                // than opening a second
+                                                // `OpenFile` (and a second
+                                                // real LSP session) for the
+                                                // same real path.
+                                                let target_index = find_open_file_index(
+                                                    &files, &path,
+                                                )
+                                                .unwrap_or_else(|| {
+                                                    let mut new_file = open_file(
+                                                        &path.display().to_string(),
+                                                        None,
+                                                    );
+                                                    new_file.viewport.visible_lines =
+                                                        files[active].viewport.visible_lines;
+                                                    files.push(new_file);
+                                                    files.len() - 1
+                                                });
+                                                active = target_index;
+                                                let active_file = &mut files[active];
+                                                window.set_title(&window_title(active_file));
+                                                reshape_window(
+                                                    &mut text_state,
+                                                    &active_file.editor,
+                                                    &active_file.viewport,
+                                                    active_file.highlighter.as_mut(),
+                                                );
+                                            }
+                                        }
+                                    }
+                                    window.request_redraw();
+                                }
+                                Key::Named(NamedKey::ArrowUp) => {
+                                    if let Some(palette) = command_palette_state.as_mut() {
+                                        if palette.selected > 0 {
+                                            palette.selected -= 1;
+                                        }
+                                    }
+                                    window.request_redraw();
+                                }
+                                Key::Named(NamedKey::ArrowDown) => {
+                                    if let Some(palette) = command_palette_state.as_mut() {
+                                        if palette.selected + 1 < palette.filtered.len() {
+                                            palette.selected += 1;
+                                        }
+                                    }
+                                    window.request_redraw();
+                                }
+                                Key::Named(NamedKey::Backspace) => {
+                                    if let Some(palette) = command_palette_state.as_mut() {
+                                        palette.query.pop();
+                                        palette.filtered = command_palette::filter_and_rank(
+                                            &palette.query,
+                                            &palette.all_entries,
+                                        );
+                                        palette.selected = 0;
+                                    }
+                                    window.request_redraw();
+                                }
+                                _ => {
+                                    if let Some(text) = &key_event.text {
+                                        if !text.is_empty() && text.chars().all(|c| !c.is_control())
+                                        {
+                                            if let Some(palette) = command_palette_state.as_mut() {
+                                                palette.query.push_str(text);
+                                                palette.filtered = command_palette::filter_and_rank(
+                                                    &palette.query,
+                                                    &palette.all_entries,
+                                                );
+                                                palette.selected = 0;
+                                            }
+                                            window.request_redraw();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } if pending_close.is_none()
+                            && commit_message.is_none()
+                            && command_palette_state.is_none()
+                            && modifiers.control_key()
+                            && key_event.physical_key == PhysicalKey::Code(KeyCode::KeyP) =>
+                        {
+                            // Ctrl+P: open the real command palette (§16.1,
+                            // task #3). The file half of its entry list is
+                            // captured once here, from whatever real project
+                            // root the file tree sidebar already resolved --
+                            // `None` (a `--synthetic:` fixture) means no
+                            // real files to list, so the palette shows only
+                            // the static command list, same "empty is the
+                            // ordinary state" pattern this crate's other
+                            // optional panels already use.
+                            let mut all_entries = command_palette::static_commands();
+                            if let Some(tree) = &file_tree {
+                                all_entries.extend(
+                                    command_palette::collect_files(tree.root(), 6)
+                                        .into_iter()
+                                        .map(command_palette::PaletteEntry::File),
+                                );
+                            }
+                            let filtered = command_palette::filter_and_rank("", &all_entries);
+                            command_palette_state = Some(CommandPaletteState {
+                                query: String::new(),
+                                all_entries,
+                                filtered,
+                                selected: 0,
+                            });
+                            window.request_redraw();
                         }
                         WindowEvent::KeyboardInput {
                             event:
@@ -2120,6 +2418,19 @@ fn main() {
                                 format!(
                                     "Commit message (Enter to commit, Escape to cancel):\n\n{message}_"
                                 )
+                            } else if let Some(palette) = &command_palette_state {
+                                // Real command palette text (§16.1, task
+                                // #3), checked before the mode placeholder
+                                // just below since the palette can be
+                                // opened from any mode (Ctrl+P isn't gated
+                                // on `mode == Editor`) and should always
+                                // take rendering priority over it while
+                                // open.
+                                command_palette::build_palette_text(
+                                    &palette.query,
+                                    &palette.filtered,
+                                    palette.selected,
+                                )
                             } else if let Some(placeholder) = mode.placeholder_message() {
                                 // Real Agent/Design mode placeholder (§8,
                                 // task #3) -- reuses this same modal
@@ -2285,6 +2596,7 @@ fn main() {
                             let modal_rects: Vec<selection::SelectionRect> =
                                 if pending_close.is_some()
                                     || commit_message.is_some()
+                                    || command_palette_state.is_some()
                                     || mode.placeholder_message().is_some()
                                 {
                                     vec![selection::SelectionRect {

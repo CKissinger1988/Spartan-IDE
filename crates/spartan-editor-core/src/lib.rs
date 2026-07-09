@@ -12,6 +12,7 @@
 //! here too.
 pub mod accessibility;
 pub mod build;
+pub mod command_palette;
 pub mod dap;
 pub mod dap_session;
 pub mod editor_view;
