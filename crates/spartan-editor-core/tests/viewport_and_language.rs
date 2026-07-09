@@ -543,10 +543,20 @@ fn undo_clears_an_active_selection() {
 }
 
 #[test]
-fn multiple_undo_calls_walk_back_through_several_edits() {
+fn multiple_undo_calls_walk_back_through_several_non_adjacent_edits() {
+    // Each insert here is separated by a cursor move, so undo coalescing
+    // (§75.25) does not merge them into one run -- this exercises walking
+    // back through several genuinely distinct edits, one undo per edit.
+    // (Three *adjacent* inserts coalescing into a single undo step is its
+    // own, separately tested, real behavior change -- see the
+    // `consecutive_inserts_coalesce_...` tests below.)
     let mut editor = EditorView::new("");
     editor.insert_at_cursor("a");
+    editor.move_left();
+    editor.move_right();
     editor.insert_at_cursor("b");
+    editor.move_left();
+    editor.move_right();
     editor.insert_at_cursor("c");
     assert_eq!(editor.text(), "abc");
     assert!(editor.undo());
@@ -556,6 +566,122 @@ fn multiple_undo_calls_walk_back_through_several_edits() {
     assert!(editor.undo());
     assert_eq!(editor.text(), "");
     assert!(!editor.undo());
+}
+
+// -- §75.25: undo coalescing (task #23) --
+
+#[test]
+fn consecutive_inserts_coalesce_into_a_single_undo_step() {
+    let mut editor = EditorView::new("");
+    editor.insert_at_cursor("a");
+    editor.insert_at_cursor("b");
+    editor.insert_at_cursor("c");
+    assert_eq!(editor.text(), "abc");
+    assert!(editor.undo());
+    assert_eq!(editor.text(), "");
+    assert_eq!(editor.cursor, 0);
+}
+
+#[test]
+fn a_cursor_move_between_inserts_breaks_the_coalescing_run() {
+    let mut editor = EditorView::new("");
+    editor.insert_at_cursor("a");
+    editor.move_left();
+    editor.move_right();
+    editor.insert_at_cursor("b");
+    assert_eq!(editor.text(), "ab");
+    assert!(editor.undo());
+    assert_eq!(editor.text(), "a");
+    assert!(editor.undo());
+    assert_eq!(editor.text(), "");
+}
+
+#[test]
+fn coalesced_undo_restores_the_cursor_to_before_the_run_started() {
+    // Typing mid-document: undoing the whole run should put the cursor
+    // back exactly where it was before the first character was typed, not
+    // just clamped into the shrunk document's bounds -- the mid-document
+    // case where the pre-existing single-step "clamp" approximation from
+    // §75.19 would have landed somewhere wrong for a run longer than one
+    // character.
+    let mut editor = EditorView::new("hexyz");
+    editor.set_cursor_to_line_col(0, 2); // cursor between "he" and "xyz"
+    editor.insert_at_cursor("l");
+    editor.insert_at_cursor("l");
+    editor.insert_at_cursor("o");
+    assert_eq!(editor.text(), "helloxyz");
+    assert_eq!(editor.cursor, 5);
+    assert!(editor.undo());
+    assert_eq!(editor.text(), "hexyz");
+    assert_eq!(editor.cursor, 2);
+}
+
+#[test]
+fn redo_restores_the_cursor_to_where_it_was_before_the_undo() {
+    let mut editor = EditorView::new("hexyz");
+    editor.set_cursor_to_line_col(0, 2);
+    editor.insert_at_cursor("l");
+    editor.insert_at_cursor("l");
+    editor.insert_at_cursor("o");
+    assert_eq!(editor.cursor, 5);
+    assert!(editor.undo());
+    assert_eq!(editor.cursor, 2);
+    assert!(editor.redo());
+    assert_eq!(editor.text(), "helloxyz");
+    assert_eq!(editor.cursor, 5);
+}
+
+#[test]
+fn typing_over_a_selection_does_not_coalesce_with_surrounding_inserts() {
+    let mut editor = EditorView::new("");
+    editor.insert_at_cursor("a");
+    editor.insert_at_cursor("b");
+    // Select "ab" and replace it -- its own atomic operation, not part of
+    // the run that produced "ab".
+    editor.selection_anchor = Some(0);
+    editor.cursor = 2;
+    editor.insert_at_cursor("X");
+    assert_eq!(editor.text(), "X");
+    // A further plain insert starts a brand-new run, not a continuation of
+    // the replace.
+    editor.insert_at_cursor("Y");
+    assert_eq!(editor.text(), "XY");
+    assert!(editor.undo()); // undoes "Y" only
+    assert_eq!(editor.text(), "X");
+}
+
+#[test]
+fn backspace_is_not_part_of_an_insertion_run() {
+    // §75.25 deliberately scopes coalescing to insertion runs, not
+    // backspace runs -- a named gap, not an oversight. A backspace between
+    // two inserts must still end the run.
+    let mut editor = EditorView::new("");
+    editor.insert_at_cursor("a");
+    editor.insert_at_cursor("b");
+    editor.backspace();
+    editor.insert_at_cursor("c");
+    assert_eq!(editor.text(), "ac");
+    assert!(editor.undo()); // undoes "c" only, not the backspace or "ab"
+    assert_eq!(editor.text(), "a");
+}
+
+#[test]
+fn coalesced_undo_falls_back_to_clamp_when_the_run_partially_ages_out_of_the_ring() {
+    // `Document`'s default ring capacity is 500 (`spartan_buffer::Document::
+    // new`). A single typing run longer than that means undo()'s loop can't
+    // complete every step -- it must stop early rather than panic or
+    // over-undo, falling back to clamping the cursor rather than claiming a
+    // precise "start of run" position it never actually reached.
+    let mut editor = EditorView::new("");
+    for _ in 0..510 {
+        editor.insert_at_cursor("x");
+    }
+    assert_eq!(editor.text().len(), 510);
+    assert!(editor.undo());
+    // Some, but not all, of the run was undone -- didn't panic, and didn't
+    // fully revert to empty (that history aged out of the bounded ring).
+    assert!(!editor.text().is_empty());
+    assert_ne!(editor.text(), "x".repeat(510));
 }
 
 #[test]

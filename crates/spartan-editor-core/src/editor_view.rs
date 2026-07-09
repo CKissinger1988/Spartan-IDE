@@ -38,16 +38,21 @@ pub struct EditorView {
     /// by `selection_range()`, not a real empty one, matching how a mouse
     /// click naturally arms an anchor before any actual drag has happened.
     pub selection_anchor: Option<usize>,
-    /// Real undo/redo (§75.19): checkpoint IDs undone *away from*, most
-    /// recent last -- pushed by `undo()` on success, popped and jumped back
-    /// to by `redo()`, cleared by any new real edit. Lives here, not in
-    /// `Document`, because `spartan-buffer`'s undo tree only models "move
-    /// to parent" / "jump anywhere"; it deliberately has no linear redo
-    /// concept of its own (§2.1's branching design means "redo" isn't
-    /// always well-defined -- jumping to an arbitrary sibling checkpoint is
-    /// just as valid a "redo" as this one), so the conventional
-    /// most-recently-undone-wins behavior is built here, one layer up.
-    redo_stack: Vec<spartan_buffer::CheckpointId>,
+    /// Real undo/redo (§75.19, extended for coalescing in §75.25):
+    /// `(checkpoint, cursor)` pairs undone *away from*, most recent last --
+    /// pushed by `undo()` on success, popped and jumped back to by `redo()`,
+    /// cleared by any new real edit. Lives here, not in `Document`, because
+    /// `spartan-buffer`'s undo tree only models "move to parent" / "jump
+    /// anywhere"; it deliberately has no linear redo concept of its own
+    /// (§2.1's branching design means "redo" isn't always well-defined --
+    /// jumping to an arbitrary sibling checkpoint is just as valid a "redo"
+    /// as this one), so the conventional most-recently-undone-wins behavior
+    /// is built here, one layer up. The cursor half of the pair (added in
+    /// §75.25) lets `redo()` restore the caret to exactly where it was
+    /// right before the undo, rather than only clamping it into bounds --
+    /// which matters more now that one coalesced undo can jump back over an
+    /// entire typing run at once, not just a single character.
+    redo_stack: Vec<(spartan_buffer::CheckpointId, usize)>,
     /// "Sticky column" (§75.22): the column an up/down *run* tries to return
     /// to, even after passing through a shorter intermediate line that would
     /// otherwise clamp it away permanently -- matching conventional editor
@@ -63,6 +68,19 @@ pub struct EditorView {
     /// (left/right, word/line/document jumps, mouse clicks, edits,
     /// undo/redo) intentionally starts a fresh run next time.
     sticky_column: Option<usize>,
+    /// Undo coalescing (§75.25, task #23): `Some((start_cursor,
+    /// checkpoints_since_start))` while a run of consecutive, plain
+    /// (no-selection) character insertions is in progress, so one `undo()`
+    /// call can revert an entire typed run at once instead of one character
+    /// at a time. `start_cursor` is the cursor position *before* the run's
+    /// first character was typed, letting `undo()` restore it exactly
+    /// rather than only clamping into the shrunk document's bounds. Reset
+    /// to `None` by every method that isn't "extend an in-progress plain
+    /// insert run" -- the exact same "any other operation ends the run"
+    /// rule `sticky_column` above already established, applied to a
+    /// different kind of run. Deliberately does not cover backspace runs
+    /// (see this field's own gap named in §75.25) -- only insertion.
+    typing_run: Option<(usize, usize)>,
 }
 
 impl EditorView {
@@ -83,6 +101,7 @@ impl EditorView {
             selection_anchor: None,
             redo_stack: Vec::new(),
             sticky_column: None,
+            typing_run: None,
         }
     }
 
@@ -129,6 +148,7 @@ impl EditorView {
         };
         self.redo_stack.clear();
         self.sticky_column = None;
+        self.typing_run = None;
         let line_start = self.document.char_to_line(start).ok();
         let line_end = self.document.char_to_line(end).ok();
         let structural = line_start != line_end;
@@ -161,9 +181,26 @@ impl EditorView {
         }
         self.redo_stack.clear();
         self.sticky_column = None;
+        let cursor_before = self.cursor;
         let line_before = self.document.char_to_line(self.cursor).ok();
         if self.document.insert(self.cursor, text).is_ok() {
             self.cursor += text.chars().count();
+            // Undo coalescing (§75.25): replacing a selection is its own
+            // atomic operation (and already went through `delete_selection`
+            // above, which reset any in-progress run), not a continuation
+            // of whatever typing run preceded it -- so it starts fresh
+            // rather than silently merging into an unrelated prior run.
+            // A plain insert either extends the currently open run or, if
+            // none is open (the first keystroke after some other action),
+            // starts a new one anchored at the cursor's pre-insert position.
+            if had_selection {
+                self.typing_run = None;
+            } else {
+                match &mut self.typing_run {
+                    Some((_, checkpoints_since_start)) => *checkpoints_since_start += 1,
+                    None => self.typing_run = Some((cursor_before, 1)),
+                }
+            }
             if had_selection || text.contains('\n') {
                 EditEffect::Structural
             } else {
@@ -187,6 +224,11 @@ impl EditorView {
         }
         self.redo_stack.clear();
         self.sticky_column = None;
+        // Undo coalescing (§75.25) deliberately covers insertion runs only,
+        // not backspace runs -- a real, named gap, not an oversight (see
+        // this pass's own doc comment on `typing_run`). Backspace always
+        // ends whatever insertion run preceded it.
+        self.typing_run = None;
         let line_before = self.document.char_to_line(self.cursor).ok();
         // If the cursor sits at the very start of its line, the character
         // being removed is the previous line's terminating "\n" -- deleting
@@ -251,6 +293,7 @@ impl EditorView {
     /// end-of-line, not out-of-bounds mid-terminator).
     pub fn set_cursor_to_line_col(&mut self, line: usize, col_chars: usize) {
         self.sticky_column = None;
+        self.typing_run = None;
         let doc_len_lines = self.document.len_lines();
         let line = line.min(doc_len_lines.saturating_sub(1));
         let Ok(line_start) = self.document.line_to_char(line) else {
@@ -312,6 +355,7 @@ impl EditorView {
     /// `ArrowLeft` at the very start of the document).
     pub fn move_left(&mut self) -> bool {
         self.sticky_column = None;
+        self.typing_run = None;
         if self.cursor == 0 {
             return false;
         }
@@ -322,6 +366,7 @@ impl EditorView {
     /// Moves the cursor one char right, clamped at document end.
     pub fn move_right(&mut self) -> bool {
         self.sticky_column = None;
+        self.typing_run = None;
         let len = self.document.len_chars();
         if self.cursor >= len {
             return false;
@@ -364,6 +409,7 @@ impl EditorView {
     /// is already there.
     pub fn move_to_line_start(&mut self) -> bool {
         self.sticky_column = None;
+        self.typing_run = None;
         let (line, col) = self.cursor_line_col();
         if col == 0 {
             return false;
@@ -379,6 +425,7 @@ impl EditorView {
     /// A no-op if the cursor is already there.
     pub fn move_to_line_end(&mut self) -> bool {
         self.sticky_column = None;
+        self.typing_run = None;
         let (line, col) = self.cursor_line_col();
         let line_len_chars = self.line_len_chars(line);
         if col >= line_len_chars {
@@ -395,6 +442,7 @@ impl EditorView {
     /// cursor is already there.
     pub fn move_to_document_start(&mut self) -> bool {
         self.sticky_column = None;
+        self.typing_run = None;
         if self.cursor == 0 {
             return false;
         }
@@ -406,6 +454,7 @@ impl EditorView {
     /// cursor is already there.
     pub fn move_to_document_end(&mut self) -> bool {
         self.sticky_column = None;
+        self.typing_run = None;
         let len = self.document.len_chars();
         if self.cursor >= len {
             return false;
@@ -427,6 +476,7 @@ impl EditorView {
             return false;
         }
         self.sticky_column = None;
+        self.typing_run = None;
         let mut pos = self.cursor;
         while pos > 0 && self.char_before(pos).is_some_and(|c| c.is_whitespace()) {
             pos -= 1;
@@ -452,6 +502,7 @@ impl EditorView {
             return false;
         }
         self.sticky_column = None;
+        self.typing_run = None;
         let mut pos = self.cursor;
         while pos < len && self.char_at(pos).is_some_and(|c| c.is_whitespace()) {
             pos += 1;
@@ -469,43 +520,73 @@ impl EditorView {
         true
     }
 
-    /// Real undo (§75.19): moves to the parent checkpoint in
-    /// `spartan-buffer`'s own branching undo tree, remembering where we
-    /// came from (on `self.redo_stack`) so `redo()` can return to it.
+    /// Real undo (§75.19, extended for coalescing in §75.25): moves to the
+    /// parent checkpoint in `spartan-buffer`'s own branching undo tree,
+    /// remembering where we came from (on `self.redo_stack`, now paired
+    /// with the pre-undo cursor position) so `redo()` can return to it.
     /// Returns whether anything actually changed -- `false` at the root of
     /// the undo tree, or once that history has aged out of the bounded
     /// ring (`Document::undo`'s own two documented cases), matching every
     /// other movement method's "did anything change" convention. Clears
     /// any active selection (an undone edit invalidates whatever the
-    /// selection was pointing at) and clamps the cursor into the restored
-    /// document's real bounds -- `self.cursor` has no meaning in the
-    /// restored rope otherwise.
+    /// selection was pointing at).
+    ///
+    /// If a typing run is in progress (`self.typing_run`), this steps back
+    /// through the *entire* run's checkpoints in one call rather than just
+    /// the most recent one, and restores the cursor to exactly where it was
+    /// before the run's first character was typed -- not just clamped into
+    /// the shrunk document's bounds, which is what every other case here
+    /// still falls back to (an existing, accepted approximation from
+    /// §75.19, not newly introduced by coalescing). If the run's checkpoints
+    /// have partially aged out of `Document`'s bounded ring partway through
+    /// the loop, this stops early rather than over-undoing, and falls back
+    /// to the clamp rather than claiming a precise position it didn't
+    /// actually reach.
     pub fn undo(&mut self) -> bool {
-        let before = self.document.current_checkpoint();
-        if !self.document.undo() {
+        let before = (self.document.current_checkpoint(), self.cursor);
+        let steps = self.typing_run.map_or(1, |(_, count)| count);
+        let mut completed = 0;
+        for _ in 0..steps {
+            if !self.document.undo() {
+                break;
+            }
+            completed += 1;
+        }
+        if completed == 0 {
             return false;
         }
         self.redo_stack.push(before);
         self.selection_anchor = None;
         self.sticky_column = None;
-        self.cursor = self.cursor.min(self.document.len_chars());
+        self.cursor = if completed == steps {
+            self.typing_run.map_or(self.cursor, |(start, _)| start)
+        } else {
+            self.cursor
+        }
+        .min(self.document.len_chars());
+        self.typing_run = None;
         true
     }
 
     /// Real redo: jumps back to the most recently undone-away-from
-    /// checkpoint, if any. A checkpoint can legitimately have aged out of
-    /// `spartan-buffer`'s bounded ring since it was pushed here (a real,
-    /// honest possibility this crate's own design allows for, not a
-    /// hypothetical) -- `jump_to_checkpoint` reports that as an `Err`,
-    /// which this method treats as "skip it and try the next one" rather
-    /// than surfacing an error there's nothing a caller could usefully act
-    /// on. Returns whether anything actually changed.
+    /// checkpoint, if any, restoring the cursor to exactly where it was
+    /// right before that undo happened (§75.25 -- previously this only
+    /// clamped the existing cursor into bounds, which under-restored it for
+    /// any undo that had moved the cursor backward, coalesced or not). A
+    /// checkpoint can legitimately have aged out of `spartan-buffer`'s
+    /// bounded ring since it was pushed here (a real, honest possibility
+    /// this crate's own design allows for, not a hypothetical) --
+    /// `jump_to_checkpoint` reports that as an `Err`, which this method
+    /// treats as "skip it and try the next one" rather than surfacing an
+    /// error there's nothing a caller could usefully act on. Returns
+    /// whether anything actually changed.
     pub fn redo(&mut self) -> bool {
-        while let Some(id) = self.redo_stack.pop() {
+        while let Some((id, cursor_before_undo)) = self.redo_stack.pop() {
             if self.document.jump_to_checkpoint(id).is_ok() {
                 self.selection_anchor = None;
                 self.sticky_column = None;
-                self.cursor = self.cursor.min(self.document.len_chars());
+                self.typing_run = None;
+                self.cursor = cursor_before_undo.min(self.document.len_chars());
                 return true;
             }
         }

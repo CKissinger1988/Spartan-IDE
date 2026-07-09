@@ -467,6 +467,33 @@ first — it's the parity reference until each row there is actually reimplement
   both share the same `files.len() > 1` condition. Full test/clippy/fmt clean; 50k-line benchmark
   re-run, no regression. Tab overflow (many tabs exceeding window width) and drag-to-reorder remain
   entirely unimplemented.
+- **Real, working code — undo coalescing, task #23 (§75.25)**: before this, every keystroke created
+  its own real `spartan-buffer` checkpoint, so undoing a 5-character word took 5 separate Ctrl+Z
+  presses. Coalescing lives at the `EditorView` layer (not `Document`'s -- its "one checkpoint per
+  edit" contract is load-bearing elsewhere, already tested, out of scope to change) via a new
+  `typing_run: Option<(start_cursor, checkpoints_since_start)>` field following §75.22's
+  `sticky_column` precedent exactly: extended by a plain insert, reset by literally everything else
+  (moves, jumps, mouse clicks, selection delete, backspace, undo, redo). `undo()` now loops
+  `Document::undo()` up to the run's length in one call, stopping early (not panicking, not
+  over-undoing) if the run partially aged out of `Document`'s bounded ring, falling back to the same
+  clamp §75.19 already used in that case. A real, small correctness fix fell out of this for free:
+  `redo_stack` grew from `Vec<CheckpointId>` to `Vec<(CheckpointId, usize)>` (storing the pre-undo
+  cursor too), so both undo and redo now restore the cursor to its *exact* pre-edit/pre-undo
+  position instead of only clamping it into bounds -- which was subtly wrong for any edit not at the
+  very end of the document even before coalescing existed. A deliberate, named scope cut: backspace
+  runs do NOT coalesce (a different, related, not-yet-scheduled gap, not folded into this task). One
+  pre-existing test encoded the old, now-intentionally-changed one-undo-per-keystroke behavior --
+  not a bug, a real premise this pass was built to invalidate -- rewritten with cursor moves between
+  edits so it still tests what it always meant to (distinct edits, not adjacent typing). 7 new tests
+  (coalescing, run-breaking, precise cursor restoration on both undo and redo, selection-replace not
+  coalescing, backspace ending a run, and a 510-char run's ring-eviction fallback) all passed on the
+  first run -- no bug found this time, stated plainly rather than manufactured. Full test/clippy/fmt
+  clean (75 tests in this crate's own suite). Live, through the real binary: typing "hello world" and
+  pressing Ctrl+Z once removed the whole string in one step; Ctrl+Y once restored it, cursor at the
+  end; typing "!" after an intervening Left-then-Right arrow correctly started a new run -- one more
+  Ctrl+Z removed only the "!", leaving "hello world" intact. 50k-line benchmark re-run, no regression
+  (this benchmark never calls undo/redo, so only `insert_at_cursor`'s marginally larger per-call
+  bookkeeping was exercised). No idle-timeout run termination, no backspace coalescing.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
