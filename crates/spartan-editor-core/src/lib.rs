@@ -10,6 +10,7 @@
 //! `highlight` have no GPU dependency either (`glyphon::Color` is just a
 //! plain data type, no device needed to construct one), so they're public
 //! here too.
+pub mod accessibility;
 pub mod build;
 pub mod dap;
 pub mod dap_session;

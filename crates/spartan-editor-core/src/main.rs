@@ -8,8 +8,8 @@ mod text;
 
 use spartan_editor_core::viewport::{self, Viewport};
 use spartan_editor_core::{
-    build, dap_session, editor_view, file_tree, git_panel, highlight, language, lsp, lsp_session,
-    tab_bar,
+    accessibility, build, dap_session, editor_view, file_tree, git_panel, highlight, language, lsp,
+    lsp_session, tab_bar,
 };
 
 use std::path::{Path, PathBuf};
@@ -17,7 +17,7 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 use winit::event::{ElementState, Event, KeyEvent, MouseButton, WindowEvent};
-use winit::event_loop::EventLoop;
+use winit::event_loop::EventLoopBuilder;
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::WindowBuilder;
 
@@ -690,15 +690,28 @@ fn main() {
     // file §75.x measurement for exactly this reason).
     let t_setup_done = Instant::now();
 
-    let event_loop = EventLoop::new().expect("failed to create winit event loop");
+    // Real accessibility (§16.3, task #9): the event loop's user-event type
+    // is `accesskit_winit::Event` directly (the identity `From<T> for T`
+    // impl satisfies `Adapter::with_event_loop_proxy`'s own bound) rather
+    // than a wrapper enum, matching `accesskit_winit`'s own reference
+    // example exactly. AccessKit requires the window to be created hidden,
+    // the adapter attached, and only then shown -- see the real doc comment
+    // on `Adapter::with_event_loop_proxy` itself.
+    let event_loop = EventLoopBuilder::<accesskit_winit::Event>::with_user_event()
+        .build()
+        .expect("failed to create winit event loop");
     let t_event_loop = Instant::now();
     let window = Arc::new(
         WindowBuilder::new()
             .with_title(window_title(&files[active]))
             .with_inner_size(winit::dpi::LogicalSize::new(1000.0, 700.0))
+            .with_visible(false)
             .build(&event_loop)
             .expect("failed to create window"),
     );
+    let mut accesskit_adapter =
+        accesskit_winit::Adapter::with_event_loop_proxy(&window, event_loop.create_proxy());
+    window.set_visible(true);
     let t_window = Instant::now();
 
     // `FontSystem::new()` scans and parses every font on the system -- a
@@ -883,6 +896,11 @@ fn main() {
 
             match event {
                 Event::WindowEvent { event, window_id } if window_id == window.id() => {
+                    // Real accessibility (§16.3, task #9): must be called
+                    // for every window event, before this crate's own
+                    // handling of it, per `Adapter::process_event`'s own
+                    // real documented contract.
+                    accesskit_adapter.process_event(&window, &event);
                     match event {
                         WindowEvent::CloseRequested => {
                             // Real unsaved-changes gating (§75.23, task
@@ -1905,6 +1923,31 @@ fn main() {
                             tab_hits = new_tab_hits;
                             text_state.set_tab_bar_text(&tab_bar_text);
 
+                            // Real accessibility tree (§16.3, task #9),
+                            // rebuilt from live state every frame just like
+                            // the tab bar's own text just above -- the real,
+                            // full active-file text (not the windowed
+                            // rendering slice), so a screen reader sees the
+                            // real document, not just what's on screen.
+                            let active_file_for_a11y = &files[active];
+                            let a11y_tabs: Vec<accessibility::TabInfo> = files
+                                .iter()
+                                .map(|f| accessibility::TabInfo {
+                                    label: &f.label,
+                                    dirty: f.dirty,
+                                })
+                                .collect();
+                            let window_title_for_a11y = window_title(active_file_for_a11y);
+                            let active_text_for_a11y = active_file_for_a11y.editor.text();
+                            accesskit_adapter.update_if_active(|| {
+                                accessibility::build_tree(
+                                    &window_title_for_a11y,
+                                    &a11y_tabs,
+                                    active,
+                                    &active_text_for_a11y,
+                                )
+                            });
+
                             // Real tab bar horizontal auto-scroll (§75.28,
                             // task #25's overflow half): scrolls minimally
                             // so the active tab is always reachable, even
@@ -2356,6 +2399,37 @@ fn main() {
                             }
                         }
                         _ => {}
+                    }
+                }
+                Event::UserEvent(accesskit_winit::Event { window_event, .. }) => {
+                    match window_event {
+                        accesskit_winit::WindowEvent::InitialTreeRequested => {
+                            let active_file = &files[active];
+                            let tabs: Vec<accessibility::TabInfo> = files
+                                .iter()
+                                .map(|f| accessibility::TabInfo {
+                                    label: &f.label,
+                                    dirty: f.dirty,
+                                })
+                                .collect();
+                            accesskit_adapter.update_if_active(|| {
+                                accessibility::build_tree(
+                                    &window_title(active_file),
+                                    &tabs,
+                                    active,
+                                    &active_file.editor.text(),
+                                )
+                            });
+                        }
+                        // Real, named gap (§16.3): no `ActionRequest`
+                        // handling yet (e.g. a screen reader's own
+                        // "activate this tab" request) -- the tree is
+                        // real and readable, but not yet actionable from
+                        // the assistive-technology side. See this
+                        // increment's own documentation for the full list
+                        // of what remains.
+                        accesskit_winit::WindowEvent::ActionRequested(_) => {}
+                        accesskit_winit::WindowEvent::AccessibilityDeactivated => {}
                     }
                 }
                 Event::AboutToWait => {

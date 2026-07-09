@@ -706,6 +706,44 @@ first — it's the parity reference until each row there is actually reimplement
   `spartan-editor-core` (no plugin discovery/enable panel, no real editor-loop call site for
   `get_diagnostics`), no per-plugin resource budget (§36.4.9), no marketplace/signing (§5.4), no
   real manifest-to-`WasiCtx` capability grant mapping for filesystem/network.
+- **Real, working code — accessibility tree via AccessKit + AT-SPI, closing most of §16.3, task #9
+  (§75.34)**: the first real accessibility code in this workspace. A real dependency investigation
+  came first: `accesskit_winit`'s latest releases need `winit ^0.30`, but this workspace is pinned
+  to `winit = "0.29"`; checking the real crates.io sparse index (the web API is blocked by policy)
+  found `accesskit_winit` 0.16.0-0.19.0 all genuinely depend on `winit ^0.29` -- confirmed by
+  re-reading `Cargo.lock` after adding `accesskit_winit = "0.19"` + `accesskit = "0.13"` and seeing
+  a single, unsplit `winit` entry, avoiding a much bigger winit 0.29→0.30 upgrade the feature
+  didn't actually need. New `accessibility.rs` (pure, headlessly-tested, mirroring `tab_bar.rs`'s
+  own split) builds a real `accesskit::TreeUpdate` every frame: a `Role::Window` root, a
+  `Role::TabList` of real per-file `Role::Tab` nodes (selection state, dirty-marked names), and a
+  `Role::Document` node holding the real, full (not windowed) active-file text. 5 new headless
+  tests, all passing first run. Wired into `main.rs`'s winit event loop following
+  `accesskit_winit`'s own reference example: hidden window → adapter attached → window shown;
+  `process_event` called on every real `WindowEvent`; tree rebuilt every `RedrawRequested`. A real,
+  load-bearing finding worked out from the actual installed `accesskit_unix` source: AT-SPI
+  registration is lazy, gated behind the OS `org.a11y.Status.IsEnabled` property that's normally
+  only true while a real screen reader is running -- a first live-verification attempt found
+  nothing registered on the real AT-SPI bus, which read like a bug until the real source showed why
+  and manually flipping that property (via `busctl`, simulating what a screen reader's own startup
+  does) produced full, correct registration and a live, walkable tree. A second real, upstream,
+  version-independent finding: neither the pinned `accesskit_atspi_common` 0.3.0 nor the latest
+  available 0.19.0 implements the AT-SPI Text interface at all, so the real document text this pass
+  already populates is currently inert from a screen reader's perspective -- present in the tree,
+  not reachable through any interface a real assistive technology would query, at any version this
+  workspace could adopt without the winit 0.30 upgrade named above (which wouldn't have fixed this
+  particular gap anyway). Full test/clippy/fmt clean across the whole workspace. Live, through the
+  real binary, in a real `dbus-run-session` + `at-spi-bus-launcher` + `python3-pyatspi` client
+  (installed this pass; a real, unrelated Python ABI mismatch between the default `python3` (3.11)
+  and its `python3-gi` install (built for 3.12) was found and worked around by using `python3.12`
+  directly): a real single-file launch showed the exact expected tree structure with real file
+  paths and window title; a real two-file launch showed both real tabs correctly listed. 50k-line
+  benchmark re-run twice, no regression (one isolated scroll `max` outlier in the first run didn't
+  reproduce in the second, consistent with this project's own already-documented rebuild-cycle
+  noise). No real screen-reader read-aloud of content (the Text-interface gap above), no
+  `ActionRequest` handling (matched and explicitly left a no-op, not silently dropped), no file-tree
+  or Source-Control-panel accessibility nodes, no high-contrast/reduce-motion settings (§16.3's
+  other two bullets, out of this pass's scope), no Windows/macOS backend testing (Linux/AT-SPI only,
+  the only platform available in this environment).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -753,7 +791,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 226 tests: 6 spikes + 7 real crates (spartan-buffer,
+cargo test --workspace --release   # 231 tests: 6 spikes + 7 real crates (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-editor-core)
 # dap-spike and spartan-editor-core's own dap_integration.rs need `lldb-dap` (or `lldb-dap-18`) +
@@ -782,6 +820,12 @@ cargo test --workspace --release   # 226 tests: 6 spikes + 7 real crates (sparta
 # (crates/plugins/Cargo.toml), excluded from the main workspace on purpose -- `cargo build
 # --workspace`/`cargo test --workspace` from the repo root never touch them; build them with
 # `cargo component build` from inside crates/plugins/<name> instead.
+# spartan-editor-core's real accessibility tree (§16.3, §75.34) only has headless tests for its
+# own pure tree-building logic (accessibility.rs) -- live AT-SPI registration needs a real Linux
+# desktop accessibility stack (at-spi2-core's `at-spi-bus-launcher`, a real D-Bus session, and
+# `org.a11y.Status.IsEnabled` set true, normally done by a running screen reader) to actually
+# verify, not `cargo test`. See §75.34 for the exact `dbus-run-session` + `busctl` + `pyatspi`
+# recipe used to confirm it live.
 cargo build --release --workspace
 ```
 
