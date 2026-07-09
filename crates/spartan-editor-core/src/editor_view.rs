@@ -153,4 +153,55 @@ impl EditorView {
             .unwrap_or(0);
         self.cursor = line_start + col_chars.min(line_len_chars);
     }
+
+    /// Moves the cursor one char left, clamped at document start. Returns
+    /// whether the cursor actually moved, matching `Viewport::scroll_by`'s
+    /// own "did anything change" convention -- callers use this to skip a
+    /// redundant redraw when already at a boundary (e.g. repeated
+    /// `ArrowLeft` at the very start of the document).
+    pub fn move_left(&mut self) -> bool {
+        if self.cursor == 0 {
+            return false;
+        }
+        self.cursor -= 1;
+        true
+    }
+
+    /// Moves the cursor one char right, clamped at document end.
+    pub fn move_right(&mut self) -> bool {
+        let len = self.document.len_chars();
+        if self.cursor >= len {
+            return false;
+        }
+        self.cursor += 1;
+        true
+    }
+
+    /// Moves the cursor up one line, keeping the current column where
+    /// possible (clamped to the shorter line, via `set_cursor_to_line_col`).
+    /// A no-op already at line 0. Deliberately does not remember a "desired
+    /// column" across a run of up/down moves through lines of different
+    /// lengths (the way most real editors do) -- a real, named, minor UX
+    /// gap, not a correctness bug: each individual move still lands
+    /// somewhere valid, it just re-derives the column from the *current*
+    /// (possibly already-clamped) position rather than an original one.
+    pub fn move_up(&mut self) -> bool {
+        let (line, col) = self.cursor_line_col();
+        if line == 0 {
+            return false;
+        }
+        self.set_cursor_to_line_col(line - 1, col);
+        true
+    }
+
+    /// Moves the cursor down one line, same column-preservation caveat as
+    /// `move_up`. A no-op already on the document's last line.
+    pub fn move_down(&mut self) -> bool {
+        let (line, col) = self.cursor_line_col();
+        if line + 1 >= self.document.len_lines() {
+            return false;
+        }
+        self.set_cursor_to_line_col(line + 1, col);
+        true
+    }
 }

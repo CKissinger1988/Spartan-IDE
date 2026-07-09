@@ -153,6 +153,79 @@ fn set_cursor_to_line_col_clamps_a_line_past_end_of_document() {
 }
 
 #[test]
+fn move_left_and_right_step_one_char_at_a_time() {
+    let mut editor = EditorView::new("abc");
+    editor.set_cursor_to_line_col(0, 2);
+    assert!(editor.move_left());
+    assert_eq!(editor.cursor_line_col(), (0, 1));
+    assert!(editor.move_right());
+    assert_eq!(editor.cursor_line_col(), (0, 2));
+}
+
+#[test]
+fn move_left_at_document_start_is_a_no_op_and_reports_no_change() {
+    let mut editor = EditorView::new("abc");
+    assert!(!editor.move_left());
+    assert_eq!(editor.cursor_line_col(), (0, 0));
+}
+
+#[test]
+fn move_right_at_document_end_is_a_no_op_and_reports_no_change() {
+    let mut editor = EditorView::new("abc");
+    editor.set_cursor_to_line_col(0, 3);
+    assert!(!editor.move_right());
+    assert_eq!(editor.cursor_line_col(), (0, 3));
+}
+
+#[test]
+fn move_right_crosses_a_line_boundary_onto_the_next_line() {
+    let mut editor = EditorView::new("ab\ncd\n");
+    editor.set_cursor_to_line_col(0, 2);
+    assert!(editor.move_right());
+    assert_eq!(editor.cursor_line_col(), (1, 0));
+}
+
+#[test]
+fn move_up_and_down_preserve_column_when_lines_are_long_enough() {
+    let mut editor = EditorView::new("abcd\nefgh\nijkl\n");
+    editor.set_cursor_to_line_col(1, 2);
+    assert!(editor.move_up());
+    assert_eq!(editor.cursor_line_col(), (0, 2));
+    assert!(editor.move_down());
+    assert_eq!(editor.cursor_line_col(), (1, 2));
+}
+
+#[test]
+fn move_down_clamps_column_on_a_shorter_line() {
+    let mut editor = EditorView::new("longer line\nhi\n");
+    editor.set_cursor_to_line_col(0, 10);
+    assert!(editor.move_down());
+    assert_eq!(editor.cursor_line_col(), (1, 2));
+}
+
+#[test]
+fn move_up_at_first_line_is_a_no_op_and_reports_no_change() {
+    let mut editor = EditorView::new("only one line\n");
+    assert!(!editor.move_up());
+    assert_eq!(editor.cursor_line_col(), (0, 0));
+}
+
+#[test]
+fn move_down_at_last_line_is_a_no_op_and_reports_no_change() {
+    // `Document` (ropey) treats text ending in "\n" as having one more,
+    // phantom empty line after that final newline (documented elsewhere in
+    // this crate, e.g. `text.rs`'s `cursor_pixel_pos`) -- so the document's
+    // real last line is *not* line 0 here. Start there explicitly rather
+    // than assuming, so this test exercises the actual last line.
+    let mut editor = EditorView::new("only one line\n");
+    let last_line = editor.document.len_lines() - 1;
+    editor.set_cursor_to_line_col(last_line, 0);
+    let before = editor.cursor_line_col();
+    assert!(!editor.move_down());
+    assert_eq!(editor.cursor_line_col(), before);
+}
+
+#[test]
 fn contains_line_agrees_with_to_local_line() {
     let doc = five_line_doc();
     let mut viewport = Viewport::new(2);

@@ -775,6 +775,44 @@ fn main() {
                                     session.send_command(dap_session::DapCommand::StepInto);
                                 }
                             }
+                            Key::Named(
+                                key @ (NamedKey::ArrowLeft
+                                | NamedKey::ArrowRight
+                                | NamedKey::ArrowUp
+                                | NamedKey::ArrowDown),
+                            ) => {
+                                // Real, previously entirely missing arrow-key
+                                // navigation (§75.17) -- the cursor could
+                                // only move via mouse click or as a side
+                                // effect of inserting/deleting text before
+                                // this. No selection extension yet even
+                                // with Shift held (task #15) -- Shift is
+                                // simply ignored here for now.
+                                let active_file = &mut files[active];
+                                let moved = match key {
+                                    NamedKey::ArrowLeft => active_file.editor.move_left(),
+                                    NamedKey::ArrowRight => active_file.editor.move_right(),
+                                    NamedKey::ArrowUp => active_file.editor.move_up(),
+                                    NamedKey::ArrowDown => active_file.editor.move_down(),
+                                    _ => unreachable!(),
+                                };
+                                if moved {
+                                    let (cursor_line, _) = active_file.editor.cursor_line_col();
+                                    let doc_len_lines = active_file.editor.document.len_lines();
+                                    if active_file
+                                        .viewport
+                                        .ensure_visible(cursor_line, doc_len_lines)
+                                    {
+                                        reshape_window(
+                                            &mut text_state,
+                                            &active_file.editor,
+                                            &active_file.viewport,
+                                            active_file.highlighter.as_mut(),
+                                        );
+                                    }
+                                    window.request_redraw();
+                                }
+                            }
                             _ => {
                                 let active_file = &mut files[active];
                                 let effect =

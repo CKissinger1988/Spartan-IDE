@@ -297,6 +297,20 @@ first — it's the parity reference until each row there is actually reimplement
   directly off disk that its actual bytes matched the edit. No prompt/confirmation on closing or
   switching away from a dirty file -- both currently discard unsaved changes silently, a real,
   named data-loss risk, not a hidden one. No save-as, no external-change detection, no auto-save.
+- **Real, working code — real arrow-key cursor navigation (§75.17)**: found while scoping text
+  selection -- no arrow-key handling existed anywhere in this crate before this pass; the cursor
+  could only move via mouse click or as a side effect of editing. `EditorView::move_left/right/up/
+  down` (clamped, `move_up`/`move_down` reuse the existing `set_cursor_to_line_col` clamp) wired to
+  `main.rs`'s `ArrowLeft/Right/Up/Down` handling, following the same `ensure_visible`+reshape
+  pattern every other cursor-moving key uses. No "sticky column" across multi-line up/down runs
+  (a real, named, minor UX simplification). 8 new headless tests, all passed first run except one
+  caught before running: an early test assumed line 0 was a single-line fixture's last line without
+  accounting for `Document`'s own documented ropey phantom-trailing-line behavior, fixed by deriving
+  the real last line instead of assuming. Live verification: 3xDown+5xRight from document start
+  landed exactly on line 3 col 5 (screenshot-confirmed against the real, distinguishable text
+  there), then Up+Left landed on line 2 col 4. Shift+Arrow does not extend a selection yet -- no
+  selection concept exists (task #15 remains, now correctly blocked only on selection itself). No
+  Home/End, Ctrl+Arrow word jumps, or Ctrl+Home/End yet either.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
