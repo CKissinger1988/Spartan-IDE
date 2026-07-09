@@ -267,6 +267,24 @@ first — it's the parity reference until each row there is actually reimplement
   proving the click and keyboard paths share one real cursor. No text selection yet (no selection
   concept exists in `EditorView` at all -- scoped out as its own increment), no double/triple-click,
   no context menu, no scrollbar-drag.
+- **Real, working code — real multi-file editing, keyboard-driven switching (§75.15)**: second
+  increment of the Tier 1 push. `main.rs`'s flat single-file locals became a real `OpenFile` struct
+  + `Vec<OpenFile>` indexed by `active`; `TextState` stays one shared GPU-backed instance across all
+  open files (reshaped on switch, not duplicated). Additional files open via repeated
+  `--open:<path>` CLI args (no file-tree/dialog UI yet -- task #16), switched with Ctrl+Tab /
+  Ctrl+Shift+Tab. Each LSP-capable open file spawns its own `rust-analyzer` process (named cost --
+  `LspSession` is hardcoded to one file's lifecycle, multiplexing is separate future work). DAP
+  breakpoints moved from a flat `Vec<i64>` to per-file storage, fixing a real latent bug (no file
+  association once >1 file could be open). A real bug was caught only by actually closing the live
+  app: draining `files` on `CloseRequested` left it empty, but winit delivers at least one more
+  event afterward that still indexes `files[active]`, causing a real panic -- fixed by `take()`-ing
+  each file's LSP session in place instead of draining the `Vec`. Live verification: two real files
+  opened, switched between (confirmed via screenshots showing genuinely different content), typed
+  into one, switched away and back (confirmed the edit was per-file, not shared), and closed cleanly
+  with both LSP sessions shutting down, no panic. 50k-line benchmark re-run and still completes
+  correctly. No visual file-tree/tab bar, no shared LSP session across files, no unified multi-file
+  breakpoint set, no open-file dialog. Also surfaced a bigger, real, separate gap: **no file in this
+  crate has ever been saved to disk** -- there is no save functionality at all yet, for any file.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

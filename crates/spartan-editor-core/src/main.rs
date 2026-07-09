@@ -14,7 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use winit::event::{ElementState, Event, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::EventLoop;
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::WindowBuilder;
 
 /// `wgpu::Color` clear values are specified in linear space, but the chosen
@@ -119,77 +119,70 @@ fn apply_edit_effect(
     }
 }
 
-fn main() {
-    let program_start = Instant::now();
-    println!("=== spartan-editor-core -- real Tier 1 core-engine increment ===");
+/// One open file's full editing state -- everything that used to be flat
+/// `main()` locals before multi-file support (§75.15), now indexed through
+/// `files[active]` instead. `TextState` (the actual GPU-backed cosmic-text
+/// buffer/atlas) deliberately stays a single shared instance in `main()`,
+/// not duplicated per file -- switching the active file just reshapes the
+/// same `TextState` against the newly active file's own `editor`/
+/// `viewport`/`highlighter`, avoiding N times the GPU atlas memory for N
+/// open files, which a naive "one TextState per file" design would cost.
+struct OpenFile {
+    /// Display label -- the original CLI argument (a real path, or
+    /// `--synthetic:<n>`), not necessarily canonicalized.
+    label: String,
+    editor: editor_view::EditorView,
+    /// Constructed with a placeholder `visible_lines` of 0 by `open_file`
+    /// (file loading happens before `GpuState::new()`, to preserve the
+    /// existing cold-open breakdown's timing semantics -- see `main`'s own
+    /// comment) and patched to the real value once the window size is
+    /// known, right after `GpuState::new()` returns.
+    viewport: Viewport,
+    highlighter: Option<highlight::Highlighter>,
+    lsp_session: Option<lsp_session::LspSession>,
+    lsp_debouncer: lsp::DidChangeDebouncer,
+    /// Line-number breakpoints (1-indexed, DAP convention) for *this* file
+    /// specifically -- moved from a single flat `Vec<i64>` (§75.8) into
+    /// per-file storage here, fixing a real, previously-latent bug: a bare
+    /// line number has no file association, so it was silently ambiguous
+    /// the moment more than one file could be open at once.
+    breakpoints: Vec<i64>,
+    dap_launch_info: Option<(spartan_languages::CommandSpec, PathBuf, PathBuf, PathBuf)>,
+    dap_build_info: Option<(spartan_languages::CommandSpec, PathBuf, PathBuf)>,
+}
 
-    let fixture_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "..\\..\\crates\\spartan-buffer\\src\\lib.rs".to_string());
-    // Optional 2nd/3rd/4th args: N internally-scripted random-position edit
-    // iterations, then M sequential cursor-adjacent typing iterations, then
-    // K scroll iterations, run sequentially, printing a final report and
-    // exiting -- same "scripted, not real OS input" honesty as
-    // `render-spike`'s own bench mode. The random-position phase and the
-    // cursor-adjacent phase measure genuinely different things at 50k-line
-    // scale: random positions land inside the ~34-60 line visible window
-    // only ~0.1% of the time (a real, near-zero-cost no-op the rest of the
-    // time -- see `in_window_edits`/`off_window_edits` below), so it alone
-    // can't characterize "how fast is editing where the user can actually
-    // see," which is what virtualization is meant to help with. The cursor
-    // phase measures exactly that: the cursor starts at line 0 and this
-    // phase never scrolls, so every one of its edits is a real in-window
-    // reshape, however large the surrounding document is.
-    let bench_edit_iters: Option<usize> = std::env::args().nth(2).and_then(|s| s.parse().ok());
-    let bench_cursor_iters: Option<usize> = std::env::args().nth(3).and_then(|s| s.parse().ok());
-    let bench_scroll_iters: Option<usize> = std::env::args().nth(4).and_then(|s| s.parse().ok());
-    // Optional 6th arg: a pre-built debug binary to launch under the
-    // detected language's DAP adapter (F9/F5/F10/F11 below). Deliberately
-    // NOT "build the project automatically" -- see §75.8 for why that's a
-    // separate, real piece of work this pass doesn't attempt.
-    let debug_binary_path: Option<PathBuf> = std::env::args()
-        .nth(5)
-        .and_then(|s| s.strip_prefix("--debug-binary:").map(PathBuf::from));
-
-    let initial_text = if let Some(spec) = fixture_path.strip_prefix("--synthetic:") {
+/// Loads one file (or `--synthetic:<n>`), detects its language, and spawns
+/// its own real LSP session / captures its own DAP info / builds its own
+/// highlighter -- exactly the setup `main()` used to do once, inline, for
+/// the single file it opened (§75.5-§75.11). Every open file gets this
+/// treatment now, including a real, named cost this pass doesn't try to
+/// hide: each file with an LSP-capable profile spawns its *own*
+/// language-server process, even if two open files share a project root
+/// and could in principle share one session -- `LspSession` (§75.6) is
+/// hardcoded to exactly one file's `didOpen`/`didChange` lifecycle, and
+/// multiplexing it across files is real, separate future work, not
+/// attempted here (see the crate README).
+fn open_file(label: &str, debug_binary_path: Option<&PathBuf>) -> OpenFile {
+    let initial_text = if let Some(spec) = label.strip_prefix("--synthetic:") {
         let lines: usize = spec
             .parse()
             .unwrap_or_else(|_| panic!("invalid --synthetic:<lines> value: {spec}"));
         fixture::synthetic_file(lines)
     } else {
-        std::fs::read_to_string(&fixture_path)
-            .unwrap_or_else(|e| panic!("failed to read {fixture_path}: {e}"))
+        std::fs::read_to_string(label).unwrap_or_else(|e| panic!("failed to read {label}: {e}"))
     };
     println!(
-        "Loaded {fixture_path} -- {} chars, {} lines",
+        "Loaded {label} -- {} chars, {} lines",
         initial_text.chars().count(),
         initial_text.lines().count()
     );
 
-    // First real combination of spartan-buffer + rendering + spartan-languages
-    // (see language.rs's doc comment) -- tree-sitter stays unwired. LSP
-    // (§75.6) and DAP (§75.8) are both wired for real below.
-    let mut lsp_session: Option<lsp_session::LspSession> = None;
-    // (adapter command, pre-built binary, cwd, source path) -- captured here,
-    // used on every F5 press below (cloned, not consumed, so the same
-    // pre-built binary can be relaunched repeatedly), not launched
-    // immediately (unlike LSP, a debug session should only start when the
-    // user asks for one).
-    let mut dap_launch_info: Option<(spartan_languages::CommandSpec, PathBuf, PathBuf, PathBuf)> =
-        None;
-    // (adapter command, project root, source path) -- the real build-system
-    // integration §75.8 named as out of scope for that pass (§75.10):
-    // captured only when no explicit `--debug-binary:` was given but a real
-    // Cargo project is discoverable, so F5 can run a real `cargo build`
-    // first instead of requiring a pre-built binary.
-    let mut dap_build_info: Option<(spartan_languages::CommandSpec, PathBuf, PathBuf)> = None;
-    // Real tree-sitter syntax highlighting (§75.11) -- only Rust is wired,
-    // matching every prior pass's own precedent (LSP started with
-    // rust-analyzer, DAP with lldb-dap). Any other grammar name is named
-    // and left unhighlighted rather than silently guessed at.
-    let mut highlighter: Option<highlight::Highlighter> = None;
-    if !fixture_path.starts_with("--synthetic:") {
-        match language::detect_language_for_file(Path::new(&fixture_path)) {
+    let mut lsp_session = None;
+    let mut dap_launch_info = None;
+    let mut dap_build_info = None;
+    let mut highlighter = None;
+    if !label.starts_with("--synthetic:") {
+        match language::detect_language_for_file(Path::new(label)) {
             Some(profile) => {
                 println!(
                     "Detected language: {} (tree-sitter grammar: {}, LSP: {}, DAP: {})",
@@ -198,7 +191,7 @@ fn main() {
                     profile.lsp_command.is_some(),
                     profile.dap_command.is_some()
                 );
-                let file_path = Path::new(&fixture_path);
+                let file_path = Path::new(label);
                 let project_root = language::find_project_root(file_path, &profile.marker_files)
                     .unwrap_or_else(|| {
                         // Named, real limitation (see the crate README):
@@ -230,7 +223,7 @@ fn main() {
                     }
                 }
                 if let Some(command) = &profile.dap_command {
-                    if let Some(binary_path) = &debug_binary_path {
+                    if let Some(binary_path) = debug_binary_path {
                         println!(
                             "DAP ready: {} on {} -- F9 toggles a breakpoint at the cursor, F5 launches",
                             command.program,
@@ -276,11 +269,76 @@ fn main() {
                     );
                 }
             }
-            None => println!("No language profile detected for {fixture_path}"),
+            None => println!("No language profile detected for {label}"),
         }
     }
 
-    let mut editor = editor_view::EditorView::new(&initial_text);
+    OpenFile {
+        label: label.to_string(),
+        editor: editor_view::EditorView::new(&initial_text),
+        viewport: Viewport::new(0),
+        highlighter,
+        lsp_session,
+        lsp_debouncer: lsp::DidChangeDebouncer::new(Duration::from_millis(150)),
+        breakpoints: Vec::new(),
+        dap_launch_info,
+        dap_build_info,
+    }
+}
+
+fn main() {
+    let program_start = Instant::now();
+    println!("=== spartan-editor-core -- real Tier 1 core-engine increment ===");
+
+    let fixture_path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "..\\..\\crates\\spartan-buffer\\src\\lib.rs".to_string());
+    // Optional 2nd/3rd/4th args: N internally-scripted random-position edit
+    // iterations, then M sequential cursor-adjacent typing iterations, then
+    // K scroll iterations, run sequentially, printing a final report and
+    // exiting -- same "scripted, not real OS input" honesty as
+    // `render-spike`'s own bench mode. The random-position phase and the
+    // cursor-adjacent phase measure genuinely different things at 50k-line
+    // scale: random positions land inside the ~34-60 line visible window
+    // only ~0.1% of the time (a real, near-zero-cost no-op the rest of the
+    // time -- see `in_window_edits`/`off_window_edits` below), so it alone
+    // can't characterize "how fast is editing where the user can actually
+    // see," which is what virtualization is meant to help with. The cursor
+    // phase measures exactly that: the cursor starts at line 0 and this
+    // phase never scrolls, so every one of its edits is a real in-window
+    // reshape, however large the surrounding document is. Bench mode always
+    // runs against `files[0]` only, regardless of how many `--open:` extra
+    // files are also given -- nobody switches files mid-benchmark.
+    let bench_edit_iters: Option<usize> = std::env::args().nth(2).and_then(|s| s.parse().ok());
+    let bench_cursor_iters: Option<usize> = std::env::args().nth(3).and_then(|s| s.parse().ok());
+    let bench_scroll_iters: Option<usize> = std::env::args().nth(4).and_then(|s| s.parse().ok());
+    // Optional 6th arg: a pre-built debug binary to launch under the
+    // detected language's DAP adapter (F9/F5/F10/F11 below), for `files[0]`
+    // only. Deliberately NOT "build the project automatically" -- see §75.8
+    // for why that's a separate, real piece of work this pass doesn't
+    // attempt.
+    let debug_binary_path: Option<PathBuf> = std::env::args()
+        .nth(5)
+        .and_then(|s| s.strip_prefix("--debug-binary:").map(PathBuf::from));
+    // Any further args of the form `--open:<path>` open additional files at
+    // startup, switched between with Ctrl+Tab / Ctrl+Shift+Tab (§75.15). No
+    // file-tree/file-dialog UI exists yet (see the crate README and task
+    // #16) -- CLI args are the only way to open more than one file for now.
+    let extra_files: Vec<String> = std::env::args()
+        .skip(6)
+        .filter_map(|s| s.strip_prefix("--open:").map(str::to_string))
+        .collect();
+
+    // First real combination of spartan-buffer + rendering + spartan-languages
+    // (see language.rs's doc comment) -- tree-sitter stays unwired. LSP
+    // (§75.6) and DAP (§75.8) are both wired for real below.
+    let mut files: Vec<OpenFile> = Vec::with_capacity(1 + extra_files.len());
+    files.push(open_file(&fixture_path, debug_binary_path.as_ref()));
+    for extra in &extra_files {
+        files.push(open_file(extra, None));
+    }
+    let mut active: usize = 0;
+
     let mut bench_rng = rand::thread_rng();
     let mut edit_bench_remaining = bench_edit_iters.unwrap_or(0);
     let mut cursor_bench_remaining = bench_cursor_iters.unwrap_or(0);
@@ -298,6 +356,11 @@ fn main() {
     // Real breakdown of where cold-open time actually goes, not a guess --
     // §75.5-§75.8 all named the ~575-620ms cold-open number as ~6x over
     // §39.1's <100ms target without ever measuring which step causes it.
+    // With more than one `--open:` file given, this first bucket now covers
+    // every file's own load/LSP-spawn cost, not just one -- a real,
+    // honestly-widened definition, not a hidden regression (multi-file
+    // cold-open numbers are not directly comparable to every prior single-
+    // file §75.x measurement for exactly this reason).
     let t_setup_done = Instant::now();
 
     let event_loop = EventLoop::new().expect("failed to create winit event loop");
@@ -328,15 +391,19 @@ fn main() {
     );
 
     // Computed once from initial window size -- not recomputed on resize,
-    // a named simplification (see the crate README).
+    // a named simplification (see the crate README). Every open file's
+    // `Viewport` (constructed with a placeholder 0 by `open_file`, before
+    // the window size was known) is patched to the real value here.
     let visible_lines = ((gpu_state.size.height as f32 - 2.0 * text::TEXT_ORIGIN_Y)
         / text::LINE_HEIGHT)
         .floor()
         .max(1.0) as usize;
-    let mut viewport = Viewport::new(visible_lines);
+    for file in files.iter_mut() {
+        file.viewport.visible_lines = visible_lines;
+    }
     println!(
-        "Viewport: {visible_lines} visible lines (vs. {} total in the document)",
-        editor.document.len_lines()
+        "Viewport: {visible_lines} visible lines (vs. {} total in the active document)",
+        files[active].editor.document.len_lines()
     );
 
     let font_system = font_system_handle
@@ -352,32 +419,37 @@ fn main() {
     );
     let t_text_state = Instant::now();
     // The key difference from render-spike: seeded with only the visible
-    // window's text, not the whole document.
-    reshape_window(&mut text_state, &editor, &viewport, highlighter.as_mut());
+    // window's text, not the whole document -- and, as of this pass, only
+    // the currently *active* file's text, since `TextState` is shared
+    // across every open file.
+    {
+        let active_file = &mut files[active];
+        reshape_window(
+            &mut text_state,
+            &active_file.editor,
+            &active_file.viewport,
+            active_file.highlighter.as_mut(),
+        );
+    }
     let t_reshape = Instant::now();
 
     let cursor_renderer = cursor::CursorRenderer::new(&gpu_state.device, gpu_state.config.format);
     let t_cursor_renderer = Instant::now();
 
-    // 150ms idle default per spec §2.3. This timer is polled from
-    // `AboutToWait`, which only fires continuously because this crate
-    // already runs `ControlFlow::Poll` unconditionally (for the benchmark
-    // harness below) -- if a future pass switches to `ControlFlow::Wait`
-    // for idle-CPU reasons, this debounce would silently stop firing once
-    // the user stops generating other events.
-    let mut lsp_debouncer = lsp::DidChangeDebouncer::new(Duration::from_millis(150));
-
-    // Line-number breakpoints (1-indexed, DAP convention), toggled by F9 at
-    // the cursor's current line -- the §39.2-sanctioned fallback for a v1
-    // that doesn't yet have rope-anchored breakpoint persistence (see
-    // §75.8). No live changes once a session is running, a named limitation.
-    let mut breakpoints: Vec<i64> = Vec::new();
+    // 150ms idle default per spec §2.3, now one debouncer per open file
+    // (`OpenFile::lsp_debouncer`) rather than a single global one -- see
+    // `AboutToWait` below, which polls every file's own debouncer each
+    // tick, not just the active one's, so a background file's already-
+    // pending edit (there shouldn't be one in practice, since only the
+    // active file's `editor` is ever mutated by keyboard input, but the
+    // per-file design stays correct regardless) is never silently dropped.
     let mut dap_session: Option<dap_session::DapSession> = None;
     // A real `cargo build` running on its own thread (§75.10) -- the
     // receiver half of a one-shot channel, polled non-blockingly each
     // frame, matching the `LspSession`/`DapSession` "never block the
     // render thread" pattern even though this itself isn't an ongoing
-    // session.
+    // session. Global, not per-file: a debug session is one running
+    // program, not tied to whichever file happens to be in view.
     let mut pending_build: Option<
         mpsc::Receiver<(
             spartan_languages::CommandSpec,
@@ -403,6 +475,10 @@ fn main() {
     // most recent `CursorMoved` position is tracked here for a click to
     // read back.
     let mut last_cursor_pos: (f32, f32) = (0.0, 0.0);
+    // Tracked from `WindowEvent::ModifiersChanged` so Ctrl+Tab (next file)
+    // and Ctrl+Shift+Tab (previous file) can be detected in the
+    // `KeyboardInput` handler below, which only ever sees the key itself.
+    let mut modifiers = ModifiersState::empty();
 
     event_loop
         .run(move |event, elwt| {
@@ -420,8 +496,21 @@ fn main() {
                             edit_latency.report("input-to-photon (edits, random-position)");
                             cursor_latency.report("input-to-photon (edits, cursor-adjacent)");
                             scroll_latency.report("scroll re-shape");
-                            if let Some(session) = lsp_session.take() {
-                                session.shutdown();
+                            // Real bug caught only by actually closing the live app, not by
+                            // inspection: `elwt.exit()` doesn't take effect immediately --
+                            // winit still delivers at least one more event afterward (this
+                            // crate's own `ControlFlow::Poll` means that's typically another
+                            // `RedrawRequested`), and every other handler unconditionally
+                            // indexes `files[active]`. Draining `files` here left it empty,
+                            // so that next event's `files[active]` access panicked with an
+                            // out-of-bounds index. `take()`-ing each file's `lsp_session`
+                            // in place (not draining the `Vec` itself) shuts every session
+                            // down exactly the same way while leaving `files[active]` valid
+                            // for whatever winit delivers before the process actually exits.
+                            for file in files.iter_mut() {
+                                if let Some(session) = file.lsp_session.take() {
+                                    session.shutdown();
+                                }
                             }
                             if let Some(session) = dap_session.take() {
                                 session.shutdown();
@@ -435,25 +524,33 @@ fn main() {
                             // Recomputes how many lines are visible from the new window
                             // height -- previously fixed at startup only (a named
                             // limitation, §75.5), meaning a resized window's viewport size
-                            // silently drifted from what was actually on screen.
+                            // silently drifted from what was actually on screen. Applied to
+                            // every open file's own `Viewport`, not just the active one, so
+                            // switching files later doesn't see a stale line count.
                             let new_visible_lines = ((new_size.height as f32
                                 - 2.0 * text::TEXT_ORIGIN_Y)
                                 / text::LINE_HEIGHT)
                                 .floor()
                                 .max(1.0) as usize;
-                            if new_visible_lines != viewport.visible_lines {
-                                viewport.visible_lines = new_visible_lines;
-                                let (cursor_line, _) = editor.cursor_line_col();
-                                let doc_len_lines = editor.document.len_lines();
-                                viewport.ensure_visible(cursor_line, doc_len_lines);
+                            if new_visible_lines != files[active].viewport.visible_lines {
+                                for file in files.iter_mut() {
+                                    file.viewport.visible_lines = new_visible_lines;
+                                }
+                                let active_file = &mut files[active];
+                                let (cursor_line, _) = active_file.editor.cursor_line_col();
+                                let doc_len_lines = active_file.editor.document.len_lines();
+                                active_file.viewport.ensure_visible(cursor_line, doc_len_lines);
                                 reshape_window(
                                     &mut text_state,
-                                    &editor,
-                                    &viewport,
-                                    highlighter.as_mut(),
+                                    &active_file.editor,
+                                    &active_file.viewport,
+                                    active_file.highlighter.as_mut(),
                                 );
                                 window.request_redraw();
                             }
+                        }
+                        WindowEvent::ModifiersChanged(mods) => {
+                            modifiers = mods.state();
                         }
                         WindowEvent::CursorMoved { position, .. } => {
                             last_cursor_pos = (position.x as f32, position.y as f32);
@@ -473,8 +570,9 @@ fn main() {
                             if let Some((local_line, col_chars)) =
                                 text_state.hit_test(local_x, local_y)
                             {
-                                let doc_line = viewport::to_doc_line(local_line, &viewport);
-                                editor.set_cursor_to_line_col(doc_line, col_chars);
+                                let active_file = &mut files[active];
+                                let doc_line = viewport::to_doc_line(local_line, &active_file.viewport);
+                                active_file.editor.set_cursor_to_line_col(doc_line, col_chars);
                                 window.request_redraw();
                             }
                         }
@@ -486,42 +584,66 @@ fn main() {
                                 },
                             ..
                         } => match &key_event.logical_key {
+                            Key::Named(NamedKey::Tab) if modifiers.control_key() => {
+                                // Ctrl+Tab / Ctrl+Shift+Tab: cycle the active
+                                // file. No visual tab bar exists yet (task
+                                // #16) -- this is the keyboard-only v1.
+                                active = if modifiers.shift_key() {
+                                    (active + files.len() - 1) % files.len()
+                                } else {
+                                    (active + 1) % files.len()
+                                };
+                                println!("Switched to: {}", files[active].label);
+                                let active_file = &mut files[active];
+                                reshape_window(
+                                    &mut text_state,
+                                    &active_file.editor,
+                                    &active_file.viewport,
+                                    active_file.highlighter.as_mut(),
+                                );
+                                window.request_redraw();
+                            }
                             Key::Named(NamedKey::PageDown) => {
-                                let page = viewport.visible_lines as isize;
-                                let doc_len_lines = editor.document.len_lines();
-                                if viewport.scroll_by(page, doc_len_lines) {
+                                let active_file = &mut files[active];
+                                let page = active_file.viewport.visible_lines as isize;
+                                let doc_len_lines = active_file.editor.document.len_lines();
+                                if active_file.viewport.scroll_by(page, doc_len_lines) {
                                     reshape_window(
                                         &mut text_state,
-                                        &editor,
-                                        &viewport,
-                                        highlighter.as_mut(),
+                                        &active_file.editor,
+                                        &active_file.viewport,
+                                        active_file.highlighter.as_mut(),
                                     );
                                     window.request_redraw();
                                 }
                             }
                             Key::Named(NamedKey::PageUp) => {
-                                let page = -(viewport.visible_lines as isize);
-                                let doc_len_lines = editor.document.len_lines();
-                                if viewport.scroll_by(page, doc_len_lines) {
+                                let active_file = &mut files[active];
+                                let page = -(active_file.viewport.visible_lines as isize);
+                                let doc_len_lines = active_file.editor.document.len_lines();
+                                if active_file.viewport.scroll_by(page, doc_len_lines) {
                                     reshape_window(
                                         &mut text_state,
-                                        &editor,
-                                        &viewport,
-                                        highlighter.as_mut(),
+                                        &active_file.editor,
+                                        &active_file.viewport,
+                                        active_file.highlighter.as_mut(),
                                     );
                                     window.request_redraw();
                                 }
                             }
                             Key::Named(NamedKey::F9) => {
-                                let (cursor_line, _) = editor.cursor_line_col();
+                                let active_file = &mut files[active];
+                                let (cursor_line, _) = active_file.editor.cursor_line_col();
                                 let line_1indexed = (cursor_line + 1) as i64;
-                                if let Some(pos) =
-                                    breakpoints.iter().position(|&l| l == line_1indexed)
+                                if let Some(pos) = active_file
+                                    .breakpoints
+                                    .iter()
+                                    .position(|&l| l == line_1indexed)
                                 {
-                                    breakpoints.remove(pos);
+                                    active_file.breakpoints.remove(pos);
                                     println!("Breakpoint removed at line {line_1indexed}");
                                 } else {
-                                    breakpoints.push(line_1indexed);
+                                    active_file.breakpoints.push(line_1indexed);
                                     println!("Breakpoint set at line {line_1indexed}");
                                 }
                             }
@@ -535,12 +657,22 @@ fn main() {
                                     dap_session = None;
                                 }
 
+                                // F5 always targets the *active* file's own captured DAP
+                                // info and its own breakpoints -- a real, named scope
+                                // limitation of this pass: there is no unified multi-file
+                                // breakpoint set, since the underlying DAP client
+                                // (`launch_and_break`) only ever issues one
+                                // `setBreakpoints` call, for one source file (see
+                                // `dap.rs`). Switching files after setting breakpoints in
+                                // a different one and pressing F5 debugs the *active*
+                                // file's target with the *active* file's breakpoints only.
+                                let active_file = &files[active];
                                 if let Some(session) = &dap_session {
                                     session.send_command(dap_session::DapCommand::Continue);
                                 } else if pending_build.is_some() {
                                     println!("A build is already in progress -- please wait");
                                 } else if let Some((command, binary_path, cwd, source_path)) =
-                                    dap_launch_info.clone()
+                                    active_file.dap_launch_info.clone()
                                 {
                                     println!(
                                         "Launching debug session: {} on {}",
@@ -552,10 +684,10 @@ fn main() {
                                         &binary_path,
                                         &cwd,
                                         &source_path,
-                                        &breakpoints,
+                                        &active_file.breakpoints,
                                     ));
                                 } else if let Some((command, project_root, source_path)) =
-                                    dap_build_info.clone()
+                                    active_file.dap_build_info.clone()
                                 {
                                     println!(
                                         "Building {} with a real `cargo build`...",
@@ -588,13 +720,18 @@ fn main() {
                                 }
                             }
                             _ => {
-                                let effect = input::handle_key_event(&mut editor, &key_event);
+                                let active_file = &mut files[active];
+                                let effect =
+                                    input::handle_key_event(&mut active_file.editor, &key_event);
                                 if effect != editor_view::EditEffect::None {
                                     edit_latency.note_key_event();
-                                    lsp_debouncer.on_edit();
-                                    let (cursor_line, _) = editor.cursor_line_col();
-                                    let doc_len_lines = editor.document.len_lines();
-                                    if viewport.ensure_visible(cursor_line, doc_len_lines) {
+                                    active_file.lsp_debouncer.on_edit();
+                                    let (cursor_line, _) = active_file.editor.cursor_line_col();
+                                    let doc_len_lines = active_file.editor.document.len_lines();
+                                    if active_file
+                                        .viewport
+                                        .ensure_visible(cursor_line, doc_len_lines)
+                                    {
                                         // The cursor moved outside the current window (e.g.
                                         // Enter near the bottom edge) -- the viewport itself
                                         // scrolled, so one full reshape against the new window
@@ -602,17 +739,17 @@ fn main() {
                                         // change, rather than reshaping twice.
                                         reshape_window(
                                             &mut text_state,
-                                            &editor,
-                                            &viewport,
-                                            highlighter.as_mut(),
+                                            &active_file.editor,
+                                            &active_file.viewport,
+                                            active_file.highlighter.as_mut(),
                                         );
                                     } else {
                                         apply_edit_effect(
                                             &mut text_state,
-                                            &editor,
-                                            &viewport,
+                                            &active_file.editor,
+                                            &active_file.viewport,
                                             effect,
-                                            highlighter.as_mut(),
+                                            active_file.highlighter.as_mut(),
                                         );
                                     }
                                     window.request_redraw();
@@ -640,13 +777,17 @@ fn main() {
                                 )
                                 .expect("glyphon text prepare failed");
 
-                            let (cursor_doc_line, cursor_col) = editor.cursor_line_col();
-                            let doc_len_lines = editor.document.len_lines();
-                            let cursor_pixel_pos =
-                                viewport::to_local_line(cursor_doc_line, &viewport, doc_len_lines)
-                                    .and_then(|local_line| {
-                                        text_state.cursor_pixel_pos(local_line, cursor_col)
-                                    });
+                            let active_file = &files[active];
+                            let (cursor_doc_line, cursor_col) = active_file.editor.cursor_line_col();
+                            let doc_len_lines = active_file.editor.document.len_lines();
+                            let cursor_pixel_pos = viewport::to_local_line(
+                                cursor_doc_line,
+                                &active_file.viewport,
+                                doc_len_lines,
+                            )
+                            .and_then(|local_line| {
+                                text_state.cursor_pixel_pos(local_line, cursor_col)
+                            });
                             if let Some((rel_x, rel_y)) = cursor_pixel_pos {
                                 cursor_renderer.update(
                                     &gpu_state.queue,
@@ -746,13 +887,21 @@ fn main() {
 
                             // No diagnostics UI exists yet (matching how detected
                             // language is also just printed) -- real LSP diagnostics
-                            // are surfaced to stdout here.
-                            if let Some(session) = &lsp_session {
-                                for update in session.poll_updates() {
-                                    let lsp_session::LspUpdate::Diagnostics(lines) = update;
-                                    println!("LSP diagnostics ({} item(s)):", lines.len());
-                                    for line in lines {
-                                        println!("  {line}");
+                            // are surfaced to stdout here, for every open file's own
+                            // session, labeled with that file so background-file
+                            // diagnostics aren't confused with the active file's.
+                            for file in files.iter() {
+                                if let Some(session) = &file.lsp_session {
+                                    for update in session.poll_updates() {
+                                        let lsp_session::LspUpdate::Diagnostics(lines) = update;
+                                        println!(
+                                            "LSP diagnostics for {} ({} item(s)):",
+                                            file.label,
+                                            lines.len()
+                                        );
+                                        for line in lines {
+                                            println!("  {line}");
+                                        }
                                     }
                                 }
                             }
@@ -801,7 +950,7 @@ fn main() {
                                                 &binary_path,
                                                 &cwd,
                                                 &source_path,
-                                                &breakpoints,
+                                                &files[active].breakpoints,
                                             ));
                                         }
                                         build::BuildResult::Failure(diagnostics) => {
@@ -876,11 +1025,17 @@ fn main() {
                 }
                 Event::AboutToWait => {
                     if edit_bench_remaining > 0 {
-                        let effect = editor.insert_random(&mut bench_rng, "x");
+                        let bench_file = &mut files[0];
+                        let effect = bench_file.editor.insert_random(&mut bench_rng, "x");
                         if effect != editor_view::EditEffect::None {
                             edit_latency.note_key_event();
-                            let redrew =
-                                apply_edit_effect(&mut text_state, &editor, &viewport, effect, None);
+                            let redrew = apply_edit_effect(
+                                &mut text_state,
+                                &bench_file.editor,
+                                &bench_file.viewport,
+                                effect,
+                                None,
+                            );
                             if redrew {
                                 in_window_edits += 1;
                             } else {
@@ -895,27 +1050,43 @@ fn main() {
                         // measurement of the `EditEffect::Line` fast path at 50k-line
                         // document scale, free of the "did the cursor scroll out of the
                         // (not-yet-implemented) auto-follow window" question.
-                        let effect = editor.insert_at_cursor("x");
+                        let bench_file = &mut files[0];
+                        let effect = bench_file.editor.insert_at_cursor("x");
                         if effect != editor_view::EditEffect::None {
                             cursor_latency.note_key_event();
-                            apply_edit_effect(&mut text_state, &editor, &viewport, effect, None);
+                            apply_edit_effect(
+                                &mut text_state,
+                                &bench_file.editor,
+                                &bench_file.viewport,
+                                effect,
+                                None,
+                            );
                         }
                         cursor_bench_remaining -= 1;
                     } else if scroll_bench_remaining > 0 {
-                        let doc_len_lines = editor.document.len_lines();
-                        let direction = if viewport.scroll_line == 0 { 1isize } else { -1isize };
-                        let page = direction * viewport.visible_lines as isize;
+                        let bench_file = &mut files[0];
+                        let doc_len_lines = bench_file.editor.document.len_lines();
+                        let direction = if bench_file.viewport.scroll_line == 0 {
+                            1isize
+                        } else {
+                            -1isize
+                        };
+                        let page = direction * bench_file.viewport.visible_lines as isize;
                         scroll_latency.note_key_event();
-                        if viewport.scroll_by(page, doc_len_lines) {
-                            reshape_window(&mut text_state, &editor, &viewport, None);
+                        if bench_file.viewport.scroll_by(page, doc_len_lines) {
+                            reshape_window(&mut text_state, &bench_file.editor, &bench_file.viewport, None);
                         }
                         scroll_bench_remaining -= 1;
                     }
                     // Polled every tick because this crate runs `ControlFlow::Poll`
-                    // unconditionally (see `lsp_debouncer`'s declaration comment).
-                    if lsp_debouncer.should_dispatch_now() {
-                        if let Some(session) = &lsp_session {
-                            session.notify_edit(editor.text());
+                    // unconditionally (see `OpenFile::lsp_debouncer`'s declaration
+                    // comment) -- every open file's own debouncer/session, not just the
+                    // active one's, so a background file is never silently starved.
+                    for file in files.iter_mut() {
+                        if file.lsp_debouncer.should_dispatch_now() {
+                            if let Some(session) = &file.lsp_session {
+                                session.notify_edit(file.editor.text());
+                            }
                         }
                     }
                     window.request_redraw();
