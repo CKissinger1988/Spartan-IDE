@@ -527,6 +527,12 @@ fn open_file(label: &str, debug_binary_path: Option<&PathBuf>) -> OpenFile {
                         );
                         highlighter = Some(highlight::Highlighter::kotlin());
                     }
+                    "tree-sitter-c-sharp" => {
+                        println!(
+                            "Syntax highlighting: real tree-sitter-c-sharp (windowed, see §75.51)"
+                        );
+                        highlighter = Some(highlight::Highlighter::csharp());
+                    }
                     other => {
                         println!("No real tree-sitter wiring for grammar {other:?} yet");
                     }
@@ -808,6 +814,26 @@ fn main() {
         .skip(6)
         .filter_map(|s| s.strip_prefix("--open:").map(str::to_string))
         .collect();
+    // `--gpu-backend:<vulkan|gl|dx12|metal>` (§75.50, user-requested):
+    // forces `GpuState::new`'s wgpu instance to a single backend family
+    // instead of probing everything -- real QA/testing value (exercising
+    // the renderer against a specific backend on purpose) and a real
+    // troubleshooting escape hatch for a virtualized/passthrough GPU whose
+    // default-probed backend misbehaves. Scanned across every arg (not a
+    // fixed position) since it's optional and orthogonal to the existing
+    // positional bench-iteration/`--debug-binary:`/`--open:` args.
+    let gpu_backend_override: Option<wgpu::Backends> = std::env::args()
+        .find_map(|s| s.strip_prefix("--gpu-backend:").map(str::to_string))
+        .and_then(|name| {
+            let parsed = gpu::parse_backend_override(&name);
+            if parsed.is_none() {
+                println!(
+                    "Unrecognized --gpu-backend:{name} -- expected one of vulkan/gl/dx12/metal; \
+                     falling back to probing every backend."
+                );
+            }
+            parsed
+        });
 
     // First real combination of spartan-buffer + rendering + spartan-languages
     // (see language.rs's doc comment) -- tree-sitter stays unwired. LSP
@@ -948,7 +974,8 @@ fn main() {
     // GPU setup instead of paying both back-to-back on the same thread.
     let font_system_handle = thread::spawn(glyphon::FontSystem::new);
 
-    let mut gpu_state = pollster::block_on(gpu::GpuState::new(window.clone()));
+    let mut gpu_state =
+        pollster::block_on(gpu::GpuState::new(window.clone(), gpu_backend_override));
     let t_gpu = Instant::now();
     println!(
         "Adapter: {} | backend={:?} | device_type={:?}",
@@ -956,6 +983,22 @@ fn main() {
         gpu_state.adapter_info.backend,
         gpu_state.adapter_info.device_type
     );
+    // Real §75.50 software/virtual-GPU detection, user-requested -- a
+    // real, visible signal (not just the raw device_type debug-print
+    // above) that this session is rendering via a non-hardware backend
+    // (a software rasterizer like llvmpipe, or a VM's virtio-gpu/SR-IOV/
+    // vGPU passthrough exposed as `wgpu::DeviceType::VirtualGpu`). This
+    // configuration is genuinely supported -- this whole project's own
+    // Linux-container development sessions have run on exactly this path
+    // throughout its history -- not a degraded or unsupported mode.
+    if gpu::is_software_or_virtual(&gpu_state.adapter_info) {
+        println!(
+            "Rendering via a software or virtual GPU adapter (device_type={:?}) -- this is a \
+             real, supported configuration. If you see rendering issues, try forcing a \
+             specific backend with --gpu-backend:<vulkan|gl|dx12|metal>.",
+            gpu_state.adapter_info.device_type
+        );
+    }
 
     // Computed once from initial window size -- not recomputed on resize,
     // a named simplification (see the crate README). Every open file's
@@ -2112,8 +2155,26 @@ fn main() {
                             // user-requested), reachable from any mode --
                             // real §57/§42 GPU offload configuration is the
                             // first (and currently only) real setting.
+                            // `renderer_info` (§75.50) is captured fresh
+                            // from the real, live `wgpu::AdapterInfo` this
+                            // session already queried once at startup --
+                            // the adapter can't change mid-session, so
+                            // re-reading it here (rather than caching a
+                            // formatted string from cold-open) is cheap and
+                            // always correct.
+                            let renderer_info = format!(
+                                "{} | backend={:?} | {}",
+                                gpu_state.adapter_info.name,
+                                gpu_state.adapter_info.backend,
+                                if gpu::is_software_or_virtual(&gpu_state.adapter_info) {
+                                    "software/virtual GPU"
+                                } else {
+                                    "hardware GPU"
+                                }
+                            );
                             settings_state = Some(settings_panel::SettingsPanelState::opened_with(
                                 spartan_settings::load(),
+                                renderer_info,
                             ));
                             window.request_redraw();
                         }

@@ -93,3 +93,29 @@ build_systems = ["go"]
 
   [language.formatter]
   program = "gofmt"
+
+# Real §75.51 addition, user-requested ("Add support for .NET coding") --
+# a real, deliberate expansion beyond §35.4's original Tier 1 six, the same
+# "growing this list is a data change, not a code change" story this
+# file's own header describes, now actually exercised for a 7th language.
+# `marker_files` uses this crate's own real glob support (§75.51,
+# `marker_present_in`) since C# has no single fixed project-file name --
+# a real `*.csproj`/`*.sln` filename varies per project, unlike
+# `Cargo.toml`/`package.json`.
+[[language]]
+id = "csharp"
+file_globs = ["*.cs"]
+marker_files = ["*.csproj", "*.sln"]
+tree_sitter_grammar = "tree-sitter-c-sharp"
+build_systems = ["dotnet"]
+
+  [language.lsp_command]
+  program = "csharp-ls"
+
+  [language.dap_command]
+  program = "netcoredbg"
+  args = ["--interpreter=vscode"]
+
+  [language.formatter]
+  program = "dotnet"
+  args = ["format"]

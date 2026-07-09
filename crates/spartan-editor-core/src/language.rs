@@ -22,7 +22,11 @@ pub fn detect_language_for_file(path: &Path) -> Option<LanguageProfile> {
 /// duplicating its marker-file matching logic (that crate walks *down* from
 /// a known root to detect a project's languages; this walks *up* from a
 /// single file to find that root in the first place -- a complementary,
-/// not overlapping, direction).
+/// not overlapping, direction). As of §75.51, also reuses that crate's own
+/// `marker_present_in` for the actual per-directory check, so a glob-style
+/// marker (`"*.csproj"` -- C# has no single fixed project-file name the
+/// way `Cargo.toml`/`package.json` do) resolves identically here and in
+/// `detect_project_languages`, one real matching rule, not two.
 ///
 /// Returns `None` if no ancestor directory contains any marker file --
 /// callers should fall back to the file's own parent directory in that
@@ -33,7 +37,7 @@ pub fn find_project_root(file_path: &Path, marker_files: &[String]) -> Option<Pa
     for ancestor in start.ancestors() {
         if marker_files
             .iter()
-            .any(|marker| ancestor.join(marker).is_file())
+            .any(|marker| spartan_languages::marker_present_in(ancestor, marker))
         {
             return Some(ancestor.to_path_buf());
         }

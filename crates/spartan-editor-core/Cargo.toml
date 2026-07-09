@@ -36,6 +36,7 @@ wry = "0.43"
 raw-window-handle = "0.6"
 windows = { version = "0.56", features = ["Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse"] }
 tree-sitter-kotlin-ng = "1.1.0"
+tree-sitter-c-sharp = "0.23"
 
 # Real GTK init/event-loop-pump requirement (§6.1, task #12): wry's own
 # WebKitGTK backend needs `gtk::init()` called and `gtk::main_iteration_do`

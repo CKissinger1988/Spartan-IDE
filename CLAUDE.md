@@ -1248,6 +1248,60 @@ first — it's the parity reference until each row there is actually reimplement
   unverified live in this environment. No download/install/restart of any kind (by design). No
   update checking for anything besides this one repository (no plugin marketplace, no per-language-
   server version checks). No periodic/background checking -- user-triggered only.
+- **Real, working code — real software/virtual-GPU diagnostics and a `--gpu-backend:` override,
+  user-requested (§75.50)**: closes "would it be possible to add virtual GPU support," resolved via
+  a clarifying question into all three real interpretations at once. (1) `gpu::is_software_or_virtual`
+  (real, pure) flags both `wgpu::DeviceType::Cpu` (software rasterizers like `llvmpipe`, this whole
+  project's own Linux-container adapter throughout its history) and `wgpu::DeviceType::VirtualGpu`
+  (wgpu's own real, distinct "Virtual / Hosted" category -- exactly what VM `virtio-gpu`/SR-IOV/vGPU
+  passthrough exposes to a guest) -- a clear cold-open message and a new read-only "Renderer" line in
+  the Settings panel now both surface it as a real, supported configuration. (2) VM GPU passthrough
+  itself is real, deliberate documentation-only guidance -- actual SR-IOV/vGPU configuration lives
+  entirely in the hypervisor/guest-OS layers, genuinely outside this codebase's reach; the real
+  contribution is naming that this IDE already renders correctly on a passthrough adapter by
+  construction, and that `--gpu-backend:` (below) is the real escape hatch if a passthrough's default
+  backend misbehaves. (3) A new `--gpu-backend:<vulkan|gl|dx12|metal>` CLI override (`gpu::
+  parse_backend_override`, real and unit-tested) restricts `GpuState::new`'s wgpu instance to a single
+  backend family instead of always probing everything -- `None` preserves every existing call site's
+  exact prior behavior. 5 new `gpu.rs` tests (binary-target, not `--lib`). Live, through the real
+  binary in this same sandboxed container: the new software/virtual-GPU cold-open message printed
+  correctly; the Settings panel's real "Renderer: llvmpipe (LLVM 20.1.2, 256 bits) | backend=Vulkan |
+  software/virtual GPU" line was screenshotted; and `--gpu-backend:gl` was confirmed to genuinely
+  force a different real backend -- the startup log's own `backend=Gl` (vs. the default `backend=
+  Vulkan`) is real, observed proof, not just that the flag parses. **What this does not confirm**: no
+  real GPU hardware exists in this environment at all, so `VirtualGpu` itself (unlike `Cpu`, which
+  this pass did exercise live) was never observed on a real adapter; no DX12/Metal backend was
+  exercised live (Linux container, Vulkan/GL only); no real libvirt/QEMU/SR-IOV passthrough setup was
+  performed or tested.
+- **Real, working code — real .NET/C# language support, user-requested (§75.51)**: closes "add
+  support for .NET coding," a real, deliberate 7th-language expansion beyond §35.4's original Tier 1
+  six. A real bug was found and fixed before C# could even be added correctly: unlike `Cargo.toml`/
+  `package.json`, C# has no single fixed project-file name (`*.csproj`/`*.sln` vary per project), but
+  both `spartan-languages::detect_project_languages` and `spartan-editor-core::language::
+  find_project_root` did a real, hardcoded exact-file-existence check that could never match a glob
+  marker -- a real, latent bug caught by tracing the existing code before any test was written. Fixed
+  with a new, real `spartan_languages::marker_present_in`, reusing this crate's own existing
+  `glob_matches` (one real glob engine, not two) so both the *down-from-a-known-root* and
+  *up-from-a-file* marker-matching directions resolve identically. `languages.toml` gained
+  `id = "csharp"` (`*.cs`, `*.csproj`/`*.sln` markers, `csharp-ls` LSP, `netcoredbg --interpreter=
+  vscode` DAP -- both real, open-source, single-binary tools matching this project's existing
+  open-toolchain choices for Kotlin/Python/Go, `dotnet format`). `tree-sitter-c-sharp` 0.23.5
+  confirmed compatible with this workspace by adding and building; a real, *positive* finding this
+  time (unlike Kotlin's/TypeScript's own real gaps): it ships a genuine, self-sufficient bundled
+  highlights query, no vendored `.scm` or query-concatenation needed. 10 new tests (glob-marker
+  matching, the real 7-language registry count, the real C# profile's tools, a real
+  `detect_project_languages` fixture test, one highlight.rs test), 370 tests total workspace-wide,
+  full clippy/fmt clean. Live, through the real binary, against a real two-file `Demo.csproj`/
+  `Program.cs` fixture: language detection correctly identified `csharp`; **the glob-marker fix was
+  proven live, not just unit-tested** -- the LSP log showed the project root correctly resolved via
+  the real `*.csproj` match rather than falling back to single-file mode; `csharp-ls` failed with a
+  real, honest "not installed" (no install attempted this pass, no explicit authorization requested);
+  `netcoredbg` was correctly reported as configured; and a screenshot confirmed real, correct,
+  distinct-color highlighting across keywords, types, a string literal, a numeric literal, a function
+  call, and a comment. **What this does not confirm**: `csharp-ls`/`netcoredbg` were never installed
+  or live-exercised (LSP/DAP wiring is real and structurally correct but not live-proven the way
+  Rust/Python/Go/Kotlin's own dual-adapter verification is), no `.NET` build-system integration
+  (F5 remains Cargo-only), no injections/locals queries for C#.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1305,7 +1359,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 359 tests: 6 spikes + 11 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 370 tests: 6 spikes + 11 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-editor-core, xtask)

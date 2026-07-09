@@ -29,12 +29,50 @@ pub struct GpuState {
     pub adapter_info: wgpu::AdapterInfo,
 }
 
+/// Real, pure detection of a software or virtualized GPU adapter (§75.50,
+/// user-requested "virtual GPU support") -- `wgpu::DeviceType::Cpu`
+/// (software rasterizers like the `llvmpipe` adapter this whole project's
+/// own Linux-container sessions have run on throughout its history) and
+/// `wgpu::DeviceType::VirtualGpu` (a real, distinct wgpu-defined category
+/// for "Virtual / Hosted" adapters -- exactly what a VM's `virtio-gpu`/
+/// SR-IOV/vGPU passthrough exposes to the guest) both count. `IntegratedGpu`
+/// and `DiscreteGpu` are real hardware, even if the hardware itself is
+/// modest.
+pub fn is_software_or_virtual(info: &wgpu::AdapterInfo) -> bool {
+    matches!(
+        info.device_type,
+        wgpu::DeviceType::Cpu | wgpu::DeviceType::VirtualGpu
+    )
+}
+
+/// Real, pure parsing of a `--gpu-backend:<name>` override (§75.50,
+/// user-requested QA/testing support for forcing a specific backend --
+/// e.g. to test the renderer against a different backend than whatever
+/// `wgpu::Backends::all()` would pick by default, or to work around a
+/// broken virtualized backend by forcing a working one). Case-insensitive;
+/// `None` for an unrecognized name, so the caller can decide how to warn
+/// rather than this function silently guessing.
+pub fn parse_backend_override(name: &str) -> Option<wgpu::Backends> {
+    match name.to_ascii_lowercase().as_str() {
+        "vulkan" => Some(wgpu::Backends::VULKAN),
+        "gl" | "opengl" => Some(wgpu::Backends::GL),
+        "dx12" | "directx12" => Some(wgpu::Backends::DX12),
+        "metal" => Some(wgpu::Backends::METAL),
+        "browser-webgpu" | "webgpu" => Some(wgpu::Backends::BROWSER_WEBGPU),
+        _ => None,
+    }
+}
+
 impl GpuState {
-    pub async fn new(window: Arc<Window>) -> Self {
+    /// `backend_override` restricts the real `wgpu::Instance` to a single
+    /// backend family (§75.50) instead of the default `Backends::all()`
+    /// probe-everything behavior -- `None` preserves the exact prior
+    /// behavior for every existing call site.
+    pub async fn new(window: Arc<Window>, backend_override: Option<wgpu::Backends>) -> Self {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends: backend_override.unwrap_or(wgpu::Backends::all()),
             ..Default::default()
         });
 
@@ -107,5 +145,65 @@ impl GpuState {
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn adapter_info(device_type: wgpu::DeviceType) -> wgpu::AdapterInfo {
+        wgpu::AdapterInfo {
+            name: "test adapter".to_string(),
+            vendor: 0,
+            device: 0,
+            device_type,
+            driver: String::new(),
+            driver_info: String::new(),
+            backend: wgpu::Backend::Vulkan,
+        }
+    }
+
+    #[test]
+    fn cpu_adapters_are_real_software_rendering() {
+        assert!(is_software_or_virtual(&adapter_info(wgpu::DeviceType::Cpu)));
+    }
+
+    #[test]
+    fn virtual_gpu_adapters_are_flagged_too() {
+        assert!(is_software_or_virtual(&adapter_info(
+            wgpu::DeviceType::VirtualGpu
+        )));
+    }
+
+    #[test]
+    fn real_hardware_adapters_are_not_flagged() {
+        assert!(!is_software_or_virtual(&adapter_info(
+            wgpu::DeviceType::IntegratedGpu
+        )));
+        assert!(!is_software_or_virtual(&adapter_info(
+            wgpu::DeviceType::DiscreteGpu
+        )));
+    }
+
+    #[test]
+    fn backend_override_parses_every_real_supported_name_case_insensitively() {
+        assert_eq!(
+            parse_backend_override("vulkan"),
+            Some(wgpu::Backends::VULKAN)
+        );
+        assert_eq!(
+            parse_backend_override("VULKAN"),
+            Some(wgpu::Backends::VULKAN)
+        );
+        assert_eq!(parse_backend_override("gl"), Some(wgpu::Backends::GL));
+        assert_eq!(parse_backend_override("opengl"), Some(wgpu::Backends::GL));
+        assert_eq!(parse_backend_override("dx12"), Some(wgpu::Backends::DX12));
+        assert_eq!(parse_backend_override("metal"), Some(wgpu::Backends::METAL));
+    }
+
+    #[test]
+    fn backend_override_rejects_an_unrecognized_name() {
+        assert_eq!(parse_backend_override("not-a-real-backend"), None);
     }
 }

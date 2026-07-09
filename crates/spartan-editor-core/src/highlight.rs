@@ -209,6 +209,30 @@ impl Highlighter {
         }
     }
 
+    /// Real `tree-sitter-c-sharp` config (§75.51, user-requested ".NET
+    /// coding" support) -- self-sufficient bundled query, confirmed by
+    /// reading the real installed crate source: unlike Kotlin's own gap
+    /// (§75.44), `tree-sitter-c-sharp` 0.23.5 does ship a real
+    /// `queries/highlights.scm`, gated behind a `with_highlights_query`
+    /// cfg its own `build.rs` sets when the file is present -- no vendored
+    /// query needed here.
+    pub fn csharp() -> Self {
+        let language: tree_sitter::Language = tree_sitter_c_sharp::LANGUAGE.into();
+        let mut config = HighlightConfiguration::new(
+            language,
+            "csharp",
+            tree_sitter_c_sharp::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        )
+        .expect("tree-sitter-c-sharp's own bundled highlights query must be valid");
+        config.configure(HIGHLIGHT_NAMES);
+        Self {
+            inner: TsHighlighter::new(),
+            config,
+        }
+    }
+
     /// Real `tree-sitter-go` config -- self-sufficient bundled query.
     pub fn go() -> Self {
         let language: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
@@ -541,6 +565,41 @@ mod tests {
 
         let string_start = source.find('"').unwrap();
         let string_end = source[string_start + 1..].find('"').unwrap() + string_start + 2;
+        let string_span = spans
+            .iter()
+            .find(|s| s.start_byte == string_start && s.end_byte == string_end)
+            .unwrap_or_else(|| panic!("expected a string span, got: {spans:?}"));
+        assert_eq!(string_span.color, color_for("string"));
+    }
+
+    #[test]
+    fn csharp_keyword_string_comment_and_number_all_get_real_spans() {
+        let mut hl = Highlighter::csharp();
+        let source = "// a comment\nclass P {\n    int x = 42;\n    string s = \"hi\";\n}";
+        let spans = hl.highlight(source);
+
+        let class_start = source.find("class").unwrap();
+        let class_span = spans
+            .iter()
+            .find(|s| s.start_byte == class_start && s.end_byte == class_start + "class".len())
+            .unwrap_or_else(|| panic!("expected a 'class' keyword span, got: {spans:?}"));
+        assert_eq!(class_span.color, color_for("keyword"));
+
+        let comment_span = spans
+            .iter()
+            .find(|s| s.start_byte == 0 && s.end_byte == "// a comment".len())
+            .unwrap_or_else(|| panic!("expected a comment span, got: {spans:?}"));
+        assert_eq!(comment_span.color, color_for("comment"));
+
+        let number_start = source.find("42").unwrap();
+        let number_span = spans
+            .iter()
+            .find(|s| s.start_byte == number_start && s.end_byte == number_start + 2)
+            .unwrap_or_else(|| panic!("expected a span covering '42', got: {spans:?}"));
+        assert_eq!(number_span.color, color_for("number"));
+
+        let string_start = source.find('"').unwrap();
+        let string_end = source.rfind('"').unwrap() + 1;
         let string_span = spans
             .iter()
             .find(|s| s.start_byte == string_start && s.end_byte == string_end)

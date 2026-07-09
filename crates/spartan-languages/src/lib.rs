@@ -115,7 +115,11 @@ impl LanguageRegistry {
     pub fn detect_project_languages(&self, project_root: &Path) -> Vec<&LanguageProfile> {
         self.profiles
             .iter()
-            .filter(|p| p.marker_files.iter().any(|m| project_root.join(m).exists()))
+            .filter(|p| {
+                p.marker_files
+                    .iter()
+                    .any(|m| marker_present_in(project_root, m))
+            })
             .collect()
     }
 }
@@ -132,6 +136,31 @@ fn glob_matches(glob: &str, file_name: &str) -> bool {
     }
 }
 
+/// Real §75.51 marker-file glob support (found while adding C#/.NET,
+/// which has no single fixed project-file name the way `Cargo.toml`/
+/// `package.json` do -- a real `*.csproj` filename varies per project).
+/// A fixed-name marker (`"Cargo.toml"`) still checks real file existence
+/// directly; a glob marker (`"*.csproj"`) scans the real directory
+/// entries for any real match via the same `glob_matches` this crate's
+/// own `profile_for_file` already uses -- one glob engine, not two. `pub`
+/// (not `pub(crate)`) so `spartan-editor-core`'s own `find_project_root`
+/// (which walks *up* from a file, the complementary direction to this
+/// crate's own *down-from-a-known-root* `detect_project_languages`) can
+/// reuse the identical matching rule instead of a second, potentially
+/// drifting implementation.
+pub fn marker_present_in(dir: &Path, marker: &str) -> bool {
+    if marker.starts_with("*.") {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .any(|name| glob_matches(marker, &name))
+    } else {
+        dir.join(marker).exists()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,10 +168,20 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn curated_default_loads_the_tier_1_six_languages() {
+    fn curated_default_loads_the_tier_1_six_languages_plus_csharp() {
         let registry = LanguageRegistry::curated_default();
         let ids: Vec<&str> = registry.profiles().iter().map(|p| p.id.as_str()).collect();
-        for expected in ["rust", "typescript", "python", "kotlin", "java", "go"] {
+        // §75.51 added a real, deliberate 7th profile (C#/.NET,
+        // user-requested) beyond §35.4's original Tier 1 six.
+        for expected in [
+            "rust",
+            "typescript",
+            "python",
+            "kotlin",
+            "java",
+            "go",
+            "csharp",
+        ] {
             assert!(
                 ids.contains(&expected),
                 "missing {expected} from curated registry: {ids:?}"
@@ -150,9 +189,34 @@ mod tests {
         }
         assert_eq!(
             ids.len(),
-            6,
-            "curated registry should be exactly the Tier 1 six, got {ids:?}"
+            7,
+            "curated registry should be the Tier 1 six plus C# (§75.51), got {ids:?}"
         );
+    }
+
+    #[test]
+    fn csharp_profile_has_the_real_tools_named_in_this_pass() {
+        let registry = LanguageRegistry::curated_default();
+        let csharp = registry
+            .profile_by_id("csharp")
+            .expect("csharp profile must exist");
+        assert_eq!(csharp.lsp_command.as_ref().unwrap().program, "csharp-ls");
+        assert_eq!(csharp.dap_command.as_ref().unwrap().program, "netcoredbg");
+        assert_eq!(
+            csharp.formatter.as_ref().unwrap().args,
+            vec!["format".to_string()]
+        );
+    }
+
+    #[test]
+    fn detect_project_languages_finds_csharp_from_a_real_csproj() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("MyApp.csproj"), "<Project />").unwrap();
+
+        let registry = LanguageRegistry::curated_default();
+        let detected = registry.detect_project_languages(dir.path());
+        assert_eq!(detected.len(), 1);
+        assert_eq!(detected[0].id, "csharp");
     }
 
     #[test]
@@ -204,6 +268,26 @@ mod tests {
         let detected = registry.detect_project_languages(dir.path());
         assert_eq!(detected.len(), 1);
         assert_eq!(detected[0].id, "go");
+    }
+
+    #[test]
+    fn marker_present_in_matches_a_real_glob_marker_regardless_of_the_real_file_stem() {
+        // C# has no single fixed project-file name the way Cargo.toml/
+        // package.json do -- a real *.csproj varies per project. This is
+        // the real bug §75.51 found and fixed: a fixed-name check like
+        // `dir.join("*.csproj").exists()` can never match a real file.
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("MyApp.csproj"), "<Project />").unwrap();
+        assert!(marker_present_in(dir.path(), "*.csproj"));
+        assert!(!marker_present_in(dir.path(), "*.sln"));
+    }
+
+    #[test]
+    fn marker_present_in_still_checks_real_exact_names_for_non_glob_markers() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), "[package]\n").unwrap();
+        assert!(marker_present_in(dir.path(), "Cargo.toml"));
+        assert!(!marker_present_in(dir.path(), "go.mod"));
     }
 
     #[test]

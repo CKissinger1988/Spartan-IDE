@@ -64,14 +64,20 @@ pub struct SettingsPanelState {
     pub settings: Settings,
     pub selected: SettingsRow,
     pub update_check: UpdateCheckDisplay,
+    /// Real, static renderer diagnostics (§75.50, user-requested) --
+    /// captured once at startup from the real `wgpu::AdapterInfo`
+    /// (`main.rs` formats it), not re-queried live since the adapter
+    /// can't change mid-session. Read-only, not a selectable row.
+    pub renderer_info: String,
 }
 
 impl SettingsPanelState {
-    pub fn opened_with(settings: Settings) -> Self {
+    pub fn opened_with(settings: Settings, renderer_info: String) -> Self {
         Self {
             settings,
             selected: SettingsRow::GpuOffloadEnabled,
             update_check: UpdateCheckDisplay::NotChecked,
+            renderer_info,
         }
     }
 
@@ -178,11 +184,13 @@ pub fn build_panel_text(state: &SettingsPanelState) -> String {
          {} {enabled_box} GPU offloading enabled (Space/Enter to toggle)\n\
          {}     GPU layers to offload: {layers_text} (Left/Right to adjust)\n\
          {} {}\n\n\
+         Renderer: {}\n\n\
          Up/Down to move -- Escape to save and close.",
         row_marker(state, SettingsRow::GpuOffloadEnabled),
         row_marker(state, SettingsRow::GpuOffloadLayers),
         row_marker(state, SettingsRow::CheckForUpdates),
         update_check_line(&state.update_check),
+        state.renderer_info,
     )
 }
 
@@ -200,14 +208,15 @@ mod tests {
                 layers: Some(4),
             },
         };
-        let state = SettingsPanelState::opened_with(settings);
+        let state = SettingsPanelState::opened_with(settings, "test-renderer".to_string());
         assert_eq!(state.selected, SettingsRow::GpuOffloadEnabled);
         assert_eq!(state.settings, settings);
     }
 
     #[test]
     fn selection_moves_down_and_wraps() {
-        let mut state = SettingsPanelState::opened_with(Settings::default());
+        let mut state =
+            SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
         state.move_selection_down();
         assert_eq!(state.selected, SettingsRow::GpuOffloadLayers);
         state.move_selection_down();
@@ -218,14 +227,16 @@ mod tests {
 
     #[test]
     fn selection_moves_up_and_wraps() {
-        let mut state = SettingsPanelState::opened_with(Settings::default());
+        let mut state =
+            SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
         state.move_selection_up();
         assert_eq!(state.selected, SettingsRow::CheckForUpdates);
     }
 
     #[test]
     fn toggle_only_affects_the_enabled_row() {
-        let mut state = SettingsPanelState::opened_with(Settings::default());
+        let mut state =
+            SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
         assert!(state.settings.gpu_offload.enabled);
         state.toggle_selected();
         assert!(!state.settings.gpu_offload.enabled);
@@ -240,7 +251,8 @@ mod tests {
 
     #[test]
     fn adjust_layers_only_affects_the_layers_row() {
-        let mut state = SettingsPanelState::opened_with(Settings::default());
+        let mut state =
+            SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
         state.adjust_layers(1);
         assert_eq!(
             state.settings.gpu_offload.layers, None,
@@ -250,7 +262,8 @@ mod tests {
 
     #[test]
     fn adjust_layers_from_auto_increments_to_zero_then_up() {
-        let mut state = SettingsPanelState::opened_with(Settings::default());
+        let mut state =
+            SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
         state.move_selection_down();
         assert_eq!(state.settings.gpu_offload.layers, None);
         state.adjust_layers(1);
@@ -261,12 +274,15 @@ mod tests {
 
     #[test]
     fn adjust_layers_decrementing_from_zero_wraps_to_auto() {
-        let mut state = SettingsPanelState::opened_with(Settings {
-            gpu_offload: GpuOffloadSettings {
-                enabled: true,
-                layers: Some(0),
+        let mut state = SettingsPanelState::opened_with(
+            Settings {
+                gpu_offload: GpuOffloadSettings {
+                    enabled: true,
+                    layers: Some(0),
+                },
             },
-        });
+            "test-renderer".to_string(),
+        );
         state.move_selection_down();
         state.adjust_layers(-1);
         assert_eq!(state.settings.gpu_offload.layers, None);
@@ -274,12 +290,15 @@ mod tests {
 
     #[test]
     fn adjust_layers_incrementing_past_the_real_max_wraps_to_auto() {
-        let mut state = SettingsPanelState::opened_with(Settings {
-            gpu_offload: GpuOffloadSettings {
-                enabled: true,
-                layers: Some(128),
+        let mut state = SettingsPanelState::opened_with(
+            Settings {
+                gpu_offload: GpuOffloadSettings {
+                    enabled: true,
+                    layers: Some(128),
+                },
             },
-        });
+            "test-renderer".to_string(),
+        );
         state.move_selection_down();
         state.adjust_layers(1);
         assert_eq!(state.settings.gpu_offload.layers, None);
@@ -287,12 +306,15 @@ mod tests {
 
     #[test]
     fn panel_text_reflects_real_live_state() {
-        let mut state = SettingsPanelState::opened_with(Settings {
-            gpu_offload: GpuOffloadSettings {
-                enabled: true,
-                layers: Some(16),
+        let mut state = SettingsPanelState::opened_with(
+            Settings {
+                gpu_offload: GpuOffloadSettings {
+                    enabled: true,
+                    layers: Some(16),
+                },
             },
-        });
+            "test-renderer".to_string(),
+        );
         let text = build_panel_text(&state);
         assert!(text.contains("[x]"));
         assert!(text.contains("16"));
@@ -302,6 +324,16 @@ mod tests {
         let text = build_panel_text(&state);
         assert!(text.contains("[ ]"));
         assert!(text.contains("Auto"));
+    }
+
+    #[test]
+    fn panel_text_shows_the_real_renderer_info() {
+        let state = SettingsPanelState::opened_with(
+            Settings::default(),
+            "llvmpipe (Vulkan, software/virtual)".to_string(),
+        );
+        let text = build_panel_text(&state);
+        assert!(text.contains("llvmpipe (Vulkan, software/virtual)"));
     }
 
     fn sample_update_result(up_to_date: bool, categories: ChangeCategories) -> UpdateCheckResult {
@@ -315,14 +347,16 @@ mod tests {
 
     #[test]
     fn not_checked_shows_the_real_prompt() {
-        let state = SettingsPanelState::opened_with(Settings::default());
+        let state =
+            SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
         let text = build_panel_text(&state);
         assert!(text.contains("Check for Updates"));
     }
 
     #[test]
     fn checking_shows_a_real_in_progress_message() {
-        let mut state = SettingsPanelState::opened_with(Settings::default());
+        let mut state =
+            SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
         state.update_check = UpdateCheckDisplay::Checking;
         let text = build_panel_text(&state);
         assert!(text.contains("Checking for updates"));
@@ -330,7 +364,8 @@ mod tests {
 
     #[test]
     fn up_to_date_result_shows_the_real_short_commit() {
-        let mut state = SettingsPanelState::opened_with(Settings::default());
+        let mut state =
+            SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
         state.update_check =
             UpdateCheckDisplay::Ready(sample_update_result(true, ChangeCategories::default()));
         let text = build_panel_text(&state);
@@ -340,7 +375,8 @@ mod tests {
 
     #[test]
     fn an_available_update_names_every_real_changed_category() {
-        let mut state = SettingsPanelState::opened_with(Settings::default());
+        let mut state =
+            SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
         state.update_check = UpdateCheckDisplay::Ready(sample_update_result(
             false,
             ChangeCategories {
@@ -358,7 +394,8 @@ mod tests {
 
     #[test]
     fn a_failed_check_shows_the_real_error_message() {
-        let mut state = SettingsPanelState::opened_with(Settings::default());
+        let mut state =
+            SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
         state.update_check = UpdateCheckDisplay::Failed("network error: timed out".to_string());
         let text = build_panel_text(&state);
         assert!(text.contains("network error: timed out"));
