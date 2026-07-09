@@ -414,6 +414,42 @@ first — it's the parity reference until each row there is actually reimplement
   onto a 1-char line (visibly clamped), arrow down again restored the original visual column instead
   of staying at column 1. 50k-line benchmark re-run, no regression (cold-open ~104ms, edit/cursor p99
   ~3.5-4.0ms, scroll p99 ~5.8ms, consistent with the prior baseline).
+- **Real, working code — unsaved-changes confirmation modal, closing task #18 (§75.23)**: closing a
+  dirty tab or exiting the app previously discarded content immediately, with no confirmation.
+  Deliberately does NOT cover switching the active file (Ctrl+Tab, clicking a different tab) --
+  tracing the actual code showed nothing is ever lost by switching away from a dirty file, only by
+  closing a tab or the whole process, so the scope narrowed to match the real risk rather than
+  building an unnecessary switch-time prompt. `SelectionRenderer`/`selection.wgsl` (§75.18, reused
+  for the tab highlight in §75.21) had its color hardcoded in the shader -- genericized to a real
+  per-vertex `color` attribute now that a third caller (the modal's dim overlay) wants a different
+  one, rather than a third near-duplicate pipeline; the two existing callers now pass the extracted
+  `selection::ACCENT_HIGHLIGHT` constant explicitly. `TextState` gained a third glyphon `TextArea`
+  (`modal_buffer`), same "empty text draws nothing, no separate on/off flag" pattern the tab bar
+  already established, roughly vertically centered using the real current window height. Keyboard-
+  only confirm/cancel (Enter/Escape) is a real, named v1 scope decision -- no clickable buttons yet.
+  A new `PendingClose` enum + a dedicated `KeyboardInput` match arm inserted *before* every other
+  keyboard arm intercepts all input while a modal is up (match arms are tried in order); both mouse-
+  press arms are additionally gated on `pending_close.is_none()` so clicks don't leak through either.
+  A real edge case was found and fixed before it could ship: closing a dirty *sole remaining* tab
+  would have raised the modal, then had Enter's `close_file` call silently refuse (its own pre-
+  existing last-tab guard) -- fixed by adding the same `files.len() > 1` condition to the dirty
+  check up front, so a dirty last tab's `×` stays the same harmless no-op it already was. Live
+  verification hit two real environment snags along the way, both test-harness mistakes rather than
+  product bugs: an `--open:<path>` arg landed in the wrong positional slot and was silently dropped
+  (fixed by padding the benchmark-arg positions); and keyboard input stopped reaching one long-lived
+  window instance after extended debugging (mouse clicks kept working) but was fine on a fresh
+  instance, consistent with §75.13's already-documented X11/WM focus fragility, not a code change in
+  this pass. With both resolved: real dirty-tab-close raised the modal (dim overlay + correct file
+  name and instructions, screenshotted); Escape cancelled it (screenshotted, typing resumed
+  immediately after); Enter really closed the tab; dirtying the last file and clicking the real OS
+  window-close button raised the real `CloseRequested`-driven app-exit modal; Enter there really
+  exited the process (confirmed via `ps`) with both LSP sessions shut down and the final latency
+  report printed. A dedicated check confirmed both a click and a typed marker string were fully
+  swallowed while the modal was up, leaving the underlying dirty content unchanged. No new headless
+  tests needed (purely GPU/rendering/input-facing, like §75.14/§75.21's own work); full test/clippy/
+  fmt clean; 50k-line benchmark re-run, no regression. No Save option in the modal itself (discard-
+  or-cancel only, a deliberate v1 cut), no button hit-testing, no confirmation for any other future
+  content-loss path.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

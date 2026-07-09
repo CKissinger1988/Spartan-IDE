@@ -391,6 +391,54 @@ fn close_file(files: &mut Vec<OpenFile>, active: &mut usize, index: usize) {
     }
 }
 
+/// What a real unsaved-changes confirmation modal (§75.23, task #18) is
+/// currently blocking on -- either closing one specific tab (mouse click on
+/// its `×` while it's dirty) or exiting the whole app (`CloseRequested`
+/// while any open file is dirty). Deliberately does *not* cover switching
+/// the active file (Ctrl+Tab, clicking a different tab): nothing is lost by
+/// switching away from a dirty file, since its `OpenFile` -- and its
+/// in-memory edits -- stay right where they are in `files`; only closing a
+/// tab or the whole process can actually discard content.
+enum PendingClose {
+    File(usize),
+    App,
+}
+
+/// Real modal message text (§75.23), rebuilt from live state every
+/// `RedrawRequested` rather than captured once when the modal opens --
+/// matching the tab bar's own "always rebuild from current `files`" pattern
+/// (§75.21), so e.g. the dirty-file count stays correct even in the
+/// unlikely event other state changes while the modal is up. Keyboard-only
+/// (Enter/Escape) by design for this first real increment -- no clickable
+/// button hit-testing exists yet, a real, named minimal v1, not an
+/// oversight.
+fn modal_message(pending: &PendingClose, files: &[OpenFile]) -> String {
+    match pending {
+        PendingClose::App => {
+            let dirty_count = files.iter().filter(|f| f.dirty).count();
+            format!(
+                "{dirty_count} file(s) have unsaved changes.\n\n\
+                 Press Enter to discard changes and exit, or Escape to cancel."
+            )
+        }
+        PendingClose::File(index) => {
+            let label = files
+                .get(*index)
+                .map(|f| f.label.as_str())
+                .unwrap_or("This file");
+            format!(
+                "\"{label}\" has unsaved changes.\n\n\
+                 Press Enter to discard changes and close it, or Escape to cancel."
+            )
+        }
+    }
+}
+
+/// Linear-space black at moderate alpha (§75.23) -- pure black needs no
+/// sRGB-to-linear conversion (`srgb_to_linear(0.0) == 0.0` regardless of the
+/// curve), unlike the window's own non-black clear color just below.
+const MODAL_DIM_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
+
 fn main() {
     let program_start = Instant::now();
     println!("=== spartan-editor-core -- real Tier 1 core-engine increment ===");
@@ -550,6 +598,14 @@ fn main() {
     // choice, not an accident of reuse.
     let mut tab_bar_renderer =
         selection::SelectionRenderer::new(&gpu_state.device, gpu_state.config.format);
+    // Real unsaved-changes modal dim overlay (§75.23) -- a third instance of
+    // the same generic `SelectionRenderer`, rendered after (on top of)
+    // `tab_bar_renderer`/`selection_renderer` but still before all text, so
+    // the modal's own text (a third glyphon `TextArea`, see `text.rs`) draws
+    // on top of the dim overlay in the same text pass, the same "quads
+    // before text" ordering every other highlight here already relies on.
+    let mut modal_renderer =
+        selection::SelectionRenderer::new(&gpu_state.device, gpu_state.config.format);
 
     // 150ms idle default per spec §2.3, now one debouncer per open file
     // (`OpenFile::lsp_debouncer`) rather than a single global one -- see
@@ -626,6 +682,13 @@ fn main() {
     // button). Persists across frames/events, unlike the tab bar text
     // itself, which `TextState` already owns.
     let mut tab_hits: Vec<tab_bar::TabHit> = Vec::new();
+    // Real unsaved-changes confirmation state (§75.23, task #18) -- `None`
+    // the vast majority of the time. While `Some`, the dedicated
+    // `KeyboardInput` arm below intercepts *all* keyboard input (Enter
+    // confirms, Escape cancels, everything else is silently swallowed) and
+    // both mouse-press arms are gated off, so nothing else in the app can
+    // react to input while a modal is up.
+    let mut pending_close: Option<PendingClose> = None;
 
     event_loop
         .run(move |event, elwt| {
@@ -635,34 +698,53 @@ fn main() {
                 Event::WindowEvent { event, window_id } if window_id == window.id() => {
                     match event {
                         WindowEvent::CloseRequested => {
-                            println!("\n=== Final reports ===");
-                            println!(
-                                "In-window edits: {in_window_edits} (real reshape) | \
-                                 off-window edits: {off_window_edits} (no redraw needed)"
-                            );
-                            edit_latency.report("input-to-photon (edits, random-position)");
-                            cursor_latency.report("input-to-photon (edits, cursor-adjacent)");
-                            scroll_latency.report("scroll re-shape");
-                            // Real bug caught only by actually closing the live app, not by
-                            // inspection: `elwt.exit()` doesn't take effect immediately --
-                            // winit still delivers at least one more event afterward (this
-                            // crate's own `ControlFlow::Poll` means that's typically another
-                            // `RedrawRequested`), and every other handler unconditionally
-                            // indexes `files[active]`. Draining `files` here left it empty,
-                            // so that next event's `files[active]` access panicked with an
-                            // out-of-bounds index. `take()`-ing each file's `lsp_session`
-                            // in place (not draining the `Vec` itself) shuts every session
-                            // down exactly the same way while leaving `files[active]` valid
-                            // for whatever winit delivers before the process actually exits.
-                            for file in files.iter_mut() {
-                                if let Some(session) = file.lsp_session.take() {
-                                    session.shutdown();
+                            // Real unsaved-changes gating (§75.23, task
+                            // #18): a dirty file blocks the immediate exit
+                            // below and instead raises the modal, which the
+                            // dedicated `KeyboardInput` arm further down
+                            // (guarded on `pending_close.is_some()`) resolves
+                            // on Enter/Escape. If a modal is already up
+                            // (either kind), a repeated close request (e.g.
+                            // clicking the window's own close button twice)
+                            // is deliberately a no-op here -- it doesn't
+                            // matter, since the modal it would raise is
+                            // already showing.
+                            if pending_close.is_none() {
+                                if files.iter().any(|f| f.dirty) {
+                                    pending_close = Some(PendingClose::App);
+                                    window.request_redraw();
+                                } else {
+                                    println!("\n=== Final reports ===");
+                                    println!(
+                                        "In-window edits: {in_window_edits} (real reshape) | \
+                                         off-window edits: {off_window_edits} (no redraw needed)"
+                                    );
+                                    edit_latency.report("input-to-photon (edits, random-position)");
+                                    cursor_latency.report("input-to-photon (edits, cursor-adjacent)");
+                                    scroll_latency.report("scroll re-shape");
+                                    // Real bug caught only by actually closing the live app, not
+                                    // by inspection: `elwt.exit()` doesn't take effect
+                                    // immediately -- winit still delivers at least one more event
+                                    // afterward (this crate's own `ControlFlow::Poll` means
+                                    // that's typically another `RedrawRequested`), and every
+                                    // other handler unconditionally indexes `files[active]`.
+                                    // Draining `files` here left it empty, so that next event's
+                                    // `files[active]` access panicked with an out-of-bounds
+                                    // index. `take()`-ing each file's `lsp_session` in place (not
+                                    // draining the `Vec` itself) shuts every session down exactly
+                                    // the same way while leaving `files[active]` valid for
+                                    // whatever winit delivers before the process actually exits.
+                                    for file in files.iter_mut() {
+                                        if let Some(session) = file.lsp_session.take() {
+                                            session.shutdown();
+                                        }
+                                    }
+                                    if let Some(session) = dap_session.take() {
+                                        session.shutdown();
+                                    }
+                                    elwt.exit();
                                 }
                             }
-                            if let Some(session) = dap_session.take() {
-                                session.shutdown();
-                            }
-                            elwt.exit();
                         }
                         WindowEvent::Resized(new_size) => {
                             gpu_state.resize(new_size);
@@ -733,7 +815,7 @@ fn main() {
                             state: ElementState::Pressed,
                             button: MouseButton::Left,
                             ..
-                        } if last_cursor_pos.1 < text::TAB_BAR_HEIGHT => {
+                        } if pending_close.is_none() && last_cursor_pos.1 < text::TAB_BAR_HEIGHT => {
                             // Real tab bar clicks (§75.21) -- resolved via the
                             // same real cosmic-text hit-testing technique as
                             // the main editor, not a pixel-guessing geometry
@@ -745,20 +827,45 @@ fn main() {
                                 if let Some((file_index, is_close)) =
                                     tab_bar::hit_test_tab_bar(&tab_hits, char_index)
                                 {
-                                    if is_close {
-                                        close_file(&mut files, &mut active, file_index);
+                                    // Real unsaved-changes gating (§75.23,
+                                    // task #18): closing a dirty tab raises
+                                    // the modal instead of discarding its
+                                    // edits immediately -- switching tabs
+                                    // (the `else` arm just below) never
+                                    // needs this, since nothing is lost by
+                                    // switching away from a dirty file. Only
+                                    // when `files.len() > 1`, matching
+                                    // `close_file`'s own "refuse to close
+                                    // the last open file" guard -- without
+                                    // this, closing a dirty *sole* tab would
+                                    // raise a modal offering to discard and
+                                    // close, then silently fail to actually
+                                    // close anything once confirmed (there's
+                                    // no "empty editor" state to fall back
+                                    // to), which is real, confusing behavior
+                                    // this check avoids entirely rather than
+                                    // letting `close_file`'s own refusal
+                                    // print through *after* a pointless
+                                    // confirmation step.
+                                    if is_close && files[file_index].dirty && files.len() > 1 {
+                                        pending_close = Some(PendingClose::File(file_index));
+                                        window.request_redraw();
                                     } else {
-                                        active = file_index;
+                                        if is_close {
+                                            close_file(&mut files, &mut active, file_index);
+                                        } else {
+                                            active = file_index;
+                                        }
+                                        let active_file = &mut files[active];
+                                        window.set_title(&window_title(active_file));
+                                        reshape_window(
+                                            &mut text_state,
+                                            &active_file.editor,
+                                            &active_file.viewport,
+                                            active_file.highlighter.as_mut(),
+                                        );
+                                        window.request_redraw();
                                     }
-                                    let active_file = &mut files[active];
-                                    window.set_title(&window_title(active_file));
-                                    reshape_window(
-                                        &mut text_state,
-                                        &active_file.editor,
-                                        &active_file.viewport,
-                                        active_file.highlighter.as_mut(),
-                                    );
-                                    window.request_redraw();
                                 }
                             }
                         }
@@ -766,7 +873,7 @@ fn main() {
                             state: ElementState::Pressed,
                             button: MouseButton::Left,
                             ..
-                        } => {
+                        } if pending_close.is_none() => {
                             mouse_button_down = true;
                             // `hit_test` expects coordinates relative to the
                             // text buffer's own origin, the same convention
@@ -823,6 +930,67 @@ fn main() {
                         } => {
                             mouse_button_down = false;
                             drag_anchor_pos = None;
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } if pending_close.is_some() => {
+                            // Real unsaved-changes modal confirm/cancel
+                            // (§75.23, task #18) -- this arm's guard fires
+                            // before any of the other `KeyboardInput` arms
+                            // below get a chance (match arms are tried in
+                            // order), so while a modal is up *every*
+                            // keystroke is intercepted here: Enter confirms,
+                            // Escape cancels, anything else is silently
+                            // swallowed rather than leaking through to
+                            // typing/shortcuts underneath.
+                            match key_event.logical_key {
+                                Key::Named(NamedKey::Enter) => match pending_close.take() {
+                                    Some(PendingClose::File(index)) => {
+                                        close_file(&mut files, &mut active, index);
+                                        let active_file = &mut files[active];
+                                        window.set_title(&window_title(active_file));
+                                        reshape_window(
+                                            &mut text_state,
+                                            &active_file.editor,
+                                            &active_file.viewport,
+                                            active_file.highlighter.as_mut(),
+                                        );
+                                        window.request_redraw();
+                                    }
+                                    Some(PendingClose::App) => {
+                                        println!("\n=== Final reports ===");
+                                        println!(
+                                            "In-window edits: {in_window_edits} (real reshape) | \
+                                             off-window edits: {off_window_edits} (no redraw needed)"
+                                        );
+                                        edit_latency
+                                            .report("input-to-photon (edits, random-position)");
+                                        cursor_latency
+                                            .report("input-to-photon (edits, cursor-adjacent)");
+                                        scroll_latency.report("scroll re-shape");
+                                        for file in files.iter_mut() {
+                                            if let Some(session) = file.lsp_session.take() {
+                                                session.shutdown();
+                                            }
+                                        }
+                                        if let Some(session) = dap_session.take() {
+                                            session.shutdown();
+                                        }
+                                        elwt.exit();
+                                    }
+                                    None => {}
+                                },
+                                Key::Named(NamedKey::Escape) => {
+                                    pending_close = None;
+                                    window.request_redraw();
+                                }
+                                _ => {}
+                            }
                         }
                         WindowEvent::KeyboardInput {
                             event:
@@ -1261,6 +1429,17 @@ fn main() {
                             tab_hits = new_tab_hits;
                             text_state.set_tab_bar_text(&tab_bar_text);
 
+                            // Real unsaved-changes modal text (§75.23),
+                            // rebuilt from live state every frame just like
+                            // the tab bar's own text just above -- empty
+                            // when no modal is showing, which shapes to zero
+                            // glyphs at effectively no cost.
+                            let modal_text = pending_close
+                                .as_ref()
+                                .map(|p| modal_message(p, &files))
+                                .unwrap_or_default();
+                            text_state.set_modal_text(&modal_text);
+
                             text_state
                                 .prepare(
                                     &gpu_state.device,
@@ -1286,6 +1465,7 @@ fn main() {
                                         y: 0.0,
                                         width: x_end - x_start,
                                         height: text::TAB_BAR_HEIGHT,
+                                        color: selection::ACCENT_HIGHLIGHT,
                                     })
                                 })
                                 .into_iter()
@@ -1371,6 +1551,7 @@ fn main() {
                                             y: text::TEXT_ORIGIN_Y + y,
                                             width: x_end - x_start,
                                             height: text::LINE_HEIGHT,
+                                            color: selection::ACCENT_HIGHLIGHT,
                                         });
                                     }
                                 }
@@ -1379,6 +1560,35 @@ fn main() {
                                 &gpu_state.device,
                                 &gpu_state.queue,
                                 &selection_rects,
+                                &cursor::ScreenSize {
+                                    width: gpu_state.size.width as f32,
+                                    height: gpu_state.size.height as f32,
+                                },
+                            );
+
+                            // Real unsaved-changes modal dim overlay
+                            // (§75.23) -- a single full-window rect when a
+                            // modal is up, none otherwise. Text (both the
+                            // editor's own and the modal's) still draws on
+                            // top of this in the same text pass, the same
+                            // "quads before text" ordering `selection_rects`
+                            // above already relies on.
+                            let modal_rects: Vec<selection::SelectionRect> =
+                                if pending_close.is_some() {
+                                    vec![selection::SelectionRect {
+                                        x: 0.0,
+                                        y: 0.0,
+                                        width: gpu_state.size.width as f32,
+                                        height: gpu_state.size.height as f32,
+                                        color: MODAL_DIM_COLOR,
+                                    }]
+                                } else {
+                                    Vec::new()
+                                };
+                            modal_renderer.update(
+                                &gpu_state.device,
+                                &gpu_state.queue,
+                                &modal_rects,
                                 &cursor::ScreenSize {
                                     width: gpu_state.size.width as f32,
                                     height: gpu_state.size.height as f32,
@@ -1415,6 +1625,7 @@ fn main() {
                                     });
                                 tab_bar_renderer.render(&mut pass);
                                 selection_renderer.render(&mut pass);
+                                modal_renderer.render(&mut pass);
                                 text_state.render(&mut pass).expect("glyphon render failed");
                                 if cursor_pixel_pos.is_some() {
                                     cursor_renderer.render(&mut pass);

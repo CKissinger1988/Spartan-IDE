@@ -27,6 +27,14 @@ pub struct TextState {
     /// installed `glyphon-0.5.0` source before relying on it, not assumed),
     /// so both buffers are prepared and rendered together in `prepare()`.
     pub tab_bar_buffer: Buffer,
+    /// Real unsaved-changes modal text (§75.23) -- a third, independent
+    /// cosmic-text `Buffer`, same reasoning as `tab_bar_buffer`: shares this
+    /// same `FontSystem`/`TextAtlas`/`TextRenderer`/`SwashCache` rather than
+    /// a parallel pipeline. Empty (no text set) whenever no modal is
+    /// showing, which is enough to make it render nothing -- no separate
+    /// on/off flag needed here, matching how the tab bar itself has no
+    /// "hidden" state distinct from "empty content."
+    pub modal_buffer: Buffer,
 }
 
 pub const FONT_SIZE: f32 = 16.0;
@@ -83,6 +91,9 @@ impl TextState {
         );
         tab_bar_buffer.set_size(&mut font_system, width, TAB_BAR_HEIGHT);
 
+        let mut modal_buffer = Buffer::new(&mut font_system, Metrics::new(FONT_SIZE, LINE_HEIGHT));
+        modal_buffer.set_size(&mut font_system, width, height);
+
         Self {
             font_system,
             swash_cache,
@@ -90,6 +101,7 @@ impl TextState {
             renderer,
             buffer,
             tab_bar_buffer,
+            modal_buffer,
         }
     }
 
@@ -107,6 +119,22 @@ impl TextState {
         );
         self.tab_bar_buffer
             .shape_until_scroll(&mut self.font_system);
+    }
+
+    /// Replaces the unsaved-changes modal's entire content (§75.23). Same
+    /// "always a full reshape" reasoning as `set_tab_bar_text` -- the modal
+    /// is short-lived and its text is never large enough to need a windowed
+    /// or per-line fast path. An empty string is the real, ordinary "no
+    /// modal showing" state, not a special case this method has to guard
+    /// against.
+    pub fn set_modal_text(&mut self, text: &str) {
+        self.modal_buffer.set_text(
+            &mut self.font_system,
+            text,
+            Attrs::new().family(Family::Monospace),
+            Shaping::Advanced,
+        );
+        self.modal_buffer.shape_until_scroll(&mut self.font_system);
     }
 
     /// Replaces the buffer's entire content -- a full reshape, but of
@@ -202,6 +230,8 @@ impl TextState {
         self.buffer.set_size(&mut self.font_system, width, height);
         self.tab_bar_buffer
             .set_size(&mut self.font_system, width, TAB_BAR_HEIGHT);
+        self.modal_buffer
+            .set_size(&mut self.font_system, width, height);
     }
 
     pub fn prepare(
@@ -241,6 +271,28 @@ impl TextState {
                         top: 0,
                         right: width as i32,
                         bottom: TAB_BAR_HEIGHT as i32,
+                    },
+                    default_color: Color::rgb(0xE9, 0xE7, 0xE4),
+                },
+                // Real unsaved-changes modal text (§75.23) -- roughly
+                // vertically centered in the real current window height
+                // (not pixel-perfect centering of the text block itself,
+                // same "visibly reasonable, not typographically exact"
+                // precedent `TAB_BAR_TEXT_TOP` already set), rendered over
+                // the dim overlay `main.rs` draws in the same "quads before
+                // text" phase every other highlight already uses. Empty
+                // text (the ordinary non-modal state) shapes to zero glyphs,
+                // so this costs nothing when no modal is showing.
+                TextArea {
+                    buffer: &self.modal_buffer,
+                    left: TEXT_ORIGIN_X,
+                    top: (height as f32 / 2.0 - 40.0).max(TAB_BAR_HEIGHT),
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: 0,
+                        top: 0,
+                        right: width as i32,
+                        bottom: height as i32,
                     },
                     default_color: Color::rgb(0xE9, 0xE7, 0xE4),
                 },

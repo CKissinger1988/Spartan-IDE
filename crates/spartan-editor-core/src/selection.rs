@@ -5,16 +5,28 @@ use bytemuck::{Pod, Zeroable};
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct SelectionVertex {
     position: [f32; 2],
+    color: [f32; 4],
 }
 
-/// Pixel-space rect for one selection-highlight quad (top-left `x, y`, given
-/// `width`/`height`) -- one per visual line a selection spans, since a
-/// multi-line selection isn't a single rectangle the way the caret is.
+/// The exact rust/terracotta accent color (linear-space pre-converted, same
+/// reasoning as `cursor.wgsl`'s solid caret color) text selection and the
+/// active-tab highlight both use -- kept as a shared constant now that a
+/// third, differently-colored real caller (the unsaved-changes modal's dim
+/// overlay, §75.23) exists, rather than leaving the color hardcoded
+/// per-vertex at every call site.
+pub const ACCENT_HIGHLIGHT: [f32; 4] = [0.5524, 0.0563, 0.0242, 0.35];
+
+/// Pixel-space rect for one quad (top-left `x, y`, given `width`/`height`,
+/// linear-space `color`) -- originally one per visual line a text selection
+/// spans (a multi-line selection isn't a single rectangle the way the caret
+/// is), now also reused for the active-tab highlight and the unsaved-changes
+/// modal's dim overlay (§75.23), each with their own color.
 pub struct SelectionRect {
     pub x: f32,
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    pub color: [f32; 4],
 }
 
 const INITIAL_CAPACITY_QUADS: usize = 64;
@@ -29,7 +41,11 @@ const INITIAL_CAPACITY_QUADS: usize = 64;
 /// ordering from the caret, which renders on top of the text. Its own
 /// pipeline/shader (`selection.wgsl`) for the same reason `cursor.rs` has
 /// its own: a plain filled quad has no reason to go through glyphon's
-/// text-specific shader.
+/// text-specific shader. Color is a per-vertex attribute, not baked into the
+/// shader, since three real call sites now want three different colors
+/// (text selection and the active-tab highlight share `ACCENT_HIGHLIGHT`;
+/// the unsaved-changes modal's dim overlay, §75.23, does not) -- one
+/// generic renderer rather than near-duplicate pipelines per color.
 pub struct SelectionRenderer {
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
@@ -59,11 +75,18 @@ impl SelectionRenderer {
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<SelectionVertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[wgpu::VertexAttribute {
-                        offset: 0,
-                        shader_location: 0,
-                        format: wgpu::VertexFormat::Float32x2,
-                    }],
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: wgpu::VertexFormat::Float32x2,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+                            shader_location: 1,
+                            format: wgpu::VertexFormat::Float32x4,
+                        },
+                    ],
                 }],
             },
             fragment: Some(wgpu::FragmentState {
@@ -132,24 +155,31 @@ impl SelectionRenderer {
             let right = to_ndc_x(rect.x + rect.width);
             let top = to_ndc_y(rect.y);
             let bottom = to_ndc_y(rect.y + rect.height);
+            let color = rect.color;
             vertices.extend_from_slice(&[
                 SelectionVertex {
                     position: [left, top],
+                    color,
                 },
                 SelectionVertex {
                     position: [left, bottom],
+                    color,
                 },
                 SelectionVertex {
                     position: [right, top],
+                    color,
                 },
                 SelectionVertex {
                     position: [right, top],
+                    color,
                 },
                 SelectionVertex {
                     position: [left, bottom],
+                    color,
                 },
                 SelectionVertex {
                     position: [right, bottom],
+                    color,
                 },
             ]);
         }
