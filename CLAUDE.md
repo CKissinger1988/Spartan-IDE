@@ -450,6 +450,23 @@ first — it's the parity reference until each row there is actually reimplement
   fmt clean; 50k-line benchmark re-run, no regression. No Save option in the modal itself (discard-
   or-cancel only, a deliberate v1 cut), no button hit-testing, no confirmation for any other future
   content-loss path.
+- **Real, working code — Ctrl+W tab close, the keyboard half of task #25 (§75.24)**: splits task #25
+  ("Ctrl+W close, overflow handling, reorder") the same way §75.21 split task #16 -- Ctrl+W reuses
+  §75.23's exact two-part rule (dirty + more than one file open -> raise the modal; otherwise close
+  immediately, `close_file`'s own last-tab guard already covers the rest) from a second call site,
+  no new logic; overflow handling and drag-to-reorder are separate, larger, still-open scope tracked
+  under the same task. `close_file(&mut files, &mut active, active)` doesn't compile -- evaluating
+  `active` by value while `&mut active` is already borrowed is a real, immediate aliasing conflict,
+  not a design issue -- fixed by copying into a local `closing` binding first. No new headless tests
+  (thin wrapper around already-tested logic, same reasoning §75.23 itself used). Live, through the
+  real binary: Ctrl+W on a clean tab closed it immediately and switched to the remaining tab
+  (screenshotted); Ctrl+W on the resulting sole tab printed the pre-existing last-tab guard message
+  and left it open, no modal (screenshotted); dirtying that same sole tab and pressing Ctrl+W again
+  produced the identical correct no-op rather than a modal promising a close that could never happen
+  -- confirming the mouse-path edge-case fix from §75.23 also holds for this new keyboard path, since
+  both share the same `files.len() > 1` condition. Full test/clippy/fmt clean; 50k-line benchmark
+  re-run, no regression. Tab overflow (many tabs exceeding window width) and drag-to-reorder remain
+  entirely unimplemented.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

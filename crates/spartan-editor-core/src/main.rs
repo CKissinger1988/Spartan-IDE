@@ -1037,6 +1037,41 @@ fn main() {
                                 },
                             ..
                         } if modifiers.control_key()
+                            && key_event.physical_key == PhysicalKey::Code(KeyCode::KeyW) =>
+                        {
+                            // Ctrl+W: real keyboard-driven tab close (§75.24,
+                            // task #25), the mouse-only gap §75.21 named
+                            // explicitly. Reuses exactly the same dirty-check
+                            // (raise the unsaved-changes modal, §75.23) and
+                            // last-tab guard (`files.len() > 1`) the tab
+                            // bar's own `×` click handler already
+                            // established, rather than a second, separate
+                            // implementation of the same rule.
+                            if files[active].dirty && files.len() > 1 {
+                                pending_close = Some(PendingClose::File(active));
+                                window.request_redraw();
+                            } else {
+                                let closing = active;
+                                close_file(&mut files, &mut active, closing);
+                                let active_file = &mut files[active];
+                                window.set_title(&window_title(active_file));
+                                reshape_window(
+                                    &mut text_state,
+                                    &active_file.editor,
+                                    &active_file.viewport,
+                                    active_file.highlighter.as_mut(),
+                                );
+                                window.request_redraw();
+                            }
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } if modifiers.control_key()
                             && (key_event.physical_key == PhysicalKey::Code(KeyCode::KeyZ)
                                 || key_event.physical_key == PhysicalKey::Code(KeyCode::KeyY)) =>
                         {
