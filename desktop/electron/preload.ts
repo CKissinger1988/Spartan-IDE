@@ -27,6 +27,12 @@ const ALLOWED_METHODS = new Set([
   "pty_input",
   "pty_resize",
   "pty_close",
+  "git_status",
+  "git_stage",
+  "git_unstage",
+  "git_commit",
+  "settings_get",
+  "settings_set",
 ]);
 
 contextBridge.exposeInMainWorld("spartan", {

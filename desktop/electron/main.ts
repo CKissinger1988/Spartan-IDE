@@ -118,6 +118,12 @@ app.whenReady().then(() => {
     "pty_input",
     "pty_resize",
     "pty_close",
+    "git_status",
+    "git_stage",
+    "git_unstage",
+    "git_commit",
+    "settings_get",
+    "settings_set",
   ];
   for (const method of methods) {
     ipcMain.handle(`spartan:${method}`, async (_event, params: Record<string, unknown>) => {

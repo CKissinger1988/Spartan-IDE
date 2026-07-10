@@ -475,6 +475,98 @@ fn pty_close(
     Ok(serde_json::json!({ "ok": true }))
 }
 
+/// Real, honest JSON rendering of `spartan_git::FileStatus` -- matches
+/// the enum's own variant names lowercased, no fabricated glyphs (the
+/// original wgpu shell's `git_panel.rs` renders status *glyphs*
+/// client-side from these same names; here the renderer owns that
+/// presentation choice instead, this crate just reports real fact).
+fn file_status_json(status: spartan_git::FileStatus) -> &'static str {
+    use spartan_git::FileStatus::*;
+    match status {
+        Modified => "modified",
+        Added => "added",
+        Deleted => "deleted",
+        Renamed => "renamed",
+        TypeChanged => "type_changed",
+    }
+}
+
+/// Real, stateless-per-call git status -- no `GitRepo` is kept open in
+/// `BackendState` between calls (unlike Leo's own `leo_project_root`,
+/// which needs a live `Agent`), since every real git operation here is
+/// a one-shot `git2` call cheap enough to re-discover the repository
+/// each time, matching `leo_approve_plan`'s own existing precedent for
+/// this exact discovery call.
+fn git_status(project_root: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let entries = repo
+        .status()
+        .map_err(|e| format!("git status: {e}"))?
+        .into_iter()
+        .map(|entry| {
+            serde_json::json!({
+                "path": entry.path.to_string_lossy(),
+                "staged": entry.staged.map(file_status_json),
+                "unstaged": entry.unstaged.map(file_status_json),
+                "conflicted": entry.conflicted,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({
+        "branch": repo.current_branch(),
+        "entries": entries,
+    }))
+}
+
+fn git_stage(project_root: &str, path: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.stage(std::path::Path::new(path))
+        .map_err(|e| format!("git stage: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+fn git_unstage(project_root: &str, path: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.unstage(std::path::Path::new(path))
+        .map_err(|e| format!("git unstage: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+fn git_commit(project_root: &str, message: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let oid = repo
+        .commit(message)
+        .map_err(|e| format!("git commit: {e}"))?;
+    Ok(serde_json::json!({ "ok": true, "oid": oid.to_string() }))
+}
+
+/// Real settings read/write, wrapping `spartan_settings` directly --
+/// deliberately no in-memory caching in `BackendState`, since this
+/// crate's own request volume for settings is low (opened once when the
+/// Settings screen mounts, written once per real user change) and a
+/// second source of truth beyond the real file on disk would only risk
+/// drifting from it, the same reasoning `settings_panel.rs` in the
+/// original wgpu shell already established (it re-reads fresh, too).
+fn settings_get() -> Result<serde_json::Value, String> {
+    let settings = spartan_settings::load();
+    serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
+}
+
+fn settings_set(gpu_enabled: bool, gpu_layers: Option<u32>) -> Result<serde_json::Value, String> {
+    let settings = spartan_settings::Settings {
+        gpu_offload: spartan_settings::GpuOffloadSettings {
+            enabled: gpu_enabled,
+            layers: gpu_layers,
+        },
+    };
+    spartan_settings::save(&settings).map_err(|e| format!("save settings: {e}"))?;
+    serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
+}
+
 fn get_str_param(params: &serde_json::Value, key: &str) -> Result<String, String> {
     params
         .get(key)
@@ -573,6 +665,36 @@ pub fn handle_request(
             pty_resize(state, session_id, cols, rows)
         })(),
         "pty_close" => get_u64_param(&req.params, "session_id").and_then(|id| pty_close(state, id)),
+        "git_status" => get_str_param(&req.params, "project_root").and_then(|r| git_status(&r)),
+        "git_stage" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let path = get_str_param(&req.params, "path")?;
+            git_stage(&root, &path)
+        })(),
+        "git_unstage" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let path = get_str_param(&req.params, "path")?;
+            git_unstage(&root, &path)
+        })(),
+        "git_commit" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let message = get_str_param(&req.params, "message")?;
+            git_commit(&root, &message)
+        })(),
+        "settings_get" => settings_get(),
+        "settings_set" => (|| {
+            let gpu_enabled = req
+                .params
+                .get("gpu_enabled")
+                .and_then(|v| v.as_bool())
+                .ok_or("missing/invalid bool param `gpu_enabled`")?;
+            let gpu_layers = req
+                .params
+                .get("gpu_layers")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as u32);
+            settings_set(gpu_enabled, gpu_layers)
+        })(),
         other => Err(format!("unknown method `{other}`")),
     };
     match result {
@@ -954,6 +1076,242 @@ mod tests {
             serde_json::json!({ "session_id": session_id, "data": "hi\n" }),
         );
         assert!(input_resp.error.unwrap().contains("no pty session"));
+    }
+
+    /// A real temp git repository, matching `spartan-git`'s own
+    /// established `TempRepo` fixture pattern exactly -- a real
+    /// `git2::Repository::init` with a real, fixed test signature
+    /// configured on the repo itself (this sandboxed test environment may
+    /// have no ambient global git config at all).
+    struct TempRepo {
+        dir: PathBuf,
+    }
+
+    impl TempRepo {
+        fn new(unique: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("spartan-backend-git-test-{unique}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let repo = git2::Repository::init(&dir).unwrap();
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Spartan Test").unwrap();
+            config
+                .set_str("user.email", "test@example.invalid")
+                .unwrap();
+            Self { dir }
+        }
+    }
+
+    impl Drop for TempRepo {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn git_status_on_a_real_repo_reports_a_real_untracked_file() {
+        let tmp = TempRepo::new("status");
+        std::fs::write(tmp.dir.join("new.txt"), "hello").unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "git_status",
+            serde_json::json!({ "project_root": tmp.dir.to_string_lossy() }),
+        );
+        assert!(resp.error.is_none(), "git_status errored: {:?}", resp.error);
+        let entries = resp.result.unwrap()["entries"].as_array().unwrap().clone();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["path"], "new.txt");
+        assert_eq!(entries[0]["unstaged"], "added");
+        assert!(entries[0]["staged"].is_null());
+    }
+
+    #[test]
+    fn git_status_on_a_real_non_repo_path_errors_honestly() {
+        let dir =
+            std::env::temp_dir().join(format!("spartan-backend-not-a-repo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "git_status",
+            serde_json::json!({ "project_root": dir.to_string_lossy() }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("no git repository"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn git_stage_then_unstage_a_real_file_moves_it_between_real_states() {
+        let tmp = TempRepo::new("stage_unstage");
+        std::fs::write(tmp.dir.join("f.txt"), "content").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+
+        let stage_resp = call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        assert_eq!(stage_resp.result.unwrap()["ok"], true);
+
+        let status_after_stage = call(
+            &state,
+            2,
+            "git_status",
+            serde_json::json!({ "project_root": root }),
+        );
+        let entries = status_after_stage.result.unwrap()["entries"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(entries[0]["staged"], "added");
+        assert!(entries[0]["unstaged"].is_null());
+
+        let unstage_resp = call(
+            &state,
+            3,
+            "git_unstage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        assert_eq!(unstage_resp.result.unwrap()["ok"], true);
+
+        let status_after_unstage = call(
+            &state,
+            4,
+            "git_status",
+            serde_json::json!({ "project_root": root }),
+        );
+        let entries = status_after_unstage.result.unwrap()["entries"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(entries[0]["staged"].is_null());
+        assert_eq!(entries[0]["unstaged"], "added");
+    }
+
+    #[test]
+    fn git_commit_a_real_staged_file_clears_real_status_and_returns_a_real_oid() {
+        let tmp = TempRepo::new("commit");
+        std::fs::write(tmp.dir.join("f.txt"), "content").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        let commit_resp = call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "real first commit" }),
+        );
+        assert!(
+            commit_resp.error.is_none(),
+            "git_commit errored: {:?}",
+            commit_resp.error
+        );
+        let oid = commit_resp.result.unwrap()["oid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(oid.len(), 40, "a real git2::Oid renders as 40 hex chars");
+
+        let status_after_commit = call(
+            &state,
+            3,
+            "git_status",
+            serde_json::json!({ "project_root": root }),
+        );
+        let entries = status_after_commit.result.unwrap()["entries"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(
+            entries.is_empty(),
+            "a clean tree after commit has no real status entries"
+        );
+    }
+
+    /// `settings_get`/`settings_set` both resolve `$HOME` process-wide
+    /// (`spartan_settings::settings_path`) -- a real Mutex here serializes
+    /// the two tests that mutate it against each other so a default
+    /// multi-threaded `cargo test` run can't interleave one test's
+    /// temporary `$HOME` with the other's real file I/O.
+    static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn settings_get_with_no_saved_file_returns_real_defaults() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        // A real, isolated $HOME so this test can't read/clobber the
+        // actual user's real ~/.spartan/settings.json.
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-settings-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        let state = new_state();
+        let resp = call(&state, 1, "settings_get", serde_json::json!({}));
+        assert!(resp.error.is_none());
+        let result = resp.result.unwrap();
+        assert_eq!(result["gpu_offload"]["enabled"], true);
+        assert!(result["gpu_offload"]["layers"].is_null());
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn settings_set_then_get_round_trips_real_values_through_a_real_file() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-settings-roundtrip-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        let state = new_state();
+        let set_resp = call(
+            &state,
+            1,
+            "settings_set",
+            serde_json::json!({ "gpu_enabled": false, "gpu_layers": 12 }),
+        );
+        assert!(
+            set_resp.error.is_none(),
+            "settings_set errored: {:?}",
+            set_resp.error
+        );
+        assert_eq!(set_resp.result.unwrap()["gpu_offload"]["enabled"], false);
+
+        let get_resp = call(&state, 2, "settings_get", serde_json::json!({}));
+        let result = get_resp.result.unwrap();
+        assert_eq!(result["gpu_offload"]["enabled"], false);
+        assert_eq!(result["gpu_offload"]["layers"], 12);
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
     }
 
     #[test]

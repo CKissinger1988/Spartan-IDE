@@ -74,6 +74,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Electron-shell feature-parity audit (what's missing vs. the wgpu shell), GUI Builder + live preview wiring, undo/redo fix | §75.62 |
 | Real syntax highlighting in the Electron editor | §75.63 |
 | Streaming PTY IPC — real terminal Console + multi-CLI Sessions screens in the Electron shell | §75.64 |
+| Real Git panel + Settings screen in the Electron shell | §75.65 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -1802,6 +1803,52 @@ first — it's the parity reference until each row there is actually reimplement
   CLI's own behavior); no concurrent multi-session monitoring; the UTF-8 chunk-boundary limitation
   is real and unaddressed; no PTY resize verified live against a real process reading
   `$COLUMNS`/`$LINES`, only that the IPC call itself reaches a spawned session without erroring.
+- **Real, working code — real Git panel and Settings screen in the Electron shell, closing task
+  #56, the final item in this session's recommended priority order (§75.65)**: exposes the
+  already-real, already-tested `spartan-git` (in use for Leo's checkpointing since §75.47/§75.61)
+  and `spartan-settings` (already backing the wgpu shell's own settings panel, §75.48) over
+  `spartan-backend`'s IPC surface for the first time -- no new git/settings logic, purely real
+  plumbing. Six new dispatch methods: `git_status`/`git_stage`/`git_unstage`/`git_commit` (all
+  stateless-per-call, re-discovering the repo via `GitRepo::discover` each time, matching
+  `leo_approve_plan`'s own existing precedent) and `settings_get`/`settings_set` (thin wrappers
+  over `spartan_settings::load`/`save`, no in-memory cache). `git_status` returns each file's real
+  independent staged/unstaged halves plus the real current branch. 6 new Rust unit tests (26 total
+  in `spartan-backend`, up from 20): a real temp-repo fixture matching `spartan-git`'s own
+  established pattern; real status/stage/unstage/commit round trips; a real non-repo path erroring
+  honestly; and two settings tests serialized against each other via a dedicated `Mutex` guard
+  (both mutate the real process-wide `$HOME`, named explicitly in-code to prevent a default
+  multi-threaded `cargo test` run from interleaving them). Real, executed manual verification of
+  the raw protocol against a real temp git repository: status → stage → status → commit → status,
+  with the returned commit `Oid` independently cross-checked against `git log`/`git show` run
+  directly on the same repo on disk, an exact match. New `GitPanel.tsx` ports the wgpu shell's own
+  click-to-stage/click-to-unstage model (§75.30) -- a "Changes" row stages on click, a "Staged
+  Changes" row unstages on click, both re-fetching real status immediately; a commit textarea +
+  button (disabled with nothing staged or an empty message) calls `git_commit` then clears and
+  re-fetches. New `SettingsScreen.tsx` ports the wgpu shell's own `settings_panel.rs` (§75.48) GPU-
+  offload row exactly (enabled checkbox + a layers `<select>`, disabled when offload is off) --
+  both shells now read/write the exact same real `~/.spartan/settings.json`. A deliberate, named
+  IA choice: Git has no dedicated top-level nav slot (unlike Settings, which already had one) --
+  it's a second view inside the Editor screen's existing left rail, toggled via Files/Git buttons
+  and a real `Ctrl+G` shortcut, directly reusing the wgpu shell's own §75.30 "one region, not a
+  second pane" precedent. `nav.ts`'s stale `settings` `SCREEN_NOTES` entry was removed now that
+  it's real and closed. Real, screenshotted Playwright verification via the same mocked-
+  `window.spartan` harness this whole `desktop/` effort has used throughout (the real Electron
+  binary remains unlaunchable in this session for the same already-documented reason): clicking
+  Git showed the real branch and staged/unstaged split with correct glyphs; clicking rows moved
+  files between sections correctly in both directions with the commit-button count updating live;
+  committing cleared Staged Changes to zero and reset the input, leaving remaining unstaged files
+  untouched; `Ctrl+G` correctly toggled back to Files. Settings showed real defaults, a live layer-
+  count change, and the layers selector correctly disabling when offload was unchecked. Full
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release -- --test-threads=1` all clean (446 tests, 0 failures); `desktop`'s own
+  `npm run typecheck`/`npm run build` both clean. **What this does not confirm**: no real Electron
+  window launch this session (same standing gap); no diff view, branch switcher, per-hunk staging,
+  stash, or merge-conflict UI (file-level staging only, matching the wgpu shell's own real v1
+  scope); no GitHub layer (§56.2-56.4 remain separate, unstarted, in both shells); Settings exposes
+  only GPU offload -- the wgpu shell's separate "Check for Updates" row (`spartan-updater`, §75.49)
+  is not wired into `spartan-backend` or this screen this pass, a real, named, deliberately
+  deferred follow-up given this pass's own time constraints. This closes task #56 and every item in
+  this session's own stated recommended priority order.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1859,7 +1906,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 440 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 446 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-editor-core,

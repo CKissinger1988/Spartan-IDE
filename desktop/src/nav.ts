@@ -94,6 +94,4 @@ export const SCREEN_NOTES: Partial<Record<ScreenId, string>> = {
     "Real ModelProvider trait, OllamaProvider, ClaudeProvider, and LiteLLMProvider already exist in spartan-model. Not yet exposed via spartan-backend's IPC protocol or this shell's UI.",
   plugins: "Real WASM plugin host (spartan-plugin-host) exists. Not yet exposed to this shell.",
   marketplace: "Not yet designed for this shell.",
-  settings:
-    "A real settings panel (GPU offload, update checks) already exists in the original wgpu shell (settings_panel.rs, spartan-settings). Not yet ported to this Electron shell.",
 };

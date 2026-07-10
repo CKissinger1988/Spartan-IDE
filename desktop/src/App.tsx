@@ -1,6 +1,7 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import Sidebar from "./components/Sidebar";
 import FileTree from "./components/FileTree";
+import GitPanel from "./components/GitPanel";
 import TabBar from "./components/TabBar";
 import StatusBar from "./components/StatusBar";
 import Editor, { type OpenFile } from "./components/Editor";
@@ -9,6 +10,7 @@ import WorkflowsScreen from "./components/WorkflowsScreen";
 import DesignScreen from "./components/DesignScreen";
 import ConsoleScreen from "./components/ConsoleScreen";
 import SessionsScreen from "./components/SessionsScreen";
+import SettingsScreen from "./components/SettingsScreen";
 import LeoChatPanel from "./components/LeoChatPanel";
 import { NAV, type ScreenId } from "./nav";
 import "./app.css";
@@ -19,6 +21,21 @@ export default function App(): React.ReactElement {
   const [files, setFiles] = useState<OpenFile[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [screen, setScreen] = useState<ScreenId>("editor");
+  // Real Ctrl+G sidebar toggle (§75.30's own convention in the original
+  // wgpu shell -- one left-rail region, not a second pane, shared between
+  // the file tree and the real Source Control panel added in §75.65).
+  const [sidebarView, setSidebarView] = useState<"files" | "git">("files");
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        setSidebarView((v) => (v === "files" ? "git" : "files"));
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   const openFile = useCallback(
     async (path: string) => {
@@ -75,7 +92,25 @@ export default function App(): React.ReactElement {
             </div>
             <div className="editor-body">
               <div className="file-tree-panel">
-                <FileTree root={ROOT} onOpenFile={openFile} />
+                <div className="sidebar-toggle-row">
+                  <button
+                    className={`sidebar-toggle-btn ${sidebarView === "files" ? "sidebar-toggle-active" : ""}`}
+                    onClick={() => setSidebarView("files")}
+                  >
+                    Files
+                  </button>
+                  <button
+                    className={`sidebar-toggle-btn ${sidebarView === "git" ? "sidebar-toggle-active" : ""}`}
+                    onClick={() => setSidebarView("git")}
+                  >
+                    Git
+                  </button>
+                </div>
+                {sidebarView === "files" ? (
+                  <FileTree root={ROOT} onOpenFile={openFile} />
+                ) : (
+                  <GitPanel root={ROOT} />
+                )}
               </div>
               <div className="content-area">
                 {activeFile ? (
@@ -99,10 +134,12 @@ export default function App(): React.ReactElement {
               )}
               {screen === "console" && <ConsoleScreen root={ROOT} />}
               {screen === "sessions" && <SessionsScreen root={ROOT} />}
+              {screen === "settings" && <SettingsScreen />}
               {screen !== "workflows" &&
                 screen !== "design" &&
                 screen !== "console" &&
-                screen !== "sessions" && <Placeholder screen={screen} />}
+                screen !== "sessions" &&
+                screen !== "settings" && <Placeholder screen={screen} />}
             </div>
           </>
         )}
