@@ -161,6 +161,25 @@ impl Agent {
         Ok(())
     }
 
+    /// Real §75.73 user-initiated cancel -- abandons whatever's currently
+    /// in flight (`Planning`, `AwaitingApproval`, `Executing`, or
+    /// `Verifying`) and returns to `Idle`, discarding the plan. A real,
+    /// deliberate scope limit: this only ever updates `Agent`'s own
+    /// visible state -- it does not and cannot forcibly kill a real
+    /// background OS thread already mid-flight on a blocking model call
+    /// or tool execution (no cooperative cancellation channel exists for
+    /// that yet). The caller (`spartan-backend`) is expected to pair this
+    /// with its own `leo_generation` bump so that thread's real,
+    /// eventually-arriving result is discarded rather than silently
+    /// resurrecting the cancelled task -- the same generation-guard
+    /// mechanism §75.69 already built for the unrelated "a newer task
+    /// superseded this one" case applies unchanged here.
+    pub fn cancel(&mut self) -> Result<(), AgentError> {
+        self.transition(AgentState::Idle)?;
+        self.plan = None;
+        Ok(())
+    }
+
     /// Real §9 approval gate, checked *before* `execute_call` ever touches
     /// the sandbox -- a caller must check this (or hold an explicit,
     /// separately-obtained human approval) before calling `execute_call`
@@ -454,6 +473,43 @@ mod tests {
         agent.reject_plan().unwrap();
         assert_eq!(agent.state(), AgentState::Idle);
         assert!(agent.plan().is_none());
+    }
+
+    #[test]
+    fn cancelling_while_awaiting_approval_returns_to_idle_and_clears_the_plan() {
+        let (dir, _repo) = real_repo_with_one_commit("cancel-awaiting");
+        let mut agent = Agent::new(dir, ApprovalMode::ManualEveryStep);
+        agent
+            .start_task(&FakePlanningProvider, "do the thing")
+            .unwrap();
+        assert_eq!(agent.state(), AgentState::AwaitingApproval);
+        agent.cancel().unwrap();
+        assert_eq!(agent.state(), AgentState::Idle);
+        assert!(agent.plan().is_none());
+    }
+
+    #[test]
+    fn cancelling_mid_execution_returns_to_idle() {
+        let (dir, mut repo) = real_repo_with_one_commit("cancel-executing");
+        let mut agent = Agent::new(dir, ApprovalMode::ManualEveryStep);
+        agent
+            .start_task(&FakePlanningProvider, "do the thing")
+            .unwrap();
+        agent.approve_plan(&mut repo).unwrap();
+        assert_eq!(agent.state(), AgentState::Executing);
+
+        agent.cancel().unwrap();
+        assert_eq!(agent.state(), AgentState::Idle);
+        assert!(agent.plan().is_none());
+    }
+
+    #[test]
+    fn cancelling_from_a_real_terminal_or_idle_state_errors_instead_of_silently_no_opping() {
+        let (dir, _repo) = real_repo_with_one_commit("cancel-idle");
+        let mut agent = Agent::new(dir, ApprovalMode::ManualEveryStep);
+        assert_eq!(agent.state(), AgentState::Idle);
+        let result = agent.cancel();
+        assert!(matches!(result, Err(AgentError::InvalidTransition { .. })));
     }
 
     #[test]

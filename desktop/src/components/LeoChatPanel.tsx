@@ -354,6 +354,35 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     }
   }, []);
 
+  /** Real §75.73 cancel -- task #58's own named remaining item, "a UI
+   * control to interrupt an in-progress planning or execute loop." Real,
+   * deliberate scope limit named in `leo_cancel`'s own real backend doc
+   * comment applies here too: this cannot forcibly stop a real
+   * in-flight model call already running on its own background thread
+   * (no cooperative-cancellation channel exists for that yet) -- what it
+   * *does* do, and what makes it real rather than cosmetic, is bump the
+   * real backend's generation counter so that call's eventual result is
+   * discarded rather than silently resurrecting the cancelled task; this
+   * panel resets its own local view to a fresh, empty Idle state
+   * immediately rather than waiting to see whether that stale result
+   * ever arrives. */
+  const cancelTask = useCallback(async () => {
+    try {
+      const result = (await window.spartan.call("leo_cancel")) as { state: LeoState };
+      setAgentState(result.state);
+      setPlan(null);
+      setPendingCall(null);
+      setThinking(false);
+      setLog([]);
+      setSummary(null);
+      setMemorySaved(null);
+      setError(null);
+      setTask("");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
+
   const approveCall = useCallback(async () => {
     if (!pendingCall) return;
     try {
@@ -460,7 +489,12 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         )}
 
         {agentState === "Planning" && (
-          <div className="leo-status-message mono">Leo is planning...</div>
+          <div className="leo-status-message mono">
+            Leo is planning...
+            <button className="leo-btn leo-btn-cancel" onClick={cancelTask}>
+              Cancel
+            </button>
+          </div>
         )}
 
         {error && <div className="leo-error mono">{error}</div>}
@@ -502,6 +536,10 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
             {thinking && !pendingCall && (
               <div className="leo-status-message mono">Leo is thinking about the next step...</div>
             )}
+
+            <button className="leo-btn leo-btn-cancel" onClick={cancelTask}>
+              Cancel Task
+            </button>
           </div>
         )}
 

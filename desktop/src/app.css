@@ -637,6 +637,24 @@
   align-self: flex-end;
 }
 
+/* Real §75.73 cancel control -- deliberately quieter than Approve/Reject
+   (a real, secondary action, not the primary decision on screen) but
+   still a distinct, visible affordance, not buried in copy. */
+.leo-btn-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  margin-left: 10px;
+  margin-top: 8px;
+  padding: 3px 10px;
+  font-size: 11px;
+}
+
+.leo-btn-cancel:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
 .leo-btn:disabled {
   opacity: 0.4;
   cursor: default;

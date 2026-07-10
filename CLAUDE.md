@@ -82,6 +82,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Multi-provider LLM selection for Leo — "concepts only, rebuilt safely" from `SpartanAI_Assistant`, READ §75.70 BEFORE ASSUMING ANY OF ITS UNSANDBOXED OS-CONTROL CODE WAS PORTED (it was not) | §75.70 |
 | Voice input/output for the Leo chat panel — second "concepts only, rebuilt safely" increment, closes task #59 | §75.71 |
 | Repository professionalization — LICENSE, CI, README, "Check for Updates" wiring | §75.72 |
+| Leo cancel/stop control for in-progress planning/execute loops, closes task #58 | §75.73 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2119,6 +2120,37 @@ first — it's the parity reference until each row there is actually reimplement
   confirm**: no live "success" update-check result observed (same TLS-trust condition as §75.49);
   Leo's cancel/stop control and the `Failed -> Recovering -> Executing` retry loop's UI wiring
   remain open; Android (task #11) and the larger "full web design suite" scope are unstarted.
+- **Real, working code — real Leo cancel/stop control, closing task #58's last named remaining
+  item (§75.73)**: before this, a task stuck in `Planning` (a real, possibly 20-45s+ blocking
+  model call) or `Executing`/`Verifying` (§75.69's own auto-approve loop, up to 25 unattended
+  steps) had no way to stop short of closing the app. `AgentState` gained three real new
+  transitions (`Planning`/`Executing`/`Verifying` -> `Idle`, distinct from `AwaitingApproval ->
+  Idle`'s existing "reject" semantics but the same real target state); `Agent` gained a matching
+  `cancel()` that errors honestly (via the same `AgentError::InvalidTransition` every other
+  transition method already uses) when called from `Idle`/`Done`/`Failed`/`Recovering`. A real,
+  named scope limit: `cancel()` can only ever update the agent's own visible state -- it cannot
+  forcibly kill a real background thread already blocked on a model call, no cooperative-
+  cancellation channel exists for that yet. What makes it a real cancel rather than cosmetic:
+  `spartan-backend`'s new `leo_cancel` bumps `leo_generation` before releasing the lock -- the
+  same generation-guard mechanism §75.69 already built for "a newer task superseded this one" now
+  also discards a cancelled task's late-arriving real result instead of silently resurrecting it.
+  `LeoChatPanel.tsx` gained a Cancel button during Planning and a "Cancel Task" button in the
+  Executing/Verifying view (confirmed live to coexist correctly alongside a pending call's own
+  Approve/Reject); both reset the panel to a clean Idle view immediately. 8 new tests (2
+  `spartan-leo::state`, 3 `spartan-leo::agent`, 3 `spartan-backend`, including a real check that
+  cancelling genuinely bumps the generation counter from 5 to 6), 498 tests total workspace-wide
+  (up from 490), full fmt/clippy/test clean, `desktop`'s own typecheck/build clean. Real,
+  screenshotted Playwright verification: Cancel during Planning fires exactly one real
+  `leo_cancel` call and resets the panel; approving a plan and reaching Executing shows a real
+  Cancel Task button that survives a pending call arriving alongside it; clicking it fires a
+  second real `leo_cancel` call and returns to a clean Idle view. **What this does not confirm**:
+  no live model-driven cancel was observed (Ollama unreachable this session); the real underlying
+  background thread keeps running to completion regardless of cancellation -- its result is
+  discarded when it arrives, not prevented from running, a real architectural limit rather than a
+  true kill switch. The `Failed -> Recovering -> Executing` retry loop's own UI wiring remains the
+  one last piece named across this task's own tracked history. **Task #58 has no further items
+  explicitly named as blocking** -- it stays open only in the sense that "as much as possible" has
+  no natural end state, not because a specific promised piece is missing.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2176,7 +2208,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 490 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 498 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-editor-core,

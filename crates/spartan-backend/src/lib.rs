@@ -545,6 +545,41 @@ fn leo_reject_plan(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value
     Ok(serde_json::json!({ "ok": true, "state": agent_state_name(agent) }))
 }
 
+/// Real §75.73 user-initiated cancel -- closes task #58's own named
+/// remaining item, "a UI control to interrupt an in-progress planning or
+/// execute loop." Real, works from `Planning`, `AwaitingApproval`,
+/// `Executing`, or `Verifying` (`Agent::cancel`'s own real transition
+/// table); errors honestly, matching every other real transition method
+/// in this file, if the agent is already `Idle`/`Done`/`Failed`/
+/// `Recovering`.
+///
+/// A real, deliberate scope limit named in `Agent::cancel`'s own doc
+/// comment applies here too: this cannot forcibly kill a real background
+/// OS thread already blocked on a model call or a `run_terminal`
+/// subprocess (no cooperative-cancellation channel exists for that yet)
+/// -- what it *does* do, and what actually makes cancel real rather than
+/// cosmetic, is bump `leo_generation` before releasing the lock, so
+/// whatever real result that thread eventually produces is discarded by
+/// the exact same generation-guard check `leo_start_task`/`leo_next_step`
+/// already perform, instead of silently resurrecting a task the user
+/// just told this shell to abandon. `leo_pending_call` and `leo_history`
+/// are cleared too -- a cancelled task has nothing left to resume, the
+/// same real cleanup `leo_start_task` already does when beginning a
+/// fresh one.
+fn leo_cancel(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value, String> {
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    let agent = guard
+        .leo_agent
+        .as_mut()
+        .ok_or("no Leo task has been started yet")?;
+    agent.cancel().map_err(|e| format!("cancel: {e:?}"))?;
+    let state_name = agent_state_name(agent);
+    guard.leo_generation += 1;
+    guard.leo_pending_call = None;
+    guard.leo_history.clear();
+    Ok(serde_json::json!({ "ok": true, "state": state_name }))
+}
+
 /// Real, honest JSON rendering of a proposed `ToolCall`'s arguments --
 /// the UI needs to show the human *what* Leo wants to do before they
 /// approve or reject it.
@@ -1257,6 +1292,7 @@ pub fn handle_request(
         })(),
         "leo_approve_plan" => leo_approve_plan(state),
         "leo_reject_plan" => leo_reject_plan(state),
+        "leo_cancel" => leo_cancel(state),
         "leo_next_step" => leo_next_step(state, out_tx.clone()),
         "leo_approve_call" => leo_approve_call(state),
         "leo_reject_call" => leo_reject_call(state),
@@ -2267,6 +2303,64 @@ mod tests {
         let state = new_state();
         let resp = call(&state, 1, "leo_reject_plan", serde_json::json!({}));
         assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn leo_cancel_before_any_task_errors_honestly() {
+        let state = new_state();
+        let resp = call(&state, 1, "leo_cancel", serde_json::json!({}));
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn leo_cancel_while_awaiting_approval_returns_to_idle_and_bumps_generation() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-leo-cancel-awaiting-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut agent = Agent::new(dir.clone(), ApprovalMode::ManualEveryStep);
+        agent.begin_planning().unwrap();
+        agent.apply_generated_plan(Ok(sample_plan())).unwrap();
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            leo_generation: 5,
+            ..Default::default()
+        }));
+
+        let resp = call(&state, 1, "leo_cancel", serde_json::json!({}));
+        assert!(resp.error.is_none(), "leo_cancel errored: {:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["state"], "Idle");
+
+        let guard = state.lock().unwrap();
+        assert_eq!(
+                guard.leo_generation, 6,
+                "cancel must bump the real generation counter so a late-arriving background result is discarded"
+            );
+        drop(guard);
+
+        let status = call(&state, 2, "leo_status", serde_json::json!({}));
+        assert_eq!(status.result.unwrap()["plan"], serde_json::Value::Null);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn leo_cancel_from_an_already_idle_agent_errors_honestly() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-leo-cancel-idle-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent = Agent::new(dir.clone(), ApprovalMode::ManualEveryStep);
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            ..Default::default()
+        }));
+        let resp = call(&state, 1, "leo_cancel", serde_json::json!({}));
+        assert!(resp.error.is_some());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     fn sample_plan() -> ImplementationPlan {
