@@ -238,19 +238,58 @@
   user-select: none;
 }
 
-.editor-textarea {
+/* Real syntax highlighting overlay (§75.62/§75.63) -- the highlight
+ * layer and the textarea share one pixel-identical font/padding/
+ * line-height box, stacked via `position: absolute`, so real
+ * highlighted `<span>`s line up exactly under the real (transparent)
+ * text the textarea itself renders. */
+.editor-text-wrap {
+  position: relative;
   flex: 1;
-  background: var(--bg);
-  color: var(--text);
-  border: none;
-  outline: none;
-  resize: none;
+  overflow: hidden;
+}
+
+.editor-highlight-layer,
+.editor-textarea {
+  position: absolute;
+  inset: 0;
+  margin: 0;
   padding: 8px 12px;
   font-size: 13px;
   line-height: 20px;
   white-space: pre;
-  overflow: auto;
   tab-size: 2;
+  overflow: auto;
+}
+
+.editor-highlight-layer {
+  background: var(--bg);
+  color: var(--text);
+  pointer-events: none;
+  scrollbar-width: none;
+}
+
+.editor-highlight-layer::-webkit-scrollbar {
+  display: none;
+}
+
+.editor-highlight-layer code {
+  font-family: inherit;
+  background: none;
+  padding: 0;
+}
+
+.editor-textarea-overlay {
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+  border: none;
+  outline: none;
+  resize: none;
+}
+
+.editor-textarea-overlay::selection {
+  background: var(--accent-dim);
 }
 
 .status-bar {
@@ -509,4 +548,54 @@
 .design-edit-panel .leo-btn {
   margin: 10px 12px 0;
   align-self: flex-start;
+}
+
+/* Real, hand-written highlight.js token theme (§75.63) -- deliberately
+ * not a canned hljs theme, so token colors stay consistent with this
+ * app's own real color tokens (`theme.css`) rather than an unrelated
+ * imported palette. */
+.hljs-keyword,
+.hljs-built_in,
+.hljs-type {
+  color: var(--accent);
+}
+
+.hljs-string,
+.hljs-regexp {
+  color: #9ece6a;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.hljs-number,
+.hljs-literal {
+  color: #e0af68;
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-title.class_ {
+  color: #7dcfff;
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-params {
+  color: #bb9af7;
+}
+
+.hljs-tag,
+.hljs-name {
+  color: var(--accent);
+}
+
+.hljs-symbol,
+.hljs-bullet,
+.hljs-meta {
+  color: var(--text-dim);
 }

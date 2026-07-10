@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { highlightSource } from "../syntax";
 
 export interface OpenFile {
   path: string;
@@ -21,9 +22,16 @@ interface EditorProps {
  * character-level cursor/selection/keyboard-input handling rather than
  * reimplementing that from zero in JS (the same kind of pragmatic
  * foundation early versions of CodeMirror/Ace themselves started from).
- * A real, fully custom canvas-rendered editor (syntax highlighting,
- * multi-cursor, minimap) is real, substantial, named future work -- see
- * `docs/architecture-spec.md`'s own honest account of this pass.
+ *
+ * Real syntax highlighting (§75.62 audit finding, closed here): a real,
+ * standard "transparent textarea over a highlighted overlay" technique
+ * -- `syntax.ts`'s real `highlight.js`-backed tokenizer renders colored
+ * `<span>`s into a `<pre>` layer positioned exactly under the real
+ * textarea (identical font/line-height/padding), while the textarea's
+ * own text is made transparent so only its real caret and native text
+ * selection remain visible on top. A deliberate, named choice over this
+ * workspace's own real tree-sitter engine (`highlight.rs` in the
+ * original wgpu shell) -- see `syntax.ts`'s own doc comment for why.
  *
  * Edits are sent to the real backend as a real whole-document replace on
  * every change (`edit` with `start_char: 0, end_char: <old length>`) --
@@ -39,6 +47,7 @@ interface EditorProps {
 export default function Editor({ file, onContentChange }: EditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
+  const highlightRef = useRef<HTMLPreElement>(null);
   const [lineCount, setLineCount] = useState(1);
   const prevContentRef = useRef(file.content);
 
@@ -47,9 +56,18 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
     setLineCount(file.content.split("\n").length);
   }, [file.content]);
 
+  const highlightedHtml = useMemo(
+    () => highlightSource(file.content, file.path),
+    [file.content, file.path]
+  );
+
   const syncScroll = useCallback(() => {
-    if (textareaRef.current && gutterRef.current) {
-      gutterRef.current.scrollTop = textareaRef.current.scrollTop;
+    const el = textareaRef.current;
+    if (!el) return;
+    if (gutterRef.current) gutterRef.current.scrollTop = el.scrollTop;
+    if (highlightRef.current) {
+      highlightRef.current.scrollTop = el.scrollTop;
+      highlightRef.current.scrollLeft = el.scrollLeft;
     }
   }, []);
 
@@ -127,15 +145,29 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
       <div className="editor-gutter mono" ref={gutterRef}>
         {lineNumbers}
       </div>
-      <textarea
-        ref={textareaRef}
-        className="editor-textarea mono"
-        value={file.content}
-        spellCheck={false}
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        onScroll={syncScroll}
-      />
+      <div className="editor-text-wrap">
+        <pre className="editor-highlight-layer mono" ref={highlightRef} aria-hidden="true">
+          <code
+            className="hljs"
+            // Real, deliberate use of dangerouslySetInnerHTML: the HTML
+            // comes from this file's own `highlightSource` (a real
+            // `highlight.js` call against the real open document's own
+            // content), never from an external/untrusted source -- the
+            // same trust boundary every other real editor content path
+            // in this app already assumes for the user's own files.
+            dangerouslySetInnerHTML={{ __html: `${highlightedHtml}\n` }}
+          />
+        </pre>
+        <textarea
+          ref={textareaRef}
+          className="editor-textarea editor-textarea-overlay mono"
+          value={file.content}
+          spellCheck={false}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          onScroll={syncScroll}
+        />
+      </div>
     </div>
   );
 }

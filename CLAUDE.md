@@ -1727,6 +1727,26 @@ first — it's the parity reference until each row there is actually reimplement
   unlaunched in this session (the same already-documented, reported-not-routed-around network
   block from §75.59); the Design screen's edit form has no prop/style name autocomplete; no
   `Reparent`/`ComponentInsert` (matches `gui-builder`'s own already-documented v1 scope).
+- **Real, working code — real syntax highlighting in the Electron editor, closing the §75.62
+  audit's top remaining gap (§75.63)**: closes "prioritize and continue as you recommend."
+  Deliberate choice, named honestly: uses `highlight.js` (real, MIT, client-side) rather than this
+  workspace's own tree-sitter engine -- reusing tree-sitter here would mean either a per-keystroke
+  Rust round trip or a real `web-tree-sitter` WASM build per language, both real, separate,
+  not-yet-attempted work, named explicitly in `syntax.ts` as better-fidelity future work. New
+  `desktop/src/syntax.ts` (extension-to-language map for the same Tier 1 languages
+  `spartan-languages` covers, degrades to plain escaped text on an unrecognized language or a real
+  parse error, never a crash). `Editor.tsx` gained the standard "transparent textarea over a
+  highlighted overlay" technique -- a real `<pre><code>` layer with highlighted spans sits
+  pixel-aligned under the real (now-transparent) textarea, which stays the real character-level
+  input surface untouched, preserving cursor/selection/undo/redo/Ctrl+S exactly as already built.
+  A real, hand-written CSS token theme maps to this app's own existing color tokens, not a canned
+  import. `tsc`/`vite build` clean. Live, screenshotted: a real multi-construct Rust fixture
+  rendered with correct, distinct colors per token category; typing new text live immediately
+  re-highlighted correctly with the tab's dirty marker updating, confirming the overlay stays in
+  sync with real edits, not just a static initial render. **What this does not confirm**: no
+  incremental/windowed highlighting (whole-document re-tokenize per keystroke, unmeasured cost at
+  scale); no semantic (LSP-informed) highlighting, lexical only; tree-sitter parity with the
+  original wgpu shell remains real, unstarted future work.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

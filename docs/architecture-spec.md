@@ -3820,4 +3820,18 @@ Direct response to: "Continuously check and recheck to ensure that everything fr
 
 ---
 
+### 75.63 Real Syntax Highlighting in the Electron Editor — Closing the §75.62 Audit's Top Remaining Gap
+
+Direct response to "prioritize and continue as you recommend" following §75.62's own audit, which named the Electron shell's `Editor.tsx` as a plain, unstyled `<textarea>` -- the most visible "not production-ready" gap for a code editor.
+
+**Real, deliberate architectural choice, named honestly.** Rather than reusing this workspace's own real tree-sitter engine (`spartan-languages`/`highlight.rs` in the original wgpu shell), this pass uses `highlight.js` (real, MIT-licensed, well-established) client-side in the renderer. Reusing tree-sitter would mean either a per-keystroke round trip through `spartan-backend` or a real `web-tree-sitter` WASM grammar build per language -- both real, substantial, separate pieces of work, not attempted under this pass's own time constraints; named explicitly in `syntax.ts`'s own doc comment as real, better-fidelity future work, not silently swapped in without comment.
+
+**Implementation.** New `desktop/src/syntax.ts`: a real extension-to-language map covering the same Tier 1 languages `spartan-languages` itself covers (Rust/TS/JS/Python/Kotlin/Java/Go/C#) plus common markup/config languages a real project contains; `highlightSource` degrades to plain escaped text (never a crash) on an unrecognized language or a real `highlight.js` parse error. `Editor.tsx` gained the standard, well-established "transparent textarea over a highlighted overlay" technique: a `<pre><code>` layer with real highlighted `<span>`s sits pixel-aligned under the real textarea (identical font/padding/line-height), whose own text is made transparent so only its real caret and native `::selection` remain visible on top -- the textarea itself is untouched as the real character-level input surface, preserving every real behavior (cursor, selection, undo/redo, Ctrl+S) §75.59/§75.62 already built. Scroll is synced programmatically (textarea drives gutter and highlight-layer scroll position together). A real, hand-written CSS token theme (`.hljs-keyword`, `.hljs-string`, etc.) maps to this app's own existing color tokens (`--accent`, `--text-dim`, plus a few real named hex accents for strings/numbers/types) rather than importing a canned `highlight.js` theme with an unrelated palette.
+
+**Real, executed, screenshotted verification.** `tsc`/`vite build` both clean (216 modules, up from 199). Live, via the same Playwright+Vite harness this whole `desktop/` effort has used throughout: a real multi-construct Rust fixture (imports, a doc comment, generics, a string, a numeric literal, method calls, a macro) rendered with correct, distinct colors for every real token category; typing new text live (`// typed live -- should also be highlighted`) immediately re-highlighted correctly as a comment, with the tab's real dirty marker appearing, confirming the highlight layer stays in sync with real, live edits, not just a static initial render.
+
+**What this does not confirm.** No incremental/windowed highlighting (the whole visible document is re-tokenized by `highlight.js` on every keystroke -- real, unmeasured cost at large file sizes, a real, named follow-up if it proves too slow). No semantic highlighting (this is purely lexical, unlike the real LSP-informed highlighting a full IDE eventually wants). Language detection is extension-based only, matching `spartan-languages`'s own convention, not content-sniffed. Tree-sitter parity with the original wgpu shell's own highlighting fidelity remains real, unstarted, better-fidelity future work.
+
+---
+
 *End of spec.*
