@@ -49,6 +49,18 @@ pub struct TextState {
     /// scrolling region the way the tab bar itself is -- three short fixed
     /// labels never need it.
     pub mode_toggle_buffer: Buffer,
+    /// Real activity-bar icon-badge row text (§75.56, user-requested "more
+    /// tools/features/options" pass) -- a sixth, independent cosmic-text
+    /// `Buffer`, same sharing reasoning as the other chrome buffers. Same
+    /// single-line-many-labels shape as `mode_toggle_buffer` (short fixed
+    /// monogram labels, `Wrap::None`, char-range hit-testing), not the tab
+    /// bar's scrolling shape -- four fixed icons never overflow
+    /// `SIDEBAR_WIDTH`.
+    pub activity_bar_buffer: Buffer,
+    /// Real status bar text (§75.57, "seamless coding" tool-placement pass)
+    /// -- a seventh, independent cosmic-text `Buffer`. One real line,
+    /// `Wrap::None`, spanning the full window width along the bottom edge.
+    pub status_bar_buffer: Buffer,
     /// Real tab bar horizontal scroll (§75.28, the overflow half of task
     /// #25) -- the pixel offset the tab bar's rendered text and
     /// hit-testing are both shifted by, so tabs beyond the visible strip's
@@ -93,13 +105,36 @@ pub const SIDEBAR_WIDTH: f32 = 200.0;
 pub const SIDEBAR_FONT_SIZE: f32 = 13.0;
 pub const SIDEBAR_LINE_HEIGHT: f32 = 18.0;
 pub const SIDEBAR_TEXT_LEFT: f32 = 8.0;
-pub const SIDEBAR_TEXT_TOP: f32 = 8.0;
+
+/// Real activity-bar row height (§75.56, user-requested "more tools" pass)
+/// -- a horizontal strip of icon-badge buttons (Explorer/Source Control/
+/// Agent/Settings) reserved at the top of the sidebar column, addressing a
+/// real, concrete "more tools, features, and options" gap: every one of
+/// these four real, already-existing actions previously had *no* visible,
+/// clickable affordance at all (Ctrl+G, Ctrl+1/2/3, and Ctrl+, are real
+/// keybindings, but a first-time user has no on-screen way to discover any
+/// of them). `SIDEBAR_TEXT_TOP` below shifts down by exactly this much, the
+/// same "bump one symbolic constant, every real call site already routed
+/// through it shifts automatically" trick `TAB_BAR_HEIGHT`/`TEXT_ORIGIN_Y`
+/// used in §75.21.
+pub const ACTIVITY_ROW_HEIGHT: f32 = 40.0;
+pub const SIDEBAR_TEXT_TOP: f32 = 8.0 + ACTIVITY_ROW_HEIGHT;
 
 /// Real Agent/Editor/Design mode toggle strip width (§8, §16.1, task #3),
 /// carved out of the tab bar row's own right edge -- the tab bar's own
 /// clip bounds narrow by this much so a long tab label can never render
 /// underneath it.
 pub const MODE_TOGGLE_WIDTH: f32 = 200.0;
+
+/// Real status bar height (§75.57), reserved along the bottom edge of the
+/// window -- line:col, language, git branch, and LSP/DAP session state,
+/// a standard IDE convention this crate had never had until this pass.
+/// `main.rs`'s `visible_lines` calculation subtracts this explicitly now
+/// (previously an approximate `2.0 * TEXT_ORIGIN_Y` symmetric top/bottom
+/// margin guess with no real bottom chrome to justify it), so the editor's
+/// own visible-line count and this bar's real reserved space can't drift
+/// apart the way a hand-tuned guess could.
+pub const STATUS_BAR_HEIGHT: f32 = 24.0;
 
 /// Text origin within the window, in pixels -- kept as constants (rather than
 /// re-typing `8.0` in both `prepare()`'s `TextArea` and the cursor-position
@@ -174,6 +209,26 @@ impl TextState {
         // same way it did for the tab bar before that fix.
         mode_toggle_buffer.set_wrap(&mut font_system, Wrap::None);
 
+        // Real §75.56 activity-bar icon-badge row -- same single-line,
+        // `Wrap::None`, fixed-width-buffer shape as `mode_toggle_buffer`
+        // above (same real word-wrap bug class §75.28 already found and
+        // fixed once for the tab bar applies identically here if skipped).
+        let mut activity_bar_buffer = Buffer::new(
+            &mut font_system,
+            Metrics::new(TAB_BAR_FONT_SIZE, TAB_BAR_LINE_HEIGHT),
+        );
+        activity_bar_buffer.set_size(&mut font_system, SIDEBAR_WIDTH, ACTIVITY_ROW_HEIGHT);
+        activity_bar_buffer.set_wrap(&mut font_system, Wrap::None);
+
+        // Real §75.57 status bar -- one real line, full window width, same
+        // `Wrap::None` single-line shape.
+        let mut status_bar_buffer = Buffer::new(
+            &mut font_system,
+            Metrics::new(TAB_BAR_FONT_SIZE, STATUS_BAR_HEIGHT),
+        );
+        status_bar_buffer.set_size(&mut font_system, width, STATUS_BAR_HEIGHT);
+        status_bar_buffer.set_wrap(&mut font_system, Wrap::None);
+
         Self {
             font_system,
             swash_cache,
@@ -184,6 +239,8 @@ impl TextState {
             modal_buffer,
             sidebar_buffer,
             mode_toggle_buffer,
+            activity_bar_buffer,
+            status_bar_buffer,
             tab_bar_scroll: 0.0,
         }
     }
@@ -284,6 +341,99 @@ impl TextState {
             .map(|s| s.chars().count())
             .unwrap_or(0);
         Some(col_chars)
+    }
+
+    /// Replaces the activity bar's entire content (§75.56) -- same real
+    /// rich-text accent treatment as `set_mode_toggle_text` (the active
+    /// icon's label in the accent color, the rest dim), same reasoning:
+    /// one consistent "this is the active thing" visual language reused
+    /// across every real toggle strip in this shell.
+    pub fn set_activity_bar_text(&mut self, text: &str, active_range: std::ops::Range<usize>) {
+        const ACCENT: Color = Color::rgb(0xC4, 0x43, 0x2B);
+        const DIM: Color = crate::theme::TEXT_DIM;
+        let default_attrs = Attrs::new().family(Family::Monospace);
+        let active_start_byte = text
+            .char_indices()
+            .nth(active_range.start)
+            .map(|(b, _)| b)
+            .unwrap_or(text.len());
+        let active_end_byte = text
+            .char_indices()
+            .nth(active_range.end)
+            .map(|(b, _)| b)
+            .unwrap_or(text.len());
+        let mut rich_spans: Vec<(&str, Attrs)> = Vec::new();
+        if active_start_byte > 0 {
+            rich_spans.push((&text[..active_start_byte], default_attrs.color(DIM)));
+        }
+        rich_spans.push((
+            &text[active_start_byte..active_end_byte],
+            default_attrs.color(ACCENT),
+        ));
+        if active_end_byte < text.len() {
+            rich_spans.push((&text[active_end_byte..], default_attrs.color(DIM)));
+        }
+        self.activity_bar_buffer.set_rich_text(
+            &mut self.font_system,
+            rich_spans,
+            Shaping::Advanced,
+        );
+        self.activity_bar_buffer
+            .shape_until_scroll(&mut self.font_system);
+    }
+
+    /// Real hit-testing for the activity bar (§75.56) -- same real
+    /// cosmic-text `Buffer::hit` technique as `hit_test_mode_toggle`. `x`/
+    /// `y` are relative to the bar's own origin (`SIDEBAR_TEXT_LEFT`, `8.0`
+    /// -- see `main.rs`'s click handler).
+    pub fn hit_test_activity_bar(&self, x: f32, y: f32) -> Option<usize> {
+        let cursor = self.activity_bar_buffer.hit(x, y)?;
+        let line_text = self.activity_bar_buffer.lines.first()?.text();
+        let col_chars = line_text
+            .get(..cursor.index)
+            .map(|s| s.chars().count())
+            .unwrap_or(0);
+        Some(col_chars)
+    }
+
+    /// Real pixel x-position for a char column within the activity bar's
+    /// single line (§75.56) -- the activity-bar equivalent of
+    /// `tab_bar_pixel_pos`/`mode_toggle_pixel_pos`, used to draw each
+    /// icon's own glow badge rect at its real, laid-out position rather
+    /// than a hand-guessed one.
+    pub fn activity_bar_pixel_pos(&self, col_chars: usize) -> Option<f32> {
+        let run = self.activity_bar_buffer.layout_runs().next()?;
+        let byte_offset = run
+            .text
+            .char_indices()
+            .nth(col_chars)
+            .map(|(b, _)| b)
+            .unwrap_or(run.text.len());
+        let x = run
+            .glyphs
+            .iter()
+            .find(|g| byte_offset >= g.start && byte_offset < g.end)
+            .map(|g| g.x)
+            .unwrap_or_else(|| run.glyphs.last().map(|g| g.x + g.w).unwrap_or(0.0));
+        Some(x)
+    }
+
+    /// Replaces the status bar's entire content (§75.57) -- plain single
+    /// color (`theme::TEXT_DIM`, matching this crate's existing convention
+    /// for secondary/chrome text elsewhere), no per-segment highlighting:
+    /// unlike the tab bar or mode toggle, nothing in the status bar is a
+    /// clickable "this one is active" toggle.
+    pub fn set_status_bar_text(&mut self, text: &str) {
+        self.status_bar_buffer.set_text(
+            &mut self.font_system,
+            text,
+            Attrs::new()
+                .family(Family::Monospace)
+                .color(crate::theme::TEXT_DIM),
+            Shaping::Advanced,
+        );
+        self.status_bar_buffer
+            .shape_until_scroll(&mut self.font_system);
     }
 
     /// Replaces the buffer's entire content -- a full reshape, but of
@@ -498,6 +648,38 @@ impl TextState {
                     },
                     default_color: crate::theme::TEXT,
                 },
+                // Real activity bar text (§75.56) -- a horizontal icon row
+                // reserved at the top of the sidebar column, above the file
+                // tree/git panel content (which starts at `SIDEBAR_TEXT_TOP`,
+                // already shifted down to make room for this).
+                TextArea {
+                    buffer: &self.activity_bar_buffer,
+                    left: SIDEBAR_TEXT_LEFT,
+                    top: 8.0,
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: 0,
+                        top: 0,
+                        right: SIDEBAR_WIDTH as i32,
+                        bottom: ACTIVITY_ROW_HEIGHT as i32,
+                    },
+                    default_color: crate::theme::TEXT,
+                },
+                // Real status bar text (§75.57) -- one real line pinned to
+                // the bottom edge of the window, full width.
+                TextArea {
+                    buffer: &self.status_bar_buffer,
+                    left: SIDEBAR_TEXT_LEFT,
+                    top: (height as f32 - STATUS_BAR_HEIGHT + 4.0).max(0.0),
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: 0,
+                        top: (height as f32 - STATUS_BAR_HEIGHT) as i32,
+                        right: width as i32,
+                        bottom: height as i32,
+                    },
+                    default_color: crate::theme::TEXT_DIM,
+                },
             ],
             &mut self.swash_cache,
         )
@@ -625,6 +807,27 @@ impl TextState {
     /// empty string, e.g. no files open).
     pub fn tab_bar_pixel_pos(&self, col_chars: usize) -> Option<f32> {
         let run = self.tab_bar_buffer.layout_runs().next()?;
+        let byte_offset = run
+            .text
+            .char_indices()
+            .nth(col_chars)
+            .map(|(b, _)| b)
+            .unwrap_or(run.text.len());
+        let x = run
+            .glyphs
+            .iter()
+            .find(|g| byte_offset >= g.start && byte_offset < g.end)
+            .map(|g| g.x)
+            .unwrap_or_else(|| run.glyphs.last().map(|g| g.x + g.w).unwrap_or(0.0));
+        Some(x)
+    }
+
+    /// Real pixel x-position for a char column within the mode toggle's
+    /// single line (§75.55) -- the mode-toggle equivalent of
+    /// `tab_bar_pixel_pos`, same simplified single-line lookup (the mode
+    /// toggle, like the tab bar, is always exactly one real line).
+    pub fn mode_toggle_pixel_pos(&self, col_chars: usize) -> Option<f32> {
+        let run = self.mode_toggle_buffer.layout_runs().next()?;
         let byte_offset = run
             .text
             .char_indices()

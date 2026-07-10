@@ -1,5 +1,7 @@
+mod activity_bar;
 mod cursor;
 mod fixture;
+mod glow_rect;
 mod gpu;
 mod input;
 mod latency;
@@ -884,6 +886,9 @@ fn main() {
     // in `Editor`, the one mode with real content behind it.
     let mut mode = AppMode::Editor;
     let mut mode_hits: Vec<mode_toggle::ModeHit> = Vec::new();
+    // Real §75.56 activity bar hit-ranges, rebuilt every frame just like
+    // `mode_hits` above.
+    let mut activity_hits: Vec<activity_bar::ActivityHit> = Vec::new();
 
     // Real, scoped command palette (§16.1, task #3) -- `None` is the
     // ordinary closed state. `all_entries` (the static commands plus a
@@ -1004,10 +1009,11 @@ fn main() {
     // a named simplification (see the crate README). Every open file's
     // `Viewport` (constructed with a placeholder 0 by `open_file`, before
     // the window size was known) is patched to the real value here.
-    let visible_lines = ((gpu_state.size.height as f32 - 2.0 * text::TEXT_ORIGIN_Y)
-        / text::LINE_HEIGHT)
-        .floor()
-        .max(1.0) as usize;
+    let visible_lines =
+        ((gpu_state.size.height as f32 - text::TEXT_ORIGIN_Y - text::STATUS_BAR_HEIGHT)
+            / text::LINE_HEIGHT)
+            .floor()
+            .max(1.0) as usize;
     for file in files.iter_mut() {
         file.viewport.visible_lines = visible_lines;
     }
@@ -1047,30 +1053,31 @@ fn main() {
     let t_cursor_renderer = Instant::now();
     let mut selection_renderer =
         selection::SelectionRenderer::new(&gpu_state.device, gpu_state.config.format);
-    // Real active-tab highlight (§75.21) -- a second, independent instance
-    // of the same `SelectionRenderer` type used for text selection, reused
-    // rather than duplicated: both are just "draw some semi-transparent
-    // accent-colored rects," and sharing the color between "this text is
-    // selected" and "this is the active tab" is a coherent, deliberate
-    // choice, not an accident of reuse.
-    let mut tab_bar_renderer =
-        selection::SelectionRenderer::new(&gpu_state.device, gpu_state.config.format);
-    // Real unsaved-changes modal dim overlay (§75.23) -- a third instance of
+    // Real unsaved-changes modal dim overlay (§75.23) -- a second instance of
     // the same generic `SelectionRenderer`, rendered after (on top of)
-    // `tab_bar_renderer`/`selection_renderer` but still before all text, so
-    // the modal's own text (a third glyphon `TextArea`, see `text.rs`) draws
-    // on top of the dim overlay in the same text pass, the same "quads
-    // before text" ordering every other highlight here already relies on.
+    // `selection_renderer` but still before all text, so the modal's own
+    // text (a third glyphon `TextArea`, see `text.rs`) draws on top of the
+    // dim overlay in the same text pass, the same "quads before text"
+    // ordering every other highlight here already relies on.
     let mut modal_renderer =
         selection::SelectionRenderer::new(&gpu_state.device, gpu_state.config.format);
     // Real §75.54 sidebar/tab-bar surface panels + hairline border
-    // separators (`theme::SURFACE`/`theme::BORDER`) -- a fourth instance of
+    // separators (`theme::SURFACE`/`theme::BORDER`) -- a third instance of
     // the same generic `SelectionRenderer`, rendered *first* (the base
     // layer every other quad and all text draws on top of), giving this
     // renderer real bg/surface/border layering for the first time instead
     // of one flat clear color for every region.
     let mut chrome_renderer =
         selection::SelectionRenderer::new(&gpu_state.device, gpu_state.config.format);
+    // Real §75.55 SDF rounded-rect + glow renderer (`glow_rect.rs`) -- the
+    // active-tab pill (below) is its first real caller, replacing the flat
+    // sharp-edged highlight rect §75.21/§75.54 used with a genuinely
+    // rounded, softly glowing accent treatment, plus the mode-toggle's
+    // active-label pill (also below). A sibling pipeline to
+    // `SelectionRenderer`, not a replacement -- text selection and the
+    // modal dim overlay both stay deliberately sharp-edged.
+    let mut glow_renderer =
+        glow_rect::GlowRectRenderer::new(&gpu_state.device, gpu_state.config.format);
 
     // 150ms idle default per spec §2.3, now one debouncer per open file
     // (`OpenFile::lsp_debouncer`) rather than a single global one -- see
@@ -1111,6 +1118,26 @@ fn main() {
     // most recent `CursorMoved` position is tracked here for a click to
     // read back.
     let mut last_cursor_pos: (f32, f32) = (0.0, 0.0);
+    // Real §75.55 animated active-tab pill position (x, width) -- eased
+    // toward the real active tab's pixel bounds every frame via
+    // exponential smoothing rather than snapped instantly, so switching
+    // tabs reads as the pill genuinely sliding, matching §8.4's own real
+    // "Motion Language" spec (eased, not linear, transitions for exactly
+    // this kind of state-change feedback). `None` before the first real
+    // tab-bar layout is known. `last_anim_instant` is the wall-clock time
+    // of the previous frame's animation step -- this crate's own
+    // `ControlFlow::Poll` + unconditional per-tick `request_redraw()`
+    // (see `AboutToWait` below) means `RedrawRequested` genuinely fires
+    // continuously, so real delta-time easing here produces a real,
+    // observable animation, not just interpolation across sparse
+    // input-driven redraws.
+    let mut tab_underline_anim: Option<(f32, f32)> = None;
+    // Real §75.55 animated mode-toggle active-label pill position (x,
+    // width), same eased-not-snapped treatment as `tab_underline_anim`
+    // above, sharing the same per-frame `alpha` computed from real
+    // delta-time.
+    let mut mode_toggle_anim: Option<(f32, f32)> = None;
+    let mut last_anim_instant = Instant::now();
     // Tracked from `WindowEvent::ModifiersChanged` so Ctrl+Tab (next file)
     // and Ctrl+Shift+Tab (previous file) can be detected in the
     // `KeyboardInput` handler below, which only ever sees the key itself.
@@ -1315,7 +1342,8 @@ fn main() {
                             // every open file's own `Viewport`, not just the active one, so
                             // switching files later doesn't see a stale line count.
                             let new_visible_lines = ((new_size.height as f32
-                                - 2.0 * text::TEXT_ORIGIN_Y)
+                                - text::TEXT_ORIGIN_Y
+                                - text::STATUS_BAR_HEIGHT)
                                 / text::LINE_HEIGHT)
                                 .floor()
                                 .max(1.0) as usize;
@@ -1378,6 +1406,65 @@ fn main() {
                             && command_palette_state.is_none()
                             && settings_state.is_none()
                             && last_cursor_pos.0 < text::SIDEBAR_WIDTH
+                            && last_cursor_pos.1 < text::ACTIVITY_ROW_HEIGHT =>
+                        {
+                            // Real §75.56 activity bar clicks -- a real,
+                            // on-screen, discoverable affordance for four
+                            // actions that previously existed only as
+                            // keybindings (Ctrl+G, Ctrl+1, Ctrl+,). Checked
+                            // *before* the file-tree/git-panel arms below
+                            // (match arms are tried in order) so a click in
+                            // this row is intercepted rather than falling
+                            // through to sidebar-content hit-testing.
+                            let local_x = last_cursor_pos.0 - text::SIDEBAR_TEXT_LEFT;
+                            let local_y = last_cursor_pos.1 - 8.0;
+                            if let Some(col) = text_state.hit_test_activity_bar(local_x, local_y) {
+                                if let Some(id) = activity_bar::hit_test(&activity_hits, col) {
+                                    match id {
+                                        activity_bar::ActivityId::Explorer => {
+                                            sidebar_mode = SidebarMode::FileTree;
+                                        }
+                                        activity_bar::ActivityId::SourceControl => {
+                                            sidebar_mode = SidebarMode::SourceControl;
+                                        }
+                                        activity_bar::ActivityId::Agent => {
+                                            mode = AppMode::Agent;
+                                        }
+                                        activity_bar::ActivityId::Settings => {
+                                            let renderer_info = format!(
+                                                "{} | backend={:?} | {}",
+                                                gpu_state.adapter_info.name,
+                                                gpu_state.adapter_info.backend,
+                                                if gpu::is_software_or_virtual(
+                                                    &gpu_state.adapter_info
+                                                ) {
+                                                    "software/virtual GPU"
+                                                } else {
+                                                    "hardware GPU"
+                                                }
+                                            );
+                                            settings_state = Some(
+                                                settings_panel::SettingsPanelState::opened_with(
+                                                    spartan_settings::load(),
+                                                    renderer_info,
+                                                ),
+                                            );
+                                        }
+                                    }
+                                    window.request_redraw();
+                                }
+                            }
+                        }
+                        WindowEvent::MouseInput {
+                            state: ElementState::Pressed,
+                            button: MouseButton::Left,
+                            ..
+                        } if pending_close.is_none()
+                            && commit_message.is_none()
+                            && command_palette_state.is_none()
+                            && settings_state.is_none()
+                            && last_cursor_pos.0 < text::SIDEBAR_WIDTH
+                            && last_cursor_pos.1 >= text::ACTIVITY_ROW_HEIGHT
                             && sidebar_mode == SidebarMode::FileTree =>
                         {
                             // Real file tree sidebar clicks (§75.26) --
@@ -1441,6 +1528,7 @@ fn main() {
                             && command_palette_state.is_none()
                             && settings_state.is_none()
                             && last_cursor_pos.0 < text::SIDEBAR_WIDTH
+                            && last_cursor_pos.1 >= text::ACTIVITY_ROW_HEIGHT
                             && sidebar_mode == SidebarMode::SourceControl =>
                         {
                             // Real Source Control panel clicks (§56.1, task
@@ -3092,6 +3180,79 @@ fn main() {
                             mode_hits = new_mode_hits;
                             text_state.set_mode_toggle_text(&mode_toggle_text, active_mode_range);
 
+                            // Real activity bar text (§75.56), same
+                            // rebuilt-every-frame cheapness as the mode
+                            // toggle above. The active icon reflects
+                            // whichever real content the sidebar is
+                            // currently showing (`sidebar_mode`) -- the
+                            // most useful "this is active" signal, since
+                            // Files/Git are genuinely mutually exclusive
+                            // states while Agent/Settings are one-shot
+                            // actions, not standing states, of their own.
+                            let (activity_bar_text, new_activity_hits) =
+                                activity_bar::build_activity_bar_text();
+                            let active_activity_range = new_activity_hits
+                                .iter()
+                                .find(|hit| {
+                                    matches!(
+                                        (hit.id, sidebar_mode),
+                                        (activity_bar::ActivityId::Explorer, SidebarMode::FileTree)
+                                            | (
+                                                activity_bar::ActivityId::SourceControl,
+                                                SidebarMode::SourceControl
+                                            )
+                                    )
+                                })
+                                .map(|hit| hit.range.clone())
+                                .unwrap_or(0..0);
+                            activity_hits = new_activity_hits;
+                            text_state
+                                .set_activity_bar_text(&activity_bar_text, active_activity_range);
+
+                            // Real status bar text (§75.57) -- line:col,
+                            // real detected language (re-detected from the
+                            // active file's own path/extension each frame,
+                            // cheap glob matching against a handful of
+                            // profiles, not cached anywhere else on
+                            // `OpenFile`), dirty state, and real LSP session
+                            // presence for the active file.
+                            let active_file_for_status = &files[active];
+                            let (status_line, status_col) =
+                                active_file_for_status.editor.cursor_line_col();
+                            let status_language = if active_file_for_status
+                                .label
+                                .starts_with("--synthetic:")
+                            {
+                                "synthetic".to_string()
+                            } else {
+                                language::detect_language_for_file(std::path::Path::new(
+                                    &active_file_for_status.label,
+                                ))
+                                .map(|p| p.id)
+                                .unwrap_or_else(|| "plain text".to_string())
+                            };
+                            let status_lsp = if active_file_for_status.lsp_session.is_some() {
+                                "LSP active"
+                            } else {
+                                "no LSP"
+                            };
+                            let status_dirty = if active_file_for_status.dirty {
+                                " *"
+                            } else {
+                                ""
+                            };
+                            let status_text = format!(
+                                "Ln {}, Col {}  |  {}{}  |  {}  |  {} file{}",
+                                status_line + 1,
+                                status_col + 1,
+                                status_language,
+                                status_dirty,
+                                status_lsp,
+                                files.len(),
+                                if files.len() == 1 { "" } else { "s" }
+                            );
+                            text_state.set_status_bar_text(&status_text);
+
                             text_state
                                 .prepare(
                                     &gpu_state.device,
@@ -3143,6 +3304,33 @@ fn main() {
                                     height: theme::BORDER_WIDTH_PX,
                                     color: theme::BORDER,
                                 },
+                                // Real §75.56 hairline beneath the activity
+                                // bar row, separating it from the file
+                                // tree/git panel content below.
+                                selection::SelectionRect {
+                                    x: 0.0,
+                                    y: text::ACTIVITY_ROW_HEIGHT,
+                                    width: text::SIDEBAR_WIDTH,
+                                    height: theme::BORDER_WIDTH_PX,
+                                    color: theme::BORDER,
+                                },
+                                // Real §75.57 status bar surface panel +
+                                // top hairline, full window width along the
+                                // bottom edge.
+                                selection::SelectionRect {
+                                    x: 0.0,
+                                    y: (window_h - text::STATUS_BAR_HEIGHT).max(0.0),
+                                    width: window_w,
+                                    height: text::STATUS_BAR_HEIGHT,
+                                    color: theme::SURFACE,
+                                },
+                                selection::SelectionRect {
+                                    x: 0.0,
+                                    y: (window_h - text::STATUS_BAR_HEIGHT).max(0.0),
+                                    width: window_w,
+                                    height: theme::BORDER_WIDTH_PX,
+                                    color: theme::BORDER,
+                                },
                             ];
                             chrome_renderer.update(
                                 &gpu_state.device,
@@ -3154,50 +3342,177 @@ fn main() {
                                 },
                             );
 
-                            // Real active-tab highlight rect (§75.21), via the
+                            // Real, animated active-tab glow pill (§75.55),
+                            // replacing §75.21/§75.54's flat sharp-edged
+                            // highlight rect. Target bounds via the same
                             // real char range `build_tab_bar_text` already
-                            // computed for the active file's tab and the same
-                            // real pixel lookup the tab bar's own hit-testing
-                            // uses in reverse.
-                            let active_tab_rects: Vec<selection::SelectionRect> = tab_hits
+                            // computed for the active file's tab and the
+                            // same real pixel lookup the tab bar's own
+                            // hit-testing uses in reverse; `tab_underline_
+                            // anim` eases the *displayed* x/width toward
+                            // that target every real frame rather than
+                            // snapping, so switching tabs shows the pill
+                            // genuinely sliding.
+                            let tab_target: Option<(f32, f32)> = tab_hits
                                 .iter()
                                 .find(|hit| hit.file_index == active)
                                 .and_then(|hit| {
                                     let x_start = text_state.tab_bar_pixel_pos(hit.tab_range.start)?;
                                     let x_end = text_state.tab_bar_pixel_pos(hit.tab_range.end)?;
                                     let scroll = text_state.tab_bar_scroll();
-                                    let x = text::TEXT_ORIGIN_X + x_start - scroll;
-                                    let width = x_end - x_start;
-                                    Some([
-                                        selection::SelectionRect {
+                                    Some((text::TEXT_ORIGIN_X + x_start - scroll, x_end - x_start))
+                                });
+                            let now = Instant::now();
+                            let dt = (now - last_anim_instant).as_secs_f32();
+                            last_anim_instant = now;
+                            // Exponential smoothing with a real, frame-rate-
+                            // independent time constant (not a fixed
+                            // per-frame fraction, which would ease at a
+                            // different real speed depending on this
+                            // crate's own uncapped `ControlFlow::Poll`
+                            // frame rate).
+                            const ANIM_TIME_CONSTANT_SECS: f32 = 0.09;
+                            let alpha = 1.0 - (-dt / ANIM_TIME_CONSTANT_SECS).exp();
+                            match (tab_target, &mut tab_underline_anim) {
+                                (Some((tx, tw)), Some((cx, cw))) => {
+                                    *cx += (tx - *cx) * alpha;
+                                    *cw += (tw - *cw) * alpha;
+                                }
+                                (Some(target), None) => tab_underline_anim = Some(target),
+                                (None, _) => tab_underline_anim = None,
+                            }
+                            // Real §75.55 animated mode-toggle active-label
+                            // pill target, same real pixel lookup
+                            // (`mode_toggle_pixel_pos`) in reverse of the
+                            // tab bar's own, anchored to the mode toggle's
+                            // own fixed-width right-aligned origin.
+                            let mode_toggle_left =
+                                (window_w - text::MODE_TOGGLE_WIDTH).max(text::SIDEBAR_WIDTH);
+                            let mode_target: Option<(f32, f32)> = mode_hits
+                                .iter()
+                                .find(|hit| hit.mode == mode)
+                                .and_then(|hit| {
+                                    let x_start =
+                                        text_state.mode_toggle_pixel_pos(hit.range.start)?;
+                                    let x_end = text_state.mode_toggle_pixel_pos(hit.range.end)?;
+                                    Some((mode_toggle_left + x_start, x_end - x_start))
+                                });
+                            match (mode_target, &mut mode_toggle_anim) {
+                                (Some((tx, tw)), Some((cx, cw))) => {
+                                    *cx += (tx - *cx) * alpha;
+                                    *cw += (tw - *cw) * alpha;
+                                }
+                                (Some(target), None) => mode_toggle_anim = Some(target),
+                                (None, _) => mode_toggle_anim = None,
+                            }
+                            let active_tab_rects: Vec<glow_rect::GlowRect> = tab_underline_anim
+                                .into_iter()
+                                .flat_map(|(x, width)| {
+                                    [
+                                        // Soft, rounded, glowing accent
+                                        // pill behind the active tab's
+                                        // label -- the "futuristic" real
+                                        // replacement for the old flat
+                                        // rect highlight.
+                                        glow_rect::GlowRect {
                                             x,
-                                            y: 0.0,
+                                            y: 3.0,
                                             width,
-                                            height: text::TAB_BAR_HEIGHT,
-                                            color: selection::ACCENT_HIGHLIGHT,
+                                            height: text::TAB_BAR_HEIGHT - 6.0,
+                                            radius: glow_rect::CORNER_RADIUS_PX,
+                                            color: [
+                                                selection::ACCENT_SOLID[0],
+                                                selection::ACCENT_SOLID[1],
+                                                selection::ACCENT_SOLID[2],
+                                                0.16,
+                                            ],
+                                            glow_strength: 0.55,
                                         },
-                                        // Real §75.54 "Spartan Coding
-                                        // futuristic" accent underline --
-                                        // a solid, full-opacity strip
-                                        // beneath the translucent
-                                        // highlight above, distinguishing
-                                        // the active tab with a sharp
-                                        // accent line rather than flat
-                                        // Antigravity-style minimalism
-                                        // alone.
-                                        selection::SelectionRect {
+                                        // A thin, solid, rounded accent
+                                        // capsule at the tab's bottom
+                                        // edge -- the sharp signature
+                                        // accent §75.54 introduced, now
+                                        // rounded and animated along with
+                                        // the pill above it.
+                                        glow_rect::GlowRect {
                                             x,
                                             y: text::TAB_BAR_HEIGHT - selection::ACCENT_UNDERLINE_PX,
                                             width,
                                             height: selection::ACCENT_UNDERLINE_PX,
+                                            radius: selection::ACCENT_UNDERLINE_PX / 2.0,
                                             color: selection::ACCENT_SOLID,
+                                            glow_strength: 0.4,
                                         },
-                                    ])
+                                    ]
                                 })
-                                .into_iter()
-                                .flatten()
+                                .chain(mode_toggle_anim.into_iter().map(|(x, width)| {
+                                    // Same soft rounded glow pill treatment
+                                    // for the active mode label
+                                    // (Agent/Editor/Design) -- a real,
+                                    // consistent accent language reused
+                                    // across every "this is the active
+                                    // thing" indicator in the shell rather
+                                    // than a one-off special case.
+                                    glow_rect::GlowRect {
+                                        x,
+                                        y: 3.0,
+                                        width,
+                                        height: text::TAB_BAR_HEIGHT - 6.0,
+                                        radius: glow_rect::CORNER_RADIUS_PX,
+                                        color: [
+                                            selection::ACCENT_SOLID[0],
+                                            selection::ACCENT_SOLID[1],
+                                            selection::ACCENT_SOLID[2],
+                                            0.16,
+                                        ],
+                                        glow_strength: 0.55,
+                                    }
+                                }))
+                                .chain(
+                                    // Real §75.56 activity-bar active-icon
+                                    // badge -- static, not animated (unlike
+                                    // the tab/mode pills above): the
+                                    // activity row's own "active" state
+                                    // changes far less often than tabs or
+                                    // modes do, so an eased slide here
+                                    // would rarely even be visible.
+                                    activity_hits
+                                        .iter()
+                                        .find(|hit| {
+                                            matches!(
+                                                (hit.id, sidebar_mode),
+                                                (
+                                                    activity_bar::ActivityId::Explorer,
+                                                    SidebarMode::FileTree
+                                                ) | (
+                                                    activity_bar::ActivityId::SourceControl,
+                                                    SidebarMode::SourceControl
+                                                )
+                                            )
+                                        })
+                                        .and_then(|hit| {
+                                            let x_start = text_state
+                                                .activity_bar_pixel_pos(hit.range.start)?;
+                                            let x_end =
+                                                text_state.activity_bar_pixel_pos(hit.range.end)?;
+                                            Some(glow_rect::GlowRect {
+                                                x: text::SIDEBAR_TEXT_LEFT + x_start,
+                                                y: 5.0,
+                                                width: x_end - x_start,
+                                                height: text::ACTIVITY_ROW_HEIGHT - 10.0,
+                                                radius: glow_rect::CORNER_RADIUS_PX,
+                                                color: [
+                                                    selection::ACCENT_SOLID[0],
+                                                    selection::ACCENT_SOLID[1],
+                                                    selection::ACCENT_SOLID[2],
+                                                    0.16,
+                                                ],
+                                                glow_strength: 0.5,
+                                            })
+                                        }),
+                                )
                                 .collect();
-                            tab_bar_renderer.update(
+                            glow_renderer.update(
                                 &gpu_state.device,
                                 &gpu_state.queue,
                                 &active_tab_rects,
@@ -3355,7 +3670,7 @@ fn main() {
                                         occlusion_query_set: None,
                                     });
                                 chrome_renderer.render(&mut pass);
-                                tab_bar_renderer.render(&mut pass);
+                                glow_renderer.render(&mut pass);
                                 selection_renderer.render(&mut pass);
                                 modal_renderer.render(&mut pass);
                                 text_state.render(&mut pass).expect("glyphon render failed");

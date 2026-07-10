@@ -1386,6 +1386,29 @@ first — it's the parity reference until each row there is actually reimplement
   passing it correctly. No theme-switching UI (one hardcoded palette, now correctly sourced instead
   of ad hoc), no gradient/glow/blur/rounded-corner rendering of any kind, no per-panel border
   treatment beyond the shared base layer, no dark/light toggle.
+- **Real, working code — real SDF rounded-corner + glow shader, animated tab/mode pills, and a real
+  activity bar + status bar, user-requested (§75.55)**: direct response to "too much like a boring
+  terminal... more creative and add more tools features and options," the "futuristic and animated"
+  half §75.54 explicitly left unaddressed. New `glow_rect.rs`/`glow_rect.wgsl` -- a real SDF
+  rounded-rect + soft Gaussian-glow shader (Inigo Quilez's `sd_rounded_box`, real `fwidth`-based
+  antialiasing), a sibling to `SelectionRenderer` (which stays sharp-edged for selection/dim-overlay
+  use). The flat active-tab highlight and mode-toggle label both became real rounded, softly-glowing
+  pills, animated via exponential smoothing with a frame-rate-independent time constant -- confirmed
+  live via a mid-animation screenshot that caught the pill genuinely stretched between two tab
+  positions before settling. New `activity_bar.rs` + a real clickable Files/Git/Agent/Set icon row
+  at the top of the sidebar (`ACTIVITY_ROW_HEIGHT`), giving four previously keyboard-only actions
+  (Ctrl+G, Ctrl+1, Ctrl+,) their first on-screen affordance -- a real live-testing-only bug was
+  found (cosmic-text's `hit()` clamps a trailing click past the last label to a column outside its
+  own exclusive range, silently swallowing clicks on "Set") and fixed with a clamp-to-last-hit
+  regression test. A real bottom status bar (line:col, language, dirty state, LSP presence, file
+  count) was also added, with `visible_lines` now correctly subtracting its real height instead of
+  the previous `2.0 * TEXT_ORIGIN_Y` approximate guess. Full test/clippy/fmt clean throughout,
+  re-verified after every fix. **What this does not confirm**: no hover-state (pointer-driven)
+  animation for sidebar rows/buttons (task #32 remains open), no rounded corners on the
+  modal/command-palette/settings panels themselves, no git-branch name in the status bar. The
+  user's separate request for an automatic crash/error report *upload* service (local-only today,
+  §75.32) remains open, deliberately deferred this pass per the user's own follow-up redirect
+  toward Tier 1 MVP work.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
