@@ -6,6 +6,7 @@ import StatusBar from "./components/StatusBar";
 import Editor, { type OpenFile } from "./components/Editor";
 import Placeholder from "./components/Placeholder";
 import WorkflowsScreen from "./components/WorkflowsScreen";
+import LeoChatPanel from "./components/LeoChatPanel";
 import { NAV, type ScreenId } from "./nav";
 import "./app.css";
 
@@ -94,6 +95,7 @@ export default function App(): React.ReactElement {
           </>
         )}
       </div>
+      <LeoChatPanel projectRoot={ROOT} />
     </div>
   );
 }

@@ -74,13 +74,37 @@ app.whenReady().then(() => {
   // `preload.ts`'s `contextBridge` -- a 1:1 passthrough to the real
   // Rust backend's own protocol (`spartan-backend::handle_request`'s
   // method names), not a separate parallel API to keep in sync by hand.
-  const methods = ["list_dir", "open_file", "edit", "save_file", "undo", "close_file"];
+  // The four `leo_*` methods are real Leo agent wiring (§75.61,
+  // user-requested: "Leo still runs the show") -- `leo_start_task`
+  // returns a fast synchronous ack; the real plan (or a real failure)
+  // arrives later as a real `spartan:event`, relayed below.
+  const methods = [
+    "list_dir",
+    "open_file",
+    "edit",
+    "save_file",
+    "undo",
+    "close_file",
+    "leo_status",
+    "leo_start_task",
+    "leo_approve_plan",
+    "leo_reject_plan",
+  ];
   for (const method of methods) {
     ipcMain.handle(`spartan:${method}`, async (_event, params: Record<string, unknown>) => {
       if (!backend) throw new Error("backend not ready");
       return backend.call(method, params);
     });
   }
+
+  // Real, unprompted backend events (Leo's own async plan-ready/
+  // plan-failed notifications) relayed to every real open window --
+  // there is normally exactly one, but this doesn't assume that.
+  backend.onEvent((eventName, data) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send("spartan:event", eventName, data);
+    }
+  });
 
   createWindow();
 

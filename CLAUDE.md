@@ -70,6 +70,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Real Tier 1 implementation begun (core buffer + language registry), what it does/doesn't mean | §75 |
 | Electron/React desktop shell (`desktop/`) — the current UI, replacing the wgpu shell as the primary surface; the wgpu shell (`crates/spartan-editor-core`) is the reference/backend proof, not deleted | §75.59 |
 | Desktop shell's 3-tier nav IA (Workspace/Build/Platform) and Workflows screen — READ §75.60 BEFORE ASSUMING VELOCITY CODE/ASSETS WERE COPIED (they were not; AGPL-3.0) | §75.60 |
+| Leo's persistent chat panel in the Electron shell + `spartan-backend`'s async event protocol | §75.61 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -1620,6 +1621,56 @@ first — it's the parity reference until each row there is actually reimplement
   support for streaming PTY output before a real terminal view is possible here); the Workflows
   canvas has no node/edge creation UI or persistence; no visual assets or code from
   `OptimiLabs/velocity` were used anywhere in this pass.
+- **Real, working code — real Leo wiring in the Electron shell: a persistent chat panel and an
+  async event protocol extension, user-requested (§75.61)**: closes "Where is my Leo chat panel?
+  Leo still runs the show" -- a real, correct objection that the nav restructuring in §75.60 had
+  left Leo completely absent from the new shell (only a placeholder pointed back at the old wgpu
+  shell's Agent mode). Built as a real, persistent, fixed-width right-hand panel visible across
+  every screen at once -- not a nav destination you navigate away from, directly answering "Leo
+  still runs the show." Required a real protocol extension first: every existing
+  `spartan-backend` method was fast/synchronous, but Leo's own plan generation is a real, possibly
+  20-45s+ blocking model call that must never block the one IPC channel -- `lib.rs` gained a real
+  `Event {event, data}` message shape (no `id` field, distinguishing it from a `Response` on the
+  wire), and `main.rs` was restructured around one dedicated writer thread fed by a shared
+  `mpsc::Sender<String>` (every thread, including Leo's own background one, holds a clone) so a
+  real unprompted event can never interleave mid-line with a normal response. `BackendState`
+  became real `Arc<Mutex<>>` (previously plain/single-threaded-only) for the same reason. Four new
+  real IPC methods wrap `spartan-leo::Agent`/`spartan-model::OllamaProvider` directly (no new agent
+  logic, only plumbing): `leo_status` (rehydrates a panel that may mount before or after a task is
+  in flight), `leo_start_task` (real `begin_planning` transition, then a real spawned background
+  thread mirroring `spartan-editor-core::leo_bridge`'s own already-proven shape exactly, pushing a
+  real `leo_plan_ready`/`leo_plan_failed` event on completion), `leo_approve_plan` (real
+  `AwaitingApproval -> Executing` transition + a real git checkpoint via `spartan_git::GitRepo::
+  discover`, matching the wgpu shell's own exact scope -- no automated execute/verify loop exists
+  in `spartan-leo` yet, not overclaimed here either), `leo_reject_plan`. 4 new tests, 12 total in
+  this crate, all passing. `backend-client.ts`/`main.ts`/`preload.ts` extended to distinguish and
+  relay real events to a new `window.spartan.onEvent`. New `LeoChatPanel.tsx`: real task input
+  (Ctrl/Cmd+Enter), a real color-coded state badge, and once a plan arrives, its real goal/
+  approach/files/risk-notes fields with real Approve/Reject buttons; approving shows a real,
+  honest message naming the missing execute/verify loop rather than implying more happened than
+  did. **A real environment finding during verification, distinguished from a real test-harness
+  mistake**: a manual stdio smoke test's first attempt showed no async event at all -- traced to
+  piping input and letting stdin close immediately, which exits the whole process (killing the
+  background thread) before a slow call can finish, correct behavior for a real long-lived
+  Electron child process but misleading for a one-shot test; corrected by keeping stdin open, a
+  real event then did arrive, proving the full pipeline (ack -> background thread -> event push ->
+  parsed) works exactly as designed. Its real payload, though, was a real failure: `llama-server`
+  in this session's container could not finish loading model tensors within timeout for either the
+  8B target model or (independently checked via raw `curl`) even a 1.2B model, which returned zero
+  bytes in 60s -- matching this project's own already-documented "Ollama backend failure, not a
+  code defect" pattern (§75.56, §75.57), not a new issue, and not retried in a loop once
+  recognized as matching that known pattern (memory independently confirmed not the cause, 14GB
+  free). Live UI verification instead used Playwright against a real Vite dev server with a
+  test-only mocked `window.spartan` (never shipped) simulating a real event arriving ~800ms after
+  the sync ack -- the complete Idle -> Planning -> AwaitingApproval (full real plan rendered) ->
+  Executing flow was screenshotted and confirmed correct, exercising the exact same React code a
+  real backend event would. **What this does not confirm**: no live successful plan generation was
+  observed (the same real, environment-specific Ollama blocker above); no real Electron window
+  launch (same gap as §75.59/§75.60); no execute/verify loop (matches `spartan-leo`'s own real
+  current scope); no `ClaudeProvider`/`LiteLLMProvider` option in this panel (`OllamaProvider`
+  only, matching `leo_bridge.rs`'s own existing precedent); no multi-turn conversation history; the
+  "Agents" nav screen remains a placeholder reserved for real future agent configuration,
+  intentionally separate from this panel's own chat/plan/approve scope.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1677,7 +1728,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 428 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 432 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-editor-core,

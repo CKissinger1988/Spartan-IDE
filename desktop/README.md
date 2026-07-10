@@ -32,6 +32,28 @@ deleted).
   Usage, Agents, Skills, Commands, Hooks, MCP, Routing, Models, Plugins,
   Marketplace, Settings) an honest, specific "what exists elsewhere in
   this project and what's missing here" message instead of fake content.
+  `LeoChatPanel.tsx` is a real, persistent, always-visible chat panel
+  (fixed sibling of `.main-column`, not a nav screen) wired to Leo's real
+  `plan`/`approve`/`reject` loop -- see §75.61.
+
+## Leo's async event protocol
+
+Unlike every other `spartan-backend` method (fast, synchronous
+request/response), Leo's own plan generation is a real, possibly
+20-45s+ blocking model call. `leo_start_task` returns a fast synchronous
+ack; the real result arrives later as an unprompted line with an
+`event` field instead of an `id` (`{"event": "leo_plan_ready", "data":
+{...}}` or `"leo_plan_failed"`). `backend-client.ts` distinguishes the
+two shapes and routes events through `window.spartan.onEvent(listener)`
+(exposed via `preload.ts`, relayed by `main.ts`). See §75.61 for the
+full design and a real, honestly-diagnosed environment finding: this
+session's own Ollama backend couldn't finish loading model tensors for
+either `llama3.1:8b` or a much smaller 1.2B model within request
+timeouts, matching an already-documented environment-specific pattern
+elsewhere in this project (§75.56, §75.57) -- the protocol itself was
+independently verified correct (both the synchronous ack and a real,
+asynchronously-arriving failure event), just not a full live chain with
+an actual successful model response.
 
 ## Build & run
 

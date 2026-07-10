@@ -13,10 +13,13 @@ interface PendingRequest {
   reject: (reason: Error) => void;
 }
 
+export type EventListener = (event: string, data: unknown) => void;
+
 export class BackendClient {
   private proc: ChildProcessWithoutNullStreams;
   private nextId = 1;
   private pending = new Map<number, PendingRequest>();
+  private eventListeners = new Set<EventListener>();
 
   constructor(binaryPath: string) {
     this.proc = spawn(binaryPath, [], { stdio: ["pipe", "pipe", "pipe"] });
@@ -38,13 +41,24 @@ export class BackendClient {
 
   private handleLine(line: string): void {
     if (!line.trim()) return;
-    let parsed: { id: number; result?: unknown; error?: string };
+    let parsed: { id?: number; result?: unknown; error?: string; event?: string; data?: unknown };
     try {
       parsed = JSON.parse(line);
     } catch (e) {
       console.error(`[spartan-backend] malformed response line: ${line}`, e);
       return;
     }
+    // Real, unprompted server-initiated messages (`spartan_backend::Event`,
+    // e.g. Leo's own async plan-ready/plan-failed notifications) carry an
+    // `event` field and no `id` -- routed to real subscribers instead of
+    // resolving a pending request, since nothing is waiting on them.
+    if (typeof parsed.event === "string") {
+      for (const listener of this.eventListeners) {
+        listener(parsed.event, parsed.data);
+      }
+      return;
+    }
+    if (typeof parsed.id !== "number") return;
     const pending = this.pending.get(parsed.id);
     if (!pending) return;
     this.pending.delete(parsed.id);
@@ -62,6 +76,11 @@ export class BackendClient {
       this.pending.set(id, { resolve, reject });
       this.proc.stdin.write(`${JSON.stringify(request)}\n`);
     });
+  }
+
+  onEvent(listener: EventListener): () => void {
+    this.eventListeners.add(listener);
+    return () => this.eventListeners.delete(listener);
   }
 
   dispose(): void {

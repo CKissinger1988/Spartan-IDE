@@ -4671,9 +4671,14 @@ dependencies = [
 name = "spartan-backend"
 version = "0.1.0"
 dependencies = [
+ "git2",
  "serde",
  "serde_json",
  "spartan-buffer",
+ "spartan-git",
+ "spartan-leo",
+ "spartan-model",
+ "spartan-settings",
 ]
 
 [[package]]

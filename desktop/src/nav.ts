@@ -87,7 +87,7 @@ export const SCREEN_NOTES: Partial<Record<ScreenId, string>> = {
   analytics: "Usage/cost/latency tracking -- depends on real session execution data existing first.",
   usage: "Per-provider usage tracking -- same dependency as Analytics.",
   agents:
-    "Real Leo agent core (plan/approve/execute/verify) already exists and is wired into the original wgpu shell's Agent mode (spartan-leo, agent_panel.rs). Not yet ported to this Electron shell.",
+    "Leo's real chat/plan/approve loop now lives in the persistent right-docked panel (LeoChatPanel.tsx, always visible, not this nav screen) -- see §75.61. This screen is reserved for real future agent *configuration* (approval mode, model selection per task) once that's built, not chat.",
   workflows: "A real, working node-graph canvas -- see WorkflowsScreen.tsx.",
   skills: "Not yet designed for this shell.",
   commands: "Not yet designed for this shell.",
