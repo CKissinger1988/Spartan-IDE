@@ -87,6 +87,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Real Docker daemon started and verified inside a sandboxed session — not a universal guarantee for every future session | §75.75 |
 | Sci-Fi "Spartan Coding" theme, full Settings taxonomy, New Project wizard, first-run onboarding | §75.76 |
 | Real electron-builder packaging config, a packaged-app path-resolution fix — READ §75.77 BEFORE ASSUMING A REAL INSTALLER WAS PRODUCED (it wasn't; the same standing network block, confirmed one layer deeper) | §75.77 |
+| Real Leo "Failed → Recovering → Executing" retry UI, closing task #58's last named remaining item | §75.78 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2269,6 +2270,24 @@ first — it's the parity reference until each row there is actually reimplement
   install (`execFile("node", ...)`), unsafe for a packaged end-user machine — real, separate,
   un-started follow-up. The config and path-resolution fix are both real and ready; only the
   final network-gated packaging step is unverified.
+- **Real, working code — real Leo "Failed → Recovering → Executing" retry UI, closing task #58's
+  own last named remaining item (§75.78)**: `spartan_leo::agent::begin_recovery` has been real
+  and tested since §75.46 but had no real caller anywhere — `leo_next_step` correctly called
+  `mark_failed` on a real error, but nothing ever called `begin_recovery` back. Traced against
+  `AgentState::can_transition_to`: `Agent::cancel` has no `Failed -> Idle` edge, so
+  `begin_recovery` is the *only* way out of `Failed` short of starting a new task. New
+  `spartan-backend::leo_retry` (mirrors `leo_approve_plan`'s git-repo shape) reports the real
+  post-recovery state, or a plain "recovery attempts exhausted (max 3) — start a new task
+  instead" on the real bounded-retry limit. Registered in both `main.ts` and `preload.ts`
+  together, with both files' method arrays diffed to confirm no drift remains — a deliberate
+  check against repeating §75.76's own found bug class. `LeoChatPanel.tsx` gained a real Retry
+  button shown only in `Failed` state. 3 new Rust tests (before-any-task, real success path, real
+  exhaustion after 3 real attempts), 539 tests total (up from 536), full fmt/clippy/test clean;
+  `desktop`'s typecheck/build clean; real, screenshotted Playwright verification of the complete
+  fail → retry → succeed sequence. **What this does not confirm**: no live model-driven
+  failure/recovery cycle (Ollama unreachable this session); `RecoveryExhausted`'s UI path was
+  verified at the Rust test level, not end-to-end in Playwright. With this pass, every
+  specifically-named piece of task #58 is closed.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2326,7 +2345,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 536 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 539 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,

@@ -23,6 +23,7 @@ const ALLOWED_METHODS = new Set([
   "leo_next_step",
   "leo_approve_call",
   "leo_reject_call",
+  "leo_retry",
   "leo_cancel",
   "design_parse",
   "design_bundle",

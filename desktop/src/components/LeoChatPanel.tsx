@@ -383,6 +383,27 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     }
   }, []);
 
+  /** Real §75.78 retry -- the "Failed -> Recovering -> Executing" loop's
+   * last missing piece. Mirrors `approve`'s exact shape: call the real
+   * backend transition, adopt whatever state it reports, then
+   * immediately ask for the next step, exactly like approving a plan
+   * already does. A real `RecoveryExhausted` error surfaces as a plain
+   * error message (via the existing `error` state, already rendered
+   * unconditionally above) rather than a special-cased UI -- the honest
+   * backend message ("start a new task instead") already says what to
+   * do next. */
+  const retryTask = useCallback(async () => {
+    setError(null);
+    try {
+      const result = (await window.spartan.call("leo_retry")) as { state: LeoState };
+      setAgentState(result.state);
+      setLog((prev) => [...prev, { kind: "auto", text: "Retrying failed task..." }]);
+      requestNextStep();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [requestNextStep]);
+
   const approveCall = useCallback(async () => {
     if (!pendingCall) return;
     try {
@@ -498,6 +519,14 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         )}
 
         {error && <div className="leo-error mono">{error}</div>}
+
+        {agentState === "Failed" && (
+          <div className="leo-status-message mono">
+            <button className="leo-btn leo-btn-approve sf-chamfer-sm" onClick={retryTask}>
+              Retry
+            </button>
+          </div>
+        )}
 
         {(agentState === "Executing" || agentState === "Verifying") && (
           <div className="leo-execute">

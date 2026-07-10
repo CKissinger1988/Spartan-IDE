@@ -587,6 +587,45 @@ fn leo_cancel(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value, Str
     Ok(serde_json::json!({ "ok": true, "state": state_name }))
 }
 
+/// Real §75.78 retry -- closes the one last piece the "Failed ->
+/// Recovering -> Executing" retry loop has been missing since
+/// `spartan-leo::agent::begin_recovery` was first built (§75.46): a real
+/// caller. Every prior pass since then correctly called `mark_failed`
+/// on a real tool-execution or model error (`leo_next_step`'s own two
+/// call sites), but nothing ever called `begin_recovery` -- a task that
+/// failed had no way forward except abandoning it for a brand new one.
+/// `Agent::cancel` cannot reach `Failed` at all (`AgentState::
+/// can_transition_to` has no `Failed -> Idle` edge, by design -- see
+/// `leo_cancel`'s own doc comment), so `begin_recovery` really is the
+/// only real exit from this state. Mirrors `leo_approve_plan`'s exact
+/// git-repo-discovery shape, since `begin_recovery` needs the same real
+/// checkpoint-restore access `approve_plan` does. A real, honest,
+/// non-generic error on `RecoveryExhausted` (the bounded-retry limit
+/// `spartan-leo` itself enforces, §4.1's "default max 3 attempts") tells
+/// the user plainly that this task is done for and a new one is the
+/// only way forward, rather than a caller silently retrying forever or
+/// the UI showing a confusing generic failure.
+fn leo_retry(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value, String> {
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    let project_root = guard
+        .leo_project_root
+        .clone()
+        .ok_or("no Leo task has been started yet")?;
+    let agent = guard
+        .leo_agent
+        .as_mut()
+        .ok_or("no Leo task has been started yet")?;
+    let mut repo = spartan_git::GitRepo::discover(&project_root)
+        .ok_or("project root is not a real git repository -- Leo needs one for checkpoints")?;
+    match agent.begin_recovery(repo.raw_repo_mut()) {
+        Ok(()) => Ok(serde_json::json!({ "ok": true, "state": agent_state_name(agent) })),
+        Err(AgentError::RecoveryExhausted) => {
+            Err("recovery attempts exhausted (max 3) -- start a new task instead".to_string())
+        }
+        Err(e) => Err(format!("begin_recovery: {e:?}")),
+    }
+}
+
 /// Real, honest JSON rendering of a proposed `ToolCall`'s arguments --
 /// the UI needs to show the human *what* Leo wants to do before they
 /// approve or reject it.
@@ -1776,6 +1815,7 @@ pub fn handle_request(
         "leo_next_step" => leo_next_step(state, out_tx.clone()),
         "leo_approve_call" => leo_approve_call(state),
         "leo_reject_call" => leo_reject_call(state),
+        "leo_retry" => leo_retry(state),
         "pty_spawn" => (|| {
             let cwd = get_str_param(&req.params, "cwd")?;
             let cols = get_u64_param(&req.params, "cols")? as u16;
@@ -3372,6 +3412,71 @@ mod tests {
         let resp = call(&state, 1, "leo_next_step", serde_json::json!({}));
         assert!(resp.error.is_some());
         assert!(resp.error.unwrap().contains("already awaiting approval"));
+    }
+
+    #[test]
+    fn leo_retry_before_any_task_errors_honestly() {
+        let state = new_state();
+        let resp = call(&state, 1, "leo_retry", serde_json::json!({}));
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn leo_retry_real_transitions_a_failed_agent_back_to_executing() {
+        let tmp = TempRepo::new("leo-retry-success");
+        let mut agent = agent_in_executing_state(&tmp.dir);
+        // A real `Executing -> Failed` transition, matching exactly what
+        // `leo_next_step`'s own two real call sites do on a genuine tool-
+        // execution or model error.
+        agent.mark_failed().unwrap();
+        assert_eq!(agent.state(), spartan_leo::state::AgentState::Failed);
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            leo_project_root: Some(tmp.dir.clone()),
+            ..Default::default()
+        }));
+        let resp = call(&state, 1, "leo_retry", serde_json::json!({}));
+        assert!(resp.error.is_none(), "leo_retry errored: {:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["state"], "Executing");
+        let guard = state.lock().unwrap();
+        assert_eq!(
+            guard.leo_agent.as_ref().unwrap().state(),
+            spartan_leo::state::AgentState::Executing
+        );
+    }
+
+    #[test]
+    fn leo_retry_reports_recovery_exhausted_honestly_after_the_real_bound() {
+        let tmp = TempRepo::new("leo-retry-exhausted");
+        let mut agent = agent_in_executing_state(&tmp.dir);
+        let mut repo = git2::Repository::open(&tmp.dir).unwrap();
+        // Real §4.1 bound is 3 -- exhaust it for real via the same
+        // `mark_failed`/`begin_recovery` pair `leo_retry` itself uses,
+        // called directly here to drive the agent to the real exhausted
+        // state without needing three separate IPC round trips.
+        for _ in 0..3 {
+            agent.mark_failed().unwrap();
+            agent.begin_recovery(&mut repo).unwrap();
+        }
+        agent.mark_failed().unwrap();
+        assert_eq!(agent.state(), spartan_leo::state::AgentState::Failed);
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            leo_project_root: Some(tmp.dir.clone()),
+            ..Default::default()
+        }));
+        let resp = call(&state, 1, "leo_retry", serde_json::json!({}));
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("exhausted"));
+        // A real, deliberate consequence: the agent stays in `Failed` --
+        // `begin_recovery` never even attempted the transition once the
+        // bound check failed, matching `Agent::begin_recovery`'s own
+        // real early-return-before-transitioning behavior.
+        let guard = state.lock().unwrap();
+        assert_eq!(
+            guard.leo_agent.as_ref().unwrap().state(),
+            spartan_leo::state::AgentState::Failed
+        );
     }
 
     #[test]
