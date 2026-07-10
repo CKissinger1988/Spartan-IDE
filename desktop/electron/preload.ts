@@ -14,11 +14,15 @@ const ALLOWED_METHODS = new Set([
   "edit",
   "save_file",
   "undo",
+  "redo",
   "close_file",
   "leo_status",
   "leo_start_task",
   "leo_approve_plan",
   "leo_reject_plan",
+  "design_parse",
+  "design_bundle",
+  "design_apply_edit",
 ]);
 
 contextBridge.exposeInMainWorld("spartan", {

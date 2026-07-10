@@ -6,6 +6,7 @@ import StatusBar from "./components/StatusBar";
 import Editor, { type OpenFile } from "./components/Editor";
 import Placeholder from "./components/Placeholder";
 import WorkflowsScreen from "./components/WorkflowsScreen";
+import DesignScreen from "./components/DesignScreen";
 import LeoChatPanel from "./components/LeoChatPanel";
 import { NAV, type ScreenId } from "./nav";
 import "./app.css";
@@ -90,7 +91,11 @@ export default function App(): React.ReactElement {
               <div className="screen-title mono">{screenLabel}</div>
             </div>
             <div className="content-area">
-              {screen === "workflows" ? <WorkflowsScreen /> : <Placeholder screen={screen} />}
+              {screen === "workflows" && <WorkflowsScreen />}
+              {screen === "design" && (
+                <DesignScreen activeFile={activeFile} onContentChange={handleContentChange} />
+              )}
+              {screen !== "workflows" && screen !== "design" && <Placeholder screen={screen} />}
             </div>
           </>
         )}

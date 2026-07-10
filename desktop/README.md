@@ -34,7 +34,26 @@ deleted).
   this project and what's missing here" message instead of fake content.
   `LeoChatPanel.tsx` is a real, persistent, always-visible chat panel
   (fixed sibling of `.main-column`, not a nav screen) wired to Leo's real
-  `plan`/`approve`/`reject` loop -- see §75.61.
+  `plan`/`approve`/`reject` loop -- see §75.61. `DesignScreen.tsx` is a
+  real, working GUI Builder + live preview (§75.62): a structural tree,
+  a real sandboxed iframe rendering `gui-builder/`'s own real esbuild
+  bundle output, and an edit panel whose applied edits round-trip back
+  into the live Editor buffer.
+- `electron/gui-builder-client.ts` — spawns the real, already-tested
+  `gui-builder/dist/cli.js` (§75.38-§75.53) directly from Electron's main
+  process (not through `spartan-backend` -- zero Rust dependency there),
+  one real subprocess per `parse`/`bundle`/`apply` call.
+
+## Known feature gaps vs. the original wgpu shell (`crates/spartan-editor-core`)
+
+A real audit (§75.62) found these real, working wgpu-shell features not
+yet ported here: syntax highlighting (`Editor.tsx` is a plain
+`<textarea>`), LSP, DAP, a Git/Source Control panel, a real terminal
+(Console) and multi-CLI Sessions (both blocked on the same real, scoped
+need: reusing Leo's own async `Event` mechanism for streaming PTY
+output), a Settings screen, and the unsaved-changes confirmation modal.
+Each has a specific, honest note in `nav.ts`'s `SCREEN_NOTES` rather
+than a generic "coming soon."
 
 ## Leo's async event protocol
 

@@ -41,9 +41,14 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     window.spartan
       .call("leo_status")
       .then((result) => {
-        const r = result as { state: LeoState; plan: LeoPlan | null };
-        setAgentState(r.state);
-        setPlan(r.plan);
+        // Defensive: a malformed/unexpected response (or a backend that
+        // doesn't implement this method at all, e.g. a future headless
+        // test harness) must never crash this panel -- found live via a
+        // Playwright mock that didn't implement `leo_status`, exposing
+        // that an undefined `state` reached `.toLowerCase()` below.
+        const r = result as { state?: LeoState; plan?: LeoPlan | null } | undefined;
+        setAgentState(r?.state ?? "Idle");
+        setPlan(r?.plan ?? null);
       })
       .catch(() => {});
   }, []);

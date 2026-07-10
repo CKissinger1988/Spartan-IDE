@@ -11,6 +11,7 @@ import { app, BrowserWindow, ipcMain } from "electron";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { BackendClient } from "./backend-client.js";
+import { GuiBuilderClient } from "./gui-builder-client.js";
 
 const isDev = !app.isPackaged;
 
@@ -37,7 +38,29 @@ function resolveBackendBinaryPath(): string {
   return devPath;
 }
 
+function resolveGuiBuilderCliPath(): string {
+  // Real, already-built `gui-builder/` npm project (§75.38-§75.53) -- the
+  // actual GUI Builder AST-sync/bundling engine, a sibling of `desktop/`
+  // at the repo root, not a dependency of it (deliberately its own
+  // separate npm project since day one, see its own README.md).
+  const cliPath = path.resolve(
+    import.meta.dirname,
+    "..",
+    "..",
+    "gui-builder",
+    "dist",
+    "cli.js"
+  );
+  if (!fs.existsSync(cliPath)) {
+    throw new Error(
+      `gui-builder CLI not found at ${cliPath} -- run "npm run build" inside gui-builder/ first.`
+    );
+  }
+  return cliPath;
+}
+
 let backend: BackendClient | null = null;
+let guiBuilder: GuiBuilderClient | null = null;
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -69,6 +92,7 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   backend = new BackendClient(resolveBackendBinaryPath());
+  guiBuilder = new GuiBuilderClient(resolveGuiBuilderCliPath());
 
   // Real, narrow set of IPC methods the renderer can invoke via
   // `preload.ts`'s `contextBridge` -- a 1:1 passthrough to the real
@@ -84,6 +108,7 @@ app.whenReady().then(() => {
     "edit",
     "save_file",
     "undo",
+    "redo",
     "close_file",
     "leo_status",
     "leo_start_task",
@@ -96,6 +121,27 @@ app.whenReady().then(() => {
       return backend.call(method, params);
     });
   }
+
+  // Real GUI Builder wiring (§75.62, user-requested: "the visual GUI
+  // Builder and live app preview are mandatory") -- routed to the real
+  // `gui-builder/` CLI, not `spartan-backend`, since it's pure Node/TS
+  // with zero Rust dependency; going through the Rust process would add
+  // a pointless extra hop.
+  ipcMain.handle("spartan:design_parse", async (_event, params: { path: string }) => {
+    if (!guiBuilder) throw new Error("gui-builder not ready");
+    return guiBuilder.parseComponent(params.path);
+  });
+  ipcMain.handle("spartan:design_bundle", async (_event, params: { path: string }) => {
+    if (!guiBuilder) throw new Error("gui-builder not ready");
+    return guiBuilder.bundleComponent(params.path);
+  });
+  ipcMain.handle(
+    "spartan:design_apply_edit",
+    async (_event, params: { edit: unknown; source: string }) => {
+      if (!guiBuilder) throw new Error("gui-builder not ready");
+      return guiBuilder.applyEdit(JSON.stringify(params.edit), params.source);
+    }
+  );
 
   // Real, unprompted backend events (Leo's own async plan-ready/
   // plan-failed notifications) relayed to every real open window --

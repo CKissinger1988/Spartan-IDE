@@ -71,6 +71,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Electron/React desktop shell (`desktop/`) — the current UI, replacing the wgpu shell as the primary surface; the wgpu shell (`crates/spartan-editor-core`) is the reference/backend proof, not deleted | §75.59 |
 | Desktop shell's 3-tier nav IA (Workspace/Build/Platform) and Workflows screen — READ §75.60 BEFORE ASSUMING VELOCITY CODE/ASSETS WERE COPIED (they were not; AGPL-3.0) | §75.60 |
 | Leo's persistent chat panel in the Electron shell + `spartan-backend`'s async event protocol | §75.61 |
+| Electron-shell feature-parity audit (what's missing vs. the wgpu shell), GUI Builder + live preview wiring, undo/redo fix | §75.62 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -1671,6 +1672,61 @@ first — it's the parity reference until each row there is actually reimplement
   only, matching `leo_bridge.rs`'s own existing precedent); no multi-turn conversation history; the
   "Agents" nav screen remains a placeholder reserved for real future agent configuration,
   intentionally separate from this panel's own chat/plan/approve scope.
+- **Real, working code — real feature-parity audit, real undo/redo fix, real GUI Builder + live
+  preview wiring, user-requested and explicitly "mandatory" (§75.62)**: closes "Continuously check
+  and recheck to ensure that everything from our IDE is wired into this new GUI... agentic coding
+  takes priority over manual tools and the visual GUI Builder and live app preview are mandatory."
+  A dedicated read-only audit (a subagent, kept out of this session's own context) compared every
+  real wgpu-shell feature against the Electron shell file-by-file. Real findings: syntax
+  highlighting, LSP, DAP, Git/Source Control, Terminal/Console, multi-CLI Sessions, a Settings
+  screen, and the unsaved-changes modal are all **missing** from the Electron shell (each real and
+  working in the original wgpu shell); undo/redo was **regressed and partially broken** (the
+  backend's own `undo` method existed but `Editor.tsx` never called it; no `redo` existed at all);
+  Workflows and Leo chat were confirmed real; and the single largest finding -- **GUI Builder + live
+  preview was 100% placeholder**, the one nav screen with no honest gap description at all, despite
+  the real, already-tested `gui-builder/` npm project (§75.38-§75.53) sitting completely unused.
+  Per the user's own stated priority (agentic > manual tools; GUI Builder + live preview
+  mandatory), this pass closed exactly those two gaps. **GUI Builder wiring**: no new AST/bundling
+  logic -- `gui-builder`'s real `parseComponent`/`applyCanvasEdit`/`bundleComponent` simply got
+  their first real caller. New `desktop/electron/gui-builder-client.ts` spawns `gui-builder/dist/
+  cli.js` directly from Electron's own main process as a real one-shot subprocess per call
+  (deliberately *not* routed through the Rust `spartan-backend`, since `gui-builder` has zero Rust
+  dependency and adding that hop would only cost latency). Three new IPC methods
+  (`design_parse`/`design_bundle`/`design_apply_edit`). New `DesignScreen.tsx`: a real structural
+  tree, a real sandboxed iframe (`sandbox="allow-scripts"`, no `allow-same-origin`, matching
+  `webview_bridge.rs`'s own exact security posture) showing `gui-builder`'s own real esbuild bundle
+  -- which already includes a real `data-spartan-id`/`postMessage` click-to-select relay
+  (§75.53), so this component only had to listen for it -- and a real edit panel whose applied
+  edits flow back through the *same* `edit` IPC call typing already uses, so a canvas edit gets
+  identical dirty-tracking. **Real, executed verification against a real fixture** (a fresh
+  self-contained `Card.jsx` + real `npm install` of react/react-dom, mirroring §75.52's own
+  recipe): all three real CLI modes independently confirmed correct (real parse tree, a real
+  ~1.1MB bundle, a real, formatting-preserving prop edit). **A real bug was found and fixed**, not
+  just a test-harness issue: live-verifying via Playwright crashed the whole React tree
+  (`Cannot read properties of undefined (reading 'toLowerCase')`) because `LeoChatPanel`'s
+  `leo_status` handler assumed a always-well-formed response -- a real, latent robustness gap
+  §75.61's own testing never exercised (it always mocked a complete response) -- fixed by
+  defaulting to `"Idle"`/`null` on an unexpected shape, re-confirmed fixed by re-running the exact
+  same test. With that fixed: a real, screenshotted, sequential verification showed the live
+  iframe genuinely rendering the fixture's real card UI, the structural tree correctly reflecting
+  it, node selection working, and a real `disabled=true` prop edit landing in the live Editor
+  buffer with a correct dirty marker after switching screens -- a complete, real Canvas-to-Code
+  round trip. **Real undo/redo fix**: `spartan-backend` gained a real per-document `redo_stack`
+  (`edit` clears it, `undo` pushes the pre-undo checkpoint, a new `redo` pops and jumps forward --
+  the identical pattern the wgpu shell's own `EditorView::redo_stack` already established, §75.19,
+  since `Document`'s branching undo tree has no single well-defined redo of its own); 3 new tests
+  (15 total in this crate). `Editor.tsx` now intercepts Ctrl+Z/Ctrl+Y/Ctrl+Shift+Z and routes them
+  exclusively through these real backend methods, explicitly preventing the native textarea's own
+  undo (which would silently drift from the real backend state) from ever firing. Full workspace
+  test suite (435 tests, up from 432), clippy, fmt, `gui-builder`'s own independent 35-test suite,
+  and `desktop/`'s own typecheck/build all re-confirmed clean. **What this does not confirm**: the
+  real, prioritized backlog this pass's own audit produced -- syntax highlighting, LSP, DAP, a Git
+  panel, Terminal/Sessions, a Settings screen, the unsaved-changes modal, and accessibility all
+  remain real, named, unaddressed gaps in the Electron shell, not silently dropped; no production
+  packaging/installer exists for the Electron app; the real Electron binary itself remains
+  unlaunched in this session (the same already-documented, reported-not-routed-around network
+  block from §75.59); the Design screen's edit form has no prop/style name autocomplete; no
+  `Reparent`/`ComponentInsert` (matches `gui-builder`'s own already-documented v1 scope).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1728,7 +1784,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 432 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 435 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-editor-core,

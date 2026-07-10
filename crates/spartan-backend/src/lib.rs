@@ -92,6 +92,17 @@ pub const LEO_MODEL: &str = "llama3.1:8b";
 struct OpenDoc {
     path: PathBuf,
     document: Document,
+    /// Real redo support (task #52 audit finding: the Electron shell's
+    /// `Editor.tsx` never called the pre-existing `undo` method and had
+    /// no `redo` at all) -- `spartan_buffer::Document` itself has no
+    /// single well-defined "redo" on a branching undo tree, so this is
+    /// built one layer up here, the exact same real pattern the original
+    /// wgpu shell's own `EditorView::redo_stack` already established
+    /// (§75.19): `undo` pushes the pre-undo checkpoint here before
+    /// jumping back; `redo` pops and jumps forward to it; any real new
+    /// edit clears it, since a fresh edit invalidates whatever "forward"
+    /// used to mean.
+    redo_stack: Vec<spartan_buffer::CheckpointId>,
 }
 
 /// Real, in-memory session state, now real behind `Arc<Mutex<_>>`
@@ -162,6 +173,7 @@ fn open_file(state: &mut BackendState, path: &str) -> Result<serde_json::Value, 
         OpenDoc {
             path: PathBuf::from(path),
             document,
+            redo_stack: Vec::new(),
         },
     );
     Ok(serde_json::json!({ "doc_id": doc_id, "content": content }))
@@ -191,6 +203,9 @@ fn edit(
         .document
         .replace(start_char..end_char, text)
         .map_err(|e| format!("replace: {e:?}"))?;
+    // A real new edit invalidates whatever "redo" used to mean, the same
+    // real rule the wgpu shell's own `EditorView` already enforces.
+    open_doc.redo_stack.clear();
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -209,8 +224,36 @@ fn undo(state: &mut BackendState, doc_id: u64) -> Result<serde_json::Value, Stri
         .open_docs
         .get_mut(&doc_id)
         .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+    let pre_undo_checkpoint = open_doc.document.current_checkpoint();
     let changed = open_doc.document.undo();
+    if changed {
+        open_doc.redo_stack.push(pre_undo_checkpoint);
+    }
     Ok(serde_json::json!({ "changed": changed, "content": open_doc.document.text() }))
+}
+
+/// Real redo -- `spartan_buffer::Document` has no single well-defined
+/// "redo" on its own branching undo tree, so this pops the real
+/// pre-undo checkpoint `undo()` pushed and jumps forward to it directly,
+/// the same real pattern `EditorView::redo` already established in the
+/// original wgpu shell (§75.19).
+fn redo(state: &mut BackendState, doc_id: u64) -> Result<serde_json::Value, String> {
+    let open_doc = state
+        .open_docs
+        .get_mut(&doc_id)
+        .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+    let Some(checkpoint) = open_doc.redo_stack.pop() else {
+        return Ok(serde_json::json!({ "changed": false, "content": open_doc.document.text() }));
+    };
+    match open_doc.document.jump_to_checkpoint(checkpoint) {
+        Ok(()) => Ok(serde_json::json!({ "changed": true, "content": open_doc.document.text() })),
+        Err(_) => {
+            // The checkpoint aged out of the bounded ring since `undo`
+            // pushed it -- a real, possible outcome, not an error to
+            // surface to the user; fall back to "nothing to redo".
+            Ok(serde_json::json!({ "changed": false, "content": open_doc.document.text() }))
+        }
+    }
 }
 
 fn close_file(state: &mut BackendState, doc_id: u64) -> Result<serde_json::Value, String> {
@@ -401,6 +444,10 @@ pub fn handle_request(
             let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
             undo(&mut guard, id)
         }),
+        "redo" => get_u64_param(&req.params, "doc_id").and_then(|id| {
+            let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+            redo(&mut guard, id)
+        }),
         "close_file" => get_u64_param(&req.params, "doc_id").and_then(|id| {
             let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
             close_file(&mut guard, id)
@@ -588,6 +635,100 @@ mod tests {
         let undo_result = undo_resp.result.unwrap();
         assert_eq!(undo_result["changed"], true);
         assert_eq!(undo_result["content"], "abc");
+        std::fs::remove_file(&file).ok();
+    }
+
+    #[test]
+    fn redo_restores_a_real_undone_edit() {
+        let file = std::env::temp_dir().join(format!(
+            "spartan-backend-test-redo-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&file, "abc").unwrap();
+        let state = new_state();
+        let doc_id = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        )
+        .result
+        .unwrap()["doc_id"]
+            .as_u64()
+            .unwrap();
+
+        call(
+            &state,
+            2,
+            "edit",
+            serde_json::json!({ "doc_id": doc_id, "start_char": 3, "end_char": 3, "text": "d" }),
+        );
+        call(&state, 3, "undo", serde_json::json!({ "doc_id": doc_id }));
+        let redo_resp = call(&state, 4, "redo", serde_json::json!({ "doc_id": doc_id }));
+        let redo_result = redo_resp.result.unwrap();
+        assert_eq!(redo_result["changed"], true);
+        assert_eq!(redo_result["content"], "abcd");
+        std::fs::remove_file(&file).ok();
+    }
+
+    #[test]
+    fn redo_with_nothing_to_redo_reports_unchanged() {
+        let file = std::env::temp_dir().join(format!(
+            "spartan-backend-test-redo-empty-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&file, "abc").unwrap();
+        let state = new_state();
+        let doc_id = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        )
+        .result
+        .unwrap()["doc_id"]
+            .as_u64()
+            .unwrap();
+        let redo_resp = call(&state, 2, "redo", serde_json::json!({ "doc_id": doc_id }));
+        assert_eq!(redo_resp.result.unwrap()["changed"], false);
+        std::fs::remove_file(&file).ok();
+    }
+
+    #[test]
+    fn a_real_new_edit_after_undo_clears_the_real_redo_stack() {
+        let file = std::env::temp_dir().join(format!(
+            "spartan-backend-test-redo-clear-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&file, "abc").unwrap();
+        let state = new_state();
+        let doc_id = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        )
+        .result
+        .unwrap()["doc_id"]
+            .as_u64()
+            .unwrap();
+
+        call(
+            &state,
+            2,
+            "edit",
+            serde_json::json!({ "doc_id": doc_id, "start_char": 3, "end_char": 3, "text": "d" }),
+        );
+        call(&state, 3, "undo", serde_json::json!({ "doc_id": doc_id }));
+        // A fresh edit should invalidate the pending redo.
+        call(
+            &state,
+            4,
+            "edit",
+            serde_json::json!({ "doc_id": doc_id, "start_char": 3, "end_char": 3, "text": "e" }),
+        );
+        let redo_resp = call(&state, 5, "redo", serde_json::json!({ "doc_id": doc_id }));
+        assert_eq!(redo_resp.result.unwrap()["changed"], false);
         std::fs::remove_file(&file).ok();
     }
 

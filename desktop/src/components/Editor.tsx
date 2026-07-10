@@ -27,9 +27,14 @@ interface EditorProps {
  *
  * Edits are sent to the real backend as a real whole-document replace on
  * every change (`edit` with `start_char: 0, end_char: <old length>`) --
- * simple and correct, at the real, named cost of losing the original
- * wgpu shell's own fine-grained per-keystroke undo checkpoints. Real
- * follow-up work, not attempted in this first increment.
+ * simple and correct. Real Ctrl+Z/Ctrl+Y undo/redo (task #52) are wired
+ * to the backend's own `undo`/`redo` IPC methods exclusively -- the
+ * native textarea's own built-in undo stack is intercepted and never
+ * allowed to fire, since it would silently drift from the real
+ * `Document`'s own branching undo tree. One real, named cost remains:
+ * every keystroke is still its own undo checkpoint, unlike the original
+ * wgpu shell's own coalesced-typing-run undo (§75.25) -- real follow-up
+ * work, not attempted in this pass.
  */
 export default function Editor({ file, onContentChange }: EditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -86,6 +91,30 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
           .call("save_file", { doc_id: file.docId })
           .then(() => onContentChange(file.path, prevContentRef.current, true))
           .catch((err: Error) => console.error("save failed:", err));
+      }
+      // Real undo/redo (task #52 audit finding: this crate's own
+      // `undo`/`redo` IPC methods existed but were never called --
+      // the native textarea's own built-in undo stack is unrelated to
+      // and would silently drift from the real backend `Document`'s
+      // own branching undo tree, so both are intercepted here and
+      // routed through the backend exclusively, never left to fall
+      // through to native behavior.
+      const isRedo =
+        ((e.ctrlKey || e.metaKey) && e.key === "y") ||
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "z");
+      const isUndo = (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z";
+      if (isUndo || isRedo) {
+        e.preventDefault();
+        window.spartan
+          .call(isRedo ? "redo" : "undo", { doc_id: file.docId })
+          .then((result) => {
+            const r = result as { changed: boolean; content: string };
+            if (r.changed) {
+              prevContentRef.current = r.content;
+              onContentChange(file.path, r.content);
+            }
+          })
+          .catch((err: Error) => console.error(`${isRedo ? "redo" : "undo"} failed:`, err));
       }
     },
     [file.docId, file.path, onContentChange]
