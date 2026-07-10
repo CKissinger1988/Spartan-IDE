@@ -2196,6 +2196,28 @@ first — it's the parity reference until each row there is actually reimplement
   real, explicit, user-confirmed scope decision, not an oversight; the real Electron window
   remains unlaunchable in this session for the same standing reason as every `desktop/` pass since
   §75.59.
+- **Real, working code — a real Docker daemon actually started inside this sandbox, closing
+  §75.74's own named live-verification gap for this one session (§75.75)**: direct response to
+  "Try starting the Docker daemon here and run the real integration tests." §75.74 had only ever
+  checked for an *already-running* daemon; this pass actually started one. Real diagnostics first
+  (`dockerd` binary present, real root with a broad capability set, real kernel `overlay`
+  filesystem support, `iptables`/`ip6tables` present), then `dockerd` was started directly with no
+  special flags and came up clean in under 5 seconds — real containerd boot, real buildkit init,
+  a real `/var/run/docker.sock`, `docker version`/`docker info` both returning correct real output
+  (Engine 29.3.1, `overlayfs` storage driver). With a real daemon reachable, `cargo test -p
+  spartan-devcontainer --release -- --nocapture --test-threads=1` was re-run: both
+  `docker_integration.rs` tests executed for real for the first time in this project's history —
+  confirmed three ways, not just "ok": no `"SKIP: ..."` message printed, real wall-clock time
+  (5.02s) consistent with an actual lifecycle, and a real `alpine:latest` image (13MB) genuinely
+  left in `docker images` afterward with zero leftover containers, proving both the real pull and
+  the real stop/remove cleanup actually ran. Full workspace re-run afterward: 528 tests, 0
+  failures (same count as §75.74 — a verification pass, not a new-feature pass), clippy/fmt clean.
+  **A real, explicit non-guarantee**: this confirms the feature works end-to-end in *this*
+  session's environment, not that every future session will have a startable daemon — the same
+  "confirmed here, not universal" caveat this project already applies to GPU availability,
+  `/dev/kvm`, and live Ollama reachability. The daemon was not left running as a permanent
+  fixture; a fresh session must independently re-establish it, same as every other real-external-
+  tool dependency in this project's history.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2260,9 +2282,11 @@ cargo test --workspace --release   # 528 tests: 6 spikes + 13 real crates + xtas
                                     # spartan-editor-core, spartan-backend, xtask)
 # spartan-devcontainer (§75.74) needs a real local Docker daemon reachable for its own
 # tests/docker_integration.rs -- self-skips (prints a message) if none is found, matching every
-# other real-external-tool integration suite in this repo. This sandboxed environment has the
-# `docker` CLI installed but no daemon running (`/var/run/docker.sock` doesn't exist), so these
-# tests self-skip here.
+# other real-external-tool integration suite in this repo. A later session (§75.75) confirmed
+# `dockerd` can actually be started directly in this sandbox (`nohup dockerd &`, no special
+# flags needed -- real overlay filesystem support and iptables are both present) after which
+# both tests run for real rather than self-skipping. Not guaranteed to hold in a fresh session --
+# start `dockerd` yourself and check `docker info` before assuming either way.
 # spartan-backend (§75.59) is the real IPC service the new desktop/ Electron shell drives --
 # `cargo build --release -p spartan-backend` before running `desktop/` at all (its
 # `electron/main.ts` looks for that exact release binary path and refuses to start without it).
