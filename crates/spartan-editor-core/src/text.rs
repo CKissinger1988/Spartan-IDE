@@ -66,6 +66,20 @@ pub struct TextState {
     /// to the main editor `buffer` (same content-area region), shown
     /// instead of it while `AppMode::Terminal` is active.
     pub terminal_buffer: Buffer,
+    /// Real node-graph workflow canvas text (§75.57) -- a ninth,
+    /// independent cosmic-text `Buffer` holding node labels laid out on a
+    /// real, approximate monospace character grid (`workflow::NODE_H_
+    /// SPACING`/`NODE_V_SPACING` converted to char columns/blank-line
+    /// rows) so each label lands near its own node's real pixel position
+    /// without needing one `TextArea` per node.
+    pub workflow_buffer: Buffer,
+    /// Real workflow session-detail text (§75.57) -- the selected node's
+    /// live session output/trace, shown below the canvas. A tenth,
+    /// independent cosmic-text `Buffer` rather than reusing
+    /// `terminal_buffer` outright, since a real workflow session and a
+    /// real standalone terminal session are different real things that
+    /// can be open/visible at once in different modes.
+    pub workflow_detail_buffer: Buffer,
     /// Real tab bar horizontal scroll (§75.28, the overflow half of task
     /// #25) -- the pixel offset the tab bar's rendered text and
     /// hit-testing are both shifted by, so tabs beyond the visible strip's
@@ -125,14 +139,31 @@ pub const SIDEBAR_TEXT_LEFT: f32 = 8.0;
 pub const ACTIVITY_ROW_HEIGHT: f32 = 40.0;
 pub const SIDEBAR_TEXT_TOP: f32 = 8.0 + ACTIVITY_ROW_HEIGHT;
 
-/// Real Agent/Editor/Design/Terminal mode toggle strip width (§8, §16.1,
-/// task #3), carved out of the tab bar row's own right edge -- the tab
-/// bar's own clip bounds narrow by this much so a long tab label can
-/// never render underneath it. Widened from `200.0` when `Terminal`
-/// became a real fourth mode (§75.56) -- real headroom against the exact
-/// clipping bug `activity_bar.rs` already hit once (§75.55) for a
-/// similarly narrow row, not just a guess.
-pub const MODE_TOGGLE_WIDTH: f32 = 260.0;
+/// Real Agent/Editor/Design/Terminal/Workflow mode toggle strip width
+/// (§8, §16.1, task #3), carved out of the tab bar row's own right edge
+/// -- the tab bar's own clip bounds narrow by this much so a long tab
+/// label can never render underneath it. Widened again (`200.0` ->
+/// `260.0` -> `310.0`) when `Workflow` became a real fifth mode (§75.57)
+/// -- real headroom against the exact clipping bug `activity_bar.rs`
+/// already hit once (§75.55) for a similarly narrow row, not just a
+/// guess.
+pub const MODE_TOGGLE_WIDTH: f32 = 310.0;
+
+/// Real workflow canvas height in pixels (§75.57) -- the top portion of
+/// the content area reserved for the real node/edge graph; everything
+/// below shows the selected node's real live session detail. A fixed
+/// split rather than a real draggable divider, a deliberate v1 scope cut
+/// named here rather than hidden.
+pub const WORKFLOW_CANVAS_HEIGHT_PX: f32 = 320.0;
+
+/// Real, approximate monospace character width in pixels used only for
+/// `workflow_buffer`'s own node-label grid math (§75.57) -- not derived
+/// from real font metrics (this crate has no API for that), calibrated
+/// empirically against `TAB_BAR_FONT_SIZE`'s own real rendered glyph
+/// width the same way `activity_bar.rs`'s original column budget was
+/// worked out. A real, named approximation: a label may land a few real
+/// pixels off from dead-center under its node, not pixel-perfect.
+pub const WORKFLOW_CHAR_WIDTH_PX: f32 = 8.2;
 
 /// Real status bar height (§75.57), reserved along the bottom edge of the
 /// window -- line:col, language, git branch, and LSP/DAP session state,
@@ -245,6 +276,22 @@ impl TextState {
             Buffer::new(&mut font_system, Metrics::new(FONT_SIZE, LINE_HEIGHT));
         terminal_buffer.set_size(&mut font_system, width, height);
 
+        // Real §75.57 workflow canvas node-label grid -- real, tighter
+        // font (`TAB_BAR_FONT_SIZE`) than the main editor, `Wrap::None`
+        // (labels are short and deliberately never wrap onto a second
+        // real line, which would break the grid's own row-per-node-row
+        // assumption).
+        let mut workflow_buffer = Buffer::new(
+            &mut font_system,
+            Metrics::new(TAB_BAR_FONT_SIZE, TAB_BAR_LINE_HEIGHT),
+        );
+        workflow_buffer.set_size(&mut font_system, width, height);
+        workflow_buffer.set_wrap(&mut font_system, Wrap::None);
+
+        let mut workflow_detail_buffer =
+            Buffer::new(&mut font_system, Metrics::new(FONT_SIZE, LINE_HEIGHT));
+        workflow_detail_buffer.set_size(&mut font_system, width, height);
+
         Self {
             font_system,
             swash_cache,
@@ -258,6 +305,8 @@ impl TextState {
             activity_bar_buffer,
             status_bar_buffer,
             terminal_buffer,
+            workflow_buffer,
+            workflow_detail_buffer,
             tab_bar_scroll: 0.0,
         }
     }
@@ -466,6 +515,30 @@ impl TextState {
             Shaping::Advanced,
         );
         self.terminal_buffer
+            .shape_until_scroll(&mut self.font_system);
+    }
+
+    /// Replaces the workflow canvas's node-label grid text (§75.57).
+    pub fn set_workflow_text(&mut self, text: &str) {
+        self.workflow_buffer.set_text(
+            &mut self.font_system,
+            text,
+            Attrs::new().family(Family::Monospace),
+            Shaping::Advanced,
+        );
+        self.workflow_buffer
+            .shape_until_scroll(&mut self.font_system);
+    }
+
+    /// Replaces the workflow session-detail panel's text (§75.57).
+    pub fn set_workflow_detail_text(&mut self, text: &str) {
+        self.workflow_detail_buffer.set_text(
+            &mut self.font_system,
+            text,
+            Attrs::new().family(Family::Monospace),
+            Shaping::Advanced,
+        );
+        self.workflow_detail_buffer
             .shape_until_scroll(&mut self.font_system);
     }
 
@@ -750,6 +823,36 @@ impl TextState {
                     bounds: TextBounds {
                         left: 0,
                         top: TAB_BAR_HEIGHT as i32,
+                        right: width as i32,
+                        bottom: (height as f32 - STATUS_BAR_HEIGHT) as i32,
+                    },
+                    default_color: crate::theme::TEXT,
+                },
+                // Real workflow canvas node labels (§75.57) -- the top
+                // `WORKFLOW_CANVAS_HEIGHT_PX` of the content area.
+                TextArea {
+                    buffer: &self.workflow_buffer,
+                    left: TEXT_ORIGIN_X,
+                    top: TEXT_ORIGIN_Y,
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: 0,
+                        top: TAB_BAR_HEIGHT as i32,
+                        right: width as i32,
+                        bottom: (TAB_BAR_HEIGHT + WORKFLOW_CANVAS_HEIGHT_PX) as i32,
+                    },
+                    default_color: crate::theme::TEXT,
+                },
+                // Real workflow session-detail text (§75.57) -- below the
+                // canvas, down to the status bar.
+                TextArea {
+                    buffer: &self.workflow_detail_buffer,
+                    left: TEXT_ORIGIN_X,
+                    top: TAB_BAR_HEIGHT + WORKFLOW_CANVAS_HEIGHT_PX + 8.0,
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: 0,
+                        top: (TAB_BAR_HEIGHT + WORKFLOW_CANVAS_HEIGHT_PX) as i32,
                         right: width as i32,
                         bottom: (height as f32 - STATUS_BAR_HEIGHT) as i32,
                     },

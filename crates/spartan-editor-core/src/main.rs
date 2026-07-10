@@ -14,9 +14,9 @@ use mode_toggle::AppMode;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use spartan_editor_core::viewport::{self, Viewport};
 use spartan_editor_core::{
-    accessibility, activity_bar, agent_panel, build, command_palette, dap_session, editor_view,
-    file_tree, git_panel, gui_bridge, highlight, language, leo_bridge, lsp, lsp_session,
-    mode_toggle, settings_panel, tab_bar, terminal, update_bridge,
+    accessibility, activity_bar, agent_panel, build, cli_session, command_palette, dap_session,
+    editor_view, file_tree, git_panel, gui_bridge, highlight, language, leo_bridge, lsp,
+    lsp_session, mode_toggle, settings_panel, tab_bar, terminal, update_bridge, workflow,
 };
 
 use std::path::{Path, PathBuf};
@@ -894,6 +894,25 @@ fn main() {
     // may never open it.
     let mut terminal_panel: Option<terminal::TerminalPanel> = None;
 
+    // Real node-graph workflow builder (§75.57, user-requested) -- seeded
+    // with three real default nodes (Claude/Codex/Gemini, chained
+    // left-to-right) at cold-open, matching the "run all three coding
+    // tools in one place" concept, but deliberately *not* eager-spawning
+    // any real session/process for them yet (that only happens once a
+    // node is actually launched) -- the same lazy-creation discipline
+    // Design mode's WebView (§75.39) and Terminal mode's PTY (§75.56)
+    // both already established.
+    let mut workflow_graph = workflow::WorkflowGraph::new();
+    let claude_node = workflow_graph.add_node("Claude");
+    let codex_node = workflow_graph.add_node("Codex");
+    let gemini_node = workflow_graph.add_node("Gemini");
+    workflow_graph.connect(claude_node, codex_node);
+    workflow_graph.connect(codex_node, gemini_node);
+    let mut cli_sessions = cli_session::CliSessionManager::new();
+    let mut workflow_selected_node: Option<u64> = Some(claude_node);
+    let mut workflow_compare_node: Option<u64> = None;
+    let mut workflow_drag: Option<(u64, f32, f32)> = None;
+
     // Real, scoped command palette (§16.1, task #3) -- `None` is the
     // ordinary closed state. `all_entries` (the static commands plus a
     // real file listing under the project root) is captured once when the
@@ -1081,6 +1100,14 @@ fn main() {
     // `SelectionRenderer`, not a replacement -- text selection and the
     // modal dim overlay both stay deliberately sharp-edged.
     let mut glow_renderer =
+        glow_rect::GlowRectRenderer::new(&gpu_state.device, gpu_state.config.format);
+    // Real §75.57 second `GlowRectRenderer` instance, dedicated to the
+    // workflow canvas's own node/edge boxes -- rendered *after*
+    // `modal_renderer`'s opaque mode-cover quad (see the real bug this
+    // fixes, documented at its own `update()` call site below), unlike
+    // `glow_renderer`'s tab/mode-toggle pills, which correctly render
+    // *before* it since those sit outside the covered content area.
+    let mut workflow_glow_renderer =
         glow_rect::GlowRectRenderer::new(&gpu_state.device, gpu_state.config.format);
 
     // 150ms idle default per spec §2.3, now one debouncer per open file
@@ -1382,7 +1409,7 @@ fn main() {
                             // selection anchor there -- see `drag_anchor_pos`'s
                             // own declaration comment for why this is
                             // deliberately lazy rather than armed on press.
-                            if mouse_button_down {
+                            if mouse_button_down && mode == AppMode::Editor {
                                 let local_x = last_cursor_pos.0 - text::TEXT_ORIGIN_X;
                                 let local_y = last_cursor_pos.1 - text::TEXT_ORIGIN_Y;
                                 if let Some((local_line, col_chars)) =
@@ -1399,6 +1426,24 @@ fn main() {
                                     }
                                     window.request_redraw();
                                 }
+                            }
+                            // Real workflow canvas node dragging (§75.57)
+                            // -- `workflow_drag` holds the dragged node's
+                            // real id plus the real cursor-to-node-origin
+                            // offset captured on press, so the node moves
+                            // smoothly under the cursor rather than
+                            // snapping its top-left corner to it.
+                            if let Some((node_id, offset_x, offset_y)) = workflow_drag {
+                                let canvas_x = last_cursor_pos.0 - text::TEXT_ORIGIN_X - offset_x;
+                                let canvas_y = last_cursor_pos.1 - text::TAB_BAR_HEIGHT - offset_y;
+                                workflow_graph.move_node(
+                                    node_id,
+                                    workflow::NodePos {
+                                        x: canvas_x,
+                                        y: canvas_y,
+                                    },
+                                );
+                                window.request_redraw();
                             }
                         }
                         WindowEvent::MouseInput {
@@ -1457,6 +1502,52 @@ fn main() {
                                     }
                                     window.request_redraw();
                                 }
+                            }
+                        }
+                        WindowEvent::MouseInput {
+                            state: ElementState::Pressed,
+                            button: MouseButton::Left,
+                            ..
+                        } if pending_close.is_none()
+                            && commit_message.is_none()
+                            && command_palette_state.is_none()
+                            && settings_state.is_none()
+                            && mode == AppMode::Workflow
+                            && last_cursor_pos.0 >= text::SIDEBAR_WIDTH
+                            && last_cursor_pos.1 >= text::TAB_BAR_HEIGHT
+                            && last_cursor_pos.1
+                                < text::TAB_BAR_HEIGHT + text::WORKFLOW_CANVAS_HEIGHT_PX =>
+                        {
+                            // Real workflow canvas clicks (§75.57) --
+                            // resolved via the graph's own real pixel-space
+                            // `hit_test`, not the text grid (node hit
+                            // regions are the real rounded-rect boxes
+                            // `glow_rect` draws, independent of the
+                            // approximate label-grid text). Shift+click
+                            // sets a real second "compare" node (cleared by
+                            // clicking the same node again); a plain click
+                            // selects and arms a real drag.
+                            let canvas_x = last_cursor_pos.0 - text::TEXT_ORIGIN_X;
+                            let canvas_y = last_cursor_pos.1 - text::TAB_BAR_HEIGHT;
+                            if let Some(hit_id) = workflow_graph.hit_test(canvas_x, canvas_y) {
+                                if modifiers.shift_key() {
+                                    workflow_compare_node = if workflow_compare_node == Some(hit_id)
+                                    {
+                                        None
+                                    } else {
+                                        Some(hit_id)
+                                    };
+                                } else {
+                                    workflow_selected_node = Some(hit_id);
+                                    if let Some(node) = workflow_graph.node(hit_id) {
+                                        workflow_drag = Some((
+                                            hit_id,
+                                            canvas_x - node.pos.x,
+                                            canvas_y - node.pos.y,
+                                        ));
+                                    }
+                                }
+                                window.request_redraw();
                             }
                         }
                         WindowEvent::MouseInput {
@@ -1756,6 +1847,7 @@ fn main() {
                         } => {
                             mouse_button_down = false;
                             drag_anchor_pos = None;
+                            workflow_drag = None;
                             // Real tab drag-to-reorder (§75.27): resolved
                             // here, on release, against whatever tab (if
                             // any) the cursor is currently over -- a real
@@ -2358,21 +2450,24 @@ fn main() {
                                     | PhysicalKey::Code(KeyCode::Digit2)
                                     | PhysicalKey::Code(KeyCode::Digit3)
                                     | PhysicalKey::Code(KeyCode::Digit4)
+                                    | PhysicalKey::Code(KeyCode::Digit5)
                             ) =>
                         {
-                            // Ctrl+1/2/3/4: real Agent/Editor/Design/
-                            // Terminal mode switching (§8, §16.1, task #3;
-                            // Terminal added §75.56) -- checked before the
-                            // "swallow everything while non-Editor" arm
-                            // just below, so mode-switch keys always work
-                            // regardless of the current mode, the same way
-                            // Escape always works to close a modal
-                            // regardless of what's on screen behind it.
+                            // Ctrl+1/2/3/4/5: real Agent/Editor/Design/
+                            // Terminal/Workflow mode switching (§8, §16.1,
+                            // task #3; Terminal added §75.56, Workflow
+                            // added §75.57) -- checked before the "swallow
+                            // everything while non-Editor" arm just below,
+                            // so mode-switch keys always work regardless
+                            // of the current mode, the same way Escape
+                            // always works to close a modal regardless of
+                            // what's on screen behind it.
                             mode = match key_event.physical_key {
                                 PhysicalKey::Code(KeyCode::Digit1) => AppMode::Agent,
                                 PhysicalKey::Code(KeyCode::Digit2) => AppMode::Editor,
                                 PhysicalKey::Code(KeyCode::Digit3) => AppMode::Design,
                                 PhysicalKey::Code(KeyCode::Digit4) => AppMode::Terminal,
+                                PhysicalKey::Code(KeyCode::Digit5) => AppMode::Workflow,
                                 _ => unreachable!(),
                             };
                             if mode == AppMode::Terminal && terminal_panel.is_none() {
@@ -2581,6 +2676,95 @@ fn main() {
                                     }
                                 }
                                 window.request_redraw();
+                            }
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } if pending_close.is_none()
+                            && commit_message.is_none()
+                            && command_palette_state.is_none()
+                            && settings_state.is_none()
+                            && mode == AppMode::Workflow =>
+                        {
+                            // Real workflow canvas input (§75.57) -- Enter
+                            // on a selected node with no real session yet
+                            // launches one (a real CLI tool inferred from
+                            // the node's own label); Enter on an already-
+                            // running node's selection forwards a real
+                            // `\r` to it instead, the same real per-mode
+                            // input split Terminal mode already
+                            // established.
+                            if let Some(selected_id) = workflow_selected_node {
+                                let already_running = workflow_graph
+                                    .node(selected_id)
+                                    .and_then(|n| n.session_id)
+                                    .and_then(|sid| cli_sessions.get(sid))
+                                    .map(|s| s.panel.is_some())
+                                    .unwrap_or(false);
+                                match &key_event.logical_key {
+                                    Key::Named(NamedKey::Enter) if !already_running => {
+                                        if let Some(node) = workflow_graph.node(selected_id) {
+                                            let tool = match node.label.as_str() {
+                                                "Claude" => cli_session::CliTool::Claude,
+                                                "Codex" => cli_session::CliTool::Codex,
+                                                "Gemini" => cli_session::CliTool::Gemini,
+                                                other => {
+                                                    cli_session::CliTool::Custom(other.to_string())
+                                                }
+                                            };
+                                            let cwd = files[active]
+                                                .label
+                                                .parse::<PathBuf>()
+                                                .ok()
+                                                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                                                .unwrap_or_else(|| PathBuf::from("."));
+                                            let session_id =
+                                                cli_sessions.spawn(tool, &cwd, 100, 30);
+                                            workflow_graph.set_session(selected_id, session_id);
+                                        }
+                                        window.request_redraw();
+                                    }
+                                    Key::Named(NamedKey::Enter) => {
+                                        if let Some(session) = workflow_graph
+                                            .node(selected_id)
+                                            .and_then(|n| n.session_id)
+                                            .and_then(|sid| cli_sessions.get_mut(sid))
+                                        {
+                                            session.send_input("\r");
+                                        }
+                                        window.request_redraw();
+                                    }
+                                    Key::Named(NamedKey::Backspace) if already_running => {
+                                        if let Some(session) = workflow_graph
+                                            .node(selected_id)
+                                            .and_then(|n| n.session_id)
+                                            .and_then(|sid| cli_sessions.get_mut(sid))
+                                        {
+                                            session.send_input("\x7f");
+                                            window.request_redraw();
+                                        }
+                                    }
+                                    _ if already_running => {
+                                        if let Some(text) = &key_event.text {
+                                            if !text.is_empty() {
+                                                if let Some(session) = workflow_graph
+                                                    .node(selected_id)
+                                                    .and_then(|n| n.session_id)
+                                                    .and_then(|sid| cli_sessions.get_mut(sid))
+                                                {
+                                                    session.send_input(text);
+                                                    window.request_redraw();
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
                         WindowEvent::KeyboardInput {
@@ -3216,12 +3400,12 @@ fn main() {
                                 // the same way the commit modal and (before
                                 // it) the mode placeholder already did.
                                 agent_panel::build_panel_text(&agent_panel_state)
-                            } else if mode == AppMode::Terminal {
-                                // Real Terminal mode (§75.56) -- unlike
-                                // Agent, this gets its own dedicated
-                                // `terminal_buffer` (below), so the shared
-                                // modal buffer stays empty while it's
-                                // active.
+                            } else if mode == AppMode::Terminal || mode == AppMode::Workflow {
+                                // Real Terminal/Workflow mode (§75.56,
+                                // §75.57) -- unlike Agent, these get their
+                                // own dedicated buffers (below), so the
+                                // shared modal buffer stays empty while
+                                // either is active.
                                 String::new()
                             } else if let Some(placeholder) = mode.placeholder_message() {
                                 // Real Design mode placeholder, if any (§8,
@@ -3254,6 +3438,70 @@ fn main() {
                                 }
                             } else {
                                 text_state.set_terminal_text("");
+                            }
+
+                            // Real workflow canvas + session-detail text
+                            // (§75.57) -- polls every real tracked CLI
+                            // session's own PTY (non-blocking, same
+                            // pattern as Terminal mode above), rebuilds
+                            // the node-label grid, and shows the selected
+                            // node's real live session output (or a real,
+                            // honest "not launched yet" / "failed to
+                            // spawn" message) below the canvas.
+                            if mode == AppMode::Workflow {
+                                cli_sessions.poll_all();
+                                text_state.set_workflow_text(&workflow::build_grid_text(
+                                    &workflow_graph,
+                                    workflow_selected_node,
+                                    text::WORKFLOW_CHAR_WIDTH_PX,
+                                    text::TAB_BAR_LINE_HEIGHT,
+                                ));
+                                let detail_text = workflow_selected_node
+                                    .and_then(|id| workflow_graph.node(id))
+                                    .map(|node| {
+                                        let header = format!("=== {} ===", node.label);
+                                        let body = match node.session_id.and_then(|sid| cli_sessions.get(sid)) {
+                                            Some(session) => match &session.spawn_error {
+                                                Some(err) => format!(
+                                                    "Failed to launch `{}`: {err}",
+                                                    session.tool.command()
+                                                ),
+                                                None => session.display_text(),
+                                            },
+                                            None => "Not launched yet -- press Enter to start a real session.".to_string(),
+                                        };
+                                        let compare_text = workflow_compare_node
+                                            .filter(|&cid| cid != node.id)
+                                            .and_then(|cid| workflow_graph.node(cid))
+                                            .map(|compare_node| {
+                                                let compare_body = match compare_node
+                                                    .session_id
+                                                    .and_then(|sid| cli_sessions.get(sid))
+                                                {
+                                                    Some(session) => match &session.spawn_error {
+                                                        Some(err) => format!(
+                                                            "Failed to launch `{}`: {err}",
+                                                            session.tool.command()
+                                                        ),
+                                                        None => session.display_text(),
+                                                    },
+                                                    None => "Not launched yet.".to_string(),
+                                                };
+                                                format!(
+                                                    "\n\n=== Compare: {} ===\n{compare_body}",
+                                                    compare_node.label
+                                                )
+                                            })
+                                            .unwrap_or_default();
+                                        format!("{header}\n{body}{compare_text}")
+                                    })
+                                    .unwrap_or_else(|| {
+                                        "Click a node to select it.".to_string()
+                                    });
+                                text_state.set_workflow_detail_text(&detail_text);
+                            } else {
+                                text_state.set_workflow_text("");
+                                text_state.set_workflow_detail_text("");
                             }
 
                             // Real mode toggle text (§8, §16.1, task #3),
@@ -3623,6 +3871,88 @@ fn main() {
                                         }),
                                 )
                                 .collect();
+
+                            // Real workflow canvas node/edge rects
+                            // (§75.57) -- offset by the canvas's own real
+                            // screen origin (`TEXT_ORIGIN_X`,
+                            // `TAB_BAR_HEIGHT`, matching `workflow_buffer`'s
+                            // own `TextArea` top). Edges drawn first (as
+                            // real, sharp, un-rounded `radius: 0.0` rects,
+                            // no glow) so they visually sit *under* the
+                            // node boxes drawn after them -- ordering within
+                            // this one `Vec` is the real z-order.
+                            //
+                            // Deliberately a *separate* `Vec`/renderer from
+                            // `active_tab_rects`/`glow_renderer`, not folded
+                            // in: the real opaque `modal_renderer` "mode
+                            // cover" quad below (`theme::OPAQUE_MODE_COVER`,
+                            // §75.56) is rendered *after* `glow_renderer` in
+                            // this same pass to correctly hide stale editor
+                            // content while Agent/Terminal/Workflow mode is
+                            // active -- which would just as opaquely hide
+                            // these node boxes too if they shared that
+                            // renderer, a real bug caught live (correct text
+                            // labels, invisible boxes, confirmed by pixel-
+                            // sampling a screenshot). `workflow_glow_renderer`
+                            // is rendered after `modal_renderer` instead (see
+                            // below), the same "draws on top of the mode
+                            // cover" position `text_state.render` already
+                            // uses for this exact reason.
+                            let mut workflow_rects: Vec<glow_rect::GlowRect> = Vec::new();
+                            if mode == AppMode::Workflow {
+                                let canvas_x = text::TEXT_ORIGIN_X;
+                                let canvas_y = text::TAB_BAR_HEIGHT;
+                                for edge in workflow_graph.edges() {
+                                    for (x, y, w, h) in workflow_graph.edge_segments(edge) {
+                                        workflow_rects.push(glow_rect::GlowRect {
+                                            x: canvas_x + x,
+                                            y: canvas_y + y,
+                                            width: w,
+                                            height: h,
+                                            radius: 0.0,
+                                            color: theme::BORDER,
+                                            glow_strength: 0.0,
+                                        });
+                                    }
+                                }
+                                for node in workflow_graph.nodes() {
+                                    let is_selected = Some(node.id) == workflow_selected_node;
+                                    let is_compare = Some(node.id) == workflow_compare_node;
+                                    let color = if is_selected || is_compare {
+                                        [
+                                            selection::ACCENT_SOLID[0],
+                                            selection::ACCENT_SOLID[1],
+                                            selection::ACCENT_SOLID[2],
+                                            0.22,
+                                        ]
+                                    } else {
+                                        theme::SURFACE
+                                    };
+                                    workflow_rects.push(glow_rect::GlowRect {
+                                        x: canvas_x + node.pos.x,
+                                        y: canvas_y + node.pos.y,
+                                        width: workflow::NODE_WIDTH,
+                                        height: workflow::NODE_HEIGHT,
+                                        radius: glow_rect::CORNER_RADIUS_PX,
+                                        color,
+                                        glow_strength: if is_selected || is_compare {
+                                            0.5
+                                        } else {
+                                            0.0
+                                        },
+                                    });
+                                }
+                            }
+                            workflow_glow_renderer.update(
+                                &gpu_state.device,
+                                &gpu_state.queue,
+                                &workflow_rects,
+                                &cursor::ScreenSize {
+                                    width: gpu_state.size.width as f32,
+                                    height: gpu_state.size.height as f32,
+                                },
+                            );
+
                             glow_renderer.update(
                                 &gpu_state.device,
                                 &gpu_state.queue,
@@ -3744,14 +4074,18 @@ fn main() {
                                         height: gpu_state.size.height as f32,
                                         color: MODAL_DIM_COLOR,
                                     }]
-                                } else if mode == AppMode::Agent || mode == AppMode::Terminal {
+                                } else if mode == AppMode::Agent
+                                    || mode == AppMode::Terminal
+                                    || mode == AppMode::Workflow
+                                {
                                     // Covers only the content area (right
                                     // of the sidebar, below the tab bar) --
                                     // the sidebar and tab bar/mode toggle
                                     // stay real and usable while Agent/
-                                    // Terminal mode is active, matching
-                                    // what the earlier live screenshot
-                                    // already showed working correctly.
+                                    // Terminal/Workflow mode is active,
+                                    // matching what the earlier live
+                                    // screenshot already showed working
+                                    // correctly.
                                     vec![selection::SelectionRect {
                                         x: text::SIDEBAR_WIDTH,
                                         y: text::TAB_BAR_HEIGHT,
@@ -3807,6 +4141,13 @@ fn main() {
                                 glow_renderer.render(&mut pass);
                                 selection_renderer.render(&mut pass);
                                 modal_renderer.render(&mut pass);
+                                // After `modal_renderer` so the workflow
+                                // canvas's node/edge boxes draw on top of
+                                // the opaque mode-cover quad instead of
+                                // being hidden by it -- see this renderer's
+                                // own declaration comment for the real bug
+                                // this fixes.
+                                workflow_glow_renderer.render(&mut pass);
                                 text_state.render(&mut pass).expect("glyphon render failed");
                                 if cursor_pixel_pos.is_some() {
                                     cursor_renderer.render(&mut pass);

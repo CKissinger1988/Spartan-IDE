@@ -19,14 +19,20 @@ pub enum AppMode {
     /// Real integrated terminal (§75.56, user-requested: "I don't see...
     /// a terminal") -- the fourth real mode, joining Agent/Editor/Design.
     Terminal,
+    /// Real node-graph workflow builder (§75.57, user-requested) -- the
+    /// fifth real mode: a real draggable node/edge canvas for orchestrating
+    /// multiple real external CLI-tool sessions (`cli_session.rs`) as one
+    /// workflow, with a session-detail trace view and run comparison.
+    Workflow,
 }
 
 impl AppMode {
-    pub const ALL: [AppMode; 4] = [
+    pub const ALL: [AppMode; 5] = [
         AppMode::Agent,
         AppMode::Editor,
         AppMode::Design,
         AppMode::Terminal,
+        AppMode::Workflow,
     ];
 
     pub fn label(self) -> &'static str {
@@ -35,6 +41,7 @@ impl AppMode {
             AppMode::Editor => "Editor",
             AppMode::Design => "Design",
             AppMode::Terminal => "Term",
+            AppMode::Workflow => "Flow",
         }
     }
 
@@ -54,6 +61,7 @@ impl AppMode {
             AppMode::Editor => None,
             AppMode::Design => None,
             AppMode::Terminal => None,
+            AppMode::Workflow => None,
         }
     }
 }
@@ -66,11 +74,11 @@ pub struct ModeHit {
     pub range: std::ops::Range<usize>,
 }
 
-/// Builds the real "Agent|Editor|Design|Term" display text plus each
+/// Builds the real "Agent|Editor|Design|Term|Flow" display text plus each
 /// label's real char range, in document order. A tight `|` separator (no
-/// surrounding spaces) -- real four-label room found tighter than
-/// expected once `Terminal` was added, same fix `activity_bar.rs` already
-/// needed for its own narrower row (§75.55).
+/// surrounding spaces) -- real room found tighter than expected once
+/// `Terminal` was added, same fix `activity_bar.rs` already needed for its
+/// own narrower row (§75.55); now five real labels wide.
 pub fn build_mode_toggle_text() -> (String, Vec<ModeHit>) {
     let mut text = String::new();
     let mut hits = Vec::with_capacity(AppMode::ALL.len());
@@ -110,7 +118,7 @@ mod tests {
     #[test]
     fn build_mode_toggle_text_produces_the_expected_real_string() {
         let (text, _) = build_mode_toggle_text();
-        assert_eq!(text, "Agent|Editor|Design|Term");
+        assert_eq!(text, "Agent|Editor|Design|Term|Flow");
     }
 
     #[test]
@@ -133,12 +141,13 @@ mod tests {
         assert_eq!(hit_test(&hits, 6), Some(AppMode::Editor));
         assert_eq!(hit_test(&hits, 13), Some(AppMode::Design));
         assert_eq!(hit_test(&hits, 20), Some(AppMode::Terminal));
+        assert_eq!(hit_test(&hits, 25), Some(AppMode::Workflow));
     }
 
     #[test]
     fn hit_test_on_the_separator_between_labels_resolves_to_none() {
         let (_, hits) = build_mode_toggle_text();
-        // "Agent|Editor|Design|Term"
+        // "Agent|Editor|Design|Term|Flow"
         //  0123456789...
         // index 5 is the '|' separator between Agent (0..5) and Editor (6..12).
         assert_eq!(hit_test(&hits, 5), None);
@@ -148,19 +157,21 @@ mod tests {
     fn hit_test_clamps_a_trailing_click_to_the_last_label() {
         let (text, hits) = build_mode_toggle_text();
         let past_end = text.chars().count();
-        assert_eq!(hit_test(&hits, past_end), Some(AppMode::Terminal));
-        assert_eq!(hit_test(&hits, past_end + 5), Some(AppMode::Terminal));
+        assert_eq!(hit_test(&hits, past_end), Some(AppMode::Workflow));
+        assert_eq!(hit_test(&hits, past_end + 5), Some(AppMode::Workflow));
     }
 
     #[test]
     fn no_mode_has_a_placeholder_message_anymore() {
         // Editor always had real content; Design gained a real embedded
         // WebView in §75.39/task #12; Agent gained real Leo UI wiring in
-        // §75.47/task #5; Terminal gained a real PTY in §75.56 -- every
-        // mode now shows real content.
+        // §75.47/task #5; Terminal gained a real PTY in §75.56; Workflow
+        // gained a real node-graph canvas in §75.57 -- every mode now
+        // shows real content.
         assert!(AppMode::Editor.placeholder_message().is_none());
         assert!(AppMode::Design.placeholder_message().is_none());
         assert!(AppMode::Agent.placeholder_message().is_none());
         assert!(AppMode::Terminal.placeholder_message().is_none());
+        assert!(AppMode::Workflow.placeholder_message().is_none());
     }
 }

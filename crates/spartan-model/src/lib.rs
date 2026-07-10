@@ -5,11 +5,13 @@
 
 pub mod claude;
 pub mod fallback;
+pub mod litellm;
 pub mod ollama;
 pub mod provider;
 
 pub use claude::ClaudeProvider;
 pub use fallback::{FallbackParser, ParseEvent};
+pub use litellm::LiteLLMProvider;
 pub use ollama::OllamaProvider;
 pub use provider::{
     CompletionRequest, Delta, Message, ModelProvider, ProviderError, ProviderHealth, Role,

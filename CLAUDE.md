@@ -1437,6 +1437,51 @@ first — it's the parity reference until each row there is actually reimplement
   docked alongside the editor, a docked preview panel, and "projects and sessions") remain open --
   Agent/Design already exist as full-mode views rather than docked panels (a larger three-column-
   shell change), and "projects and sessions" has no real implementation anywhere in this crate yet.
+- **Real, working code — real multi-CLI orchestration, a real node-graph workflow builder canvas,
+  and a real `LiteLLMProvider`, closing tasks #37/#38/#39 (§75.57)**: built after two explicit user
+  requests to match the *concepts* (not the code) of two external reference products -- a GPL-2.0,
+  pre-launch "Velocity" repo (read-only researched, never added to this session, never copied from)
+  and `optimalvelocity.io`'s own described "Workflow Control Plane for AI Coding" (node-based
+  Workflow Builder, Routing Graph, Session Detail, Review & Compare) -- confirmed via
+  `AskUserQuestion` both times before writing code. New `crates/spartan-model/src/litellm.rs`:
+  a real `LiteLLMProvider: ModelProvider` against a real local LiteLLM proxy (OpenAI-compatible
+  SSE, real incremental tool-call-argument accumulation by chunk index, `is_local() -> false` since
+  it's a routing layer to real cloud backends, not a privacy boundary) -- closes task #4's last
+  unimplemented provider. New `crates/spartan-editor-core/src/cli_session.rs`: `CliSession`/
+  `CliSessionManager` spawn real named external CLI tools (`claude`/`codex`/`gemini`/custom) as
+  real PTYs via a generalized `terminal::TerminalPanel::spawn_command`, capturing a failed spawn as
+  a real `spawn_error` rather than a hard failure, plus a real append-only per-session trace log.
+  New `crates/spartan-editor-core/src/workflow.rs`: a real, pure, headlessly-tested `WorkflowGraph`
+  (grid auto-layout, click hit-testing, drag-to-move, deduplicated connect, right-angle
+  axis-aligned edge routing -- chosen because this renderer's only real primitives are solid-color
+  quads, not a placeholder) plus `build_grid_text`, the same grid-text-label technique already
+  established for `tab_bar.rs`/`activity_bar.rs`. A fifth real `AppMode::Workflow` (Ctrl+5) wires
+  it all together in `main.rs`: click/shift-click/drag on the canvas, Enter launches a real session
+  on the selected node, typed input forwards to its real PTY. **A real, confirmed-by-pixel-sampling
+  rendering bug was found and fixed**: the workflow node boxes were invisible despite correct text
+  labels, traced to the pre-existing opaque `modal_renderer` "mode cover" quad (§75.56) rendering
+  *after* `glow_renderer` in the fixed render-pass order, silently hiding the new node/edge
+  `glow_rect`s the same way it's supposed to hide stale editor content -- fixed with a second,
+  dedicated `workflow_glow_renderer` instance rendered *after* `modal_renderer`, the same position
+  `text_state.render` already correctly occupies for the identical reason. 29 new tests (8
+  `litellm.rs`, 5 `cli_session.rs`, 16 `workflow.rs`) plus every `mode_toggle.rs` test updated for
+  the new five-label toggle text, full workspace test/clippy/fmt clean (one plugin-host integration
+  test failure during a parallel run was re-run in isolation and passed, confirming this project's
+  own already-documented resource-contention flake, not a regression). Live, through the real
+  binary (Xvfb+fluxbox), six sequential screenshots: correct initial render of all three nodes/two
+  edges (post-fix); click-to-select; drag-to-reposition with edges dynamically re-routing; shift-
+  click compare showing both nodes highlighted and a second detail-panel section; Enter on the
+  uninstalled `codex` node producing a real, honest "not found in PATH" message; Enter on the real,
+  actually-installed `claude` node spawning a genuine `claude` process with its real startup banner
+  streaming live into the detail panel. **What this does not confirm**: no live successful
+  completion through `LiteLLMProvider` (blocked by the same real, pre-existing, environment-
+  specific Ollama backend segfault §75.56 already documented -- the proxy's own request routing and
+  OpenAI-compatible error passthrough were both confirmed working). No real Routing Graph/data-flow
+  visualization, no structured diff for Review & Compare (raw side-by-side text only), no node/edge
+  creation or deletion via the UI (three nodes and two edges are cold-open-seeded, hardcoded), no
+  workflow persistence across restarts, no ANSI color in the session-detail panel (inherits
+  `terminal.rs`'s own already-documented partial stripper). This is a real, working, live-verified
+  first increment of the "workflow control plane" concept, not its full scope.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1494,7 +1539,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 372 tests: 6 spikes + 11 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 420 tests: 6 spikes + 11 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-editor-core, xtask)

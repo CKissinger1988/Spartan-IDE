@@ -48,6 +48,23 @@ impl TerminalPanel {
     /// PTY needs a real initial size -- most shells/programs query it via
     /// `ioctl(TIOCGWINSZ)` on startup for real line-wrapping behavior).
     pub fn spawn(cwd: &std::path::Path, cols: u16, rows: u16) -> std::io::Result<Self> {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        Self::spawn_command(cwd, cols, rows, &shell, &[])
+    }
+
+    /// Real §75.57 generalization (multi-CLI orchestration, user-requested)
+    /// -- spawns any real named command (not just the interactive shell)
+    /// in a real PTY, the same real mechanism `cli_session.rs` uses to run
+    /// `claude`/`codex`/`gemini` as a tracked session. `spawn` above is now
+    /// a thin wrapper around this with the user's real `$SHELL` and no
+    /// extra args.
+    pub fn spawn_command(
+        cwd: &std::path::Path,
+        cols: u16,
+        rows: u16,
+        command: &str,
+        args: &[String],
+    ) -> std::io::Result<Self> {
         let pty_system = portable_pty::native_pty_system();
         let pty_pair = pty_system
             .openpty(portable_pty::PtySize {
@@ -58,8 +75,10 @@ impl TerminalPanel {
             })
             .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        let mut cmd = portable_pty::CommandBuilder::new(shell);
+        let mut cmd = portable_pty::CommandBuilder::new(command);
+        for arg in args {
+            cmd.arg(arg);
+        }
         cmd.cwd(cwd);
 
         let child = pty_pair
