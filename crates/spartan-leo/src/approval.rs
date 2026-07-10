@@ -29,10 +29,14 @@ pub enum RiskClass {
 /// Real, conservative classification -- `run_terminal` is always
 /// `Destructive` (an arbitrary shell command can do anything a file-scoped
 /// tool call can't be limited to), `edit_file` is `Destructive` (it
-/// mutates real user files), `read_file` is `Safe` (read-only).
+/// mutates real user files), `read_file`/`search_files`/`list_directory`
+/// are all `Safe` (read-only, never touch the filesystem beyond reading
+/// it).
 pub fn classify(call: &ToolCall) -> RiskClass {
     match call {
         ToolCall::ReadFile { .. } => RiskClass::Safe,
+        ToolCall::SearchFiles { .. } => RiskClass::Safe,
+        ToolCall::ListDirectory { .. } => RiskClass::Safe,
         ToolCall::EditFile { .. } => RiskClass::Destructive,
         ToolCall::RunTerminal { .. } => RiskClass::Destructive,
     }
@@ -58,6 +62,25 @@ mod tests {
     fn read_file_is_classified_safe() {
         assert_eq!(
             classify(&ToolCall::ReadFile { path: "x".into() }),
+            RiskClass::Safe
+        );
+    }
+
+    #[test]
+    fn search_files_is_classified_safe() {
+        assert_eq!(
+            classify(&ToolCall::SearchFiles {
+                pattern: "x".into(),
+                path: None
+            }),
+            RiskClass::Safe
+        );
+    }
+
+    #[test]
+    fn list_directory_is_classified_safe() {
+        assert_eq!(
+            classify(&ToolCall::ListDirectory { path: None }),
             RiskClass::Safe
         );
     }

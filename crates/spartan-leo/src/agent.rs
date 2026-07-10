@@ -170,6 +170,22 @@ impl Agent {
         may_auto_execute(call, self.approval_mode)
     }
 
+    /// Real, read-only peek at a file's *current* content through the
+    /// exact same jailed `Sandbox` every other tool call uses (§75.68) --
+    /// deliberately does **not** require `Executing` state and does
+    /// **not** count as a real tool call (no history entry, no approval
+    /// gate consumed): its only purpose is letting a caller build a real
+    /// diff preview for a proposed `edit_file` call *before* that call is
+    /// approved. Returns `None` (not an error) when the file doesn't
+    /// exist yet -- a real, valid case for a brand-new file `edit_file`
+    /// would create, not a failure.
+    pub fn peek_file(&self, path: &str) -> Option<String> {
+        match self.sandbox.read_file(path) {
+            Ok(ToolResult::FileContent(content)) => Some(content),
+            _ => None,
+        }
+    }
+
     /// Must be in `Executing`. Runs `call` through the real, hard-jailed
     /// sandbox -- this function does not itself re-check
     /// `may_auto_execute`; a caller that skips the approval gate for a
@@ -450,6 +466,37 @@ mod tests {
         };
         let result = agent.execute_call(call);
         assert!(matches!(result, Err(AgentError::InvalidTransition { .. })));
+    }
+
+    #[test]
+    fn peek_file_reads_a_real_existing_file_without_requiring_executing_state() {
+        let (dir, _repo) = real_repo_with_one_commit("peek-existing");
+        let agent = Agent::new(dir, ApprovalMode::ManualEveryStep);
+        // Deliberately still `Idle` -- peek_file has no state requirement.
+        assert_eq!(agent.state(), AgentState::Idle);
+        assert_eq!(agent.peek_file("a.txt"), Some("original\n".to_string()));
+    }
+
+    #[test]
+    fn peek_file_on_a_real_nonexistent_file_returns_none_not_an_error() {
+        let (dir, _repo) = real_repo_with_one_commit("peek-missing");
+        let agent = Agent::new(dir, ApprovalMode::ManualEveryStep);
+        assert_eq!(agent.peek_file("does_not_exist.txt"), None);
+    }
+
+    #[test]
+    fn peek_file_never_appears_in_history_or_counts_as_a_real_tool_call() {
+        // A real, structural confirmation, not just a doc comment claim:
+        // peek_file takes `&self`, so it's provably incapable of
+        // mutating `Agent` state (no `recovery_attempts`/`plan`/history
+        // field this crate owns could change) -- calling it repeatedly
+        // must leave the agent's own real state completely untouched.
+        let (dir, _repo) = real_repo_with_one_commit("peek-no-side-effects");
+        let agent = Agent::new(dir, ApprovalMode::ManualEveryStep);
+        let before = agent.state();
+        let _ = agent.peek_file("a.txt");
+        let _ = agent.peek_file("a.txt");
+        assert_eq!(agent.state(), before);
     }
 
     #[test]

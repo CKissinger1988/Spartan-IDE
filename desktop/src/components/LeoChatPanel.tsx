@@ -11,6 +11,10 @@ interface PendingCall {
   call_id: string;
   tool: string;
   args: Record<string, unknown>;
+  /** Real §75.68 diff preview -- only present for `edit_file` proposals,
+   * a plain `+`/`-`/` `-prefixed line diff computed server-side against
+   * the file's real current content. */
+  diff?: string;
 }
 
 interface LogEntry {
@@ -41,9 +45,34 @@ function describeCall(call: PendingCall): string {
       return `Edit file: ${call.args.path}`;
     case "run_terminal":
       return `Run command: ${call.args.command}`;
+    case "search_files":
+      return call.args.path
+        ? `Search for "${call.args.pattern}" in ${call.args.path}`
+        : `Search project for "${call.args.pattern}"`;
+    case "list_directory":
+      return call.args.path ? `List directory: ${call.args.path}` : "List project root";
     default:
       return `${call.tool}(${JSON.stringify(call.args)})`;
   }
+}
+
+/** Real diff rendering -- one `<div>` per real line, colored by its real
+ * `+`/`-`/` ` prefix, matching a real, minimal, modern diff view rather
+ * than a raw text dump. */
+function DiffView({ diff }: { diff: string }): React.ReactElement {
+  const lines = diff.split("\n").filter((_, i, arr) => !(i === arr.length - 1 && arr[i] === ""));
+  return (
+    <pre className="leo-diff mono">
+      {lines.map((line, i) => {
+        const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "ctx";
+        return (
+          <div key={i} className={`leo-diff-line leo-diff-${kind}`}>
+            {line || " "}
+          </div>
+        );
+      })}
+    </pre>
+  );
 }
 
 /**
@@ -190,17 +219,38 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     try {
       const result = (await window.spartan.call("leo_approve_call")) as {
         ok: boolean;
-        result?: { kind: string; content?: string; path?: string; bytes?: number; stdout?: string };
+        result?: {
+          kind: string;
+          content?: string;
+          path?: string;
+          bytes?: number;
+          matches?: unknown[];
+          entries?: unknown[];
+        };
         error?: string;
       };
       setPendingCall(null);
-      const text = result.ok
-        ? result.result?.kind === "file_content"
-          ? `Read ${(result.result.content ?? "").length} chars`
-          : result.result?.kind === "file_written"
-            ? `Wrote ${result.result.bytes} bytes to ${result.result.path}`
-            : `Ran command (exit shown in log)`
-        : `Failed: ${result.error}`;
+      let text: string;
+      if (!result.ok) {
+        text = `Failed: ${result.error}`;
+      } else {
+        switch (result.result?.kind) {
+          case "file_content":
+            text = `Read ${(result.result.content ?? "").length} chars`;
+            break;
+          case "file_written":
+            text = `Wrote ${result.result.bytes} bytes to ${result.result.path}`;
+            break;
+          case "search_matches":
+            text = `Found ${result.result.matches?.length ?? 0} match(es)`;
+            break;
+          case "directory_listing":
+            text = `Listed ${result.result.entries?.length ?? 0} entries`;
+            break;
+          default:
+            text = "Ran command (exit shown in log)";
+        }
+      }
       setLog((prev) => [...prev, { kind: "result", text }]);
       requestNextStep();
     } catch (e) {
@@ -281,11 +331,14 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
             {pendingCall && (
               <div className="leo-pending-call">
                 <div className="leo-pending-call-desc mono">{describeCall(pendingCall)}</div>
-                {pendingCall.tool === "edit_file" && (
-                  <pre className="leo-pending-call-content mono">
-                    {String(pendingCall.args.content ?? "")}
-                  </pre>
-                )}
+                {pendingCall.tool === "edit_file" &&
+                  (pendingCall.diff ? (
+                    <DiffView diff={pendingCall.diff} />
+                  ) : (
+                    <pre className="leo-pending-call-content mono">
+                      {String(pendingCall.args.content ?? "")}
+                    </pre>
+                  ))}
                 <div className="leo-plan-actions">
                   <button className="leo-btn leo-btn-approve" onClick={approveCall}>
                     Approve

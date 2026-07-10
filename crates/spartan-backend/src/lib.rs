@@ -471,6 +471,10 @@ fn tool_call_json(call: &ToolCall) -> serde_json::Value {
             serde_json::json!({ "path": path, "content": content })
         }
         ToolCall::RunTerminal { command } => serde_json::json!({ "command": command }),
+        ToolCall::SearchFiles { pattern, path } => {
+            serde_json::json!({ "pattern": pattern, "path": path })
+        }
+        ToolCall::ListDirectory { path } => serde_json::json!({ "path": path }),
     }
 }
 
@@ -487,6 +491,34 @@ fn tool_result_text(result: &ToolResult) -> String {
             stderr,
             exit_code,
         } => format!("exit_code={exit_code}\nstdout:\n{stdout}\nstderr:\n{stderr}"),
+        ToolResult::SearchMatches(matches) => {
+            if matches.is_empty() {
+                "No matches found.".to_string()
+            } else {
+                matches
+                    .iter()
+                    .map(|m| format!("{}:{}: {}", m.path, m.line, m.text))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+        }
+        ToolResult::DirectoryListing(entries) => {
+            if entries.is_empty() {
+                "(empty directory)".to_string()
+            } else {
+                entries
+                    .iter()
+                    .map(|e| {
+                        if e.is_dir {
+                            format!("{}/", e.name)
+                        } else {
+                            e.name.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+        }
     }
 }
 
@@ -508,7 +540,52 @@ fn tool_result_json(result: &ToolResult) -> serde_json::Value {
             "stderr": stderr,
             "exit_code": exit_code,
         }),
+        ToolResult::SearchMatches(matches) => serde_json::json!({
+            "kind": "search_matches",
+            "matches": matches.iter().map(|m| serde_json::json!({
+                "path": m.path, "line": m.line, "text": m.text,
+            })).collect::<Vec<_>>(),
+        }),
+        ToolResult::DirectoryListing(entries) => serde_json::json!({
+            "kind": "directory_listing",
+            "entries": entries.iter().map(|e| serde_json::json!({
+                "name": e.name, "is_dir": e.is_dir,
+            })).collect::<Vec<_>>(),
+        }),
     }
+}
+
+/// Real §75.68 diff preview -- a plain, `+`/`-`/` `-prefixed line diff
+/// (via the real `similar` crate's line-level `TextDiff`), not a full
+/// unified-diff-with-hunk-headers format, since the UI renders every
+/// line directly rather than parsing hunk boundaries. Bounded to
+/// `MAX_DIFF_LINES` real output lines so an unexpectedly huge rewrite
+/// can't balloon the event payload -- truncated with an honest note,
+/// never silently cut off without saying so.
+fn compute_diff(old: &str, new: &str) -> String {
+    const MAX_DIFF_LINES: usize = 500;
+    use similar::{ChangeTag, TextDiff};
+    let diff = TextDiff::from_lines(old, new);
+    let mut out = String::new();
+    for (lines, change) in diff.iter_all_changes().enumerate() {
+        if lines >= MAX_DIFF_LINES {
+            out.push_str(&format!(
+                "... diff truncated after {MAX_DIFF_LINES} lines ...\n"
+            ));
+            break;
+        }
+        let sign = match change.tag() {
+            ChangeTag::Delete => '-',
+            ChangeTag::Insert => '+',
+            ChangeTag::Equal => ' ',
+        };
+        out.push(sign);
+        out.push_str(change.as_str().unwrap_or_default());
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// Real §4.1 execute-step round trip (§75.66, closing the single largest
@@ -558,13 +635,32 @@ fn leo_next_step(
             match result {
                 Ok(step) => match step.action {
                     ExecuteAction::Call(call) => {
+                        // Real §75.68 diff preview -- computed here, once,
+                        // before the human ever sees the proposal, rather
+                        // than in the UI, so the exact same real "current
+                        // file content" `peek_file` reads is what gets
+                        // diffed (no risk of the UI's own, possibly
+                        // stale, view of the file disagreeing with what
+                        // Leo is actually about to write).
+                        let diff = if let ToolCall::EditFile { path, content } = &call {
+                            guard.leo_agent.as_ref().map(|agent| {
+                                let current = agent.peek_file(path).unwrap_or_default();
+                                compute_diff(&current, content)
+                            })
+                        } else {
+                            None
+                        };
+                        let mut data = serde_json::json!({
+                            "call_id": step.call_id,
+                            "tool": call.name(),
+                            "args": tool_call_json(&call),
+                        });
+                        if let Some(d) = diff {
+                            data["diff"] = serde_json::Value::String(d);
+                        }
                         let event = Event {
                             event: "leo_action_proposed".to_string(),
-                            data: serde_json::json!({
-                                "call_id": step.call_id,
-                                "tool": call.name(),
-                                "args": tool_call_json(&call),
-                            }),
+                            data,
                         };
                         guard.leo_pending_call = Some(PendingCall {
                             call_id: step.call_id,
@@ -1766,6 +1862,34 @@ mod tests {
     }
 
     #[test]
+    fn compute_diff_marks_added_and_removed_lines_and_keeps_unchanged_ones() {
+        let old = "line one\nline two\nline three\n";
+        let new = "line one\nline TWO changed\nline three\nline four\n";
+        let diff = compute_diff(old, new);
+        assert!(diff.contains("-line two\n"));
+        assert!(diff.contains("+line TWO changed\n"));
+        assert!(diff.contains(" line one\n"));
+        assert!(diff.contains(" line three\n"));
+        assert!(diff.contains("+line four\n"));
+    }
+
+    #[test]
+    fn compute_diff_of_identical_content_has_no_added_or_removed_lines() {
+        let content = "same\ncontent\n";
+        let diff = compute_diff(content, content);
+        assert!(!diff.contains('+'));
+        assert!(!diff.contains('-'));
+    }
+
+    #[test]
+    fn compute_diff_against_empty_old_content_marks_every_line_added() {
+        let diff = compute_diff("", "brand new file\nsecond line\n");
+        assert!(diff.contains("+brand new file\n"));
+        assert!(diff.contains("+second line\n"));
+        assert!(!diff.contains('-'));
+    }
+
+    #[test]
     fn leo_next_step_errors_when_a_call_is_already_pending() {
         let tmp = TempRepo::new("leo-next-step-pending");
         let agent = agent_in_executing_state(&tmp.dir);
@@ -1830,6 +1954,84 @@ mod tests {
         assert_eq!(guard.leo_history.len(), 2, "an Assistant+Tool message pair");
         assert_eq!(guard.leo_history[1].content, "real file contents");
         assert_eq!(guard.leo_history[1].tool_call_id.as_deref(), Some("call_1"));
+    }
+
+    #[test]
+    fn leo_approve_call_executes_a_real_search_files_call() {
+        let tmp = TempRepo::new("leo-approve-search");
+        std::fs::write(tmp.dir.join("f.txt"), "fn needle() {}\n").unwrap();
+        let agent = agent_in_executing_state(&tmp.dir);
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            leo_pending_call: Some(PendingCall {
+                call_id: "call_1".to_string(),
+                call: ToolCall::SearchFiles {
+                    pattern: "needle".to_string(),
+                    path: None,
+                },
+            }),
+            ..Default::default()
+        }));
+
+        let resp = call(&state, 1, "leo_approve_call", serde_json::json!({}));
+        assert!(
+            resp.error.is_none(),
+            "leo_approve_call errored: {:?}",
+            resp.error
+        );
+        let result = resp.result.unwrap();
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["result"]["kind"], "search_matches");
+        let matches = result["result"]["matches"].as_array().unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0]["path"], "f.txt");
+
+        let guard = state.lock().unwrap();
+        assert!(guard.leo_pending_call.is_none());
+        assert!(guard.leo_history[1].content.contains("f.txt:1:"));
+    }
+
+    #[test]
+    fn leo_approve_call_executes_a_real_list_directory_call() {
+        let tmp = TempRepo::new("leo-approve-list");
+        std::fs::write(tmp.dir.join("a.txt"), "x").unwrap();
+        std::fs::create_dir_all(tmp.dir.join("zsub")).unwrap();
+        // A real, empty directory carries no git-trackable content at
+        // all -- `approve_plan`'s own checkpoint does a real
+        // stash-then-reapply round trip (checkpoint.rs's own doc comment
+        // already names this exact class of limitation for untracked
+        // paths), which cannot preserve a directory with nothing in it.
+        // A real file inside it sidesteps that entirely, matching how a
+        // real project's subdirectories always actually look.
+        std::fs::write(tmp.dir.join("zsub/nested.txt"), "y").unwrap();
+        let agent = agent_in_executing_state(&tmp.dir);
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            leo_pending_call: Some(PendingCall {
+                call_id: "call_1".to_string(),
+                call: ToolCall::ListDirectory { path: None },
+            }),
+            ..Default::default()
+        }));
+
+        let resp = call(&state, 1, "leo_approve_call", serde_json::json!({}));
+        assert!(
+            resp.error.is_none(),
+            "leo_approve_call errored: {:?}",
+            resp.error
+        );
+        let result = resp.result.unwrap();
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["result"]["kind"], "directory_listing");
+        let entries = result["result"]["entries"].as_array().unwrap();
+        // TempRepo initializes a real .git directory too -- just confirm
+        // our two real real entries are both present, not an exact count.
+        assert!(entries
+            .iter()
+            .any(|e| e["name"] == "a.txt" && e["is_dir"] == false));
+        assert!(entries
+            .iter()
+            .any(|e| e["name"] == "zsub" && e["is_dir"] == true));
     }
 
     #[test]

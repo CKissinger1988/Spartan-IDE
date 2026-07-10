@@ -75,6 +75,8 @@ impl std::error::Error for ExecuteError {}
 const READ_FILE_TOOL: &str = "read_file";
 const EDIT_FILE_TOOL: &str = "edit_file";
 const RUN_TERMINAL_TOOL: &str = "run_terminal";
+const SEARCH_FILES_TOOL: &str = "search_files";
+const LIST_DIRECTORY_TOOL: &str = "list_directory";
 const TASK_COMPLETE_TOOL: &str = "task_complete";
 
 fn execute_tool_definitions() -> Vec<ToolDefinition> {
@@ -114,6 +116,37 @@ fn execute_tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: SEARCH_FILES_TOOL.to_string(),
+            description: "Search the real project for a plain substring across every real \
+                text file (binary files and common noise directories like .git/node_modules/ \
+                target are skipped automatically). Use this to find where something is \
+                defined or used before guessing a file path. `path` optionally scopes the \
+                search to one real subdirectory; omit it to search the whole project."
+                .to_string(),
+            parameters_schema: json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string"},
+                    "path": {"type": "string", "description": "Optional subdirectory to scope the search to"}
+                },
+                "required": ["pattern"]
+            }),
+        },
+        ToolDefinition {
+            name: LIST_DIRECTORY_TOOL.to_string(),
+            description: "List the real, immediate contents (files and subdirectories) of \
+                a real directory. `path` is relative to the project root; omit it to list \
+                the real project root itself."
+                .to_string(),
+            parameters_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Optional directory to list, relative to the project root"}
+                },
+                "required": []
+            }),
+        },
+        ToolDefinition {
             name: TASK_COMPLETE_TOOL.to_string(),
             description: "Call this exactly once, and only once, when the plan has been \
                 fully executed and no further tool calls are needed."
@@ -137,9 +170,13 @@ fn system_prompt(plan: &ImplementationPlan) -> String {
          Approach: {}\n\
          Files: {}\n\
          Risk notes: {}\n\n\
-         Execute this plan by calling exactly one real tool (read_file, edit_file, or \
-         run_terminal) per turn. After you have finished, call task_complete exactly once \
-         with a real summary of what you did. Never call more than one tool in a single turn.",
+         Execute this plan by calling exactly one real tool per turn: search_files or \
+         list_directory to explore the project when you're not certain of an exact path or \
+         what a file currently contains, read_file to see a file's real current content \
+         before editing it, edit_file to write a real change, or run_terminal to run a real \
+         command. Prefer search_files/list_directory over guessing a path. After you have \
+         finished, call task_complete exactly once with a real summary of what you did. \
+         Never call more than one tool in a single turn.",
         plan.goal,
         plan.approach,
         plan.files.join(", "),
@@ -215,6 +252,15 @@ pub fn next_action(
             let command = require_str(&parsed, "command", &call_name, &call_args)?;
             ExecuteAction::Call(ToolCall::RunTerminal { command })
         }
+        SEARCH_FILES_TOOL => {
+            let pattern = require_str(&parsed, "pattern", &call_name, &call_args)?;
+            let path = optional_str(&parsed, "path");
+            ExecuteAction::Call(ToolCall::SearchFiles { pattern, path })
+        }
+        LIST_DIRECTORY_TOOL => {
+            let path = optional_str(&parsed, "path");
+            ExecuteAction::Call(ToolCall::ListDirectory { path })
+        }
         TASK_COMPLETE_TOOL => {
             let summary = require_str(&parsed, "summary", &call_name, &call_args)?;
             ExecuteAction::Done { summary }
@@ -223,7 +269,9 @@ pub fn next_action(
             return Err(ExecuteError::MalformedCall {
                 tool: other.to_string(),
                 raw: call_args,
-                reason: "not one of read_file/edit_file/run_terminal/task_complete".to_string(),
+                reason: "not one of read_file/edit_file/run_terminal/search_files/\
+                    list_directory/task_complete"
+                    .to_string(),
             })
         }
     };
@@ -241,6 +289,18 @@ fn require_str(parsed: &Value, field: &str, tool: &str, raw: &str) -> Result<Str
             raw: raw.to_string(),
             reason: format!("missing or non-string '{field}'"),
         })
+}
+
+/// A real, genuinely optional string field (`search_files`'s/
+/// `list_directory`'s own `path`) -- `None` for both a missing field and
+/// an explicit real empty string, since either one means "the whole
+/// project root" to `Sandbox::search_files`/`list_directory`.
+fn optional_str(parsed: &Value, field: &str) -> Option<String> {
+    parsed
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// Builds the real `Assistant` + `Role::Tool` message pair a caller
@@ -365,6 +425,61 @@ mod tests {
         assert!(matches!(
             step.action,
             ExecuteAction::Call(ToolCall::RunTerminal { command }) if command == "cargo build"
+        ));
+    }
+
+    #[test]
+    fn a_real_search_files_call_parses_correctly_with_a_scoped_path() {
+        let provider = FakeProvider {
+            tool: Some((
+                SEARCH_FILES_TOOL,
+                json!({"pattern": "fn foo", "path": "src"}),
+            )),
+        };
+        let step = next_action(&provider, &sample_plan(), &[]).unwrap();
+        match step.action {
+            ExecuteAction::Call(ToolCall::SearchFiles { pattern, path }) => {
+                assert_eq!(pattern, "fn foo");
+                assert_eq!(path.as_deref(), Some("src"));
+            }
+            other => panic!("expected SearchFiles, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_real_search_files_call_with_no_path_defaults_to_the_whole_project() {
+        let provider = FakeProvider {
+            tool: Some((SEARCH_FILES_TOOL, json!({"pattern": "TODO"}))),
+        };
+        let step = next_action(&provider, &sample_plan(), &[]).unwrap();
+        assert!(matches!(
+            step.action,
+            ExecuteAction::Call(ToolCall::SearchFiles { pattern, path })
+                if pattern == "TODO" && path.is_none()
+        ));
+    }
+
+    #[test]
+    fn a_real_list_directory_call_parses_correctly() {
+        let provider = FakeProvider {
+            tool: Some((LIST_DIRECTORY_TOOL, json!({"path": "src"}))),
+        };
+        let step = next_action(&provider, &sample_plan(), &[]).unwrap();
+        assert!(matches!(
+            step.action,
+            ExecuteAction::Call(ToolCall::ListDirectory { path }) if path.as_deref() == Some("src")
+        ));
+    }
+
+    #[test]
+    fn a_real_list_directory_call_with_no_args_at_all_lists_the_root() {
+        let provider = FakeProvider {
+            tool: Some((LIST_DIRECTORY_TOOL, json!({}))),
+        };
+        let step = next_action(&provider, &sample_plan(), &[]).unwrap();
+        assert!(matches!(
+            step.action,
+            ExecuteAction::Call(ToolCall::ListDirectory { path }) if path.is_none()
         ));
     }
 

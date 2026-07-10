@@ -77,6 +77,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Real Git panel + Settings screen in the Electron shell | §75.65 |
 | Real Leo execute/verify loop wired into the Electron shell — READ BEFORE ASSUMING §9's ManualEveryStep approval gate is bypassed anywhere in this loop | §75.66 |
 | Real project-tier memory, read and written for the first time | §75.67 |
+| Leo enhancement toward modern coding-agent parity — search/list tools, real diff preview (first increment) | §75.68 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -1930,6 +1931,41 @@ first — it's the parity reference until each row there is actually reimplement
   hand-editable, just not surfaced in either shell's chrome); no session-/global-tier memory (out of
   scope for Tier 1). With this pass, both named halves of task #5's Tier 1 bar -- the execute/verify
   loop and project-tier memory -- are real and wired end-to-end in the primary Electron UI.
+- **Real, working code — real codebase search/list tools and a real diff preview, first increment
+  of enhancing Leo toward modern coding-agent feature parity (§75.68)**: closes "Enhance Leo agent
+  as much as possible with all current AI coding features." With task #5's Tier 1 bar already
+  closed, this pass and its successors go beyond the spec's minimum toward parity with Claude
+  Code/Cursor/Aider-style agents. `spartan_leo::tool::ToolCall` gained `SearchFiles { pattern,
+  path: Option<String> }` (a real, bounded recursive substring search -- deliberately plain
+  substring matching, not regex, a named v1 simplification, not a limitation of the sandbox) and
+  `ListDirectory { path: Option<String> }`, both real, jailed through the exact same
+  `Sandbox::resolve` path-jail every other tool call already uses, both `RiskClass::Safe`.
+  `search_files` skips common noise dirs (`.git`/`node_modules`/`target`/`dist`/`build`/`.next`/
+  `.venv`/`__pycache__`) and is bounded to 200 matches / 20,000 files visited; binary files are
+  silently skipped, a real expected case. Before this, Leo could only ever read a file it already
+  knew the exact path of -- now it can actually explore. `Agent` gained a real, read-only
+  `peek_file(path) -> Option<String>` (no state requirement, no history entry, no approval gate
+  consumed) purely to support a real diff preview: `spartan-backend` added the `similar` crate (a
+  real, well-established MIT dependency, matching this project's existing preference for legitimate
+  third-party crates over hand-rolling) and a new `compute_diff` function producing a real
+  `+`/`-`/` `-prefixed line diff, bounded to 500 lines, computed server-side once before the
+  `leo_action_proposed` event is ever emitted so the diff and the actual write can never disagree.
+  **A real bug was found and fixed only by running the new tests**: a test expected a real *empty*
+  directory to survive `approve_plan`'s own checkpoint (a real git stash-then-reapply, §4.2) --
+  but git has no way to represent an empty directory at all, so it was silently lost in the stash
+  round trip, a real, correctly-behaving git limitation, not a product bug. Fixed by putting a
+  real file inside the test directory. 20 new tests across two crates (15 in `spartan-leo`, 5 in
+  `spartan-backend`), all passing. `LeoChatPanel.tsx` renders real descriptions for both new tools
+  and a new `DiffView` component shows each diff line colored (green add / red remove / dim
+  context) instead of a raw content dump. Real, screenshotted Playwright verification: a full
+  four-step sequence (search → list → edit-with-diff → Done) all confirmed correct. Full
+  `cargo fmt`/`clippy`/`test --workspace --release -- --test-threads=1` clean (477 tests, up from
+  457, a real clippy `explicit_counter_loop` warning found and fixed along the way); `desktop`'s
+  own `typecheck`/`build` clean. **What this does not confirm**: no live model-driven exercise of
+  either new tool (Ollama unreachable this session, same as every §75.66+ pass); `search_files` is
+  substring-only, not regex; no diff preview for non-`edit_file` calls (nothing to diff against).
+  First of several planned increments -- configurable approval mode, a cancel/stop control, and
+  the `Failed -> Recovering -> Executing` retry loop's UI wiring are the natural next pieces.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1987,7 +2023,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 457 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 477 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-editor-core,

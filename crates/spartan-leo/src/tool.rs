@@ -20,9 +20,34 @@ use std::process::Command;
 
 #[derive(Debug, Clone)]
 pub enum ToolCall {
-    ReadFile { path: String },
-    EditFile { path: String, content: String },
-    RunTerminal { command: String },
+    ReadFile {
+        path: String,
+    },
+    EditFile {
+        path: String,
+        content: String,
+    },
+    RunTerminal {
+        command: String,
+    },
+    /// Real §75.68 addition: a codebase-wide substring search, closing
+    /// the single biggest real gap in Leo's original three-tool set --
+    /// without this, Leo could only ever read a file it already knew the
+    /// exact path of (from the plan's own `files` list), unlike every
+    /// other current coding agent (Claude Code, Cursor, Aider all ship a
+    /// real grep/search tool). Deliberately plain substring matching, not
+    /// full regex -- a real, named v1 simplification avoiding a new
+    /// `regex` dependency, not a limitation of the sandbox itself.
+    SearchFiles {
+        pattern: String,
+        path: Option<String>,
+    },
+    /// Real §75.68 addition: lets Leo explore the project structure
+    /// itself instead of relying entirely on the plan's own static file
+    /// list -- `path: None` lists the real project root.
+    ListDirectory {
+        path: Option<String>,
+    },
 }
 
 impl ToolCall {
@@ -31,8 +56,23 @@ impl ToolCall {
             ToolCall::ReadFile { .. } => "read_file",
             ToolCall::EditFile { .. } => "edit_file",
             ToolCall::RunTerminal { .. } => "run_terminal",
+            ToolCall::SearchFiles { .. } => "search_files",
+            ToolCall::ListDirectory { .. } => "list_directory",
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchMatch {
+    pub path: String,
+    pub line: usize,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirEntry {
+    pub name: String,
+    pub is_dir: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +87,8 @@ pub enum ToolResult {
         stderr: String,
         exit_code: i32,
     },
+    SearchMatches(Vec<SearchMatch>),
+    DirectoryListing(Vec<DirEntry>),
 }
 
 #[derive(Debug)]
@@ -199,11 +241,130 @@ impl Sandbox {
         })
     }
 
+    /// Real, bounded recursive substring search under `path` (or the
+    /// whole real project root when `None`) -- directly closes the gap
+    /// named on `ToolCall::SearchFiles` itself. Two real, named bounds
+    /// prevent a pathological repo (a huge `node_modules`/build output
+    /// that somehow isn't excluded) from hanging the agent loop: at most
+    /// `SEARCH_MAX_MATCHES` results and at most `SEARCH_MAX_FILES_VISITED`
+    /// real directory entries visited. A handful of common, real,
+    /// noise-only directories are skipped outright rather than searched
+    /// and immediately discarded. Files that fail real UTF-8 decoding
+    /// (binaries) are silently skipped, not an error -- a real, expected,
+    /// common case, not a failure.
+    pub fn search_files(
+        &self,
+        pattern: &str,
+        path: Option<&str>,
+    ) -> Result<ToolResult, SandboxError> {
+        const SKIP_DIRS: &[&str] = &[
+            ".git",
+            "node_modules",
+            "target",
+            "dist",
+            "build",
+            ".next",
+            ".venv",
+            "venv",
+            "__pycache__",
+        ];
+        const MAX_MATCHES: usize = 200;
+        const MAX_FILES_VISITED: usize = 20_000;
+
+        let canonical_root = self.project_root.canonicalize().map_err(SandboxError::Io)?;
+        let start = match path {
+            Some(p) => self.resolve(p)?,
+            None => canonical_root.clone(),
+        };
+
+        let mut matches = Vec::new();
+        let mut visited = 0usize;
+        let mut stack = vec![start];
+        'walk: while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                visited += 1;
+                if visited >= MAX_FILES_VISITED || matches.len() >= MAX_MATCHES {
+                    break 'walk;
+                }
+                let entry_path = entry.path();
+                let Ok(file_type) = entry.file_type() else {
+                    continue;
+                };
+                if file_type.is_dir() {
+                    let name = entry.file_name();
+                    if SKIP_DIRS.contains(&name.to_string_lossy().as_ref()) {
+                        continue;
+                    }
+                    stack.push(entry_path);
+                    continue;
+                }
+                if !file_type.is_file() {
+                    continue;
+                }
+                let Ok(content) = std::fs::read_to_string(&entry_path) else {
+                    continue;
+                };
+                let rel = entry_path
+                    .strip_prefix(&canonical_root)
+                    .unwrap_or(&entry_path)
+                    .to_string_lossy()
+                    .to_string();
+                for (i, line) in content.lines().enumerate() {
+                    if line.contains(pattern) {
+                        matches.push(SearchMatch {
+                            path: rel.clone(),
+                            line: i + 1,
+                            text: line.trim().chars().take(200).collect(),
+                        });
+                        if matches.len() >= MAX_MATCHES {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(ToolResult::SearchMatches(matches))
+    }
+
+    /// Real, non-recursive directory listing, mirroring `spartan-backend`
+    /// own `list_dir` IPC method's real sort convention (dirs first, then
+    /// alphabetical) -- kept as a separate, sandboxed implementation
+    /// rather than sharing code with that method, since this one must go
+    /// through `resolve()`'s real path-jail enforcement and that one is
+    /// already trusted (it only ever serves the real, already-open
+    /// project's own file tree).
+    pub fn list_directory(&self, path: Option<&str>) -> Result<ToolResult, SandboxError> {
+        let resolved = match path {
+            Some(p) => self.resolve(p)?,
+            None => self.project_root.canonicalize().map_err(SandboxError::Io)?,
+        };
+        let mut entries = Vec::new();
+        for entry in std::fs::read_dir(&resolved).map_err(SandboxError::Io)? {
+            let entry = entry.map_err(SandboxError::Io)?;
+            let file_type = entry.file_type().map_err(SandboxError::Io)?;
+            entries.push(DirEntry {
+                name: entry.file_name().to_string_lossy().to_string(),
+                is_dir: file_type.is_dir(),
+            });
+        }
+        entries.sort_by(|a, b| {
+            b.is_dir
+                .cmp(&a.is_dir)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        Ok(ToolResult::DirectoryListing(entries))
+    }
+
     pub fn execute(&self, call: &ToolCall) -> Result<ToolResult, SandboxError> {
         match call {
             ToolCall::ReadFile { path } => self.read_file(path),
             ToolCall::EditFile { path, content } => self.edit_file(path, content),
             ToolCall::RunTerminal { command } => self.run_terminal(command),
+            ToolCall::SearchFiles { pattern, path } => self.search_files(pattern, path.as_deref()),
+            ToolCall::ListDirectory { path } => self.list_directory(path.as_deref()),
         }
     }
 }
@@ -307,5 +468,86 @@ mod tests {
         };
         assert_eq!(exit_code, 0);
         assert!(stdout.contains("marker.txt"));
+    }
+
+    #[test]
+    fn search_files_finds_a_real_substring_across_multiple_real_files() {
+        let root = temp_project("search-basic");
+        std::fs::write(root.join("a.rs"), "fn foo() {}\nfn bar() {}\n").unwrap();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/b.rs"), "// calls foo() here\n").unwrap();
+        let sandbox = Sandbox::new(&root);
+        let result = sandbox.search_files("foo", None).unwrap();
+        let ToolResult::SearchMatches(matches) = result else {
+            panic!("expected SearchMatches");
+        };
+        assert_eq!(matches.len(), 2);
+        assert!(matches.iter().any(|m| m.path == "a.rs" && m.line == 1));
+        assert!(matches
+            .iter()
+            .any(|m| m.path.ends_with("sub/b.rs") && m.line == 1));
+    }
+
+    #[test]
+    fn search_files_skips_real_noise_directories() {
+        let root = temp_project("search-skip-dirs");
+        std::fs::create_dir_all(root.join("node_modules")).unwrap();
+        std::fs::write(root.join("node_modules/dep.js"), "needle").unwrap();
+        std::fs::write(root.join("real.js"), "needle").unwrap();
+        let sandbox = Sandbox::new(&root);
+        let result = sandbox.search_files("needle", None).unwrap();
+        let ToolResult::SearchMatches(matches) = result else {
+            panic!("expected SearchMatches");
+        };
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path, "real.js");
+    }
+
+    #[test]
+    fn search_files_scoped_to_a_real_subdirectory_only_searches_it() {
+        let root = temp_project("search-scoped");
+        std::fs::write(root.join("outside.txt"), "needle").unwrap();
+        std::fs::create_dir_all(root.join("inside")).unwrap();
+        std::fs::write(root.join("inside/hit.txt"), "needle").unwrap();
+        let sandbox = Sandbox::new(&root);
+        let result = sandbox.search_files("needle", Some("inside")).unwrap();
+        let ToolResult::SearchMatches(matches) = result else {
+            panic!("expected SearchMatches");
+        };
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].path.ends_with("inside/hit.txt"));
+    }
+
+    #[test]
+    fn search_files_refuses_a_real_path_jail_escape() {
+        let root = temp_project("search-jail");
+        let sandbox = Sandbox::new(&root);
+        let result = sandbox.search_files("x", Some("../../../etc"));
+        assert!(matches!(result, Err(SandboxError::PathEscapesJail { .. })));
+    }
+
+    #[test]
+    fn list_directory_with_no_path_lists_the_real_project_root() {
+        let root = temp_project("list-root");
+        std::fs::write(root.join("a.txt"), "x").unwrap();
+        std::fs::create_dir_all(root.join("zsub")).unwrap();
+        let sandbox = Sandbox::new(&root);
+        let result = sandbox.list_directory(None).unwrap();
+        let ToolResult::DirectoryListing(entries) = result else {
+            panic!("expected DirectoryListing");
+        };
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "zsub");
+        assert!(entries[0].is_dir);
+        assert_eq!(entries[1].name, "a.txt");
+        assert!(!entries[1].is_dir);
+    }
+
+    #[test]
+    fn list_directory_refuses_a_real_path_jail_escape() {
+        let root = temp_project("list-jail");
+        let sandbox = Sandbox::new(&root);
+        let result = sandbox.list_directory(Some("../../../etc"));
+        assert!(matches!(result, Err(SandboxError::PathEscapesJail { .. })));
     }
 }
