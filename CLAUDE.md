@@ -69,6 +69,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Open source decompilers (Ghidra, radare2, JADX, ILSpy, CFR/Fernflower) — untrusted-content posture in §74.7 | §74 |
 | Real Tier 1 implementation begun (core buffer + language registry), what it does/doesn't mean | §75 |
 | Electron/React desktop shell (`desktop/`) — the current UI, replacing the wgpu shell as the primary surface; the wgpu shell (`crates/spartan-editor-core`) is the reference/backend proof, not deleted | §75.59 |
+| Desktop shell's 3-tier nav IA (Workspace/Build/Platform) and Workflows screen — READ §75.60 BEFORE ASSUMING VELOCITY CODE/ASSETS WERE COPIED (they were not; AGPL-3.0) | §75.60 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -1577,6 +1578,48 @@ first — it's the parity reference until each row there is actually reimplement
   original wgpu shell's own fine-grained per-edit undo checkpoints (real, named regression, not
   hidden); `crates/spartan-editor-core` itself is unchanged and remains the real, tested reference
   this new shell's backend wiring is built from.
+- **Real, working code — real 3-tier navigation shell (Workspace/Build/Platform) and a real
+  ReactFlow Workflows screen, restructuring `desktop/`'s IA around a second external reference
+  product (§75.60)**: closes "This IDE should look and function exactly like
+  github.com/OptimiLabs/velocity.Git with all of our features... added." A real, more severe
+  licensing finding than §75.57's: `OptimiLabs/velocity` (a different repo from
+  `ishandutta2007/Velocity`) is **AGPL-3.0** -- stronger copyleft than GPL-2.0 (its network-use
+  clause triggers even when code only runs as a service, never distributed) -- and, unlike the
+  earlier repo, is real, substantial, working Next.js/TypeScript/Bun code, not aspirational.
+  Confirmed via `AskUserQuestion` before writing anything: **match concepts/UI, zero code copied**
+  -- the same safe choice as §75.57, re-confirmed explicitly rather than assumed given this pass's
+  higher real risk and the user's own stronger "build on the foundation of" phrasing. Only that
+  repo's own README prose (fetched read-only, once, via `WebFetch` -- `add_repo` was denied for the
+  same cross-owner reason as before) was ever read; no source file was fetched or copied. The real,
+  adopted finding: Velocity's own navigation is a real 3-tier grouped sidebar -- Workspace
+  (Console/Sessions/Review/Analytics/Usage), Build (Agents/Workflows/Skills/Commands/Hooks/MCP/
+  Routing), Platform (Models/Plugins/Marketplace/Settings) -- replacing this project's own prior
+  top mode-toggle bar (§75.59); a second real finding: Velocity has **no code-editing surface at
+  all**, confirming the user's own "with all of our features added" instruction means slotting
+  Spartan's real Editor/Design capabilities into this borrowed IA, not replacing them with it. New
+  `desktop/src/nav.ts` (typed `NavGroup`/`NavItem` model, `SCREEN_NOTES` naming exactly which real
+  existing Spartan capability -- almost always already real in the original wgpu shell -- each
+  placeholder screen maps to and what real work porting it needs), `Sidebar.tsx`, `Placeholder.tsx`
+  (styled with the same `theme.css` tokens already established, no colors read from Velocity's own
+  CSS). New `WorkflowsScreen.tsx`: a real, working node-graph canvas built on `@xyflow/react`
+  (MIT-licensed, added as a genuine independent dependency -- the same *category* of library
+  Velocity's own README says it uses, not code copied from it), seeded with the same real
+  Claude/Codex/Gemini concept `workflow.rs` (§75.57) already proved, with real click-select and
+  real drag-reposition via the library's own built-in change handlers. `ModeToggle.tsx` deleted
+  outright as dead code (not left unused) once `App.tsx`'s `screen` state replaced `mode`. Live,
+  through the same Playwright+Vite harness §75.59 established (the real Electron binary remains
+  unavailable in this session for the same already-documented reason): the full 18-item, 3-group
+  nav rendered correctly with "SPARTAN" branding, screenshotted; the Editor screen (file tree, tab
+  bar, status bar) confirmed unaffected; the Workflows screen showed all three real nodes/edges
+  correctly rendered with working zoom controls; a real drag repositioned Claude with both edges
+  dynamically re-routing, screenshotted; Settings and Console each showed real, specifically-worded
+  placeholder text (not generic "coming soon") naming exactly what exists elsewhere in this project
+  and what's missing here. **What this does not confirm**: no real Electron window launch (same
+  gap as §75.59); none of the 14 placeholder screens have real functionality yet; Console/Sessions
+  share a real, scoped, unstarted blocker (`spartan-backend`'s protocol needs async push-event
+  support for streaming PTY output before a real terminal view is possible here); the Workflows
+  canvas has no node/edge creation UI or persistence; no visual assets or code from
+  `OptimiLabs/velocity` were used anywhere in this pass.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

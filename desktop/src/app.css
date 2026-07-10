@@ -4,75 +4,58 @@
   width: 100vw;
 }
 
-.activity-bar {
-  width: 44px;
-  background: var(--surface);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding-top: 8px;
-  gap: 14px;
-  flex-shrink: 0;
-}
-
-.activity-icon {
-  font-size: 10px;
-  color: var(--text-dim);
-  writing-mode: vertical-rl;
-  cursor: pointer;
-  padding: 4px 2px;
-  border-radius: 6px;
-}
-
-.activity-icon:hover {
-  background: var(--accent-hover);
-  color: var(--text);
-}
-
-.activity-active {
-  color: var(--accent);
-  background: var(--accent-dim);
-}
-
-.sidebar {
-  width: 220px;
+/* Real, persistent 3-tier nav sidebar (Workspace/Build/Platform), replacing
+ * the old top mode-toggle -- matches the IA researched from
+ * OptimiLabs/velocity (concepts only, see App.tsx's own doc comment). */
+.nav-sidebar {
+  width: 200px;
   background: var(--surface);
   border-right: 1px solid var(--border);
   overflow-y: auto;
   flex-shrink: 0;
+  padding-bottom: 16px;
 }
 
-.file-tree {
-  padding: 8px 0;
+.nav-brand {
+  padding: 14px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
 }
 
-.tree-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
+.nav-group {
+  margin-bottom: 14px;
+}
+
+.nav-group-label {
+  padding: 4px 16px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+
+.nav-item {
+  padding: 5px 16px;
   font-size: 12.5px;
+  color: var(--text-dim);
   cursor: pointer;
   border-radius: 4px;
-  white-space: nowrap;
+  margin: 0 6px;
 }
 
-.tree-row:hover {
+.nav-item:hover {
   background: var(--accent-hover);
+  color: var(--text);
 }
 
-.tree-caret {
-  display: inline-block;
-  width: 12px;
-  color: var(--text-dim);
-  font-size: 10px;
-}
-
-.tree-error {
-  color: #e05a4a;
-  padding: 8px;
-  font-size: 12px;
+.nav-item-active {
+  background: var(--accent-dim);
+  color: var(--accent);
 }
 
 .main-column {
@@ -90,6 +73,12 @@
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+.screen-title {
+  padding: 0 16px;
+  font-size: 12.5px;
+  color: var(--text-dim);
 }
 
 .tab-bar {
@@ -130,34 +119,50 @@
   color: var(--accent);
 }
 
-.mode-toggle {
+.editor-body {
+  flex: 1;
+  min-height: 0;
   display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 12px;
-  font-size: 12px;
+}
+
+.file-tree-panel {
+  width: 220px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
   flex-shrink: 0;
 }
 
-.mode-label {
-  color: var(--text-dim);
+.file-tree {
+  padding: 8px 0;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-size: 12.5px;
   cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 6px;
+  border-radius: 4px;
+  white-space: nowrap;
 }
 
-.mode-label:hover {
+.tree-row:hover {
   background: var(--accent-hover);
-  color: var(--text);
 }
 
-.mode-active {
-  color: var(--accent);
-  background: var(--accent-dim);
+.tree-caret {
+  display: inline-block;
+  width: 12px;
+  color: var(--text-dim);
+  font-size: 10px;
 }
 
-.mode-sep {
-  color: var(--border);
+.tree-error {
+  color: #e05a4a;
+  padding: 8px;
+  font-size: 12px;
 }
 
 .content-area {
@@ -176,6 +181,42 @@
   font-size: 13px;
   padding: 32px;
   text-align: center;
+}
+
+.placeholder-screen {
+  height: 100%;
+  padding: 32px;
+  color: var(--text-dim);
+}
+
+.placeholder-screen h2 {
+  color: var(--text);
+  font-size: 15px;
+  margin: 0 0 8px 0;
+}
+
+.placeholder-screen p {
+  font-size: 13px;
+  line-height: 1.6;
+  max-width: 640px;
+}
+
+.workflows-screen {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.workflows-detail {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .editor-root {

@@ -18,10 +18,20 @@ deleted).
   no Node API, `nodeIntegration: false` + `contextIsolation: true`.
 - `electron/backend-client.ts` — spawns `spartan-backend` and speaks its real
   newline-delimited JSON protocol over stdin/stdout.
-- `src/` — the React renderer: `FileTree`, `TabBar`, `ModeToggle`,
-  `StatusBar`, and `Editor` (a real, custom -- not Monaco/CodeMirror --
-  text-editing surface; see `Editor.tsx`'s own doc comment for exactly what
-  "custom" means here and what it doesn't yet do).
+- `src/` — the React renderer. `Sidebar.tsx` + `nav.ts` are the real,
+  persistent 3-tier navigation (Workspace/Build/Platform), its IA adapted
+  (concepts only, zero code) from `OptimiLabs/velocity`'s own README --
+  see `docs/architecture-spec.md` §75.60 for the full licensing discussion
+  (that repo is AGPL-3.0, so nothing from its source was ever read).
+  `FileTree`, `TabBar`, `StatusBar`, and `Editor` (a real, custom -- not
+  Monaco/CodeMirror -- text-editing surface; see `Editor.tsx`'s own doc
+  comment for exactly what "custom" means here) make up the real Editor
+  screen. `WorkflowsScreen.tsx` is a real, working node-graph canvas built
+  on `@xyflow/react` (MIT). `Placeholder.tsx` + `nav.ts`'s `SCREEN_NOTES`
+  give every other real nav item (Console, Sessions, Review, Analytics,
+  Usage, Agents, Skills, Commands, Hooks, MCP, Routing, Models, Plugins,
+  Marketplace, Settings) an honest, specific "what exists elsewhere in
+  this project and what's missing here" message instead of fake content.
 
 ## Build & run
 

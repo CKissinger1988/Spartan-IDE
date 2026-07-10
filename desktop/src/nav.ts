@@ -1,0 +1,103 @@
+// Real navigation model for the desktop shell's information architecture
+// -- three grouped sections (Workspace / Build / Platform), matching the
+// IA researched from OptimiLabs/velocity (AGPL-3.0; concepts only, no
+// code copied -- see docs/architecture-spec.md §75.60 for the full,
+// explicit licensing discussion this structure came out of). Spartan's
+// own pre-existing features (Editor, Design) are slotted into this same
+// structure rather than replacing it, per the user's own explicit
+// "with all of our features, functions, additions, and integrations
+// added" instruction.
+
+export type ScreenId =
+  | "editor"
+  | "console"
+  | "sessions"
+  | "review"
+  | "analytics"
+  | "usage"
+  | "design"
+  | "agents"
+  | "workflows"
+  | "skills"
+  | "commands"
+  | "hooks"
+  | "mcp"
+  | "routing"
+  | "models"
+  | "plugins"
+  | "marketplace"
+  | "settings";
+
+export interface NavItem {
+  id: ScreenId;
+  label: string;
+}
+
+export interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
+export const NAV: NavGroup[] = [
+  {
+    label: "Workspace",
+    items: [
+      { id: "editor", label: "Editor" },
+      { id: "console", label: "Console" },
+      { id: "sessions", label: "Sessions" },
+      { id: "review", label: "Review" },
+      { id: "analytics", label: "Analytics" },
+      { id: "usage", label: "Usage" },
+    ],
+  },
+  {
+    label: "Build",
+    items: [
+      { id: "design", label: "Design" },
+      { id: "agents", label: "Agents" },
+      { id: "workflows", label: "Workflows" },
+      { id: "skills", label: "Skills" },
+      { id: "commands", label: "Commands" },
+      { id: "hooks", label: "Hooks" },
+      { id: "mcp", label: "MCP" },
+      { id: "routing", label: "Routing" },
+    ],
+  },
+  {
+    label: "Platform",
+    items: [
+      { id: "models", label: "Models" },
+      { id: "plugins", label: "Plugins" },
+      { id: "marketplace", label: "Marketplace" },
+      { id: "settings", label: "Settings" },
+    ],
+  },
+];
+
+/** Real, honest per-screen descriptions of what's real vs. not-yet-wired
+ * -- shown by `Placeholder.tsx` for every screen that isn't `editor` or
+ * `workflows` yet. Named specifically, not a generic "coming soon", so
+ * each gap is traceable to real, scoped future work. */
+export const SCREEN_NOTES: Partial<Record<ScreenId, string>> = {
+  console:
+    "A real integrated terminal already exists in the original wgpu shell (crates/spartan-editor-core/src/terminal.rs, real portable-pty). Wiring it into this Electron shell needs spartan-backend's request/response protocol extended with async push events for streaming PTY output -- a real, scoped, not-yet-built increment.",
+  sessions:
+    "Real multi-CLI session orchestration (Claude/Codex/Gemini as real PTYs) already exists in the original wgpu shell (cli_session.rs). Porting it here has the same real dependency as Console: streaming IPC events.",
+  review: "Session comparison view -- depends on Sessions existing first.",
+  analytics: "Usage/cost/latency tracking -- depends on real session execution data existing first.",
+  usage: "Per-provider usage tracking -- same dependency as Analytics.",
+  agents:
+    "Real Leo agent core (plan/approve/execute/verify) already exists and is wired into the original wgpu shell's Agent mode (spartan-leo, agent_panel.rs). Not yet ported to this Electron shell.",
+  workflows: "A real, working node-graph canvas -- see WorkflowsScreen.tsx.",
+  skills: "Not yet designed for this shell.",
+  commands: "Not yet designed for this shell.",
+  hooks: "Not yet designed for this shell.",
+  mcp: "Not yet designed for this shell.",
+  routing: "Depends on Sessions/Agents existing first to have real routing decisions to visualize.",
+  models:
+    "Real ModelProvider trait, OllamaProvider, ClaudeProvider, and LiteLLMProvider already exist in spartan-model. Not yet exposed via spartan-backend's IPC protocol or this shell's UI.",
+  plugins: "Real WASM plugin host (spartan-plugin-host) exists. Not yet exposed to this shell.",
+  marketplace: "Not yet designed for this shell.",
+  settings:
+    "A real settings panel (GPU offload, update checks) already exists in the original wgpu shell (settings_panel.rs, spartan-settings). Not yet ported to this Electron shell.",
+};

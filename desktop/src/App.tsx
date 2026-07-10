@@ -1,9 +1,12 @@
 import React, { useCallback, useState } from "react";
+import Sidebar from "./components/Sidebar";
 import FileTree from "./components/FileTree";
 import TabBar from "./components/TabBar";
-import ModeToggle, { type Mode } from "./components/ModeToggle";
 import StatusBar from "./components/StatusBar";
 import Editor, { type OpenFile } from "./components/Editor";
+import Placeholder from "./components/Placeholder";
+import WorkflowsScreen from "./components/WorkflowsScreen";
+import { NAV, type ScreenId } from "./nav";
 import "./app.css";
 
 const ROOT = new URLSearchParams(window.location.search).get("root") ?? "/";
@@ -11,7 +14,7 @@ const ROOT = new URLSearchParams(window.location.search).get("root") ?? "/";
 export default function App(): React.ReactElement {
   const [files, setFiles] = useState<OpenFile[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [mode, setMode] = useState<Mode>("Editor");
+  const [screen, setScreen] = useState<ScreenId>("editor");
 
   const openFile = useCallback(
     async (path: string) => {
@@ -50,38 +53,46 @@ export default function App(): React.ReactElement {
   );
 
   const activeFile = files[activeIndex] ?? null;
+  const screenLabel = NAV.flatMap((g) => g.items).find((i) => i.id === screen)?.label ?? screen;
 
   return (
     <div className="app-root">
-      <div className="activity-bar mono">
-        <span className="activity-icon activity-active">Files</span>
-        <span className="activity-icon">Git</span>
-        <span className="activity-icon">Agent</span>
-        <span className="activity-icon">Set</span>
-      </div>
-      <div className="sidebar">
-        <FileTree root={ROOT} onOpenFile={openFile} />
-      </div>
+      <Sidebar active={screen} onSelect={setScreen} />
       <div className="main-column">
-        <div className="top-row">
-          <TabBar files={files} activeIndex={activeIndex} onSelect={setActiveIndex} onClose={closeFile} />
-          <ModeToggle mode={mode} onChange={setMode} />
-        </div>
-        <div className="content-area">
-          {mode === "Editor" && activeFile && (
-            <Editor file={activeFile} onContentChange={handleContentChange} />
-          )}
-          {mode === "Editor" && !activeFile && (
-            <div className="empty-state mono">Open a file from the sidebar to start editing.</div>
-          )}
-          {mode !== "Editor" && (
-            <div className="empty-state mono">
-              {mode} mode is real in the original wgpu shell (crates/spartan-editor-core) but not
-              yet ported to this new Electron shell -- named honestly, not simulated.
+        {screen === "editor" ? (
+          <>
+            <div className="top-row">
+              <TabBar
+                files={files}
+                activeIndex={activeIndex}
+                onSelect={setActiveIndex}
+                onClose={closeFile}
+              />
             </div>
-          )}
-        </div>
-        <StatusBar fileCount={files.length} activePath={activeFile?.path ?? null} />
+            <div className="editor-body">
+              <div className="file-tree-panel">
+                <FileTree root={ROOT} onOpenFile={openFile} />
+              </div>
+              <div className="content-area">
+                {activeFile ? (
+                  <Editor file={activeFile} onContentChange={handleContentChange} />
+                ) : (
+                  <div className="empty-state mono">Open a file from the sidebar to start editing.</div>
+                )}
+              </div>
+            </div>
+            <StatusBar fileCount={files.length} activePath={activeFile?.path ?? null} />
+          </>
+        ) : (
+          <>
+            <div className="top-row">
+              <div className="screen-title mono">{screenLabel}</div>
+            </div>
+            <div className="content-area">
+              {screen === "workflows" ? <WorkflowsScreen /> : <Placeholder screen={screen} />}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
