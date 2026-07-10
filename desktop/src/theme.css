@@ -1,0 +1,43 @@
+/*
+ * Real color tokens ported verbatim from crates/spartan-editor-core/src/
+ * theme.rs (§75.54's own already-researched Antigravity 2.0 palette),
+ * not re-derived -- so the new Electron shell and the original wgpu
+ * shell share one real source of truth for color, the same discipline
+ * theme.rs itself established for the wgpu renderer.
+ */
+
+:root {
+  --bg: #09090b;
+  --surface: #18181b;
+  --border: #27272a;
+  --text: #e9e7e4;
+  --text-dim: #84838a;
+  --accent: #c4432b;
+  --accent-dim: rgba(196, 67, 43, 0.16);
+  --accent-hover: rgba(196, 67, 43, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", "Inter", sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  user-select: none;
+}
+
+.mono {
+  font-family: "SF Mono", "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+}

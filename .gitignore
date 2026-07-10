@@ -15,6 +15,13 @@ Cargo.lock.bak
 gui-builder/node_modules/
 gui-builder/dist/
 
+# Electron desktop shell (§75.59, user-requested pivot) -- real npm project,
+# package-lock.json IS committed for reproducible installs; only real
+# build output/deps are ignored.
+desktop/node_modules/
+desktop/dist/
+desktop/dist-electron/
+
 # Legacy Agent Deck console (Electron/Node/Python) — kept for reference, not built here
 legacy/agent-deck-console/node_modules/
 legacy/agent-deck-console/package-lock.json

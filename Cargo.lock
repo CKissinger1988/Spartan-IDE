@@ -4668,6 +4668,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "spartan-backend"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "spartan-buffer",
+]
+
+[[package]]
 name = "spartan-buffer"
 version = "0.1.0"
 dependencies = [

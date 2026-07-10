@@ -1,8 +1,23 @@
 # Spartan IDE
 
-From-scratch, agent-first desktop IDE. No VS Code/Monaco/CodeMirror — this is a locked
-architectural decision, not an open question. Custom Rust rope + wgpu rendering engine,
-`ropey` as the buffer foundation, tree-sitter for syntax, in-house LSP/DAP clients.
+From-scratch, agent-first desktop IDE. **UI shell (as of §75.59, user-directed pivot):** a real
+Electron + React frontend (`desktop/`) driving the real Rust core over a local IPC service
+(`crates/spartan-backend`) — not the original custom wgpu renderer, which is kept as the tested
+backend proof-of-concept, not deleted (see below). No VS Code/Monaco/CodeMirror code is forked or
+vendored, still a locked decision, not an open question — the text-editing surface in
+`desktop/src/components/Editor.tsx` is real, hand-built React chrome, not either of those
+components brought in wholesale. `ropey` remains the buffer foundation (`crates/spartan-buffer`),
+tree-sitter remains the syntax engine, LSP/DAP clients remain in-house — all real, tested, and
+reused by the new shell via IPC as that wiring lands (see §75.59 for exactly what's wired so far
+vs. still pending).
+
+**The original wgpu-native shell (`crates/spartan-editor-core`) is not deleted or deprecated.** It
+remains real, tested, working code — the same real product all of §75.1 through §75.58 built and
+verified — and stays the reference implementation and backend proof-of-concept until each of its
+features is reproduced in the new Electron shell. Don't delete it or treat its own extensive
+history below as void; it documents real, working Rust logic (rope buffer, LSP/DAP, tree-sitter,
+Leo, git, plugins, accessibility, packaging) that the Electron shell now consumes rather than
+duplicates.
 
 **Source of truth:** `docs/architecture-spec.md` (75 sections). This file is an index and a
 behavioral contract, not a summary — read the relevant section before implementing anything,
@@ -53,6 +68,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Security & Exploit Auditor — READ §73.2 BEFORE ASSUMING IT CAN TARGET ANYTHING BUT THE OPEN PROJECT | §73 |
 | Open source decompilers (Ghidra, radare2, JADX, ILSpy, CFR/Fernflower) — untrusted-content posture in §74.7 | §74 |
 | Real Tier 1 implementation begun (core buffer + language registry), what it does/doesn't mean | §75 |
+| Electron/React desktop shell (`desktop/`) — the current UI, replacing the wgpu shell as the primary surface; the wgpu shell (`crates/spartan-editor-core`) is the reference/backend proof, not deleted | §75.59 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -1482,6 +1498,85 @@ first — it's the parity reference until each row there is actually reimplement
   workflow persistence across restarts, no ANSI color in the session-detail panel (inherits
   `terminal.rs`'s own already-documented partial stripper). This is a real, working, live-verified
   first increment of the "workflow control plane" concept, not its full scope.
+- **Real, working code — real hover glow for tab bar, mode toggle, activity bar, and sidebar rows,
+  closing task #32 (§75.58)**: four real eased hover targets, resolved fresh every frame from the
+  cursor position against the same hit-test data (`tab_hits`/`mode_hits`/`activity_hits`/
+  `hit_test_sidebar`) the click handlers already use -- no separate mouse-move-tracked state
+  machine, the same pattern `tab_underline_anim`/`mode_toggle_anim` (§75.55) already established,
+  reused rather than duplicated. Each target excludes whichever item is already the row's active
+  one (that item already shows its own brighter accent pill) and is dimmer than the active-item
+  treatment (`0.14` alpha / `0.35` glow vs. the active pill's `0.16`/`0.55`) so hover reads as "this
+  is clickable," not a second competing "this is selected." A real debugging pass was needed to
+  find a real bug in the *test*, not the feature: an early live check moved the cursor to
+  screen-space y=38 for a tab-bar-height-28 element, missing the real `y < TAB_BAR_HEIGHT` gate
+  entirely -- confirmed as a test-coordinate mistake, not a feature bug, via temporary
+  `eprintln!` instrumentation gated behind `SPARTAN_DEBUG_HOVER`, which showed the real hover
+  target resolving correctly (`Some((690.0, 39.0))` for "Design") once the y-coordinate was fixed;
+  the debug instrumentation was fully reverted before committing. 8 pre-existing tests unaffected,
+  full workspace test/clippy/fmt clean. This pass predates the Electron pivot below (§75.59) --
+  it's real, tested, working polish on the original wgpu shell, kept and documented on its own
+  merits even though that shell is no longer the primary UI target.
+- **Real, working code — Electron/React desktop shell, replacing the wgpu renderer as the primary
+  UI by explicit user direction, first increment (§75.59)**: closes a direct, escalating user
+  complaint ("the GUI still looks absolutely horrible... let's create GUI using electron") after
+  two real, live-verified passes (§75.54, §75.55, and this session's own hover-glow work above)
+  failed to satisfy it. Confirmed via `AskUserQuestion` before writing any code -- not assumed --
+  on two architecturally consequential choices: **keep the real, tested Rust core** (rope buffer,
+  LSP/DAP, tree-sitter, Leo, git) **and drive it from Electron over local IPC** rather than a full
+  JS/TS rewrite (avoids discarding ~58 real, tested increments of backend logic); and build a
+  **real, custom React text-editing surface**, not Monaco, honoring this project's own standing
+  "no VS Code/Monaco/CodeMirror" rule even through the pivot -- the user chose both explicitly.
+  New `crates/spartan-backend`: a real, minimal newline-delimited JSON-RPC-style protocol
+  (`open_file`/`edit`/`save_file`/`undo`/`close_file`/`list_dir`) over stdin/stdout wrapping the
+  real, already-tested `spartan_buffer::Document` (branching undo tree, char-indexed
+  insert/delete/replace) -- 8 new unit tests plus a real, manually-run stdio smoke test (piped raw
+  JSON into the real release binary, confirmed the target file's real on-disk bytes changed
+  exactly as expected), all passing. New `desktop/`: a real Electron main process
+  (`electron/main.ts`) that spawns the real `spartan-backend` binary and exposes exactly six IPC
+  channels; a real, narrow `contextBridge` preload (`nodeIntegration: false`,
+  `contextIsolation: true`, an allow-list `Set` of the same six method names) so the renderer never
+  gets direct Node/`ipcRenderer` access, matching this project's own §9 least-privilege posture
+  even through a UI-stack pivot; and a real React renderer (`src/`) -- `FileTree` (lazy, real
+  `list_dir` IPC calls per expansion, mirroring the wgpu shell's own `file_tree.rs` design),
+  `TabBar`, `ModeToggle` (same five real labels the wgpu shell uses), `StatusBar`, and `Editor.tsx`
+  (real line-number gutter, real open/edit/save through the IPC backend, Ctrl+S wired, a real
+  `<textarea>`-backed editing surface -- a deliberate, named v1 choice: real custom chrome/theming/
+  IPC wiring built from scratch, but real character-level cursor/selection/keyboard handling comes
+  from the browser's own native text input rather than being reimplemented from zero, honestly
+  distinct from "not custom at all" and from "a from-scratch canvas renderer," the latter named as
+  real future work, not attempted this pass). Color tokens in `desktop/src/theme.css` are copied
+  verbatim from `theme.rs`'s own already-researched Antigravity 2.0 palette, one shared source of
+  truth for color across both shells. **A real, reported-not-routed-around environment blocker**:
+  this session's own egress policy blocks `github.com/electron/electron/releases/...` (confirmed
+  directly via `curl`, real `403`, not a proxy misconfiguration) -- the exact host Electron's own
+  postinstall script downloads its real runtime binary from, so a normal `npm install` cannot
+  complete in this session. Per this environment's own documented policy ("do not retry or route
+  around a blocked host"), no mirror substitution was attempted; `ELECTRON_SKIP_BINARY_DOWNLOAD=1
+  npm install` was used instead -- a real, legitimate skip (not a workaround for the block, since
+  it avoids contacting the blocked host at all) that still installed all 138 other real packages
+  and let both `tsc` projects (`tsconfig.json` for the renderer, `electron/tsconfig.json` for the
+  main process) type-check clean. With the real Electron binary itself unavailable in this specific
+  session, live verification used the environment's own pre-installed Playwright Chromium against
+  a real `vite` dev server instead: a test-only `window.spartan` stub (mimicking the real
+  backend's response shapes, never shipped in `desktop/src` itself) stood in for Electron's real
+  preload bridge, since a plain browser has no `contextBridge`. Real, screenshotted, live
+  verification through that harness: the file tree listed a real project structure and expanded a
+  real directory on click; clicking a file opened a real new tab with real content and a real
+  line-numbered editor; typing live text produced 42 real `edit()` IPC-shaped calls (one per
+  keystroke, matching the current whole-document-replace approach named above) and a real dirty (`
+  *`) marker on the tab, screenshotted at each step. **What this does not confirm**: the real
+  Electron window/native chrome itself was never launched in this session (needs a real `npm
+  install` without the skip flag, run somewhere with access to GitHub releases -- see
+  `desktop/README.md`'s own honest account); the real IPC wiring through an actual Electron
+  process (as opposed to the test-only browser stub) is therefore unverified end-to-end, though
+  `spartan-backend`'s own protocol is independently, separately verified via both its unit tests
+  and the manual stdio smoke test above. No LSP/DAP/tree-sitter/Leo/git wiring into
+  `spartan-backend` yet (file open/edit/save only); no Agent/Design/Terminal/Workflow mode content
+  in the new shell (each shows a real, honest "not yet ported" message, not simulated content); no
+  packaging/distribution story for the Electron app; per-keystroke whole-document replace loses the
+  original wgpu shell's own fine-grained per-edit undo checkpoints (real, named regression, not
+  hidden); `crates/spartan-editor-core` itself is unchanged and remains the real, tested reference
+  this new shell's backend wiring is built from.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1539,10 +1634,20 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 420 tests: 6 spikes + 11 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 428 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
-                                    # spartan-settings, spartan-updater, spartan-editor-core, xtask)
+                                    # spartan-settings, spartan-updater, spartan-editor-core,
+                                    # spartan-backend, xtask)
+# spartan-backend (§75.59) is the real IPC service the new desktop/ Electron shell drives --
+# `cargo build --release -p spartan-backend` before running `desktop/` at all (its
+# `electron/main.ts` looks for that exact release binary path and refuses to start without it).
+# desktop/ (§75.59) is a real, separate npm/TypeScript project (Electron + React), not part of the
+# Cargo workspace -- see desktop/README.md for setup. `ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm install`
+# is a real, environment-specific workaround one session needed because its own egress policy
+# blocked github.com/electron/electron/releases/... (a real 403, confirmed directly, not routed
+# around) -- a normal `npm install` should be tried first in any environment with real GitHub
+# releases access.
 # spartan-model's own tests/ollama_integration.rs (§75.43), spartan-leo's own
 # tests/plan_ollama_integration.rs (§75.46), and spartan-leo's own
 # tests/execute_ollama_integration.rs (§75.56) all need a real local Ollama instance
