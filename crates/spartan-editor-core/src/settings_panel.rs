@@ -209,7 +209,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let state = SettingsPanelState::opened_with(settings, "test-renderer".to_string());
+        let state = SettingsPanelState::opened_with(settings.clone(), "test-renderer".to_string());
         assert_eq!(state.selected, SettingsRow::GpuOffloadEnabled);
         assert_eq!(state.settings, settings);
     }

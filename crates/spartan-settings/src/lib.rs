@@ -62,10 +62,55 @@ pub enum LeoApprovalMode {
     AutoApproveSafe,
 }
 
+/// Real §75.70 Leo model-provider setting -- closes the concrete "LLM
+/// Agnostic: Seamlessly switch between local models... and remote APIs"
+/// concept researched from `CKissinger1988/SpartanAI_Assistant` (the
+/// user's own separate repo; concepts adapted into this project's real
+/// `spartan-model` providers, no code ported -- see
+/// `docs/architecture-spec.md` §75.70 for the full discussion). All three
+/// real `ModelProvider` implementations (`OllamaProvider`,
+/// `ClaudeProvider`, `LiteLLMProvider`) have existed in `spartan-model`
+/// since §75.43/§75.57, but Leo itself had always hardcoded Ollama --
+/// this is the first real setting choosing between them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LeoProviderKind {
+    #[default]
+    Ollama,
+    Claude,
+    LiteLLM,
+}
+
+/// `model` is a real, free-form string (not an enum) since each real
+/// provider's own valid model identifiers are that provider's own,
+/// external, evolving namespace -- validating it here would mean this
+/// crate silently going stale every time a provider ships a new model
+/// name. The UI supplies a sensible real default per `kind` when the
+/// user switches providers; this struct just stores whatever was chosen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeoProviderSettings {
+    pub kind: LeoProviderKind,
+    pub model: String,
+}
+
+impl Default for LeoProviderSettings {
+    fn default() -> Self {
+        Self {
+            kind: LeoProviderKind::Ollama,
+            model: "llama3.1:8b".to_string(),
+        }
+    }
+}
+
+/// `Settings` itself is no longer `Copy` (`LeoProviderSettings` owns a
+/// real, non-`Copy` `String`) -- a real, mechanical ripple from adding
+/// this field; every existing call site that relied on implicit copies
+/// needed an explicit `.clone()`, found and fixed by the compiler, not
+/// missed silently.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Settings {
     pub gpu_offload: GpuOffloadSettings,
     pub leo_approval_mode: LeoApprovalMode,
+    pub leo_provider: LeoProviderSettings,
 }
 
 /// `~/.spartan/settings.json` (`$HOME`, falling back to `$USERPROFILE` for
@@ -172,6 +217,10 @@ mod tests {
                 layers: Some(12),
             },
             leo_approval_mode: LeoApprovalMode::AutoApproveSafe,
+            leo_provider: LeoProviderSettings {
+                kind: LeoProviderKind::Claude,
+                model: "claude-3-5-sonnet-latest".to_string(),
+            },
         };
         save_to(&path, &settings).unwrap();
         let loaded = load_from(&path);
@@ -183,6 +232,17 @@ mod tests {
         assert_eq!(
             Settings::default().leo_approval_mode,
             LeoApprovalMode::ManualEveryStep
+        );
+    }
+
+    #[test]
+    fn default_leo_provider_is_local_ollama() {
+        assert_eq!(
+            Settings::default().leo_provider,
+            LeoProviderSettings {
+                kind: LeoProviderKind::Ollama,
+                model: "llama3.1:8b".to_string(),
+            }
         );
     }
 

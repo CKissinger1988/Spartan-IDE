@@ -79,6 +79,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Real project-tier memory, read and written for the first time | §75.67 |
 | Leo enhancement toward modern coding-agent parity — search/list tools, real diff preview (first increment) | §75.68 |
 | Leo enhancement — configurable approval mode, auto-approve loop for Safe calls, generation guard (second increment) | §75.69 |
+| Multi-provider LLM selection for Leo — "concepts only, rebuilt safely" from `SpartanAI_Assistant`, READ §75.70 BEFORE ASSUMING ANY OF ITS UNSANDBOXED OS-CONTROL CODE WAS PORTED (it was not) | §75.70 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2001,6 +2002,45 @@ first — it's the parity reference until each row there is actually reimplement
   model-driven exercise of the auto-loop (Ollama unreachable this session); no UI control to
   interrupt an in-progress auto-loop mid-run (the natural next increment: a cancel/stop control);
   the `Failed -> Recovering -> Executing` retry loop's UI wiring remains the last open piece.
+- **Real, working code — real multi-provider LLM selection for Leo, the first "concepts only,
+  rebuilt safely" increment adapted from `CKissinger1988/SpartanAI_Assistant` (§75.70)**: direct
+  response to "Integrate ... SpartanAI_Assistant.git into the Leo agent." That repo (the user's own
+  separate, previously-shipped PyQt6/LangChain Windows assistant) was cloned read-only after
+  explicit user confirmation and found to carry a real security mismatch with this project's own
+  non-negotiable §9/§36 invariants -- its `os_control.py`/`security_admin.py` plugins run arbitrary,
+  unsandboxed PowerShell (including a real command-injection shape in unescaped string
+  interpolation) with zero approval gating or risk classification. Presented to the user directly;
+  they chose **"Concepts only, rebuilt safely"** via `AskUserQuestion` -- adapt genuinely valuable
+  ideas as new Leo capabilities built fresh in this project's own stack and routed through Leo's
+  existing `Sandbox`/`ApprovalMode`, explicitly excluding any code port and explicitly excluding the
+  source repo's OS-control/security-admin/PowerShell/smart-home/pi-network capabilities in any form.
+  This pass closes the first of two named concepts: "LLM Agnostic... local models and remote APIs."
+  Leo had always hardcoded `OllamaProvider::local(LEO_MODEL)` at both real `spartan-backend` call
+  sites despite all three real `ModelProvider` impls (`OllamaProvider`/`ClaudeProvider`/
+  `LiteLLMProvider`) already existing in `spartan-model` since §75.43/§75.57. New
+  `spartan_settings::LeoProviderKind`/`LeoProviderSettings` (`model` deliberately a free-form
+  string, each provider's own namespace); `Settings` lost `Copy` as a real, mechanical consequence,
+  fixed at every call site the compiler found. New `spartan-backend::build_leo_provider()`
+  constructs the real configured provider -- `Claude` reads `ANTHROPIC_API_KEY` from the process
+  environment and errors clearly if unset (no settings-level secret storage exists anywhere in this
+  codebase yet, §58 is spec-only); both background threads now call this instead of hardcoding
+  Ollama, reporting `leo_plan_failed`/`leo_execute_failed` on construction failure, matching the
+  existing error convention exactly. `settings_set` gained an optional `leo_provider` param
+  following §75.69's own "override only what's provided" pattern. `SettingsScreen.tsx` gained a
+  real "Leo — Model Provider" section (provider `<select>` auto-filling a real sensible default
+  model per kind, a model text input saved on blur). 7 new tests (1 `spartan-settings`, 6
+  `spartan-backend` -- covering all three real provider constructions, a clear Claude-no-key error,
+  and GPU-only-save provider preservation), full workspace clean (488 tests, up from 481, 0
+  failures); `desktop`'s own `tsc --noEmit`/`build:renderer` clean. Real, screenshotted Playwright
+  verification (same mocked-`window.spartan` harness as every `desktop/` pass since §75.59):
+  provider switching, real default-model auto-fill, a real typed custom model persisting through a
+  real `settings_get` round trip, and switching back to Ollama correctly restoring its own default
+  rather than leaking the prior provider's value. **What this does not confirm**: no live model call
+  through any newly-wired provider path (Ollama's own real backend segfault/hang since §75.56
+  remains unresolved and wasn't re-attempted; Claude/LiteLLM have never been exercised against a
+  real key or a real running proxy in this project's history); no API-key storage UI; no
+  model-name autocomplete. The second named concept -- voice input/output via Electron's native Web
+  Speech API -- remains open, the next planned increment.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2058,7 +2098,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 481 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 488 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-editor-core,

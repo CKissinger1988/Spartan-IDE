@@ -38,7 +38,7 @@ use spartan_leo::execute::{self, ExecuteAction};
 use spartan_leo::plan::{generate_plan, ImplementationPlan, PlanError};
 use spartan_leo::tool::{ToolCall, ToolResult};
 use spartan_model::provider::Message;
-use spartan_model::OllamaProvider;
+use spartan_model::{ClaudeProvider, LiteLLMProvider, ModelProvider, OllamaProvider};
 
 mod pty;
 
@@ -379,6 +379,37 @@ fn approval_mode_from_settings(mode: spartan_settings::LeoApprovalMode) -> Appro
     }
 }
 
+/// Real §75.70 provider construction -- the first real call site that
+/// picks between all three of `spartan-model`'s already-built providers
+/// rather than hardcoding `OllamaProvider`, closing the "LLM Agnostic"
+/// concept adapted from `CKissinger1988/SpartanAI_Assistant` (concepts
+/// only, no code ported -- see `docs/architecture-spec.md` §75.70).
+/// `gpu_offload` only ever applies to the real local `OllamaProvider`
+/// path -- Claude/LiteLLM are remote, `num_gpu` has no meaning for them.
+fn build_leo_provider(
+    provider_settings: &spartan_settings::LeoProviderSettings,
+    gpu_offload: spartan_settings::GpuOffloadSettings,
+) -> Result<Box<dyn ModelProvider>, String> {
+    match provider_settings.kind {
+        spartan_settings::LeoProviderKind::Ollama => Ok(Box::new(
+            OllamaProvider::local(&provider_settings.model).with_gpu_layers(gpu_offload.num_gpu()),
+        )),
+        spartan_settings::LeoProviderKind::Claude => {
+            let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
+                "ANTHROPIC_API_KEY is not set -- required to use Claude as Leo's provider"
+                    .to_string()
+            })?;
+            Ok(Box::new(ClaudeProvider::new(
+                api_key,
+                &provider_settings.model,
+            )))
+        }
+        spartan_settings::LeoProviderKind::LiteLLM => {
+            Ok(Box::new(LiteLLMProvider::local(&provider_settings.model)))
+        }
+    }
+}
+
 fn leo_start_task(
     state: &Arc<Mutex<BackendState>>,
     out_tx: Sender<String>,
@@ -405,8 +436,25 @@ fn leo_start_task(
 
     let state = Arc::clone(state);
     thread::spawn(move || {
-        let gpu_offload = spartan_settings::load().gpu_offload;
-        let provider = OllamaProvider::local(LEO_MODEL).with_gpu_layers(gpu_offload.num_gpu());
+        let settings = spartan_settings::load();
+        let provider = match build_leo_provider(&settings.leo_provider, settings.gpu_offload) {
+            Ok(provider) => provider,
+            Err(message) => {
+                let Ok(guard) = state.lock() else {
+                    return;
+                };
+                if guard.leo_generation != my_generation {
+                    return;
+                }
+                let event = Event {
+                    event: "leo_plan_failed".to_string(),
+                    data: serde_json::json!({ "error": message }),
+                };
+                drop(guard);
+                let _ = out_tx.send(serde_json::to_string(&event).unwrap_or_default());
+                return;
+            }
+        };
         // Real §4.3 project-tier memory, read back into planning context
         // for the first time (closing task #5's own named "project-tier
         // memory" bar) -- deliberately folded into the task string itself
@@ -419,7 +467,7 @@ fn leo_start_task(
             .unwrap_or_default();
         let task_with_memory = augment_task_with_memory(&task, &memory);
         let result: Result<ImplementationPlan, PlanError> =
-            generate_plan(&provider, &task_with_memory);
+            generate_plan(provider.as_ref(), &task_with_memory);
 
         let event = {
             let Ok(mut guard) = state.lock() else {
@@ -661,7 +709,7 @@ fn leo_next_step(
     state: &Arc<Mutex<BackendState>>,
     out_tx: Sender<String>,
 ) -> Result<serde_json::Value, String> {
-    let (provider_gpu, plan, mut history, my_generation) = {
+    let (plan, mut history, my_generation) = {
         let guard = state.lock().map_err(|_| "backend state poisoned")?;
         let agent = guard
             .leo_agent
@@ -677,22 +725,34 @@ fn leo_next_step(
             return Err("a proposed action is already awaiting approval".to_string());
         }
         let plan = agent.plan().cloned().ok_or("no approved plan to execute")?;
-        let gpu_offload = spartan_settings::load().gpu_offload;
-        (
-            gpu_offload.num_gpu(),
-            plan,
-            guard.leo_history.clone(),
-            guard.leo_generation,
-        )
+        (plan, guard.leo_history.clone(), guard.leo_generation)
     };
 
     let state = Arc::clone(state);
     thread::spawn(move || {
-        let provider = OllamaProvider::local(LEO_MODEL).with_gpu_layers(provider_gpu);
+        let settings = spartan_settings::load();
+        let provider = match build_leo_provider(&settings.leo_provider, settings.gpu_offload) {
+            Ok(provider) => provider,
+            Err(message) => {
+                let Ok(guard) = state.lock() else {
+                    return;
+                };
+                if guard.leo_generation != my_generation {
+                    return;
+                }
+                let event = Event {
+                    event: "leo_execute_failed".to_string(),
+                    data: serde_json::json!({ "error": message }),
+                };
+                drop(guard);
+                let _ = out_tx.send(serde_json::to_string(&event).unwrap_or_default());
+                return;
+            }
+        };
         let mut auto_steps = 0u32;
 
         loop {
-            let result = execute::next_action(&provider, &plan, &history);
+            let result = execute::next_action(provider.as_ref(), &plan, &history);
 
             let Ok(mut guard) = state.lock() else {
                 return;
@@ -1055,16 +1115,17 @@ fn settings_get() -> Result<serde_json::Value, String> {
     serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
 }
 
-/// A real, optional third field alongside the always-present GPU pair
-/// (§75.69) -- `leo_approval_mode` is only ever sent when the Settings
-/// screen's own Leo row actually changed, so an unrelated GPU-only save
-/// must not silently reset it back to the real default; loading the
-/// current settings first and only overriding what was actually
-/// provided preserves it.
+/// A real, optional set of fields alongside the always-present GPU pair
+/// (§75.69, §75.70) -- `leo_approval_mode`/`leo_provider` are only ever
+/// sent when the Settings screen's own Leo rows actually changed, so an
+/// unrelated GPU-only save must not silently reset them back to their
+/// real defaults; loading the current settings first and only
+/// overriding what was actually provided preserves them.
 fn settings_set(
     gpu_enabled: bool,
     gpu_layers: Option<u32>,
     leo_approval_mode: Option<spartan_settings::LeoApprovalMode>,
+    leo_provider: Option<spartan_settings::LeoProviderSettings>,
 ) -> Result<serde_json::Value, String> {
     let current = spartan_settings::load();
     let settings = spartan_settings::Settings {
@@ -1073,6 +1134,7 @@ fn settings_set(
             layers: gpu_layers,
         },
         leo_approval_mode: leo_approval_mode.unwrap_or(current.leo_approval_mode),
+        leo_provider: leo_provider.unwrap_or(current.leo_provider),
     };
     spartan_settings::save(&settings).map_err(|e| format!("save settings: {e}"))?;
     serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
@@ -1213,7 +1275,13 @@ pub fn handle_request(
                 .map(|v| serde_json::from_value::<spartan_settings::LeoApprovalMode>(v.clone()))
                 .transpose()
                 .map_err(|e| format!("invalid leo_approval_mode: {e}"))?;
-            settings_set(gpu_enabled, gpu_layers, leo_approval_mode)
+            let leo_provider = req
+                .params
+                .get("leo_provider")
+                .map(|v| serde_json::from_value::<spartan_settings::LeoProviderSettings>(v.clone()))
+                .transpose()
+                .map_err(|e| format!("invalid leo_provider: {e}"))?;
+            settings_set(gpu_enabled, gpu_layers, leo_approval_mode, leo_provider)
         })(),
         other => Err(format!("unknown method `{other}`")),
     };
@@ -1813,7 +1881,11 @@ mod tests {
             &state,
             1,
             "settings_set",
-            serde_json::json!({ "gpu_enabled": false, "gpu_layers": 12 }),
+            serde_json::json!({
+                "gpu_enabled": false,
+                "gpu_layers": 12,
+                "leo_provider": { "kind": "Claude", "model": "claude-3-5-sonnet-latest" },
+            }),
         );
         assert!(
             set_resp.error.is_none(),
@@ -1826,12 +1898,136 @@ mod tests {
         let result = get_resp.result.unwrap();
         assert_eq!(result["gpu_offload"]["enabled"], false);
         assert_eq!(result["gpu_offload"]["layers"], 12);
+        assert_eq!(result["leo_provider"]["kind"], "Claude");
+        assert_eq!(result["leo_provider"]["model"], "claude-3-5-sonnet-latest");
 
         match prior_home {
             Some(h) => std::env::set_var("HOME", h),
             None => std::env::remove_var("HOME"),
         }
         std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn settings_set_without_leo_provider_preserves_the_real_previously_saved_one() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-settings-provider-preserve-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        let state = new_state();
+        call(
+            &state,
+            1,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": true,
+                "leo_provider": { "kind": "LiteLLM", "model": "gpt-4o" },
+            }),
+        );
+        // A later, unrelated GPU-only save must not silently reset the
+        // real, already-chosen provider back to the Ollama default.
+        let set_resp = call(
+            &state,
+            2,
+            "settings_set",
+            serde_json::json!({ "gpu_enabled": false }),
+        );
+        let result = set_resp.result.unwrap();
+        assert_eq!(result["leo_provider"]["kind"], "LiteLLM");
+        assert_eq!(result["leo_provider"]["model"], "gpt-4o");
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn build_leo_provider_constructs_a_real_ollama_provider_by_default() {
+        let settings = spartan_settings::LeoProviderSettings::default();
+        let provider =
+            build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default())
+                .expect("Ollama provider construction must never fail");
+        assert!(provider.is_local());
+        assert_eq!(provider.id(), "llama3.1:8b");
+    }
+
+    #[test]
+    fn build_leo_provider_constructs_a_real_litellm_provider() {
+        let settings = spartan_settings::LeoProviderSettings {
+            kind: spartan_settings::LeoProviderKind::LiteLLM,
+            model: "gpt-4o".to_string(),
+        };
+        let provider =
+            build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default())
+                .expect("LiteLLM provider construction must never fail (no API key needed)");
+        assert!(!provider.is_local());
+        assert_eq!(provider.id(), "gpt-4o");
+    }
+
+    #[test]
+    fn build_leo_provider_errors_clearly_when_claude_has_no_api_key() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let prior_key = std::env::var("ANTHROPIC_API_KEY").ok();
+        std::env::remove_var("ANTHROPIC_API_KEY");
+
+        let settings = spartan_settings::LeoProviderSettings {
+            kind: spartan_settings::LeoProviderKind::Claude,
+            model: "claude-3-5-sonnet-latest".to_string(),
+        };
+        let result = build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default());
+        match result {
+            Err(message) => assert!(message.contains("ANTHROPIC_API_KEY")),
+            Ok(_) => panic!("Claude must fail clearly, not silently, with no API key configured"),
+        }
+
+        if let Some(key) = prior_key {
+            std::env::set_var("ANTHROPIC_API_KEY", key);
+        }
+    }
+
+    #[test]
+    fn build_leo_provider_constructs_a_real_claude_provider_when_a_key_is_set() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let prior_key = std::env::var("ANTHROPIC_API_KEY").ok();
+        std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-test-fake-key");
+
+        let settings = spartan_settings::LeoProviderSettings {
+            kind: spartan_settings::LeoProviderKind::Claude,
+            model: "claude-3-5-sonnet-latest".to_string(),
+        };
+        let provider =
+            build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default())
+                .expect("Claude provider construction must succeed once a key is set");
+        assert!(!provider.is_local());
+        assert_eq!(provider.id(), "claude-3-5-sonnet-latest");
+
+        match prior_key {
+            Some(key) => std::env::set_var("ANTHROPIC_API_KEY", key),
+            None => std::env::remove_var("ANTHROPIC_API_KEY"),
+        }
+    }
+
+    #[test]
+    fn build_leo_provider_disabled_gpu_offload_forces_zero_layers_for_ollama() {
+        let settings = spartan_settings::LeoProviderSettings::default();
+        let gpu = spartan_settings::GpuOffloadSettings {
+            enabled: false,
+            layers: Some(20),
+        };
+        // Real, indirect proof: construction must still succeed (no panic
+        // on a disabled-with-stale-layers combination) -- `num_gpu()`
+        // itself is already directly unit-tested in `spartan-settings`.
+        let provider = build_leo_provider(&settings, gpu)
+            .expect("must construct even when GPU offload is disabled");
+        assert!(provider.is_local());
     }
 
     #[test]

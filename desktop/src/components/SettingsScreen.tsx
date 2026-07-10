@@ -7,10 +7,28 @@ interface GpuOffloadSettings {
 
 type LeoApprovalMode = "ManualEveryStep" | "AutoApproveSafe";
 
+type LeoProviderKind = "Ollama" | "Claude" | "LiteLLM";
+
+interface LeoProviderSettings {
+  kind: LeoProviderKind;
+  model: string;
+}
+
 interface Settings {
   gpu_offload: GpuOffloadSettings;
   leo_approval_mode: LeoApprovalMode;
+  leo_provider: LeoProviderSettings;
 }
+
+/** Real, sensible default model per provider kind -- shown the moment the
+ * user switches kind in the UI, before they've typed anything of their
+ * own; matches each provider's own already-established test/default
+ * precedent in `spartan-model`/`spartan-settings`. */
+const DEFAULT_MODEL_FOR_KIND: Record<LeoProviderKind, string> = {
+  Ollama: "llama3.1:8b",
+  Claude: "claude-3-5-sonnet-latest",
+  LiteLLM: "gpt-4o",
+};
 
 /**
  * Real Settings screen for the Electron shell (§42, user-requested "GPU
@@ -56,7 +74,7 @@ export default function SettingsScreen(): React.ReactElement {
   }, [refresh]);
 
   const save = useCallback(
-    (overrides: Partial<Pick<Settings, "gpu_offload" | "leo_approval_mode">>) => {
+    (overrides: Partial<Pick<Settings, "gpu_offload" | "leo_approval_mode" | "leo_provider">>) => {
       if (!settings) return;
       setSaving(true);
       const next: Settings = { ...settings, ...overrides };
@@ -65,6 +83,7 @@ export default function SettingsScreen(): React.ReactElement {
           gpu_enabled: next.gpu_offload.enabled,
           gpu_layers: next.gpu_offload.layers ?? undefined,
           leo_approval_mode: next.leo_approval_mode,
+          leo_provider: next.leo_provider,
         })
         .then((result) => setSettings(result as Settings))
         .catch((e: Error) => setError(e.message))
@@ -139,6 +158,47 @@ export default function SettingsScreen(): React.ReactElement {
         Manual mode requires an explicit click before any real tool call runs. Auto-approve safe
         reads still always requires approval for edit_file and run_terminal — read-only exploration
         (search_files/list_directory/read_file) runs immediately instead.
+      </div>
+
+      <div className="settings-section-label mono" style={{ marginTop: 28 }}>
+        Leo — Model Provider
+      </div>
+      <div className="settings-row">
+        <label className="settings-label mono">Provider</label>
+        <select
+          className="settings-select mono"
+          disabled={saving}
+          value={settings.leo_provider.kind}
+          onChange={(e) => {
+            const kind = e.target.value as LeoProviderKind;
+            save({ leo_provider: { kind, model: DEFAULT_MODEL_FOR_KIND[kind] } });
+          }}
+        >
+          <option value="Ollama">Ollama (local)</option>
+          <option value="Claude">Claude (Anthropic API)</option>
+          <option value="LiteLLM">LiteLLM (local proxy → cloud backends)</option>
+        </select>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label mono">Model</label>
+        <input
+          className="settings-select mono"
+          type="text"
+          disabled={saving}
+          defaultValue={settings.leo_provider.model}
+          key={settings.leo_provider.kind}
+          onBlur={(e) => {
+            const model = e.target.value.trim();
+            if (model && model !== settings.leo_provider.model) {
+              save({ leo_provider: { kind: settings.leo_provider.kind, model } });
+            }
+          }}
+        />
+      </div>
+      <div className="settings-note mono">
+        Ollama runs fully local (GPU offload above applies). Claude reads ANTHROPIC_API_KEY from
+        the environment — no key storage exists in this settings screen yet. LiteLLM routes
+        through a local proxy at localhost:4000 to whichever cloud backend it's configured for.
       </div>
     </div>
   );
