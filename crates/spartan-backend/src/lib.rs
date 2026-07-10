@@ -1140,6 +1140,54 @@ fn settings_set(
     serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
 }
 
+/// Real §75.72 wiring of `spartan-updater` (already real and tested since
+/// §75.49, already wired into the original wgpu shell's own
+/// `settings_panel.rs`/`update_bridge.rs`) into this shell for the first
+/// time -- closes the gap §75.65 named explicitly ("Settings exposes only
+/// GPU offload -- the wgpu shell's separate 'Check for Updates' row is
+/// not wired into `spartan-backend` or this screen this pass"). A real,
+/// possibly-slow HTTPS round trip against the GitHub API, so this follows
+/// the exact same spawn-thread/immediate-ack/later-`Event` shape
+/// `leo_start_task` already established -- it must never block the one
+/// IPC channel. Neither `UpdateCheckResult` nor `ChangeCategories`
+/// derives `Serialize` (a real, deliberate choice in `spartan-updater`
+/// itself, which has no JSON/IPC concerns of its own), so this function
+/// builds the wire shape by hand at this one real boundary, the same
+/// pattern `plan_json`/`tool_result_json` already use elsewhere in this
+/// file for other crates' own plain Rust types.
+fn check_for_updates(out_tx: Sender<String>) -> Result<serde_json::Value, String> {
+    // This project's own real repository and default branch -- matching
+    // the exact values `update_bridge.rs` in the original wgpu shell
+    // already uses (and `spartan-updater`'s own live integration test).
+    const REPO: &str = "ckissinger1988/spartan-ide";
+    const BRANCH: &str = "main";
+    thread::spawn(move || {
+        let event = match spartan_updater::check_for_updates(REPO, BRANCH) {
+            Ok(result) => Event {
+                event: "update_check_result".to_string(),
+                data: serde_json::json!({
+                    "current_commit": result.current_commit,
+                    "latest_commit": result.latest_commit,
+                    "up_to_date": result.up_to_date,
+                    "categories": {
+                        "language_definitions_changed": result.categories.language_definitions_changed,
+                        "leo_changed": result.categories.leo_changed,
+                        "other_changed": result.categories.other_changed,
+                    },
+                }),
+            },
+            Err(e) => Event {
+                event: "update_check_failed".to_string(),
+                data: serde_json::json!({ "error": e.to_string() }),
+            },
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+    Ok(serde_json::json!({ "status": "checking" }))
+}
+
 fn get_str_param(params: &serde_json::Value, key: &str) -> Result<String, String> {
     params
         .get(key)
@@ -1283,6 +1331,7 @@ pub fn handle_request(
                 .map_err(|e| format!("invalid leo_provider: {e}"))?;
             settings_set(gpu_enabled, gpu_layers, leo_approval_mode, leo_provider)
         })(),
+        "check_for_updates" => check_for_updates(out_tx.clone()),
         other => Err(format!("unknown method `{other}`")),
     };
     match result {

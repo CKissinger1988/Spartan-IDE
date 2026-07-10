@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust workspace (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        # libgtk-3-dev / libwebkit2gtk-4.1-dev are real, environment-specific
+        # build requirements found the first time this workspace was ever
+        # compiled in a Linux container (§75.12) -- spartan-editor-core and
+        # ui-shell-spike embed a real wry/WebView2 control that needs GTK's
+        # headers to even link, not just run.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --release --all-targets
+
+      - name: cargo test
+        # --test-threads=1: this workspace's own real subprocess-spawning
+        # test suites (LSP/DAP clients spawning real language
+        # servers/debug adapters when present on PATH) can flake under
+        # full parallelism from resource contention, not a functional bug
+        # -- see CLAUDE.md's own "Build & test" section for the same note.
+        # Tests requiring external tools not installed on this runner
+        # (rust-analyzer, lldb-dap, debugpy, cargo-component, a live
+        # Ollama instance) self-skip with a printed message rather than
+        # failing, matching this project's own established convention.
+        run: cargo test --workspace --release -- --test-threads=1
+
+  desktop:
+    name: desktop/ (Electron + React shell)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: npm ci
+        working-directory: desktop
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: desktop
+        run: npm run typecheck
+
+      - name: Build renderer
+        working-directory: desktop
+        run: npm run build:renderer
+
+      - name: Build electron main process
+        working-directory: desktop
+        run: npm run build:electron
+
+  gui-builder:
+    name: gui-builder/ (AST sync engine)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: gui-builder/package-lock.json
+
+      - name: npm ci
+        working-directory: gui-builder
+        run: npm ci
+
+      - name: Build
+        working-directory: gui-builder
+        run: npm run build
+
+      - name: Test
+        # A handful of these tests perform a real `npm install` of a temp
+        # react/react-dom fixture and self-skip if that install fails --
+        # see gui-builder/README.md.
+        working-directory: gui-builder
+        run: npm test
+
+  mobile:
+    name: mobile/ (Expo/React Native IDE)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: npm ci
+        working-directory: mobile
+        run: npm ci
+
+      - name: Test
+        working-directory: mobile
+        run: npm test -- --ci

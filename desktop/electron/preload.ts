@@ -36,6 +36,7 @@ const ALLOWED_METHODS = new Set([
   "git_commit",
   "settings_get",
   "settings_set",
+  "check_for_updates",
 ]);
 
 contextBridge.exposeInMainWorld("spartan", {

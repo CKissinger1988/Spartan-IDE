@@ -2,6 +2,7 @@
   "name": "@spartan-ide/gui-builder",
   "version": "0.1.0",
   "private": true,
+  "license": "UNLICENSED",
   "description": "Real §6/§34 GUI Builder two-way AST sync engine (task #12) -- parses JSX/TSX into a component tree and applies structured CanvasEdit events back onto the real source AST, preserving the author's original formatting. Not yet wired into the wgpu shell (§6.1's WebView canvas) or a live dev-server bridge (§6.2 step 1) -- see README.md for exactly what this package does and does not do.",
   "type": "module",
   "engines": {

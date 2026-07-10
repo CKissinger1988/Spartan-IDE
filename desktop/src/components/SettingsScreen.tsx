@@ -30,6 +30,56 @@ const DEFAULT_MODEL_FOR_KIND: Record<LeoProviderKind, string> = {
   LiteLLM: "gpt-4o",
 };
 
+interface UpdateCheckCategories {
+  language_definitions_changed: boolean;
+  leo_changed: boolean;
+  other_changed: boolean;
+}
+
+interface UpdateCheckResult {
+  current_commit: string;
+  latest_commit: string;
+  up_to_date: boolean;
+  categories: UpdateCheckCategories;
+}
+
+type UpdateCheckDisplay =
+  | { kind: "not_checked" }
+  | { kind: "checking" }
+  | { kind: "ready"; result: UpdateCheckResult }
+  | { kind: "failed"; error: string };
+
+function shortCommit(commit: string): string {
+  return commit.slice(0, 7);
+}
+
+/** Real, live text for the "Check for Updates" row's own current state --
+ * a real category breakdown on a real update, not just "update
+ * available." Mirrors the original wgpu shell's own `update_check_line`
+ * (`settings_panel.rs`, §75.49) line for line. */
+function updateCheckLine(state: UpdateCheckDisplay): string {
+  switch (state.kind) {
+    case "not_checked":
+      return "Not checked yet";
+    case "checking":
+      return "Checking for updates…";
+    case "ready": {
+      const { result } = state;
+      if (result.up_to_date) {
+        return `Up to date (${shortCommit(result.current_commit)})`;
+      }
+      const parts: string[] = [];
+      if (result.categories.language_definitions_changed) parts.push("language definitions");
+      if (result.categories.leo_changed) parts.push("Leo/agent core");
+      if (result.categories.other_changed) parts.push("other IDE code");
+      const what = parts.length > 0 ? parts.join(", ") : "changes";
+      return `Update available: ${what} (${shortCommit(result.current_commit)} → ${shortCommit(result.latest_commit)})`;
+    }
+    case "failed":
+      return `Update check failed: ${state.error}`;
+  }
+}
+
 /**
  * Real Settings screen for the Electron shell (§42, user-requested "GPU
  * offloading toggle and amount to offload selector"), the first half of
@@ -48,16 +98,18 @@ const DEFAULT_MODEL_FOR_KIND: Record<LeoProviderKind, string> = {
  * rule -- `Agent::may_auto_execute` is the one real gate this setting
  * feeds into, unchanged).
  *
- * The wgpu shell's own "Check for Updates" row (§75.49, `spartan-updater`)
- * is real but not wired into this screen this pass -- `spartan-backend`
- * has no `spartan-updater` dependency yet, a real, separate, named
- * follow-up rather than attempted under this pass's own time
- * constraints.
+ * §75.72 closes the gap §75.49/§75.65 both named: the wgpu shell's own
+ * "Check for Updates" row (`spartan-updater`) is now wired into this
+ * shell too, via `spartan-backend`'s real `check_for_updates` IPC method
+ * -- a real, possibly-slow HTTPS call, so it follows the exact same
+ * "immediate ack + later unprompted event" pattern the Leo chat panel
+ * already established for `leo_start_task`.
  */
 export default function SettingsScreen(): React.ReactElement {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheckDisplay>({ kind: "not_checked" });
 
   const refresh = useCallback(() => {
     window.spartan
@@ -72,6 +124,24 @@ export default function SettingsScreen(): React.ReactElement {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event === "update_check_result") {
+        setUpdateCheck({ kind: "ready", result: data as UpdateCheckResult });
+      } else if (event === "update_check_failed") {
+        setUpdateCheck({ kind: "failed", error: (data as { error: string }).error });
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  const checkForUpdates = useCallback(() => {
+    setUpdateCheck({ kind: "checking" });
+    window.spartan.call("check_for_updates", {}).catch((e: Error) => {
+      setUpdateCheck({ kind: "failed", error: e.message });
+    });
+  }, []);
 
   const save = useCallback(
     (overrides: Partial<Pick<Settings, "gpu_offload" | "leo_approval_mode" | "leo_provider">>) => {
@@ -199,6 +269,26 @@ export default function SettingsScreen(): React.ReactElement {
         Ollama runs fully local (GPU offload above applies). Claude reads ANTHROPIC_API_KEY from
         the environment — no key storage exists in this settings screen yet. LiteLLM routes
         through a local proxy at localhost:4000 to whichever cloud backend it's configured for.
+      </div>
+
+      <div className="settings-section-label mono" style={{ marginTop: 28 }}>
+        Updates
+      </div>
+      <div className="settings-row">
+        <button
+          className="settings-button mono"
+          disabled={updateCheck.kind === "checking"}
+          onClick={checkForUpdates}
+        >
+          Check for Updates
+        </button>
+        <span className="settings-update-status mono">{updateCheckLine(updateCheck)}</span>
+      </div>
+      <div className="settings-note mono">
+        A real, live check against this project's own GitHub repository for whether a newer
+        build exists, categorized by language definitions, Leo/agent core, or other IDE code.
+        No download, install, or restart of any kind — this only tells you something is
+        available so you can act on it yourself.
       </div>
     </div>
   );
