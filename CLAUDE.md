@@ -83,6 +83,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Voice input/output for the Leo chat panel — second "concepts only, rebuilt safely" increment, closes task #59 | §75.71 |
 | Repository professionalization — LICENSE, CI, README, "Check for Updates" wiring | §75.72 |
 | Leo cancel/stop control for in-progress planning/execute loops, closes task #58 | §75.73 |
+| Dev Containers (OCI/Docker-based, containers.dev spec) — READ §75.74 BEFORE ASSUMING THIS MEANS FULL VM/CROSS-KERNEL-OS SUPPORT (it does not; a real, explicit scope decision) | §75.74 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2151,6 +2152,50 @@ first — it's the parity reference until each row there is actually reimplement
   one last piece named across this task's own tracked history. **Task #58 has no further items
   explicitly named as blocking** -- it stays open only in the sense that "as much as possible" has
   no natural end state, not because a specific promised piece is missing.
+- **Real, working code — real Dev Containers (OCI/Docker-based, containers.dev spec), a
+  godmod3.ai integration declined, a NotebookLM plugin deferred by user choice (§75.74)**: a
+  three-part user request, all three parts researched via real web search before any code was
+  written. **godmod3.ai declined outright**: real research found it's an open-source "LIBERATED
+  AI CHAT" tool built by a well-known AI-jailbreaking figure, explicitly for red-teaming/defeating
+  model safety training across 50+ models at once -- unlike §75.70/§75.71's SpartanAI_Assistant
+  case, there's no legitimate feature separable from the unsafe core here, so nothing was
+  integrated, consistent with this project's own standing safety posture. **NotebookLM deferred
+  by explicit user choice**: real research confirmed no public consumer API exists (only a gated
+  Google Cloud Enterprise API, or unofficial ToS-violating wrappers this project won't build on);
+  asked via `AskUserQuestion`, the user chose to skip given the enterprise-only gate. **Dev
+  Containers: real, built, tested** -- scoped via a second `AskUserQuestion` after confirming this
+  sandbox has no `/dev/kvm` at all and no running Docker daemon (neither a VM nor a container
+  approach could be live-verified here either way, but they're very different features): the user
+  chose OCI/Docker-based Dev Containers, the real, industry-standard approach VS Code Dev
+  Containers/GitHub Codespaces/JetBrains Gateway all actually ship, following the open
+  containers.dev `devcontainer.json` spec. New `crates/spartan-devcontainer`: a real, pure,
+  JSONC-tolerant spec parser (`spec.rs`, string-literal-aware comment stripping, not a regex) and
+  real Docker Engine API access via `bollard` (`docker.rs`) -- image pull/build, container
+  create+start with real bind-mounts/port-forwarding/labels, `postCreateCommand` execution,
+  stop/remove, status, managed-container listing, and a real interactive `docker exec
+  -it`-equivalent session. `tokio` stays fully contained inside this crate's own background
+  threads (each function builds its own single-thread runtime and calls `block_on`), never
+  leaking into this workspace's otherwise sync/callback architecture. `spartan-backend` gained 11
+  new IPC methods (`devcontainer_detect`/`_up`/`_down`/`_status`/`_list`/`_exec_spawn`/`_input`/
+  `_resize`/`_close`), the async ones (`_up`/`_down`) following `leo_start_task`'s own
+  immediate-ack + real progress/ready/failed event pattern. New Electron UI: a `containers` nav
+  item, `DevContainersScreen.tsx` (detect → config summary → Start → real streaming progress →
+  Running + Stop, plus a managed-containers list), and `DevContainerTerminal.tsx` -- a real,
+  deliberate sibling of `TerminalView.tsx` (different spawn shape, no local PTY to kill), not a
+  forced generalization of it. **A real mock-fidelity bug found and fixed while building Playwright
+  verification, not a product bug**: the first test harness used one global event-emit variable
+  silently overwritten by whichever component subscribed last, unlike the real `preload.ts`'s own
+  correctly-independent per-component subscriptions -- fixed by making the mock fan out to every
+  registered listener. 28 new Rust tests (528 total, up from 498; 2 of them real, self-skipping
+  Docker integration tests -- this sandbox has no real daemon reachable, confirmed directly), full
+  fmt/clippy/test clean; `desktop`'s own typecheck/build clean; real, screenshotted Playwright
+  verification of the complete detect → start → progress → running-with-terminal → stop flow.
+  **What this does not confirm**: no real Docker daemon exists in this session, so no part of the
+  actual container lifecycle was exercised live; no full spec support (`features`,
+  `customizations`, Compose multi-service); no true separate-kernel VM support of any kind, a
+  real, explicit, user-confirmed scope decision, not an oversight; the real Electron window
+  remains unlaunchable in this session for the same standing reason as every `desktop/` pass since
+  §75.59.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2208,11 +2253,16 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 498 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 528 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
-                                    # spartan-settings, spartan-updater, spartan-editor-core,
-                                    # spartan-backend, xtask)
+                                    # spartan-settings, spartan-updater, spartan-devcontainer,
+                                    # spartan-editor-core, spartan-backend, xtask)
+# spartan-devcontainer (§75.74) needs a real local Docker daemon reachable for its own
+# tests/docker_integration.rs -- self-skips (prints a message) if none is found, matching every
+# other real-external-tool integration suite in this repo. This sandboxed environment has the
+# `docker` CLI installed but no daemon running (`/var/run/docker.sock` doesn't exist), so these
+# tests self-skip here.
 # spartan-backend (§75.59) is the real IPC service the new desktop/ Electron shell drives --
 # `cargo build --release -p spartan-backend` before running `desktop/` at all (its
 # `electron/main.ts` looks for that exact release binary path and refuses to start without it).

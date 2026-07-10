@@ -10,6 +10,7 @@ spartan-model = { path = "../spartan-model" }
 spartan-git = { path = "../spartan-git" }
 spartan-settings = { path = "../spartan-settings" }
 spartan-updater = { path = "../spartan-updater" }
+spartan-devcontainer = { path = "../spartan-devcontainer" }
 git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

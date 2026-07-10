@@ -48,6 +48,7 @@ crates/spartan-security/    Real secrets detection/redaction (credential-shaped 
 crates/spartan-crash/       Real local-first crash reporter (panic hook, redacted, no upload)
 crates/spartan-updater/     Real "check for updates" against this repo's own GitHub API
 crates/spartan-plugin-host/ Real WASM Component Model plugin host (wasmtime), capability-gated
+crates/spartan-devcontainer/ Real OCI/Docker dev containers (containers.dev spec) via bollard
 crates/spartan-editor-core/ The original wgpu-native shell — kept as the tested reference
                              implementation and backend proof-of-concept, not deleted; every
                              feature it proved was later promoted into the crates above
@@ -94,6 +95,13 @@ legacy/agent-deck-console/  This repo's prior product, preserved for feature-par
   click-to-select and a Canvas → Code round trip (prop/style edits land back in the real
   source file, formatting-preserving, via `recast`)
 - **Real node-graph Workflows canvas** for visualizing/launching multi-CLI orchestration
+- **Real Dev Containers** (OCI/Docker-based, following the open [containers.dev](https://containers.dev)
+  `devcontainer.json` spec — the same one VS Code Dev Containers, GitHub Codespaces, and
+  JetBrains Gateway use): detect a project's `devcontainer.json`, build or pull its image, start
+  a real container with the project bind-mounted in, run its setup command, and open a real
+  interactive shell into it — test a project's Linux environment in isolation without touching
+  your host machine. Not a VM — genuinely different OS *families* (Windows/macOS guests) are out
+  of scope by design; see [`crates/spartan-devcontainer`](crates/spartan-devcontainer)
 
 ### Trust & security
 

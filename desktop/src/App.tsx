@@ -11,6 +11,7 @@ import DesignScreen from "./components/DesignScreen";
 import ConsoleScreen from "./components/ConsoleScreen";
 import SessionsScreen from "./components/SessionsScreen";
 import SettingsScreen from "./components/SettingsScreen";
+import DevContainersScreen from "./components/DevContainersScreen";
 import LeoChatPanel from "./components/LeoChatPanel";
 import { NAV, type ScreenId } from "./nav";
 import "./app.css";
@@ -135,11 +136,13 @@ export default function App(): React.ReactElement {
               {screen === "console" && <ConsoleScreen root={ROOT} />}
               {screen === "sessions" && <SessionsScreen root={ROOT} />}
               {screen === "settings" && <SettingsScreen />}
+              {screen === "containers" && <DevContainersScreen root={ROOT} />}
               {screen !== "workflows" &&
                 screen !== "design" &&
                 screen !== "console" &&
                 screen !== "sessions" &&
-                screen !== "settings" && <Placeholder screen={screen} />}
+                screen !== "settings" &&
+                screen !== "containers" && <Placeholder screen={screen} />}
             </div>
           </>
         )}

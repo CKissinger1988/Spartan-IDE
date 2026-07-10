@@ -38,6 +38,15 @@ const ALLOWED_METHODS = new Set([
   "settings_get",
   "settings_set",
   "check_for_updates",
+  "devcontainer_detect",
+  "devcontainer_up",
+  "devcontainer_down",
+  "devcontainer_status",
+  "devcontainer_list",
+  "devcontainer_exec_spawn",
+  "devcontainer_exec_input",
+  "devcontainer_exec_resize",
+  "devcontainer_exec_close",
 ]);
 
 contextBridge.exposeInMainWorld("spartan", {

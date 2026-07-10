@@ -17,6 +17,7 @@ export type ScreenId =
   | "usage"
   | "design"
   | "agents"
+  | "containers"
   | "workflows"
   | "skills"
   | "commands"
@@ -55,6 +56,7 @@ export const NAV: NavGroup[] = [
     items: [
       { id: "design", label: "Design" },
       { id: "agents", label: "Agents" },
+      { id: "containers", label: "Dev Containers" },
       { id: "workflows", label: "Workflows" },
       { id: "skills", label: "Skills" },
       { id: "commands", label: "Commands" },
