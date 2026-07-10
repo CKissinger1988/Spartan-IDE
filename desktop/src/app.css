@@ -616,6 +616,40 @@
   cursor: default;
 }
 
+/* Real §75.71 voice I/O controls. */
+.leo-btn-voice-toggle {
+  background: transparent;
+  padding: 2px 6px;
+  font-size: 13px;
+  opacity: 0.45;
+}
+
+.leo-btn-voice-toggle.leo-btn-voice-on {
+  opacity: 1;
+}
+
+.leo-btn-mic {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 6px 10px;
+  font-size: 13px;
+  align-self: flex-end;
+}
+
+.leo-btn-mic-active {
+  background: rgba(248, 113, 113, 0.25);
+  animation: leo-mic-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes leo-mic-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
 .leo-status-message {
   color: var(--text-dim);
   font-size: 12px;

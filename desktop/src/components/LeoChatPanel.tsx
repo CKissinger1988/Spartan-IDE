@@ -1,4 +1,57 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+
+/**
+ * Real §75.71 voice I/O -- second and final "concepts only, rebuilt
+ * safely" increment adapted from `CKissinger1988/SpartanAI_Assistant`
+ * (see §75.70 for the full scoping discussion). That repo's own
+ * "Dynamic Personas & Voice" concept runs local `whisper` STT and
+ * `edge-tts` TTS as new Python dependencies; this uses Electron's own
+ * Chromium-native Web Speech API instead -- zero new dependencies, and
+ * no code ported from the source repo (that repo's `voice.py` was never
+ * read in detail; only the README's own feature description was).
+ * Deliberately narrow, minimal browser-API typings rather than pulling
+ * in `@types/dom-speech-recognition` -- this project's own established
+ * "declare only what's actually used" precedent (matching `nav.ts`'s own
+ * narrow typing style).
+ */
+interface SpeechRecognitionResultLike {
+  isFinal: boolean;
+  0: { transcript: string };
+}
+interface SpeechRecognitionEventLike {
+  resultIndex: number;
+  results: { length: number; [index: number]: SpeechRecognitionResultLike };
+}
+interface SpeechRecognitionErrorEventLike {
+  error: string;
+}
+interface SpeechRecognitionLike {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  start: () => void;
+  stop: () => void;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
+  onend: (() => void) | null;
+}
+type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+
+/** Real, honest feature detection -- Electron's bundled Chromium usually
+ * exposes `webkitSpeechRecognition`, but its actual recognition backend
+ * still depends on network reachability to a Google speech service in
+ * most builds; this returns `null` (not a fake stub) when unavailable,
+ * so the UI can degrade honestly instead of showing a mic button that
+ * silently does nothing. */
+function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
+  const w = window as unknown as {
+    SpeechRecognition?: SpeechRecognitionCtor;
+    webkitSpeechRecognition?: SpeechRecognitionCtor;
+  };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
+const VOICE_OUTPUT_STORAGE_KEY = "spartan.leo.voiceOutputEnabled";
 
 interface LeoPlan {
   goal: string;
@@ -113,6 +166,78 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
   const [summary, setSummary] = useState<string | null>(null);
   const [memorySaved, setMemorySaved] = useState<boolean | null>(null);
 
+  // Real §75.71 voice I/O state. `voiceOutputEnabled` is a pure renderer
+  // preference (not routed through `spartan_settings` -- it has no
+  // backend/Leo-behavior effect the way GPU offload or the provider
+  // choice do), persisted to `localStorage` since that's the honest,
+  // simplest real mechanism for a browser-native UI toggle.
+  const [voiceInputSupported] = useState(() => getSpeechRecognitionCtor() !== null);
+  const [voiceOutputSupported] = useState(
+    () => typeof window !== "undefined" && "speechSynthesis" in window
+  );
+  const [listening, setListening] = useState(false);
+  const [voiceOutputEnabled, setVoiceOutputEnabled] = useState(
+    () => typeof window !== "undefined" && window.localStorage.getItem(VOICE_OUTPUT_STORAGE_KEY) === "1"
+  );
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+
+  const speak = useCallback(
+    (text: string) => {
+      if (!voiceOutputEnabled || !voiceOutputSupported || !text) return;
+      const synth = window.speechSynthesis;
+      synth.cancel();
+      synth.speak(new SpeechSynthesisUtterance(text));
+    },
+    [voiceOutputEnabled, voiceOutputSupported]
+  );
+
+  const toggleVoiceOutput = useCallback(() => {
+    setVoiceOutputEnabled((prev) => {
+      const next = !prev;
+      window.localStorage.setItem(VOICE_OUTPUT_STORAGE_KEY, next ? "1" : "0");
+      if (!next) window.speechSynthesis?.cancel();
+      return next;
+    });
+  }, []);
+
+  const toggleListening = useCallback(() => {
+    if (listening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+    const Ctor = getSpeechRecognitionCtor();
+    if (!Ctor) return;
+    const recognition = new Ctor();
+    recognition.lang = "en-US";
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.onresult = (event) => {
+      let transcript = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) transcript += result[0].transcript;
+      }
+      if (transcript.trim()) {
+        setTask((prev) => (prev ? `${prev} ${transcript}`.trim() : transcript.trim()));
+      }
+    };
+    recognition.onerror = (event) => {
+      setError(`Voice input error: ${event.error}`);
+      setListening(false);
+    };
+    recognition.onend = () => setListening(false);
+    recognitionRef.current = recognition;
+    recognition.start();
+    setListening(true);
+  }, [listening]);
+
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.stop();
+      window.speechSynthesis?.cancel();
+    };
+  }, []);
+
   const requestNextStep = useCallback(async () => {
     setThinking(true);
     try {
@@ -145,12 +270,16 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
   useEffect(() => {
     const unsubscribe = window.spartan.onEvent((event, data) => {
       if (event === "leo_plan_ready") {
-        setPlan(data as LeoPlan);
+        const readyPlan = data as LeoPlan;
+        setPlan(readyPlan);
         setAgentState("AwaitingApproval");
         setError(null);
+        speak(`Leo has a plan: ${readyPlan.goal}`);
       } else if (event === "leo_plan_failed") {
-        setError((data as { error: string }).error);
+        const failMessage = (data as { error: string }).error;
+        setError(failMessage);
         setAgentState("Failed");
+        speak(`Leo ran into an error: ${failMessage}`);
       } else if (event === "leo_action_proposed") {
         const call = data as PendingCall;
         setThinking(false);
@@ -173,6 +302,7 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         setSummary(s);
         setMemorySaved(memory_saved);
         setLog((prev) => [...prev, { kind: "done", text: s }]);
+        speak(s);
       } else if (event === "leo_execute_failed") {
         setThinking(false);
         setPendingCall(null);
@@ -180,10 +310,11 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         const e = (data as { error: string }).error;
         setError(e);
         setLog((prev) => [...prev, { kind: "failed", text: e }]);
+        speak(`Leo ran into an error: ${e}`);
       }
     });
     return unsubscribe;
-  }, []);
+  }, [speak]);
 
   const submitTask = useCallback(async () => {
     if (!task.trim()) return;
@@ -282,6 +413,15 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     <div className="leo-panel">
       <div className="leo-header mono">
         <span className="leo-title">LEO</span>
+        {voiceOutputSupported && (
+          <button
+            className={`leo-btn leo-btn-voice-toggle${voiceOutputEnabled ? " leo-btn-voice-on" : ""}`}
+            onClick={toggleVoiceOutput}
+            title={voiceOutputEnabled ? "Voice responses on" : "Voice responses off"}
+          >
+            {voiceOutputEnabled ? "\u{1F50A}" : "\u{1F507}"}
+          </button>
+        )}
         <span className={`leo-state leo-state-${agentState.toLowerCase()}`}>{agentState}</span>
       </div>
 
@@ -392,6 +532,16 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
           }}
           disabled={agentState === "Planning" || agentState === "Executing" || agentState === "Verifying"}
         />
+        {voiceInputSupported && (
+          <button
+            className={`leo-btn leo-btn-mic${listening ? " leo-btn-mic-active" : ""}`}
+            onClick={toggleListening}
+            disabled={agentState === "Planning" || agentState === "Executing" || agentState === "Verifying"}
+            title={listening ? "Stop dictating" : "Dictate task"}
+          >
+            {listening ? "\u{1F534}" : "\u{1F3A4}"}
+          </button>
+        )}
         <button
           className="leo-btn leo-btn-send"
           onClick={submitTask}

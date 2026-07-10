@@ -80,6 +80,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Leo enhancement toward modern coding-agent parity — search/list tools, real diff preview (first increment) | §75.68 |
 | Leo enhancement — configurable approval mode, auto-approve loop for Safe calls, generation guard (second increment) | §75.69 |
 | Multi-provider LLM selection for Leo — "concepts only, rebuilt safely" from `SpartanAI_Assistant`, READ §75.70 BEFORE ASSUMING ANY OF ITS UNSANDBOXED OS-CONTROL CODE WAS PORTED (it was not) | §75.70 |
+| Voice input/output for the Leo chat panel — second "concepts only, rebuilt safely" increment, closes task #59 | §75.71 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2041,6 +2042,37 @@ first — it's the parity reference until each row there is actually reimplement
   real key or a real running proxy in this project's history); no API-key storage UI; no
   model-name autocomplete. The second named concept -- voice input/output via Electron's native Web
   Speech API -- remains open, the next planned increment.
+- **Real, working code — real voice input/output for the Leo chat panel, the second and final
+  "concepts only, rebuilt safely" increment, closing task #59 (§75.71)**: adapts
+  `SpartanAI_Assistant`'s "Dynamic Personas & Voice" concept using Electron's own bundled
+  Chromium's native Web Speech API (`SpeechRecognition`/`webkitSpeechRecognition` for STT,
+  `speechSynthesis`/`SpeechSynthesisUtterance` for TTS) instead of porting that repo's Python
+  `whisper`/`edge-tts` dependencies -- zero new dependencies needed. `LeoChatPanel.tsx` gained a
+  new mic button (toggles a real `SpeechRecognition` session, appending only newly-finalized
+  transcript segments via the correct `event.resultIndex`-based pattern into the task field) and a
+  header voice-output toggle (🔊/🔇, persisted to `localStorage` since it's a pure renderer
+  preference with no backend effect, unlike GPU offload/provider choice). `speak()` is wired into
+  `leo_plan_ready`/`leo_execute_done`/`leo_plan_failed`/`leo_execute_failed` -- the three real
+  moments a user benefits most from an audible cue. Both controls only render when their real API
+  is actually detected present (`getSpeechRecognitionCtor()` returns `null`, not a fake stub, when
+  unsupported), degrading honestly rather than showing a dead control. A real test-harness-only
+  finding while building Playwright verification (not a product bug): this sandbox's Chromium
+  exposes a real, unprefixed `window.SpeechRecognition` that the component correctly prefers over
+  the legacy `webkit`-prefixed name, so the test's first mock (stubbing only the prefixed name) let
+  the real native constructor win and silently no-op with no microphone present -- fixed by
+  stubbing both names. `npx tsc --noEmit`/`npm run build:renderer` clean; no Rust changes (pure
+  renderer feature, no IPC surface needed), so the existing 488-test workspace suite is unaffected.
+  Real, screenshotted Playwright verification confirmed: both controls render once their mocked API
+  is present; voice output stays silent by default and correctly speaks the real plan goal once
+  enabled; the toggle persists across a reload via real `localStorage`; the mic button shows a
+  correct pulsing active state, a real dictated transcript lands exactly in the task field, and
+  stopping clears the active state. **What this does not confirm**: no real microphone/speaker
+  hardware exists in this sandbox, so real speech recognition accuracy and real audio output were
+  never exercised, only the real wiring; no language/voice selection UI; no interim-transcript
+  preview; whether a real end-user desktop's Electron build has a working, network-connected speech
+  backend was not independently confirmed. **Task #59 is now closed** -- both named concepts
+  (multi-provider LLM selection §75.70, voice I/O this section) are real, implemented, and verified
+  to the extent this environment allows.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
