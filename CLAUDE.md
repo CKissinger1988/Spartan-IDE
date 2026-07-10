@@ -86,6 +86,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Dev Containers (OCI/Docker-based, containers.dev spec) — READ §75.74 BEFORE ASSUMING THIS MEANS FULL VM/CROSS-KERNEL-OS SUPPORT (it does not; a real, explicit scope decision) | §75.74 |
 | Real Docker daemon started and verified inside a sandboxed session — not a universal guarantee for every future session | §75.75 |
 | Sci-Fi "Spartan Coding" theme, full Settings taxonomy, New Project wizard, first-run onboarding | §75.76 |
+| Real electron-builder packaging config, a packaged-app path-resolution fix — READ §75.77 BEFORE ASSUMING A REAL INSTALLER WAS PRODUCED (it wasn't; the same standing network block, confirmed one layer deeper) | §75.77 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2251,6 +2252,23 @@ first — it's the parity reference until each row there is actually reimplement
   window remains unlaunchable in this session (same standing network-policy gap since §75.59); no
   bundle code-splitting; no template customization in the New Project wizard; onboarding's feature
   tour is a single static screen, not multi-step.
+- **Real, working code — real electron-builder packaging config, a real packaged-app
+  path-resolution bug found and fixed, one layer deeper confirmation of the standing network
+  block (§75.77)**: `electron-builder` installs cleanly from the npm registry (not the blocked
+  host). **A real bug found and fixed before any config was written**: `main.ts`'s binary-path
+  resolvers always computed a dev-relative path with no packaged-app branch at all — would have
+  broken on first launch of any real installer. Fixed with a real `app.isPackaged` branch using
+  `process.resourcesPath`. Added a real `extraResources` config (bundles the real
+  `spartan-backend` binary + `gui-builder`) and a Linux AppImage target. **A real packaging
+  attempt was actually run**, not just configured — got measurably further than a bare `npm
+  install` ever has (a real `@electron/rebuild` succeeded, electron-builder's own separate
+  download mechanism reported 100% progress) before a real `403` during packaging — confirming
+  the network block covers Electron's real distributable content broadly, not one specific
+  postinstall path. No bypass attempted, consistent with this project's own settled decision.
+  **A second, real, honestly-named gap**: `gui-builder-client.ts` assumes a system-wide Node.js
+  install (`execFile("node", ...)`), unsafe for a packaged end-user machine — real, separate,
+  un-started follow-up. The config and path-resolution fix are both real and ready; only the
+  final network-gated packaging step is unverified.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
