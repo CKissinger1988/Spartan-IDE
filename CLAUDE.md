@@ -76,6 +76,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Streaming PTY IPC — real terminal Console + multi-CLI Sessions screens in the Electron shell | §75.64 |
 | Real Git panel + Settings screen in the Electron shell | §75.65 |
 | Real Leo execute/verify loop wired into the Electron shell — READ BEFORE ASSUMING §9's ManualEveryStep approval gate is bypassed anywhere in this loop | §75.66 |
+| Real project-tier memory, read and written for the first time | §75.67 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -1899,6 +1900,36 @@ first — it's the parity reference until each row there is actually reimplement
   (same gap §75.47 already named); no `run_terminal` call exercised live through this UI (the
   sandbox method has no timeout, a real, named, pre-existing limitation); no real Electron window
   launch this session (same standing gap as every prior §75.59+ pass).
+- **Real, working code — real project-tier memory, read and written for the first time, closing
+  the last named piece of task #5's Tier 1 bar (§75.67)**: direct continuation of §75.66, same
+  session. `spartan-leo::memory` has been real and tested since §75.46/§75.47 but had no real
+  caller anywhere in either shell -- this pass gives it one. **Write path**: `leo_next_step`'s
+  `Done` branch now calls `agent.append_memory(&summary)` right after `mark_done()` succeeds -- a
+  real, best-effort append (not on the critical path: a real I/O failure must never hide that the
+  task itself genuinely completed), with real success/failure reported honestly as a
+  `memory_saved: bool` on the `leo_execute_done` event rather than silently swallowed. **Read
+  path**: `leo_start_task`'s planning thread now reads the real project memory file and folds it
+  into the task string via a new, pure, unit-tested `augment_task_with_memory(task, memory)` --
+  prefixing a real "Project memory..." block when non-empty, passing the task through byte-for-byte
+  unchanged when empty (never a fabricated "no notes yet" placeholder). Deliberately folded into
+  the existing task string rather than a new `generate_plan` parameter, since that signature is
+  shared with `spartan-editor-core::leo_bridge.rs` and every one of `plan.rs`'s own existing tests
+  -- zero ripple outside this one call site. **A real, live-caught UI bug, found only by re-running
+  the Playwright verification**: `LeoChatPanel.tsx`'s first version threaded `memory_saved` into
+  the same `log` array only the `Executing`/`Verifying` view renders -- invisible once `agentState`
+  becomes `Done`, silently computed but never shown. Fixed with a dedicated `memorySaved` state
+  variable rendered directly under the summary in the `Done` block, re-verified fixed via the
+  identical screenshot. 2 new Rust unit tests (37 total in `spartan-backend`, up from 35) for
+  `augment_task_with_memory`'s pure pass-through/prefix behavior. Full `cargo fmt`/`clippy`/`test
+  --workspace --release -- --test-threads=1` clean (457 tests, up from 455); `desktop`'s own
+  `typecheck`/`build` clean; the full four-step Playwright execute-loop sequence was re-run and
+  re-screenshotted with the fixed `Done` view. **What this does not confirm**: no live write-then-
+  read round trip against a real running project (same Ollama-unreachable constraint blocks a real
+  completed task from reaching the write path this session); no memory compaction/token-budgeting;
+  no UI for browsing/editing `.spartan/memory/project.md` directly (a real, plain Markdown file,
+  hand-editable, just not surfaced in either shell's chrome); no session-/global-tier memory (out of
+  scope for Tier 1). With this pass, both named halves of task #5's Tier 1 bar -- the execute/verify
+  loop and project-tier memory -- are real and wired end-to-end in the primary Electron UI.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1956,7 +1987,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 455 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 457 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-editor-core,

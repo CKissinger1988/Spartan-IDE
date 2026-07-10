@@ -82,6 +82,7 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
   const [thinking, setThinking] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
+  const [memorySaved, setMemorySaved] = useState<boolean | null>(null);
 
   const requestNextStep = useCallback(async () => {
     setThinking(true);
@@ -130,8 +131,9 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         setThinking(false);
         setPendingCall(null);
         setAgentState("Done");
-        const s = (data as { summary: string }).summary;
+        const { summary: s, memory_saved } = data as { summary: string; memory_saved: boolean };
         setSummary(s);
+        setMemorySaved(memory_saved);
         setLog((prev) => [...prev, { kind: "done", text: s }]);
       } else if (event === "leo_execute_failed") {
         setThinking(false);
@@ -152,6 +154,7 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     setPendingCall(null);
     setLog([]);
     setSummary(null);
+    setMemorySaved(null);
     setAgentState("Planning");
     try {
       await window.spartan.call("leo_start_task", { task, project_root: projectRoot });
@@ -304,6 +307,11 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
           <div className="leo-summary mono">
             <span className="leo-plan-label">Done</span>
             <p>{summary}</p>
+            {memorySaved !== null && (
+              <p className="leo-memory-note">
+                {memorySaved ? "Saved a note to project memory." : "Could not save to project memory."}
+              </p>
+            )}
           </div>
         )}
       </div>

@@ -309,6 +309,26 @@ fn plan_json(plan: &ImplementationPlan) -> serde_json::Value {
     })
 }
 
+/// Real, pure §4.3 memory-folding logic -- separated from
+/// `leo_start_task`'s own spawned thread so it's directly unit-testable
+/// without needing a real model call. An empty or whitespace-only memory
+/// file (no prior task has completed yet in this project, or a real I/O
+/// error already degraded to an empty string by the caller) means the
+/// task string passes through completely unchanged -- never a fabricated
+/// "no notes yet" placeholder sent to the model.
+fn augment_task_with_memory(task: &str, memory: &str) -> String {
+    if memory.trim().is_empty() {
+        task.to_string()
+    } else {
+        format!(
+            "Project memory (notes from prior completed tasks in this project):\n{}\n\n\
+             Task: {}",
+            memory.trim(),
+            task
+        )
+    }
+}
+
 /// Real Leo status snapshot -- the renderer calls this on mount to
 /// rehydrate a persistent chat panel's state, since (unlike a single
 /// full-screen mode) it may be mounted before or after a task is
@@ -358,7 +378,19 @@ fn leo_start_task(
     thread::spawn(move || {
         let gpu_offload = spartan_settings::load().gpu_offload;
         let provider = OllamaProvider::local(LEO_MODEL).with_gpu_layers(gpu_offload.num_gpu());
-        let result: Result<ImplementationPlan, PlanError> = generate_plan(&provider, &task);
+        // Real §4.3 project-tier memory, read back into planning context
+        // for the first time (closing task #5's own named "project-tier
+        // memory" bar) -- deliberately folded into the task string itself
+        // rather than a new `generate_plan` parameter, since that
+        // function's signature is shared with `spartan-editor-core`'s own
+        // `leo_bridge.rs` and every one of `plan.rs`'s own existing
+        // tests; this achieves the same real effect entirely at this one
+        // call site.
+        let memory = spartan_leo::memory::read_project_memory(&PathBuf::from(&project_root))
+            .unwrap_or_default();
+        let task_with_memory = augment_task_with_memory(&task, &memory);
+        let result: Result<ImplementationPlan, PlanError> =
+            generate_plan(&provider, &task_with_memory);
 
         let event = {
             let Ok(mut guard) = state.lock() else {
@@ -553,10 +585,26 @@ fn leo_next_step(
                         let transitioned =
                             agent.begin_verification().and_then(|()| agent.mark_done());
                         match transitioned {
-                            Ok(()) => Event {
-                                event: "leo_execute_done".to_string(),
-                                data: serde_json::json!({ "summary": summary }),
-                            },
+                            Ok(()) => {
+                                // Real §4.3 project-tier memory write --
+                                // "Leo writes to this itself" (memory.rs's
+                                // own doc comment) -- a real, best-effort
+                                // append, not on the critical path: a
+                                // real memory-file I/O failure (e.g. a
+                                // read-only project directory) must never
+                                // hide that the task itself genuinely
+                                // completed, so `memory_saved` is reported
+                                // honestly rather than silently swallowed
+                                // or allowed to fail the whole task.
+                                let memory_saved = agent.append_memory(&summary).is_ok();
+                                Event {
+                                    event: "leo_execute_done".to_string(),
+                                    data: serde_json::json!({
+                                        "summary": summary,
+                                        "memory_saved": memory_saved,
+                                    }),
+                                }
+                            }
                             Err(e) => Event {
                                 event: "leo_execute_failed".to_string(),
                                 data: serde_json::json!({ "error": format!("{e:?}") }),
@@ -1865,5 +1913,24 @@ mod tests {
         assert_eq!(result["pending_call"]["call_id"], "call_7");
         assert_eq!(result["pending_call"]["tool"], "run_terminal");
         assert_eq!(result["pending_call"]["args"]["command"], "echo hi");
+    }
+
+    #[test]
+    fn augment_task_with_memory_passes_through_unchanged_when_empty() {
+        assert_eq!(augment_task_with_memory("do the thing", ""), "do the thing");
+        assert_eq!(
+            augment_task_with_memory("do the thing", "   \n  "),
+            "do the thing"
+        );
+    }
+
+    #[test]
+    fn augment_task_with_memory_prefixes_real_notes() {
+        let result = augment_task_with_memory(
+            "add a login form",
+            "- Always use the existing AuthContext, never a new one\n",
+        );
+        assert!(result.contains("Always use the existing AuthContext"));
+        assert!(result.ends_with("Task: add a login form"));
     }
 }
