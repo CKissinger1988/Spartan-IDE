@@ -37,6 +37,8 @@ use spartan_leo::approval::ApprovalMode;
 use spartan_leo::plan::{generate_plan, ImplementationPlan, PlanError};
 use spartan_model::OllamaProvider;
 
+mod pty;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Request {
     pub id: u64,
@@ -115,6 +117,8 @@ pub struct BackendState {
     next_doc_id: u64,
     leo_agent: Option<Agent>,
     leo_project_root: Option<PathBuf>,
+    pty_sessions: HashMap<u64, pty::PtyHandle>,
+    next_pty_id: u64,
 }
 
 impl BackendState {
@@ -394,6 +398,83 @@ fn leo_reject_plan(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value
     Ok(serde_json::json!({ "ok": true, "state": agent_state_name(agent) }))
 }
 
+/// Real PTY spawn (§75.64, closing the §75.62 audit's own named
+/// Console/Sessions gap) -- `command`/`args` of `None`/empty default to
+/// the real `$SHELL` (Console); a real named command (Sessions) reuses
+/// this exact same primitive. Output streams back as real, unprompted
+/// `pty_output`/`pty_exit` events (`pty.rs`), never blocking this
+/// synchronous call, which only returns once the real spawn itself
+/// either succeeds or fails.
+fn pty_spawn(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    cwd: &str,
+    cols: u16,
+    rows: u16,
+    command: Option<&str>,
+    args: &[String],
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    let session_id = guard.next_pty_id;
+    let handle = pty::spawn_pty(
+        session_id,
+        std::path::Path::new(cwd),
+        cols,
+        rows,
+        command,
+        args,
+        out_tx,
+    )
+    .map_err(|e| format!("failed to spawn pty: {e}"))?;
+    guard.next_pty_id += 1;
+    guard.pty_sessions.insert(session_id, handle);
+    Ok(serde_json::json!({ "session_id": session_id }))
+}
+
+fn pty_input(
+    state: &Arc<Mutex<BackendState>>,
+    session_id: u64,
+    data: &str,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    let handle = guard
+        .pty_sessions
+        .get_mut(&session_id)
+        .ok_or_else(|| format!("no pty session with id {session_id}"))?;
+    handle
+        .write(data.as_bytes())
+        .map_err(|e| format!("pty write failed: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+fn pty_resize(
+    state: &Arc<Mutex<BackendState>>,
+    session_id: u64,
+    cols: u16,
+    rows: u16,
+) -> Result<serde_json::Value, String> {
+    let guard = state.lock().map_err(|_| "backend state poisoned")?;
+    let handle = guard
+        .pty_sessions
+        .get(&session_id)
+        .ok_or_else(|| format!("no pty session with id {session_id}"))?;
+    handle
+        .resize(cols, rows)
+        .map_err(|e| format!("pty resize failed: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+fn pty_close(
+    state: &Arc<Mutex<BackendState>>,
+    session_id: u64,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    if let Some(mut handle) = guard.pty_sessions.remove(&session_id) {
+        handle.kill();
+    }
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 fn get_str_param(params: &serde_json::Value, key: &str) -> Result<String, String> {
     params
         .get(key)
@@ -463,6 +544,35 @@ pub fn handle_request(
         })(),
         "leo_approve_plan" => leo_approve_plan(state),
         "leo_reject_plan" => leo_reject_plan(state),
+        "pty_spawn" => (|| {
+            let cwd = get_str_param(&req.params, "cwd")?;
+            let cols = get_u64_param(&req.params, "cols")? as u16;
+            let rows = get_u64_param(&req.params, "rows")? as u16;
+            let command = req.params.get("command").and_then(|v| v.as_str());
+            let args: Vec<String> = req
+                .params
+                .get("args")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            pty_spawn(state, out_tx.clone(), &cwd, cols, rows, command, &args)
+        })(),
+        "pty_input" => (|| {
+            let session_id = get_u64_param(&req.params, "session_id")?;
+            let data = get_str_param(&req.params, "data")?;
+            pty_input(state, session_id, &data)
+        })(),
+        "pty_resize" => (|| {
+            let session_id = get_u64_param(&req.params, "session_id")?;
+            let cols = get_u64_param(&req.params, "cols")? as u16;
+            let rows = get_u64_param(&req.params, "rows")? as u16;
+            pty_resize(state, session_id, cols, rows)
+        })(),
+        "pty_close" => get_u64_param(&req.params, "session_id").and_then(|id| pty_close(state, id)),
         other => Err(format!("unknown method `{other}`")),
     };
     match result {
@@ -730,6 +840,120 @@ mod tests {
         let redo_resp = call(&state, 5, "redo", serde_json::json!({ "doc_id": doc_id }));
         assert_eq!(redo_resp.result.unwrap()["changed"], false);
         std::fs::remove_file(&file).ok();
+    }
+
+    #[test]
+    fn pty_spawn_starts_a_real_process_and_returns_a_session_id() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "pty_spawn",
+            serde_json::json!({
+                "cwd": std::env::temp_dir().to_string_lossy(),
+                "cols": 80,
+                "rows": 24,
+                "command": "bash",
+                "args": ["-c", "echo READY && exit"],
+            }),
+        );
+        assert!(resp.error.is_none(), "pty_spawn errored: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["session_id"], 0);
+
+        // A second real spawn on the same state gets a distinct, incrementing id.
+        let resp2 = call(
+            &state,
+            2,
+            "pty_spawn",
+            serde_json::json!({
+                "cwd": std::env::temp_dir().to_string_lossy(),
+                "cols": 80,
+                "rows": 24,
+                "command": "bash",
+                "args": ["-c", "exit"],
+            }),
+        );
+        assert_eq!(resp2.result.unwrap()["session_id"], 1);
+    }
+
+    #[test]
+    fn pty_input_on_an_unknown_session_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "pty_input",
+            serde_json::json!({ "session_id": 999, "data": "hi\n" }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("no pty session"));
+    }
+
+    #[test]
+    fn pty_resize_on_an_unknown_session_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "pty_resize",
+            serde_json::json!({ "session_id": 999, "cols": 100, "rows": 40 }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("no pty session"));
+    }
+
+    #[test]
+    fn pty_close_on_an_unknown_session_is_a_real_harmless_no_op() {
+        // Closing an id that was never spawned (or already closed) should
+        // not error -- matches close_file's own "already gone is fine"
+        // semantics, since a UI's close button firing twice shouldn't crash.
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "pty_close",
+            serde_json::json!({ "session_id": 999 }),
+        );
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["ok"], true);
+    }
+
+    #[test]
+    fn pty_close_really_removes_the_session_so_input_after_close_errors() {
+        let state = new_state();
+        let session_id = call(
+            &state,
+            1,
+            "pty_spawn",
+            serde_json::json!({
+                "cwd": std::env::temp_dir().to_string_lossy(),
+                "cols": 80,
+                "rows": 24,
+                "command": "bash",
+                "args": ["-c", "sleep 5"],
+            }),
+        )
+        .result
+        .unwrap()["session_id"]
+            .as_u64()
+            .unwrap();
+
+        let close_resp = call(
+            &state,
+            2,
+            "pty_close",
+            serde_json::json!({ "session_id": session_id }),
+        );
+        assert_eq!(close_resp.result.unwrap()["ok"], true);
+
+        let input_resp = call(
+            &state,
+            3,
+            "pty_input",
+            serde_json::json!({ "session_id": session_id, "data": "hi\n" }),
+        );
+        assert!(input_resp.error.unwrap().contains("no pty session"));
     }
 
     #[test]

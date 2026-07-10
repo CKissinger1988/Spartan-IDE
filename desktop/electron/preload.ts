@@ -23,6 +23,10 @@ const ALLOWED_METHODS = new Set([
   "design_parse",
   "design_bundle",
   "design_apply_edit",
+  "pty_spawn",
+  "pty_input",
+  "pty_resize",
+  "pty_close",
 ]);
 
 contextBridge.exposeInMainWorld("spartan", {

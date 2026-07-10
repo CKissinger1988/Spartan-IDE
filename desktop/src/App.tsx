@@ -7,6 +7,8 @@ import Editor, { type OpenFile } from "./components/Editor";
 import Placeholder from "./components/Placeholder";
 import WorkflowsScreen from "./components/WorkflowsScreen";
 import DesignScreen from "./components/DesignScreen";
+import ConsoleScreen from "./components/ConsoleScreen";
+import SessionsScreen from "./components/SessionsScreen";
 import LeoChatPanel from "./components/LeoChatPanel";
 import { NAV, type ScreenId } from "./nav";
 import "./app.css";
@@ -95,7 +97,12 @@ export default function App(): React.ReactElement {
               {screen === "design" && (
                 <DesignScreen activeFile={activeFile} onContentChange={handleContentChange} />
               )}
-              {screen !== "workflows" && screen !== "design" && <Placeholder screen={screen} />}
+              {screen === "console" && <ConsoleScreen root={ROOT} />}
+              {screen === "sessions" && <SessionsScreen root={ROOT} />}
+              {screen !== "workflows" &&
+                screen !== "design" &&
+                screen !== "console" &&
+                screen !== "sessions" && <Placeholder screen={screen} />}
             </div>
           </>
         )}

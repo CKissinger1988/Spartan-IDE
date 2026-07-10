@@ -79,10 +79,6 @@ export const NAV: NavGroup[] = [
  * `workflows` yet. Named specifically, not a generic "coming soon", so
  * each gap is traceable to real, scoped future work. */
 export const SCREEN_NOTES: Partial<Record<ScreenId, string>> = {
-  console:
-    "A real integrated terminal already exists in the original wgpu shell (crates/spartan-editor-core/src/terminal.rs, real portable-pty). Wiring it into this Electron shell needs spartan-backend's request/response protocol extended with async push events for streaming PTY output -- a real, scoped, not-yet-built increment.",
-  sessions:
-    "Real multi-CLI session orchestration (Claude/Codex/Gemini as real PTYs) already exists in the original wgpu shell (cli_session.rs). Porting it here has the same real dependency as Console: streaming IPC events.",
   review: "Session comparison view -- depends on Sessions existing first.",
   analytics: "Usage/cost/latency tracking -- depends on real session execution data existing first.",
   usage: "Per-provider usage tracking -- same dependency as Analytics.",

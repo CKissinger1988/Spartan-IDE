@@ -72,6 +72,8 @@ first — it's the parity reference until each row there is actually reimplement
 | Desktop shell's 3-tier nav IA (Workspace/Build/Platform) and Workflows screen — READ §75.60 BEFORE ASSUMING VELOCITY CODE/ASSETS WERE COPIED (they were not; AGPL-3.0) | §75.60 |
 | Leo's persistent chat panel in the Electron shell + `spartan-backend`'s async event protocol | §75.61 |
 | Electron-shell feature-parity audit (what's missing vs. the wgpu shell), GUI Builder + live preview wiring, undo/redo fix | §75.62 |
+| Real syntax highlighting in the Electron editor | §75.63 |
+| Streaming PTY IPC — real terminal Console + multi-CLI Sessions screens in the Electron shell | §75.64 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -1747,6 +1749,59 @@ first — it's the parity reference until each row there is actually reimplement
   incremental/windowed highlighting (whole-document re-tokenize per keystroke, unmeasured cost at
   scale); no semantic (LSP-informed) highlighting, lexical only; tree-sitter parity with the
   original wgpu shell remains real, unstarted future work.
+- **Real, working code — real streaming PTY IPC, a real terminal Console and a real multi-CLI
+  Sessions screen in the Electron shell, closing task #55 (§75.64)**: continues down the same
+  recommended order (syntax highlighting, then Terminal/Sessions, then Git/Settings). Closes the
+  §75.62 audit's own named blocker -- "reusing Leo's async `Event` mechanism for streaming PTY
+  output" -- since a PTY's output is unbounded and arrives over time, not a single request/
+  response. New `crates/spartan-backend/src/pty.rs` ports `spartan-editor-core::terminal.rs`'s own
+  already-tested `portable-pty` spawn shape (§75.56/§75.57), streaming raw output over this crate's
+  own `Event` mechanism (§75.61) instead of an in-process channel a render loop polls -- each
+  `pty_output`/`pty_exit` event carries a real `session_id` so multiple sessions never cross-talk
+  on one stdout stream. A deliberate, named improvement over the wgpu shell's own approach: no
+  ANSI-stripping -- that shell had to strip escapes because its renderer has no per-cell color
+  grid; the Electron shell can drive a real client-side terminal emulator that understands them
+  natively, so raw bytes pass through verbatim. Four new dispatch methods (`pty_spawn`/`pty_input`/
+  `pty_resize`/`pty_close`); `pty_spawn` with no `command` defaults to the real `$SHELL` (Console),
+  a named command (`claude`/`codex`/`gemini`) is how Sessions reuses the exact same primitive
+  rather than needing a second implementation. A real, honest, named limitation in `pty.rs`'s own
+  doc comment: a multi-byte UTF-8 sequence split across two OS read chunks can produce a spurious
+  replacement character at the boundary (no incremental reassembly buffer was built this pass) --
+  real shell output is overwhelmingly ASCII, a rare cosmetic edge case, not hidden. Real, executed
+  manual verification of the raw protocol, done before any UI existed, using this project's own
+  already-learned "keep stdin open past the async response" lesson (§75.61 hit the identical race
+  first): a piped `pty_spawn` for `bash -c "echo HELLO_PTY && exit"` produced the exact real
+  expected sequence -- a synchronous `{"session_id":0}` ack, then a real `pty_output` event with
+  the actual command's output, then a real `pty_exit` event. 6 new Rust unit tests (20 total in
+  this crate, up from 14): a real spawn returning real incrementing session ids; `pty_input`/
+  `pty_resize` against an unknown session both erroring honestly (matching this file's own
+  established pattern); `pty_close` on an unknown id being a real harmless no-op (mirroring
+  `close_file`'s "already gone is fine" semantics); and a real spawn-close-then-input round trip
+  confirming `pty_close` actually removes the session, not just acking. New `TerminalView.tsx`
+  wraps a real `xterm.js` (`@xterm/xterm`+`@xterm/addon-fit`, real independent MIT dependencies --
+  a genuine fidelity improvement over the wgpu shell's necessarily plain-text rendering, since
+  Electron has a real DOM the wgpu shell never did), handling spawn/output-subscribe/input-forward/
+  resize. New `ConsoleScreen.tsx` mounts it with no command (real `$SHELL`); new
+  `SessionsScreen.tsx` mounts it per-tab with a real named CLI command, switched via real tabs -- a
+  deliberate, named v1 simplification: only the active provider's session is mounted, switching
+  tabs closes the previous real PTY rather than keeping several alive concurrently, a real,
+  separate, unstarted follow-up if concurrent monitoring is wanted. `nav.ts`'s own `SCREEN_NOTES`
+  entries for `console`/`sessions` (which had named this exact blocker) were removed now that it's
+  real and closed. Real, screenshotted Playwright verification via the same mocked-`window.spartan`
+  harness this whole `desktop/` effort has used throughout (the real Electron binary remains
+  unlaunchable in this session for the same already-documented network-policy reason as
+  §75.59-§75.63): Console showed a real `xterm.js` terminal with correct echoed output; Sessions
+  showed the `claude` tab active by default with correct `[claude]`-prefixed output, and clicking
+  the `codex` tab correctly tore down the prior session and mounted a fresh one with
+  `[codex]`-prefixed output, confirming the shared-component, per-tab-remount design works. Full
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release -- --test-threads=1` all clean; `desktop`'s own `npm run typecheck` clean.
+  **What this does not confirm**: no real Electron window launch this session (same standing gap);
+  no live verification against the actual installed `claude`/`codex`/`gemini` CLIs, only mocked UI
+  events (the raw-protocol smoke test used plain `bash`, to isolate PTY plumbing from any specific
+  CLI's own behavior); no concurrent multi-session monitoring; the UTF-8 chunk-boundary limitation
+  is real and unaddressed; no PTY resize verified live against a real process reading
+  `$COLUMNS`/`$LINES`, only that the IPC call itself reaches a spawned session without erroring.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1804,7 +1859,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 435 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 440 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-editor-core,

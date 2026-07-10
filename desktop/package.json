@@ -23,6 +23,8 @@
     "vite": "^6.0.3"
   },
   "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "@xyflow/react": "^12.3.6",
     "highlight.js": "^11.11.1",
     "react": "^18.3.1",

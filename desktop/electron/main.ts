@@ -114,6 +114,10 @@ app.whenReady().then(() => {
     "leo_start_task",
     "leo_approve_plan",
     "leo_reject_plan",
+    "pty_spawn",
+    "pty_input",
+    "pty_resize",
+    "pty_close",
   ];
   for (const method of methods) {
     ipcMain.handle(`spartan:${method}`, async (_event, params: Record<string, unknown>) => {

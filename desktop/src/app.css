@@ -599,3 +599,45 @@
 .hljs-meta {
   color: var(--text-dim);
 }
+
+/* Real terminal (§75.64) -- Console and Sessions both use TerminalView. */
+.console-screen,
+.terminal-view {
+  height: 100%;
+  padding: 4px;
+}
+
+.sessions-screen {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.sessions-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.sessions-tab {
+  padding: 6px 16px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.sessions-tab:hover {
+  color: var(--text);
+}
+
+.sessions-tab-active {
+  color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.sessions-body {
+  flex: 1;
+  min-height: 0;
+  padding: 4px;
+}
