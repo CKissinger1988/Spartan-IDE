@@ -34,7 +34,10 @@ use std::thread;
 use spartan_buffer::Document;
 use spartan_leo::agent::{Agent, AgentError};
 use spartan_leo::approval::ApprovalMode;
+use spartan_leo::execute::{self, ExecuteAction};
 use spartan_leo::plan::{generate_plan, ImplementationPlan, PlanError};
+use spartan_leo::tool::{ToolCall, ToolResult};
+use spartan_model::provider::Message;
 use spartan_model::OllamaProvider;
 
 mod pty;
@@ -107,6 +110,16 @@ struct OpenDoc {
     redo_stack: Vec<spartan_buffer::CheckpointId>,
 }
 
+/// One real, model-proposed tool call awaiting explicit human approval --
+/// every real call needs one (`leo_start_task` always constructs its
+/// `Agent` with `ApprovalMode::ManualEveryStep`, §9's own non-negotiable
+/// default), so there is never more than one pending at a time in this
+/// crate's own real usage.
+struct PendingCall {
+    call_id: String,
+    call: ToolCall,
+}
+
 /// Real, in-memory session state, now real behind `Arc<Mutex<_>>`
 /// (previously plain, single-threaded-only) because Leo's own plan
 /// generation must run on a background thread without blocking file
@@ -117,6 +130,14 @@ pub struct BackendState {
     next_doc_id: u64,
     leo_agent: Option<Agent>,
     leo_project_root: Option<PathBuf>,
+    /// Real, accumulating conversation history for the current task's
+    /// execute loop (§75.66) -- grows by one `Assistant`+`Tool` message
+    /// pair per real approved-and-run tool call (`execute::
+    /// append_tool_result`), read fresh by every `leo_next_step` call so
+    /// the model sees its own real prior actions, matching `execute.rs`'s
+    /// own doc comment for how a caller is expected to drive the loop.
+    leo_history: Vec<Message>,
+    leo_pending_call: Option<PendingCall>,
     pty_sessions: HashMap<u64, pty::PtyHandle>,
     next_pty_id: u64,
 }
@@ -297,8 +318,13 @@ fn leo_status(state: &BackendState) -> Result<serde_json::Value, String> {
         Some(agent) => Ok(serde_json::json!({
             "state": agent_state_name(agent),
             "plan": agent.plan().map(plan_json),
+            "pending_call": state.leo_pending_call.as_ref().map(|p| serde_json::json!({
+                "call_id": p.call_id,
+                "tool": p.call.name(),
+                "args": tool_call_json(&p.call),
+            })),
         })),
-        None => Ok(serde_json::json!({ "state": "Idle", "plan": null })),
+        None => Ok(serde_json::json!({ "state": "Idle", "plan": null, "pending_call": null })),
     }
 }
 
@@ -321,6 +347,11 @@ fn leo_start_task(
             .map_err(|e| format!("begin_planning: {e:?}"))?;
         guard.leo_agent = Some(agent);
         guard.leo_project_root = Some(PathBuf::from(&project_root));
+        // A fresh `Agent` per task (§75.47's own documented decision)
+        // means the execute-loop's own real state must reset too, or a
+        // second task would start with the first task's stale history.
+        guard.leo_history.clear();
+        guard.leo_pending_call = None;
     }
 
     let state = Arc::clone(state);
@@ -396,6 +427,214 @@ fn leo_reject_plan(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value
         .reject_plan()
         .map_err(|e| format!("reject_plan: {e:?}"))?;
     Ok(serde_json::json!({ "ok": true, "state": agent_state_name(agent) }))
+}
+
+/// Real, honest JSON rendering of a proposed `ToolCall`'s arguments --
+/// the UI needs to show the human *what* Leo wants to do before they
+/// approve or reject it.
+fn tool_call_json(call: &ToolCall) -> serde_json::Value {
+    match call {
+        ToolCall::ReadFile { path } => serde_json::json!({ "path": path }),
+        ToolCall::EditFile { path, content } => {
+            serde_json::json!({ "path": path, "content": content })
+        }
+        ToolCall::RunTerminal { command } => serde_json::json!({ "command": command }),
+    }
+}
+
+/// The real plain-text form fed back to the model as a `Role::Tool`
+/// message (`execute::append_tool_result`) -- separate from
+/// `tool_result_json` below, which is the structured form the UI gets,
+/// since the model only ever sees raw text content on that role.
+fn tool_result_text(result: &ToolResult) -> String {
+    match result {
+        ToolResult::FileContent(content) => content.clone(),
+        ToolResult::FileWritten { path, bytes } => format!("Wrote {bytes} bytes to {path}"),
+        ToolResult::TerminalOutput {
+            stdout,
+            stderr,
+            exit_code,
+        } => format!("exit_code={exit_code}\nstdout:\n{stdout}\nstderr:\n{stderr}"),
+    }
+}
+
+fn tool_result_json(result: &ToolResult) -> serde_json::Value {
+    match result {
+        ToolResult::FileContent(content) => {
+            serde_json::json!({ "kind": "file_content", "content": content })
+        }
+        ToolResult::FileWritten { path, bytes } => {
+            serde_json::json!({ "kind": "file_written", "path": path, "bytes": bytes })
+        }
+        ToolResult::TerminalOutput {
+            stdout,
+            stderr,
+            exit_code,
+        } => serde_json::json!({
+            "kind": "terminal_output",
+            "stdout": stdout,
+            "stderr": stderr,
+            "exit_code": exit_code,
+        }),
+    }
+}
+
+/// Real §4.1 execute-step round trip (§75.66, closing the single largest
+/// gap task #5 has had open since §75.47/§75.56: "approving a plan
+/// creates a real checkpoint and then has nothing further to run"). Must
+/// be in `Executing` with no call already pending approval -- calling
+/// this again before the pending one is resolved is a real caller bug,
+/// not something to silently queue.
+///
+/// Mirrors `leo_start_task`'s own spawn-thread-report-back shape exactly:
+/// a real, possibly slow model call runs on its own thread; the caller
+/// gets an immediate synchronous ack and the real result arrives later as
+/// an unprompted `Event`.
+fn leo_next_step(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+) -> Result<serde_json::Value, String> {
+    let (provider_gpu, plan, history) = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let agent = guard
+            .leo_agent
+            .as_ref()
+            .ok_or("no Leo task has been started yet")?;
+        if agent.state() != spartan_leo::state::AgentState::Executing {
+            return Err(format!(
+                "leo_next_step requires the Executing state, agent is currently {:?}",
+                agent.state()
+            ));
+        }
+        if guard.leo_pending_call.is_some() {
+            return Err("a proposed action is already awaiting approval".to_string());
+        }
+        let plan = agent.plan().cloned().ok_or("no approved plan to execute")?;
+        let gpu_offload = spartan_settings::load().gpu_offload;
+        (gpu_offload.num_gpu(), plan, guard.leo_history.clone())
+    };
+
+    let state = Arc::clone(state);
+    thread::spawn(move || {
+        let provider = OllamaProvider::local(LEO_MODEL).with_gpu_layers(provider_gpu);
+        let result = execute::next_action(&provider, &plan, &history);
+
+        let event = {
+            let Ok(mut guard) = state.lock() else {
+                return;
+            };
+            match result {
+                Ok(step) => match step.action {
+                    ExecuteAction::Call(call) => {
+                        let event = Event {
+                            event: "leo_action_proposed".to_string(),
+                            data: serde_json::json!({
+                                "call_id": step.call_id,
+                                "tool": call.name(),
+                                "args": tool_call_json(&call),
+                            }),
+                        };
+                        guard.leo_pending_call = Some(PendingCall {
+                            call_id: step.call_id,
+                            call,
+                        });
+                        event
+                    }
+                    ExecuteAction::Done { summary } => {
+                        let Some(agent) = guard.leo_agent.as_mut() else {
+                            return;
+                        };
+                        // No configured verification command exists in
+                        // this pass -- a real, named v1 scope cut (see
+                        // this crate's own doc comment for `leo_next_step`
+                        // above) -- so `Verifying` is a real, momentary,
+                        // always-passing waypoint on the way to `Done`
+                        // rather than a fabricated command result.
+                        let transitioned =
+                            agent.begin_verification().and_then(|()| agent.mark_done());
+                        match transitioned {
+                            Ok(()) => Event {
+                                event: "leo_execute_done".to_string(),
+                                data: serde_json::json!({ "summary": summary }),
+                            },
+                            Err(e) => Event {
+                                event: "leo_execute_failed".to_string(),
+                                data: serde_json::json!({ "error": format!("{e:?}") }),
+                            },
+                        }
+                    }
+                },
+                Err(e) => {
+                    if let Some(agent) = guard.leo_agent.as_mut() {
+                        let _ = agent.mark_failed();
+                    }
+                    Event {
+                        event: "leo_execute_failed".to_string(),
+                        data: serde_json::json!({ "error": e.to_string() }),
+                    }
+                }
+            }
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+
+    Ok(serde_json::json!({ "status": "thinking" }))
+}
+
+/// Real, synchronous approval + execution of the one real pending call --
+/// runs it through the real, hard-jailed `Sandbox` (`agent.execute_call`)
+/// and appends the real result to `leo_history` so the next
+/// `leo_next_step` call sees it. Deliberately synchronous, not spawned:
+/// `read_file`/`edit_file` are fast; `run_terminal` can legitimately take
+/// a while and has no timeout here, a real, named limitation shared with
+/// `spartan-leo::tool::Sandbox::run_terminal` itself, not newly
+/// introduced by this call site.
+fn leo_approve_call(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value, String> {
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    let pending = guard
+        .leo_pending_call
+        .take()
+        .ok_or("no action is currently awaiting approval")?;
+    let agent = guard
+        .leo_agent
+        .as_mut()
+        .ok_or("no Leo task has been started yet")?;
+
+    match agent.execute_call(pending.call) {
+        Ok(result) => {
+            let text = tool_result_text(&result);
+            execute::append_tool_result(&mut guard.leo_history, &pending.call_id, &text);
+            Ok(serde_json::json!({ "ok": true, "result": tool_result_json(&result) }))
+        }
+        Err(e) => {
+            let text = format!("Error: {e:?}");
+            execute::append_tool_result(&mut guard.leo_history, &pending.call_id, &text);
+            Ok(serde_json::json!({ "ok": false, "error": text }))
+        }
+    }
+}
+
+/// Real rejection -- does not fail the task outright, since the model may
+/// have a real, viable alternative approach. Appends a real `Role::Tool`
+/// rejection notice to history instead, leaving the agent in `Executing`
+/// so a caller's next `leo_next_step` call gives the model a genuine
+/// chance to propose something else (or call `task_complete` if nothing
+/// further is needed).
+fn leo_reject_call(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value, String> {
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    let pending = guard
+        .leo_pending_call
+        .take()
+        .ok_or("no action is currently awaiting approval")?;
+    execute::append_tool_result(
+        &mut guard.leo_history,
+        &pending.call_id,
+        "User rejected this action. Propose a different approach, or call task_complete if \
+         no further action is needed.",
+    );
+    Ok(serde_json::json!({ "ok": true }))
 }
 
 /// Real PTY spawn (§75.64, closing the §75.62 audit's own named
@@ -636,6 +875,9 @@ pub fn handle_request(
         })(),
         "leo_approve_plan" => leo_approve_plan(state),
         "leo_reject_plan" => leo_reject_plan(state),
+        "leo_next_step" => leo_next_step(state, out_tx.clone()),
+        "leo_approve_call" => leo_approve_call(state),
+        "leo_reject_call" => leo_reject_call(state),
         "pty_spawn" => (|| {
             let cwd = get_str_param(&req.params, "cwd")?;
             let cols = get_u64_param(&req.params, "cols")? as u16;
@@ -1409,5 +1651,219 @@ mod tests {
         let state = new_state();
         let resp = call(&state, 1, "leo_reject_plan", serde_json::json!({}));
         assert!(resp.error.is_some());
+    }
+
+    fn sample_plan() -> ImplementationPlan {
+        ImplementationPlan {
+            goal: "test goal".to_string(),
+            approach: "test approach".to_string(),
+            files: vec!["f.txt".to_string()],
+            risk_notes: "none".to_string(),
+        }
+    }
+
+    /// A real `Agent`, already through `Idle -> Planning ->
+    /// AwaitingApproval -> Executing` against a real temp git repo (no
+    /// mock) -- exactly the state `leo_next_step`/`leo_approve_call`/
+    /// `leo_reject_call` all require, built directly rather than through
+    /// the full async `leo_start_task`/`leo_approve_plan` IPC round trip
+    /// (which needs a real model) since these tests exercise the
+    /// execute-loop's own real state handling, not plan generation.
+    fn agent_in_executing_state(root: &std::path::Path) -> Agent {
+        let mut repo = git2::Repository::open(root).unwrap();
+        // Checkpointing needs a real base commit to reset back to --
+        // a brand-new `TempRepo` has no `HEAD` at all yet.
+        {
+            let signature = repo.signature().unwrap();
+            let tree_oid = repo.index().unwrap().write_tree().unwrap();
+            let tree = repo.find_tree(tree_oid).unwrap();
+            repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+                .unwrap();
+        }
+
+        let mut agent = Agent::new(root.to_path_buf(), ApprovalMode::ManualEveryStep);
+        agent.begin_planning().unwrap();
+        agent.apply_generated_plan(Ok(sample_plan())).unwrap();
+        agent.approve_plan(&mut repo).unwrap();
+        agent
+    }
+
+    #[test]
+    fn leo_next_step_before_any_task_errors_honestly() {
+        let state = new_state();
+        let resp = call(&state, 1, "leo_next_step", serde_json::json!({}));
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn leo_next_step_requires_the_executing_state() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-leo-next-step-state-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut agent = Agent::new(dir.clone(), ApprovalMode::ManualEveryStep);
+        agent.begin_planning().unwrap();
+        agent.apply_generated_plan(Ok(sample_plan())).unwrap();
+        // Real, deliberately still `AwaitingApproval`, not `Executing`.
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            ..Default::default()
+        }));
+        let resp = call(&state, 1, "leo_next_step", serde_json::json!({}));
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().contains("Executing"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn leo_next_step_errors_when_a_call_is_already_pending() {
+        let tmp = TempRepo::new("leo-next-step-pending");
+        let agent = agent_in_executing_state(&tmp.dir);
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            leo_pending_call: Some(PendingCall {
+                call_id: "call_1".to_string(),
+                call: ToolCall::ReadFile {
+                    path: "f.txt".to_string(),
+                },
+            }),
+            ..Default::default()
+        }));
+        let resp = call(&state, 1, "leo_next_step", serde_json::json!({}));
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().contains("already awaiting approval"));
+    }
+
+    #[test]
+    fn leo_approve_call_with_nothing_pending_errors_honestly() {
+        let state = new_state();
+        let resp = call(&state, 1, "leo_approve_call", serde_json::json!({}));
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn leo_reject_call_with_nothing_pending_errors_honestly() {
+        let state = new_state();
+        let resp = call(&state, 1, "leo_reject_call", serde_json::json!({}));
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn leo_approve_call_executes_a_real_read_file_call_and_appends_history() {
+        let tmp = TempRepo::new("leo-approve-read");
+        std::fs::write(tmp.dir.join("f.txt"), "real file contents").unwrap();
+        let agent = agent_in_executing_state(&tmp.dir);
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            leo_pending_call: Some(PendingCall {
+                call_id: "call_1".to_string(),
+                call: ToolCall::ReadFile {
+                    path: "f.txt".to_string(),
+                },
+            }),
+            ..Default::default()
+        }));
+
+        let resp = call(&state, 1, "leo_approve_call", serde_json::json!({}));
+        assert!(
+            resp.error.is_none(),
+            "leo_approve_call errored: {:?}",
+            resp.error
+        );
+        let result = resp.result.unwrap();
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["result"]["kind"], "file_content");
+        assert_eq!(result["result"]["content"], "real file contents");
+
+        let guard = state.lock().unwrap();
+        assert!(guard.leo_pending_call.is_none());
+        assert_eq!(guard.leo_history.len(), 2, "an Assistant+Tool message pair");
+        assert_eq!(guard.leo_history[1].content, "real file contents");
+        assert_eq!(guard.leo_history[1].tool_call_id.as_deref(), Some("call_1"));
+    }
+
+    #[test]
+    fn leo_reject_call_appends_a_rejection_notice_and_clears_pending() {
+        let tmp = TempRepo::new("leo-reject-call");
+        let agent = agent_in_executing_state(&tmp.dir);
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            leo_pending_call: Some(PendingCall {
+                call_id: "call_1".to_string(),
+                call: ToolCall::EditFile {
+                    path: "f.txt".to_string(),
+                    content: "x".to_string(),
+                },
+            }),
+            ..Default::default()
+        }));
+
+        let resp = call(&state, 1, "leo_reject_call", serde_json::json!({}));
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["ok"], true);
+
+        let guard = state.lock().unwrap();
+        assert!(guard.leo_pending_call.is_none());
+        assert_eq!(guard.leo_history.len(), 2);
+        assert!(guard.leo_history[1].content.contains("rejected"));
+        // A rejection must never actually touch the real file.
+        assert!(!tmp.dir.join("f.txt").exists());
+    }
+
+    #[test]
+    fn leo_approve_call_with_a_path_jail_violation_reports_the_error_and_still_appends_history() {
+        let tmp = TempRepo::new("leo-approve-jail-violation");
+        let agent = agent_in_executing_state(&tmp.dir);
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            leo_pending_call: Some(PendingCall {
+                call_id: "call_1".to_string(),
+                call: ToolCall::ReadFile {
+                    path: "../../../../../../etc/passwd".to_string(),
+                },
+            }),
+            ..Default::default()
+        }));
+
+        let resp = call(&state, 1, "leo_approve_call", serde_json::json!({}));
+        // Not a protocol-level error -- a real, reported tool failure the
+        // model itself gets to see and react to on the next real step.
+        assert!(resp.error.is_none());
+        let result = resp.result.unwrap();
+        assert_eq!(result["ok"], false);
+        assert!(result["error"]
+            .as_str()
+            .unwrap()
+            .to_lowercase()
+            .contains("jail"));
+
+        let guard = state.lock().unwrap();
+        assert!(guard.leo_pending_call.is_none());
+        assert_eq!(guard.leo_history.len(), 2);
+    }
+
+    #[test]
+    fn leo_status_reports_a_real_pending_call() {
+        let tmp = TempRepo::new("leo-status-pending");
+        let agent = agent_in_executing_state(&tmp.dir);
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            leo_pending_call: Some(PendingCall {
+                call_id: "call_7".to_string(),
+                call: ToolCall::RunTerminal {
+                    command: "echo hi".to_string(),
+                },
+            }),
+            ..Default::default()
+        }));
+
+        let resp = call(&state, 1, "leo_status", serde_json::json!({}));
+        let result = resp.result.unwrap();
+        assert_eq!(result["state"], "Executing");
+        assert_eq!(result["pending_call"]["call_id"], "call_7");
+        assert_eq!(result["pending_call"]["tool"], "run_terminal");
+        assert_eq!(result["pending_call"]["args"]["command"], "echo hi");
     }
 }

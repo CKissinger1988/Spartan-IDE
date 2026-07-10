@@ -75,6 +75,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Real syntax highlighting in the Electron editor | §75.63 |
 | Streaming PTY IPC — real terminal Console + multi-CLI Sessions screens in the Electron shell | §75.64 |
 | Real Git panel + Settings screen in the Electron shell | §75.65 |
+| Real Leo execute/verify loop wired into the Electron shell — READ BEFORE ASSUMING §9's ManualEveryStep approval gate is bypassed anywhere in this loop | §75.66 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -1849,6 +1850,55 @@ first — it's the parity reference until each row there is actually reimplement
   is not wired into `spartan-backend` or this screen this pass, a real, named, deliberately
   deferred follow-up given this pass's own time constraints. This closes task #56 and every item in
   this session's own stated recommended priority order.
+- **Real, working code — real Leo execute/verify loop wired into the Electron shell, closing the
+  single largest remaining gap in task #5 (§75.66)**: closes "keep going with what's next on the
+  road map." §35.4's Tier 1 bar names the full "plan→approve→execute→verify loop," but every prior
+  pass touching Leo (§75.46/§75.47/§75.56/§75.61) had named the same real, unclosed gap: approving a
+  plan creates a checkpoint and then has nothing further to run. `spartan-leo::execute::next_action`
+  (§75.56) had been real, tested, and completely unwired since the pass that built it -- this pass
+  is its first real caller. No new logic in `spartan-leo` itself. `BackendState` gained
+  `leo_history: Vec<Message>` and `leo_pending_call: Option<PendingCall>` (never more than one --
+  `leo_start_task` always uses `ApprovalMode::ManualEveryStep`, §9's non-negotiable default, so
+  *every* real call needs explicit approval). Three new dispatch methods: `leo_next_step` (spawns a
+  background thread calling `execute::next_action` against a real `OllamaProvider`, mirroring
+  `leo_start_task`'s own exact shape; on `task_complete` transitions `Executing -> Verifying -> Done`
+  -- no automated verification command is configured anywhere in this pass, a real, named v1 scope
+  cut, so `Verifying` is a real, momentary, always-passing waypoint, not a fabricated command
+  result), `leo_approve_call` (synchronously runs the pending call through the real, hard-jailed
+  `Sandbox` and appends the result to history), `leo_reject_call` (does *not* fail the task --
+  appends a real rejection notice so the model gets a genuine chance to propose something else).
+  `leo_status` now also reports a real pending call for mid-execution rehydration. **A real bug was
+  found and fixed only by running the new tests**: the first test fixture panicked with a real
+  `git2` error (`reference 'refs/heads/master' not found`) -- `spartan-leo::checkpoint::
+  create_checkpoint` needs a real base commit, and a brand-new `git2::Repository::init` has no
+  `HEAD` until one exists; every prior real checkpoint test happened to already have a commit from
+  its own setup, so this was the first to hit a genuinely commit-less repo -- fixed by having the
+  fixture create a real initial commit first. 9 new Rust unit tests (35 total in `spartan-backend`,
+  up from 26): guard conditions (no task, wrong state, already-pending); a real end-to-end
+  `leo_approve_call` against a real file on disk with exactly one real `Assistant`+`Tool` message
+  pair appended; a real rejection test confirming the target file is never touched; a real
+  path-jail-violation test confirming the sandbox still refuses an escape attempt mid-execute-loop
+  and reports it as a real, non-crashing failure rather than a protocol error; a real `leo_status`
+  pending-call round-trip test. **A real, honest live-verification limitation, consistent with this
+  project's own established practice for this exact blocker**: this session's own Ollama instance is
+  unreachable, so the model-driven half of `leo_next_step` couldn't be exercised live -- a real piped
+  -stdio smoke test against a real temp git repo confirmed `leo_start_task`'s own pre-existing
+  plan-generation path still fails fast and honestly (`Connection refused`, no hang) over the
+  identical `OllamaProvider`/`ureq` path `leo_next_step`'s own error branch depends on. `LeoChatPanel
+  .tsx` gained a real execute-loop view: approving a plan auto-triggers `leo_next_step`; every
+  proposed action renders a real card (edit_file shows the real proposed content) with Approve/
+  Reject; approving or rejecting both chain into the next `leo_next_step` call; a running log
+  accumulates each real action/result/rejection; `Done` shows the model's own real summary; Send is
+  now also disabled while Executing/Verifying to prevent a confusing mid-loop task reset. Real,
+  screenshotted Playwright verification: a full four-step sequence (plan -> approve -> approve
+  read_file -> approve edit_file -> Done) all confirmed correct. Full `cargo fmt`/`clippy`/`test
+  --workspace --release -- --test-threads=1` clean (455 tests, up from 446); `desktop`'s own
+  `typecheck`/`build` clean. **What this does not confirm**: no live model-driven execute loop
+  observed end-to-end (Ollama unreachable this session); no automated verification command; no
+  concurrent tool calls; no `Failed -> Recovering -> Executing` retry path exercised from this UI
+  (same gap §75.47 already named); no `run_terminal` call exercised live through this UI (the
+  sandbox method has no timeout, a real, named, pre-existing limitation); no real Electron window
+  launch this session (same standing gap as every prior §75.59+ pass).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1906,7 +1956,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 446 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 455 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-editor-core,

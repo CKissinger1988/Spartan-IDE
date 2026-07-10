@@ -7,10 +7,43 @@ interface LeoPlan {
   risk_notes: string;
 }
 
-type LeoState = "Idle" | "Planning" | "AwaitingApproval" | "Executing" | "Failed" | string;
+interface PendingCall {
+  call_id: string;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+interface LogEntry {
+  kind: "call" | "result" | "rejected" | "done" | "failed";
+  text: string;
+}
+
+type LeoState =
+  | "Idle"
+  | "Planning"
+  | "AwaitingApproval"
+  | "Executing"
+  | "Verifying"
+  | "Done"
+  | "Failed"
+  | "Recovering"
+  | string;
 
 interface LeoChatPanelProps {
   projectRoot: string;
+}
+
+function describeCall(call: PendingCall): string {
+  switch (call.tool) {
+    case "read_file":
+      return `Read file: ${call.args.path}`;
+    case "edit_file":
+      return `Edit file: ${call.args.path}`;
+    case "run_terminal":
+      return `Run command: ${call.args.command}`;
+    default:
+      return `${call.tool}(${JSON.stringify(call.args)})`;
+  }
 }
 
 /**
@@ -30,12 +63,35 @@ interface LeoChatPanelProps {
  * a real, unprompted `spartan:event` this panel subscribes to via
  * `window.spartan.onEvent`, since a real local-model plan call can take
  * 20-45s+ and must never block the IPC channel.
+ *
+ * Since §75.66, once a plan is approved this panel drives the real
+ * execute loop too: `requestNextStep` asks the model for the next real
+ * tool call (or `task_complete`) over the same async `Event` pattern;
+ * every real call -- `read_file`/`edit_file`/`run_terminal` -- is shown
+ * to the human and requires an explicit Approve/Reject before it
+ * actually runs (`leo_start_task` always constructs its `Agent` with
+ * `ApprovalMode::ManualEveryStep`, §9's own non-negotiable default, so
+ * there is no auto-run path to skip here).
  */
 export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.ReactElement {
   const [agentState, setAgentState] = useState<LeoState>("Idle");
   const [plan, setPlan] = useState<LeoPlan | null>(null);
   const [task, setTask] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [pendingCall, setPendingCall] = useState<PendingCall | null>(null);
+  const [thinking, setThinking] = useState(false);
+  const [log, setLog] = useState<LogEntry[]>([]);
+  const [summary, setSummary] = useState<string | null>(null);
+
+  const requestNextStep = useCallback(async () => {
+    setThinking(true);
+    try {
+      await window.spartan.call("leo_next_step");
+    } catch (e) {
+      setThinking(false);
+      setError((e as Error).message);
+    }
+  }, []);
 
   useEffect(() => {
     window.spartan
@@ -46,9 +102,12 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         // test harness) must never crash this panel -- found live via a
         // Playwright mock that didn't implement `leo_status`, exposing
         // that an undefined `state` reached `.toLowerCase()` below.
-        const r = result as { state?: LeoState; plan?: LeoPlan | null } | undefined;
+        const r = result as
+          | { state?: LeoState; plan?: LeoPlan | null; pending_call?: PendingCall | null }
+          | undefined;
         setAgentState(r?.state ?? "Idle");
         setPlan(r?.plan ?? null);
+        setPendingCall(r?.pending_call ?? null);
       })
       .catch(() => {});
   }, []);
@@ -62,6 +121,25 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
       } else if (event === "leo_plan_failed") {
         setError((data as { error: string }).error);
         setAgentState("Failed");
+      } else if (event === "leo_action_proposed") {
+        const call = data as PendingCall;
+        setThinking(false);
+        setPendingCall(call);
+        setLog((prev) => [...prev, { kind: "call", text: describeCall(call) }]);
+      } else if (event === "leo_execute_done") {
+        setThinking(false);
+        setPendingCall(null);
+        setAgentState("Done");
+        const s = (data as { summary: string }).summary;
+        setSummary(s);
+        setLog((prev) => [...prev, { kind: "done", text: s }]);
+      } else if (event === "leo_execute_failed") {
+        setThinking(false);
+        setPendingCall(null);
+        setAgentState("Failed");
+        const e = (data as { error: string }).error;
+        setError(e);
+        setLog((prev) => [...prev, { kind: "failed", text: e }]);
       }
     });
     return unsubscribe;
@@ -71,6 +149,9 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     if (!task.trim()) return;
     setError(null);
     setPlan(null);
+    setPendingCall(null);
+    setLog([]);
+    setSummary(null);
     setAgentState("Planning");
     try {
       await window.spartan.call("leo_start_task", { task, project_root: projectRoot });
@@ -84,10 +165,11 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     try {
       const result = (await window.spartan.call("leo_approve_plan")) as { state: LeoState };
       setAgentState(result.state);
+      requestNextStep();
     } catch (e) {
       setError((e as Error).message);
     }
-  }, []);
+  }, [requestNextStep]);
 
   const reject = useCallback(async () => {
     try {
@@ -99,6 +181,40 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
       setError((e as Error).message);
     }
   }, []);
+
+  const approveCall = useCallback(async () => {
+    if (!pendingCall) return;
+    try {
+      const result = (await window.spartan.call("leo_approve_call")) as {
+        ok: boolean;
+        result?: { kind: string; content?: string; path?: string; bytes?: number; stdout?: string };
+        error?: string;
+      };
+      setPendingCall(null);
+      const text = result.ok
+        ? result.result?.kind === "file_content"
+          ? `Read ${(result.result.content ?? "").length} chars`
+          : result.result?.kind === "file_written"
+            ? `Wrote ${result.result.bytes} bytes to ${result.result.path}`
+            : `Ran command (exit shown in log)`
+        : `Failed: ${result.error}`;
+      setLog((prev) => [...prev, { kind: "result", text }]);
+      requestNextStep();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [pendingCall, requestNextStep]);
+
+  const rejectCall = useCallback(async () => {
+    try {
+      await window.spartan.call("leo_reject_call");
+      setPendingCall(null);
+      setLog((prev) => [...prev, { kind: "rejected", text: "Rejected -- asking Leo to reconsider" }]);
+      requestNextStep();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [requestNextStep]);
 
   return (
     <div className="leo-panel">
@@ -147,11 +263,47 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
 
         {error && <div className="leo-error mono">{error}</div>}
 
-        {agentState === "Executing" && (
-          <div className="leo-status-message mono">
-            Plan approved -- a real checkpoint was created. No automated execute/verify loop is
-            wired yet (real, named gap: spartan-leo's own execute/verify machinery isn't driven
-            from this shell).
+        {(agentState === "Executing" || agentState === "Verifying") && (
+          <div className="leo-execute">
+            {log.length > 0 && (
+              <div className="leo-log">
+                {log.map((entry, i) => (
+                  <div key={i} className={`leo-log-entry leo-log-${entry.kind} mono`}>
+                    {entry.text}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {pendingCall && (
+              <div className="leo-pending-call">
+                <div className="leo-pending-call-desc mono">{describeCall(pendingCall)}</div>
+                {pendingCall.tool === "edit_file" && (
+                  <pre className="leo-pending-call-content mono">
+                    {String(pendingCall.args.content ?? "")}
+                  </pre>
+                )}
+                <div className="leo-plan-actions">
+                  <button className="leo-btn leo-btn-approve" onClick={approveCall}>
+                    Approve
+                  </button>
+                  <button className="leo-btn leo-btn-reject" onClick={rejectCall}>
+                    Reject
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {thinking && !pendingCall && (
+              <div className="leo-status-message mono">Leo is thinking about the next step...</div>
+            )}
+          </div>
+        )}
+
+        {agentState === "Done" && summary && (
+          <div className="leo-summary mono">
+            <span className="leo-plan-label">Done</span>
+            <p>{summary}</p>
           </div>
         )}
       </div>
@@ -168,12 +320,17 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
               submitTask();
             }
           }}
-          disabled={agentState === "Planning"}
+          disabled={agentState === "Planning" || agentState === "Executing" || agentState === "Verifying"}
         />
         <button
           className="leo-btn leo-btn-send"
           onClick={submitTask}
-          disabled={agentState === "Planning" || !task.trim()}
+          disabled={
+            agentState === "Planning" ||
+            agentState === "Executing" ||
+            agentState === "Verifying" ||
+            !task.trim()
+          }
         >
           Send
         </button>
