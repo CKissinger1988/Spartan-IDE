@@ -16,16 +16,25 @@ pub enum AppMode {
     Agent,
     Editor,
     Design,
+    /// Real integrated terminal (§75.56, user-requested: "I don't see...
+    /// a terminal") -- the fourth real mode, joining Agent/Editor/Design.
+    Terminal,
 }
 
 impl AppMode {
-    pub const ALL: [AppMode; 3] = [AppMode::Agent, AppMode::Editor, AppMode::Design];
+    pub const ALL: [AppMode; 4] = [
+        AppMode::Agent,
+        AppMode::Editor,
+        AppMode::Design,
+        AppMode::Terminal,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             AppMode::Agent => "Agent",
             AppMode::Editor => "Editor",
             AppMode::Design => "Design",
+            AppMode::Terminal => "Term",
         }
     }
 
@@ -44,6 +53,7 @@ impl AppMode {
             AppMode::Agent => None,
             AppMode::Editor => None,
             AppMode::Design => None,
+            AppMode::Terminal => None,
         }
     }
 }
@@ -56,14 +66,17 @@ pub struct ModeHit {
     pub range: std::ops::Range<usize>,
 }
 
-/// Builds the real "Agent | Editor | Design" display text plus each
-/// label's real char range, in document order.
+/// Builds the real "Agent|Editor|Design|Term" display text plus each
+/// label's real char range, in document order. A tight `|` separator (no
+/// surrounding spaces) -- real four-label room found tighter than
+/// expected once `Terminal` was added, same fix `activity_bar.rs` already
+/// needed for its own narrower row (§75.55).
 pub fn build_mode_toggle_text() -> (String, Vec<ModeHit>) {
     let mut text = String::new();
     let mut hits = Vec::with_capacity(AppMode::ALL.len());
     for (index, mode) in AppMode::ALL.iter().enumerate() {
         if index > 0 {
-            text.push_str(" | ");
+            text.push('|');
         }
         let start = text.chars().count();
         text.push_str(mode.label());
@@ -77,11 +90,16 @@ pub fn build_mode_toggle_text() -> (String, Vec<ModeHit>) {
 }
 
 /// Resolves a real click's char-column (from `TextState::hit_test_mode_toggle`)
-/// to the mode it landed on -- `None` for a click on the " | " separator
-/// between two labels.
+/// to the mode it landed on -- `None` for a click on the `|` separator
+/// between two labels. A trailing click past the last label clamps to it
+/// (same real fix `activity_bar::hit_test` needed, §75.55, for the same
+/// underlying cosmic-text `hit()` end-of-buffer clamping behavior).
 pub fn hit_test(hits: &[ModeHit], col_chars: usize) -> Option<AppMode> {
-    hits.iter()
-        .find(|hit| hit.range.contains(&col_chars))
+    if let Some(hit) = hits.iter().find(|hit| hit.range.contains(&col_chars)) {
+        return Some(hit.mode);
+    }
+    hits.last()
+        .filter(|hit| col_chars >= hit.range.end)
         .map(|hit| hit.mode)
 }
 
@@ -92,7 +110,7 @@ mod tests {
     #[test]
     fn build_mode_toggle_text_produces_the_expected_real_string() {
         let (text, _) = build_mode_toggle_text();
-        assert_eq!(text, "Agent | Editor | Design");
+        assert_eq!(text, "Agent|Editor|Design|Term");
     }
 
     #[test]
@@ -112,26 +130,37 @@ mod tests {
     fn hit_test_resolves_a_click_inside_each_real_label() {
         let (_, hits) = build_mode_toggle_text();
         assert_eq!(hit_test(&hits, 0), Some(AppMode::Agent));
-        assert_eq!(hit_test(&hits, 8), Some(AppMode::Editor));
-        assert_eq!(hit_test(&hits, 17), Some(AppMode::Design));
+        assert_eq!(hit_test(&hits, 6), Some(AppMode::Editor));
+        assert_eq!(hit_test(&hits, 13), Some(AppMode::Design));
+        assert_eq!(hit_test(&hits, 20), Some(AppMode::Terminal));
     }
 
     #[test]
     fn hit_test_on_the_separator_between_labels_resolves_to_none() {
         let (_, hits) = build_mode_toggle_text();
-        // "Agent | Editor | Design"
-        //  0123456
-        // index 6 is inside " | " between Agent (0..5) and Editor (8..14).
-        assert_eq!(hit_test(&hits, 6), None);
+        // "Agent|Editor|Design|Term"
+        //  0123456789...
+        // index 5 is the '|' separator between Agent (0..5) and Editor (6..12).
+        assert_eq!(hit_test(&hits, 5), None);
+    }
+
+    #[test]
+    fn hit_test_clamps_a_trailing_click_to_the_last_label() {
+        let (text, hits) = build_mode_toggle_text();
+        let past_end = text.chars().count();
+        assert_eq!(hit_test(&hits, past_end), Some(AppMode::Terminal));
+        assert_eq!(hit_test(&hits, past_end + 5), Some(AppMode::Terminal));
     }
 
     #[test]
     fn no_mode_has_a_placeholder_message_anymore() {
         // Editor always had real content; Design gained a real embedded
         // WebView in §75.39/task #12; Agent gained real Leo UI wiring in
-        // §75.47/task #5 -- every mode now shows real content.
+        // §75.47/task #5; Terminal gained a real PTY in §75.56 -- every
+        // mode now shows real content.
         assert!(AppMode::Editor.placeholder_message().is_none());
         assert!(AppMode::Design.placeholder_message().is_none());
         assert!(AppMode::Agent.placeholder_message().is_none());
+        assert!(AppMode::Terminal.placeholder_message().is_none());
     }
 }

@@ -8,6 +8,7 @@
 pub mod agent;
 pub mod approval;
 pub mod checkpoint;
+pub mod execute;
 pub mod memory;
 pub mod plan;
 pub mod state;
@@ -15,6 +16,7 @@ pub mod tool;
 
 pub use agent::{Agent, AgentError};
 pub use approval::{may_auto_execute, ApprovalMode, RiskClass};
+pub use execute::{append_tool_result, next_action, ExecuteAction, ExecuteError, ExecuteStep};
 pub use plan::{generate_plan, ImplementationPlan, PlanError};
 pub use state::AgentState;
 pub use tool::{Sandbox, SandboxError, ToolCall, ToolResult};

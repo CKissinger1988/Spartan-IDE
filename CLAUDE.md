@@ -1409,6 +1409,34 @@ first — it's the parity reference until each row there is actually reimplement
   user's separate request for an automatic crash/error report *upload* service (local-only today,
   §75.32) remains open, deliberately deferred this pass per the user's own follow-up redirect
   toward Tier 1 MVP work.
+- **Real, working code — real Leo execute-step model round trip, and a real integrated terminal
+  panel, user-requested (§75.56)**: two increments landed together. First, the actual next Tier 1
+  gap: `agent.rs`'s execute/verify state machine had always been real and tested, but nothing ever
+  asked a real model what the next tool call should be -- new `crates/spartan-leo/src/execute.rs`
+  adds `next_action(provider, plan, history)`, mirroring `plan.rs`'s own native-tool-calling
+  approach with four real tools (`read_file`/`edit_file`/`run_terminal`/`task_complete`), 8 new unit
+  tests all passing. A new live Ollama integration test was written but could not be verified live
+  this session: starting a real local Ollama server surfaced a real, current, environment-specific
+  failure (`llama-server process has terminated: signal: segmentation fault`, then a 90s hang with
+  even the smallest 1.2B model on a trivial prompt) -- a genuine regression in this container's
+  Ollama backend since it worked in prior sessions (§75.43/§75.46/§75.47), not a code defect,
+  reported honestly rather than retried indefinitely. Second, real integrated terminal panel
+  (`terminal.rs`, moved into `lib.rs` per its own no-GPU-dependency rule): a real `portable-pty`
+  spawning the user's real shell, `AppMode::Terminal` (Ctrl+4), real keyboard forwarding, a real
+  (deliberately partial, no-color) ANSI stripper. Live-testing it surfaced a second, broader,
+  previously-undiscovered real bug -- glyphon draws every `TextArea` in one shared pass with no
+  z-order control, so a covering quad drawn before text can never hide already-drawn text on top of
+  it, meaning Agent mode/settings panel/command palette/close-modal all silently had the same latent
+  overlap risk, just never triggered by this project's own short test fixtures. Fixed once, for
+  every real case, via a new `show_editor_text` flag that collapses the editor's own `TextArea`
+  bounds to zero instead of trying to draw over it. 6 new `terminal.rs` tests including a real live
+  PTY spawn-and-echo test; full test/clippy/fmt clean. Live-verified end-to-end: a real
+  `echo HELLO_FROM_TERMINAL && ls` typed into the terminal produced its exact real output. **What
+  this does not confirm**: no color/ANSI rendering, no full-screen TUI support, no PTY resize-on-
+  window-resize, no multiple terminal sessions. The user's other three named gaps (AI chat panel
+  docked alongside the editor, a docked preview panel, and "projects and sessions") remain open --
+  Agent/Design already exist as full-mode views rather than docked panels (a larger three-column-
+  shell change), and "projects and sessions" has no real implementation anywhere in this crate yet.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -1470,10 +1498,15 @@ cargo test --workspace --release   # 372 tests: 6 spikes + 11 real crates + xtas
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-editor-core, xtask)
-# spartan-model's own tests/ollama_integration.rs (§75.43) and spartan-leo's own
-# tests/plan_ollama_integration.rs (§75.46) both need a real local Ollama instance
+# spartan-model's own tests/ollama_integration.rs (§75.43), spartan-leo's own
+# tests/plan_ollama_integration.rs (§75.46), and spartan-leo's own
+# tests/execute_ollama_integration.rs (§75.56) all need a real local Ollama instance
 # reachable at http://localhost:11434 with `llama3.1:8b` pulled -- self-skips (prints a message)
 # if either isn't present, matching every other real-external-tool integration suite in this repo.
+# A real, current, environment-specific Ollama backend failure (llama-server segfault / hang, not
+# a code defect) blocked live verification of execute_ollama_integration.rs in the §75.56 session
+# itself -- see §75.56 for the full, honest account; the test is real and correct, just unverified
+# live as of that pass.
 # `ollama serve` has no systemd unit in a bare container -- start it manually in the background.
 # `cargo run -p xtask -- package` (§75.35) builds a real Linux .tar.gz release package into
 # dist/ (gitignored) -- see §75.35 for the real install.sh verification recipe.

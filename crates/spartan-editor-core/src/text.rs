@@ -61,6 +61,11 @@ pub struct TextState {
     /// -- a seventh, independent cosmic-text `Buffer`. One real line,
     /// `Wrap::None`, spanning the full window width along the bottom edge.
     pub status_bar_buffer: Buffer,
+    /// Real integrated terminal scrollback text (§75.56) -- an eighth,
+    /// independent cosmic-text `Buffer`, positioned and clipped identically
+    /// to the main editor `buffer` (same content-area region), shown
+    /// instead of it while `AppMode::Terminal` is active.
+    pub terminal_buffer: Buffer,
     /// Real tab bar horizontal scroll (§75.28, the overflow half of task
     /// #25) -- the pixel offset the tab bar's rendered text and
     /// hit-testing are both shifted by, so tabs beyond the visible strip's
@@ -120,11 +125,14 @@ pub const SIDEBAR_TEXT_LEFT: f32 = 8.0;
 pub const ACTIVITY_ROW_HEIGHT: f32 = 40.0;
 pub const SIDEBAR_TEXT_TOP: f32 = 8.0 + ACTIVITY_ROW_HEIGHT;
 
-/// Real Agent/Editor/Design mode toggle strip width (§8, §16.1, task #3),
-/// carved out of the tab bar row's own right edge -- the tab bar's own
-/// clip bounds narrow by this much so a long tab label can never render
-/// underneath it.
-pub const MODE_TOGGLE_WIDTH: f32 = 200.0;
+/// Real Agent/Editor/Design/Terminal mode toggle strip width (§8, §16.1,
+/// task #3), carved out of the tab bar row's own right edge -- the tab
+/// bar's own clip bounds narrow by this much so a long tab label can
+/// never render underneath it. Widened from `200.0` when `Terminal`
+/// became a real fourth mode (§75.56) -- real headroom against the exact
+/// clipping bug `activity_bar.rs` already hit once (§75.55) for a
+/// similarly narrow row, not just a guess.
+pub const MODE_TOGGLE_WIDTH: f32 = 260.0;
 
 /// Real status bar height (§75.57), reserved along the bottom edge of the
 /// window -- line:col, language, git branch, and LSP/DAP session state,
@@ -229,6 +237,14 @@ impl TextState {
         status_bar_buffer.set_size(&mut font_system, width, STATUS_BAR_HEIGHT);
         status_bar_buffer.set_wrap(&mut font_system, Wrap::None);
 
+        // Real §75.56 integrated terminal -- same full-content-area shape
+        // as `buffer` (the main editor), real word-wrap left on (terminal
+        // output has no per-line windowing the way document text does, so
+        // long lines should wrap rather than silently extend off-screen).
+        let mut terminal_buffer =
+            Buffer::new(&mut font_system, Metrics::new(FONT_SIZE, LINE_HEIGHT));
+        terminal_buffer.set_size(&mut font_system, width, height);
+
         Self {
             font_system,
             swash_cache,
@@ -241,6 +257,7 @@ impl TextState {
             mode_toggle_buffer,
             activity_bar_buffer,
             status_bar_buffer,
+            terminal_buffer,
             tab_bar_scroll: 0.0,
         }
     }
@@ -436,6 +453,22 @@ impl TextState {
             .shape_until_scroll(&mut self.font_system);
     }
 
+    /// Replaces the terminal panel's entire content (§75.56) -- always a
+    /// full reshape of whatever scrollback text `TerminalPanel::
+    /// display_text` currently holds, the same "just re-set the whole
+    /// buffer" shape `set_modal_text` already uses for other non-windowed
+    /// content.
+    pub fn set_terminal_text(&mut self, text: &str) {
+        self.terminal_buffer.set_text(
+            &mut self.font_system,
+            text,
+            Attrs::new().family(Family::Monospace),
+            Shaping::Advanced,
+        );
+        self.terminal_buffer
+            .shape_until_scroll(&mut self.font_system);
+    }
+
     /// Replaces the buffer's entire content -- a full reshape, but of
     /// whatever text the caller gives it. When the caller passes a windowed
     /// slice (the normal case, see `main.rs`), this is cheap regardless of
@@ -537,13 +570,41 @@ impl TextState {
         // `TAB_BAR_HEIGHT`) regardless of window size -- no resize needed.
     }
 
+    /// `show_editor_text`: real fix for a real bug found live (§75.56,
+    /// not by inspection) -- Agent/Terminal mode both draw real content
+    /// into a different buffer occupying this exact same screen region,
+    /// and glyphon's `TextRenderer` draws every `TextArea` in one shared
+    /// pass with no z-order control between them (quads-before-text
+    /// ordering only controls quads vs. text, not text vs. text), so a
+    /// covering *quad* can never hide already-drawn text underneath it.
+    /// The only real fix is to not submit the editor's own `TextArea` at
+    /// all while something else owns this region -- collapsing its
+    /// `bounds` to zero width does that without touching `self.buffer`'s
+    /// own shaped content, so switching back to Editor mode needs no
+    /// re-shape to restore it.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         width: u32,
         height: u32,
+        show_editor_text: bool,
     ) -> Result<(), glyphon::PrepareError> {
+        let editor_bounds = if show_editor_text {
+            TextBounds {
+                left: 0,
+                top: TAB_BAR_HEIGHT as i32,
+                right: width as i32,
+                bottom: height as i32,
+            }
+        } else {
+            TextBounds {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            }
+        };
         self.renderer.prepare(
             device,
             queue,
@@ -556,12 +617,7 @@ impl TextState {
                     left: TEXT_ORIGIN_X,
                     top: TEXT_ORIGIN_Y,
                     scale: 1.0,
-                    bounds: TextBounds {
-                        left: 0,
-                        top: TAB_BAR_HEIGHT as i32,
-                        right: width as i32,
-                        bottom: height as i32,
-                    },
+                    bounds: editor_bounds,
                     default_color: crate::theme::TEXT,
                 },
                 TextArea {
@@ -679,6 +735,25 @@ impl TextState {
                         bottom: height as i32,
                     },
                     default_color: crate::theme::TEXT_DIM,
+                },
+                // Real integrated terminal text (§75.56) -- same region
+                // the main editor `buffer` occupies, shown instead of it
+                // while `AppMode::Terminal` is active (empty text
+                // otherwise shapes to zero glyphs, the same "no separate
+                // on/off flag" pattern every other optional buffer here
+                // already uses).
+                TextArea {
+                    buffer: &self.terminal_buffer,
+                    left: TEXT_ORIGIN_X,
+                    top: TEXT_ORIGIN_Y,
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: 0,
+                        top: TAB_BAR_HEIGHT as i32,
+                        right: width as i32,
+                        bottom: (height as f32 - STATUS_BAR_HEIGHT) as i32,
+                    },
+                    default_color: crate::theme::TEXT,
                 },
             ],
             &mut self.swash_cache,

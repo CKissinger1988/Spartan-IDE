@@ -33,6 +33,21 @@ pub const BG_LINEAR: wgpu::Color = wgpu::Color {
     a: 1.0,
 };
 
+/// The same `bg` token as `BG_LINEAR`, as a plain `[f32; 4]` for
+/// `SelectionRenderer`'s per-vertex color attribute rather than
+/// `wgpu::Color` (only usable as a render-pass clear value). Real bug
+/// found live (§75.56, not by inspection): Agent/Terminal/Settings modes
+/// all draw their own real content into `modal_buffer`/`terminal_buffer`
+/// at the *same* screen region the main editor `buffer` occupies, with no
+/// covering rect between them -- previously invisible only because every
+/// test fixture used in this crate's own live verification happened to be
+/// short enough that the editor's own text never physically overlapped
+/// the other buffer's glyphs. A real opaque cover (not `MODAL_DIM_COLOR`'s
+/// translucent 0.6 alpha, which is correct for an actual dialog-over-
+/// content modal) is the fix for a full mode swap, which should hide the
+/// editor entirely, not dim it.
+pub const OPAQUE_MODE_COVER: [f32; 4] = [0.002732, 0.002732, 0.003347, 1.0];
+
 /// `#18181B` (the prototype's own `s2` token) -- the sidebar's and tab
 /// bar's real background, a distinct, slightly lighter surface sitting
 /// visually "above" the darker editor content area underneath it. This is

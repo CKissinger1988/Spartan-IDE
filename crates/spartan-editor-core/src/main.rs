@@ -1,4 +1,3 @@
-mod activity_bar;
 mod cursor;
 mod fixture;
 mod glow_rect;
@@ -15,9 +14,9 @@ use mode_toggle::AppMode;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use spartan_editor_core::viewport::{self, Viewport};
 use spartan_editor_core::{
-    accessibility, agent_panel, build, command_palette, dap_session, editor_view, file_tree,
-    git_panel, gui_bridge, highlight, language, leo_bridge, lsp, lsp_session, mode_toggle,
-    settings_panel, tab_bar, update_bridge,
+    accessibility, activity_bar, agent_panel, build, command_palette, dap_session, editor_view,
+    file_tree, git_panel, gui_bridge, highlight, language, leo_bridge, lsp, lsp_session,
+    mode_toggle, settings_panel, tab_bar, terminal, update_bridge,
 };
 
 use std::path::{Path, PathBuf};
@@ -889,6 +888,11 @@ fn main() {
     // Real §75.56 activity bar hit-ranges, rebuilt every frame just like
     // `mode_hits` above.
     let mut activity_hits: Vec<activity_bar::ActivityHit> = Vec::new();
+    // Real integrated terminal (§75.56) -- lazily spawned the first time
+    // `AppMode::Terminal` is entered (matching Design mode's own lazy
+    // WebView creation, §75.39), not at cold-open, since most sessions
+    // may never open it.
+    let mut terminal_panel: Option<terminal::TerminalPanel> = None;
 
     // Real, scoped command palette (§16.1, task #3) -- `None` is the
     // ordinary closed state. `all_entries` (the static commands plus a
@@ -2353,22 +2357,33 @@ fn main() {
                                 PhysicalKey::Code(KeyCode::Digit1)
                                     | PhysicalKey::Code(KeyCode::Digit2)
                                     | PhysicalKey::Code(KeyCode::Digit3)
+                                    | PhysicalKey::Code(KeyCode::Digit4)
                             ) =>
                         {
-                            // Ctrl+1/2/3: real Agent/Editor/Design mode
-                            // switching (§8, §16.1, task #3) -- checked
-                            // before the "swallow everything while
-                            // non-Editor" arm just below, so mode-switch
-                            // keys always work regardless of the current
-                            // mode, the same way Escape always works to
-                            // close a modal regardless of what's on
-                            // screen behind it.
+                            // Ctrl+1/2/3/4: real Agent/Editor/Design/
+                            // Terminal mode switching (§8, §16.1, task #3;
+                            // Terminal added §75.56) -- checked before the
+                            // "swallow everything while non-Editor" arm
+                            // just below, so mode-switch keys always work
+                            // regardless of the current mode, the same way
+                            // Escape always works to close a modal
+                            // regardless of what's on screen behind it.
                             mode = match key_event.physical_key {
                                 PhysicalKey::Code(KeyCode::Digit1) => AppMode::Agent,
                                 PhysicalKey::Code(KeyCode::Digit2) => AppMode::Editor,
                                 PhysicalKey::Code(KeyCode::Digit3) => AppMode::Design,
+                                PhysicalKey::Code(KeyCode::Digit4) => AppMode::Terminal,
                                 _ => unreachable!(),
                             };
+                            if mode == AppMode::Terminal && terminal_panel.is_none() {
+                                let cwd = files[active]
+                                    .label
+                                    .parse::<PathBuf>()
+                                    .ok()
+                                    .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                                    .unwrap_or_else(|| PathBuf::from("."));
+                                terminal_panel = terminal::TerminalPanel::spawn(&cwd, 120, 40).ok();
+                            }
                             sync_webview_for_mode(
                                 &mut webview_bridge,
                                 &mut component_tree_request,
@@ -2519,6 +2534,53 @@ fn main() {
                                         }
                                     }
                                 }
+                            }
+                        }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                key_event @ KeyEvent {
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } if pending_close.is_none()
+                            && commit_message.is_none()
+                            && command_palette_state.is_none()
+                            && settings_state.is_none()
+                            && mode == AppMode::Terminal =>
+                        {
+                            // Real integrated terminal input (§75.56) --
+                            // checked before the generic "swallow
+                            // everything while non-Editor" arm just below,
+                            // same real per-mode input pattern Agent mode
+                            // already established. Forwards real bytes to
+                            // the real PTY's stdin; the PTY's own line
+                            // discipline (cooked mode) handles backspace/
+                            // echo, so this crate does not reimplement any
+                            // shell line-editing itself.
+                            if let Some(panel) = terminal_panel.as_mut() {
+                                match &key_event.logical_key {
+                                    Key::Named(NamedKey::Enter) => panel.send_input(b"\r"),
+                                    Key::Named(NamedKey::Backspace) => panel.send_input(&[0x7f]),
+                                    Key::Named(NamedKey::Tab) => panel.send_input(b"\t"),
+                                    Key::Named(NamedKey::ArrowUp) => panel.send_input(b"\x1b[A"),
+                                    Key::Named(NamedKey::ArrowDown) => panel.send_input(b"\x1b[B"),
+                                    Key::Named(NamedKey::ArrowRight) => panel.send_input(b"\x1b[C"),
+                                    Key::Named(NamedKey::ArrowLeft) => panel.send_input(b"\x1b[D"),
+                                    _ => {
+                                        if modifiers.control_key()
+                                            && key_event.physical_key
+                                                == PhysicalKey::Code(KeyCode::KeyC)
+                                        {
+                                            panel.send_input(&[0x03]);
+                                        } else if let Some(text) = &key_event.text {
+                                            if !text.is_empty() {
+                                                panel.send_input(text.as_bytes());
+                                            }
+                                        }
+                                    }
+                                }
+                                window.request_redraw();
                             }
                         }
                         WindowEvent::KeyboardInput {
@@ -3154,6 +3216,13 @@ fn main() {
                                 // the same way the commit modal and (before
                                 // it) the mode placeholder already did.
                                 agent_panel::build_panel_text(&agent_panel_state)
+                            } else if mode == AppMode::Terminal {
+                                // Real Terminal mode (§75.56) -- unlike
+                                // Agent, this gets its own dedicated
+                                // `terminal_buffer` (below), so the shared
+                                // modal buffer stays empty while it's
+                                // active.
+                                String::new()
                             } else if let Some(placeholder) = mode.placeholder_message() {
                                 // Real Design mode placeholder, if any (§8,
                                 // task #3/#12) -- currently always `None`
@@ -3165,6 +3234,27 @@ fn main() {
                                 String::new()
                             };
                             text_state.set_modal_text(&modal_text);
+
+                            // Real integrated terminal text (§75.56) --
+                            // polls the real PTY's background reader
+                            // thread for any new output (non-blocking,
+                            // matching every other real background-thread
+                            // bridge in this crate) and rebuilds the
+                            // terminal buffer's content whenever anything
+                            // changed. Cleared to empty whenever the panel
+                            // hasn't been spawned yet (never entered
+                            // Terminal mode this session) or Terminal mode
+                            // isn't currently active, the same "no
+                            // separate on/off flag" pattern every other
+                            // optional buffer here already uses.
+                            if mode == AppMode::Terminal {
+                                if let Some(panel) = terminal_panel.as_mut() {
+                                    panel.poll();
+                                    text_state.set_terminal_text(&panel.display_text());
+                                }
+                            } else {
+                                text_state.set_terminal_text("");
+                            }
 
                             // Real mode toggle text (§8, §16.1, task #3),
                             // rebuilt every frame just like the tab bar's
@@ -3253,12 +3343,33 @@ fn main() {
                             );
                             text_state.set_status_bar_text(&status_text);
 
+                            // Real fix (§75.56, found live) for a real bug
+                            // that predates this pass: glyphon draws every
+                            // `TextArea` (editor, modal, terminal, ...) in
+                            // one shared pass with no z-order between them,
+                            // so a covering quad -- including
+                            // `MODAL_DIM_COLOR`'s own dim overlay -- can
+                            // only ever dim the *background* behind text,
+                            // never the editor's own already-drawn glyphs.
+                            // Applies uniformly to every real case that
+                            // shows content in place of the editor (Agent/
+                            // Terminal mode, the close-confirmation modal,
+                            // the commit-message modal, the command
+                            // palette, the settings panel) -- see
+                            // `TextState::prepare`'s own doc comment for
+                            // the mechanism.
+                            let show_editor_text = mode == AppMode::Editor
+                                && pending_close.is_none()
+                                && commit_message.is_none()
+                                && command_palette_state.is_none()
+                                && settings_state.is_none();
                             text_state
                                 .prepare(
                                     &gpu_state.device,
                                     &gpu_state.queue,
                                     gpu_state.size.width,
                                     gpu_state.size.height,
+                                    show_editor_text,
                                 )
                                 .expect("glyphon text prepare failed");
 
@@ -3609,17 +3720,22 @@ fn main() {
                             );
 
                             // Real unsaved-changes modal dim overlay
-                            // (§75.23) -- a single full-window rect when a
-                            // modal is up, none otherwise. Text (both the
-                            // editor's own and the modal's) still draws on
-                            // top of this in the same text pass, the same
-                            // "quads before text" ordering `selection_rects`
-                            // above already relies on.
+                            // (§75.23) for a true dialog-over-content
+                            // modal, vs. a real *opaque* cover (§75.56,
+                            // `theme::OPAQUE_MODE_COVER` -- see its own doc
+                            // comment for the real overlap bug this fixes)
+                            // for a full mode swap that should hide the
+                            // editor entirely rather than just dim it.
+                            // Text (the editor's own, the modal's, and the
+                            // terminal's) still draws on top of this in the
+                            // same text pass, the same "quads before text"
+                            // ordering `selection_rects` above already
+                            // relies on.
                             let modal_rects: Vec<selection::SelectionRect> =
                                 if pending_close.is_some()
                                     || commit_message.is_some()
                                     || command_palette_state.is_some()
-                                    || mode.placeholder_message().is_some()
+                                    || settings_state.is_some()
                                 {
                                     vec![selection::SelectionRect {
                                         x: 0.0,
@@ -3627,6 +3743,24 @@ fn main() {
                                         width: gpu_state.size.width as f32,
                                         height: gpu_state.size.height as f32,
                                         color: MODAL_DIM_COLOR,
+                                    }]
+                                } else if mode == AppMode::Agent || mode == AppMode::Terminal {
+                                    // Covers only the content area (right
+                                    // of the sidebar, below the tab bar) --
+                                    // the sidebar and tab bar/mode toggle
+                                    // stay real and usable while Agent/
+                                    // Terminal mode is active, matching
+                                    // what the earlier live screenshot
+                                    // already showed working correctly.
+                                    vec![selection::SelectionRect {
+                                        x: text::SIDEBAR_WIDTH,
+                                        y: text::TAB_BAR_HEIGHT,
+                                        width: (gpu_state.size.width as f32 - text::SIDEBAR_WIDTH)
+                                            .max(0.0),
+                                        height: (gpu_state.size.height as f32
+                                            - text::TAB_BAR_HEIGHT)
+                                            .max(0.0),
+                                        color: theme::OPAQUE_MODE_COVER,
                                     }]
                                 } else {
                                     Vec::new()
