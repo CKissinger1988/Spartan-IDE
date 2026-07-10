@@ -605,6 +605,27 @@ fn find_open_file_index(files: &[OpenFile], path: &Path) -> Option<usize> {
 /// time in this crate (§75.16), a real unsaved-changes indicator -- the
 /// only user-visible signal of dirty state that exists anywhere yet, since
 /// no tab bar (task #16) has been built.
+/// Real hover glow rect (task #32) -- a subtle, low-alpha accent pill,
+/// deliberately dimmer than the active-item pills (`0.08`/`0.25` vs. their
+/// `0.16`/`0.55`) so hovering never competes visually with "this is the
+/// selected/active one," only signals "this is clickable."
+fn hover_glow_rect(x: f32, y: f32, width: f32, height: f32) -> glow_rect::GlowRect {
+    glow_rect::GlowRect {
+        x,
+        y,
+        width,
+        height,
+        radius: glow_rect::CORNER_RADIUS_PX,
+        color: [
+            selection::ACCENT_SOLID[0],
+            selection::ACCENT_SOLID[1],
+            selection::ACCENT_SOLID[2],
+            0.14,
+        ],
+        glow_strength: 0.35,
+    }
+}
+
 fn window_title(file: &OpenFile) -> String {
     if file.dirty {
         format!("Spartan editor-core — {} *", file.label)
@@ -1168,6 +1189,18 @@ fn main() {
     // above, sharing the same per-frame `alpha` computed from real
     // delta-time.
     let mut mode_toggle_anim: Option<(f32, f32)> = None;
+    // Real hover glow, closing task #32 -- four real eased targets (x,
+    // width), one per real hoverable chrome row (tab bar, mode toggle,
+    // activity bar), plus a real eased y for the sidebar's own row
+    // highlight (file tree / Source Control panel rows share one buffer,
+    // so one target serves both). Resolved fresh every real frame from
+    // `last_cursor_pos` against the same hit-test data the click handlers
+    // above already use -- no separate mouse-move-tracked state machine,
+    // matching `tab_target`/`mode_target`'s own established pattern below.
+    let mut tab_hover_anim: Option<(f32, f32)> = None;
+    let mut mode_hover_anim: Option<(f32, f32)> = None;
+    let mut activity_hover_anim: Option<(f32, f32)> = None;
+    let mut sidebar_hover_anim: Option<f32> = None;
     let mut last_anim_instant = Instant::now();
     // Tracked from `WindowEvent::ModifiersChanged` so Ctrl+Tab (next file)
     // and Ctrl+Shift+Tab (previous file) can be detected in the
@@ -3764,6 +3797,154 @@ fn main() {
                                 (Some(target), None) => mode_toggle_anim = Some(target),
                                 (None, _) => mode_toggle_anim = None,
                             }
+
+                            // Real hover glow targets (task #32) -- gated
+                            // the same way every click handler above
+                            // already gates itself against an open modal/
+                            // dialog, so hovering never lights up a chrome
+                            // row that's currently unclickable underneath
+                            // one. Each target is filtered to exclude
+                            // whichever item is already the row's *active*
+                            // one -- that item already shows its own
+                            // accent pill, so a second hover glow under it
+                            // would just look like a rendering bug.
+                            let no_modal_open = pending_close.is_none()
+                                && commit_message.is_none()
+                                && command_palette_state.is_none()
+                                && settings_state.is_none();
+                            let tab_hover_target: Option<(f32, f32)> = if no_modal_open
+                                && last_cursor_pos.0 >= text::SIDEBAR_WIDTH
+                                && last_cursor_pos.0 < window_w - text::MODE_TOGGLE_WIDTH
+                                && last_cursor_pos.1 < text::TAB_BAR_HEIGHT
+                            {
+                                let local_x = last_cursor_pos.0 - text::TEXT_ORIGIN_X
+                                    + text_state.tab_bar_scroll();
+                                let local_y = last_cursor_pos.1 - text::TAB_BAR_TEXT_TOP;
+                                text_state
+                                    .hit_test_tab_bar(local_x, local_y)
+                                    .and_then(|char_index| {
+                                        tab_bar::hit_test_tab_bar(&tab_hits, char_index)
+                                    })
+                                    .filter(|(file_index, _)| *file_index != active)
+                                    .and_then(|(file_index, _)| {
+                                        tab_hits.iter().find(|h| h.file_index == file_index)
+                                    })
+                                    .and_then(|hit| {
+                                        let x_start =
+                                            text_state.tab_bar_pixel_pos(hit.tab_range.start)?;
+                                        let x_end =
+                                            text_state.tab_bar_pixel_pos(hit.tab_range.end)?;
+                                        let scroll = text_state.tab_bar_scroll();
+                                        Some((
+                                            text::TEXT_ORIGIN_X + x_start - scroll,
+                                            x_end - x_start,
+                                        ))
+                                    })
+                            } else {
+                                None
+                            };
+                            let mode_hover_target: Option<(f32, f32)> = if no_modal_open
+                                && last_cursor_pos.0 >= mode_toggle_left
+                                && last_cursor_pos.0 < window_w
+                                && last_cursor_pos.1 < text::TAB_BAR_HEIGHT
+                            {
+                                let local_x = last_cursor_pos.0 - mode_toggle_left;
+                                let local_y = last_cursor_pos.1 - text::TAB_BAR_TEXT_TOP;
+                                text_state
+                                    .hit_test_mode_toggle(local_x, local_y)
+                                    .and_then(|col| mode_toggle::hit_test(&mode_hits, col))
+                                    .filter(|hovered_mode| *hovered_mode != mode)
+                                    .and_then(|hovered_mode| {
+                                        mode_hits.iter().find(|h| h.mode == hovered_mode)
+                                    })
+                                    .and_then(|hit| {
+                                        let x_start =
+                                            text_state.mode_toggle_pixel_pos(hit.range.start)?;
+                                        let x_end =
+                                            text_state.mode_toggle_pixel_pos(hit.range.end)?;
+                                        Some((mode_toggle_left + x_start, x_end - x_start))
+                                    })
+                            } else {
+                                None
+                            };
+                            let activity_hover_target: Option<(f32, f32)> = if no_modal_open
+                                && last_cursor_pos.0 < text::SIDEBAR_WIDTH
+                                && last_cursor_pos.1 < text::ACTIVITY_ROW_HEIGHT
+                            {
+                                let local_x = last_cursor_pos.0 - text::SIDEBAR_TEXT_LEFT;
+                                let local_y = last_cursor_pos.1 - 8.0;
+                                text_state
+                                    .hit_test_activity_bar(local_x, local_y)
+                                    .and_then(|col| activity_bar::hit_test(&activity_hits, col))
+                                    .filter(|hovered_id| {
+                                        !matches!(
+                                            (hovered_id, sidebar_mode),
+                                            (
+                                                activity_bar::ActivityId::Explorer,
+                                                SidebarMode::FileTree
+                                            ) | (
+                                                activity_bar::ActivityId::SourceControl,
+                                                SidebarMode::SourceControl
+                                            )
+                                        )
+                                    })
+                                    .and_then(|hovered_id| {
+                                        activity_hits.iter().find(|h| h.id == hovered_id)
+                                    })
+                                    .and_then(|hit| {
+                                        let x_start =
+                                            text_state.activity_bar_pixel_pos(hit.range.start)?;
+                                        let x_end =
+                                            text_state.activity_bar_pixel_pos(hit.range.end)?;
+                                        Some((text::SIDEBAR_TEXT_LEFT + x_start, x_end - x_start))
+                                    })
+                            } else {
+                                None
+                            };
+                            let sidebar_hover_target: Option<f32> = if no_modal_open
+                                && last_cursor_pos.0 < text::SIDEBAR_WIDTH
+                                && last_cursor_pos.1 >= text::ACTIVITY_ROW_HEIGHT
+                            {
+                                let local_x = last_cursor_pos.0 - text::SIDEBAR_TEXT_LEFT;
+                                let local_y = last_cursor_pos.1 - text::SIDEBAR_TEXT_TOP;
+                                text_state.hit_test_sidebar(local_x, local_y).map(|row| {
+                                    text::SIDEBAR_TEXT_TOP + row as f32 * text::TAB_BAR_LINE_HEIGHT
+                                })
+                            } else {
+                                None
+                            };
+                            match (tab_hover_target, &mut tab_hover_anim) {
+                                (Some((tx, tw)), Some((cx, cw))) => {
+                                    *cx += (tx - *cx) * alpha;
+                                    *cw += (tw - *cw) * alpha;
+                                }
+                                (Some(target), None) => tab_hover_anim = Some(target),
+                                (None, _) => tab_hover_anim = None,
+                            }
+                            match (mode_hover_target, &mut mode_hover_anim) {
+                                (Some((tx, tw)), Some((cx, cw))) => {
+                                    *cx += (tx - *cx) * alpha;
+                                    *cw += (tw - *cw) * alpha;
+                                }
+                                (Some(target), None) => mode_hover_anim = Some(target),
+                                (None, _) => mode_hover_anim = None,
+                            }
+                            match (activity_hover_target, &mut activity_hover_anim) {
+                                (Some((tx, tw)), Some((cx, cw))) => {
+                                    *cx += (tx - *cx) * alpha;
+                                    *cw += (tw - *cw) * alpha;
+                                }
+                                (Some(target), None) => activity_hover_anim = Some(target),
+                                (None, _) => activity_hover_anim = None,
+                            }
+                            match (sidebar_hover_target, &mut sidebar_hover_anim) {
+                                (Some(ty), Some(cy)) => {
+                                    *cy += (ty - *cy) * alpha;
+                                }
+                                (Some(target), None) => sidebar_hover_anim = Some(target),
+                                (None, _) => sidebar_hover_anim = None,
+                            }
+
                             let active_tab_rects: Vec<glow_rect::GlowRect> = tab_underline_anim
                                 .into_iter()
                                 .flat_map(|(x, width)| {
@@ -3870,6 +4051,26 @@ fn main() {
                                             })
                                         }),
                                 )
+                                .chain(tab_hover_anim.into_iter().map(|(x, width)| {
+                                    hover_glow_rect(x, 3.0, width, text::TAB_BAR_HEIGHT - 6.0)
+                                }))
+                                .chain(mode_hover_anim.into_iter().map(|(x, width)| {
+                                    hover_glow_rect(x, 3.0, width, text::TAB_BAR_HEIGHT - 6.0)
+                                }))
+                                .chain(activity_hover_anim.into_iter().map(|(x, width)| {
+                                    hover_glow_rect(x, 5.0, width, text::ACTIVITY_ROW_HEIGHT - 10.0)
+                                }))
+                                .chain(sidebar_hover_anim.into_iter().map(|y| {
+                                    glow_rect::GlowRect {
+                                        x: 2.0,
+                                        y,
+                                        width: text::SIDEBAR_WIDTH - 4.0,
+                                        height: text::TAB_BAR_LINE_HEIGHT,
+                                        radius: glow_rect::CORNER_RADIUS_PX * 0.6,
+                                        color: [1.0, 1.0, 1.0, 0.05],
+                                        glow_strength: 0.0,
+                                    }
+                                }))
                                 .collect();
 
                             // Real workflow canvas node/edge rects
