@@ -5,8 +5,11 @@ interface GpuOffloadSettings {
   layers: number | null;
 }
 
+type LeoApprovalMode = "ManualEveryStep" | "AutoApproveSafe";
+
 interface Settings {
   gpu_offload: GpuOffloadSettings;
+  leo_approval_mode: LeoApprovalMode;
 }
 
 /**
@@ -18,10 +21,16 @@ interface Settings {
  * wrap `spartan_settings` directly so both shells persist to and read
  * from the exact same real `~/.spartan/settings.json`.
  *
- * A deliberate, named v1 scope cut: only GPU offload is exposed here,
- * matching `spartan-settings`'s own current real scope (§42's much
- * larger settings taxonomy has no other real backing store yet). The
- * wgpu shell's own "Check for Updates" row (§75.49, `spartan-updater`)
+ * Since §75.69 this screen also exposes Leo's real approval mode --
+ * `ManualEveryStep` (the real, non-negotiable default: every real tool
+ * call needs an explicit human click) or `AutoApproveSafe` (a real
+ * `read_file`/`search_files`/`list_directory` call runs immediately,
+ * server-side, without a UI round trip; `edit_file`/`run_terminal` are
+ * never auto-approved by either mode, matching §9's own non-negotiable
+ * rule -- `Agent::may_auto_execute` is the one real gate this setting
+ * feeds into, unchanged).
+ *
+ * The wgpu shell's own "Check for Updates" row (§75.49, `spartan-updater`)
  * is real but not wired into this screen this pass -- `spartan-backend`
  * has no `spartan-updater` dependency yet, a real, separate, named
  * follow-up rather than attempted under this pass's own time
@@ -47,18 +56,21 @@ export default function SettingsScreen(): React.ReactElement {
   }, [refresh]);
 
   const save = useCallback(
-    (next: GpuOffloadSettings) => {
+    (overrides: Partial<Pick<Settings, "gpu_offload" | "leo_approval_mode">>) => {
+      if (!settings) return;
       setSaving(true);
+      const next: Settings = { ...settings, ...overrides };
       window.spartan
         .call("settings_set", {
-          gpu_enabled: next.enabled,
-          gpu_layers: next.layers ?? undefined,
+          gpu_enabled: next.gpu_offload.enabled,
+          gpu_layers: next.gpu_offload.layers ?? undefined,
+          leo_approval_mode: next.leo_approval_mode,
         })
         .then((result) => setSettings(result as Settings))
         .catch((e: Error) => setError(e.message))
         .finally(() => setSaving(false));
     },
-    []
+    [settings]
   );
 
   if (error) {
@@ -79,7 +91,7 @@ export default function SettingsScreen(): React.ReactElement {
             type="checkbox"
             checked={enabled}
             disabled={saving}
-            onChange={(e) => save({ enabled: e.target.checked, layers })}
+            onChange={(e) => save({ gpu_offload: { enabled: e.target.checked, layers } })}
           />
           {" "}GPU offloading enabled
         </label>
@@ -92,7 +104,7 @@ export default function SettingsScreen(): React.ReactElement {
           value={layers === null ? "auto" : String(layers)}
           onChange={(e) => {
             const v = e.target.value;
-            save({ enabled, layers: v === "auto" ? null : Number(v) });
+            save({ gpu_offload: { enabled, layers: v === "auto" ? null : Number(v) } });
           }}
         >
           <option value="auto">Auto</option>
@@ -106,6 +118,27 @@ export default function SettingsScreen(): React.ReactElement {
       <div className="settings-note mono">
         Disabled forces pure CPU inference. Enabled with no explicit count lets Ollama auto-offload.
         Settings are shared with the original wgpu shell via the same real ~/.spartan/settings.json.
+      </div>
+
+      <div className="settings-section-label mono" style={{ marginTop: 28 }}>
+        Leo — Approval Mode
+      </div>
+      <div className="settings-row">
+        <label className="settings-label mono">Tool call approval</label>
+        <select
+          className="settings-select mono"
+          disabled={saving}
+          value={settings.leo_approval_mode}
+          onChange={(e) => save({ leo_approval_mode: e.target.value as LeoApprovalMode })}
+        >
+          <option value="ManualEveryStep">Manual — approve every step</option>
+          <option value="AutoApproveSafe">Auto-approve safe reads (search / list / read)</option>
+        </select>
+      </div>
+      <div className="settings-note mono">
+        Manual mode requires an explicit click before any real tool call runs. Auto-approve safe
+        reads still always requires approval for edit_file and run_terminal — read-only exploration
+        (search_files/list_directory/read_file) runs immediately instead.
       </div>
     </div>
   );

@@ -691,6 +691,11 @@
   color: #f87171;
 }
 
+.leo-log-auto {
+  color: var(--accent);
+  font-style: italic;
+}
+
 .leo-pending-call {
   border: 1px solid var(--accent);
   border-radius: 6px;

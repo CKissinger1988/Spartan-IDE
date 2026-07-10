@@ -45,9 +45,27 @@ impl GpuOffloadSettings {
     }
 }
 
+/// Real §75.69 Leo approval-mode setting -- a real, user-facing mirror of
+/// `spartan_leo::approval::ApprovalMode` (deliberately a local, self-
+/// contained copy rather than a new `spartan-leo` dependency on this
+/// otherwise-leaf settings crate; `spartan-backend` maps this to the real
+/// enum at its one real call site). `ManualEveryStep` is the real,
+/// non-negotiable default -- `AutoApproveSafe` only ever changes whether
+/// a `Safe`-classified call (`read_file`/`search_files`/`list_directory`)
+/// still needs a human click; a `Destructive` call (`edit_file`/
+/// `run_terminal`) is never auto-approved by either setting, matching
+/// §9's own non-negotiable rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LeoApprovalMode {
+    #[default]
+    ManualEveryStep,
+    AutoApproveSafe,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Settings {
     pub gpu_offload: GpuOffloadSettings,
+    pub leo_approval_mode: LeoApprovalMode,
 }
 
 /// `~/.spartan/settings.json` (`$HOME`, falling back to `$USERPROFILE` for
@@ -153,10 +171,19 @@ mod tests {
                 enabled: false,
                 layers: Some(12),
             },
+            leo_approval_mode: LeoApprovalMode::AutoApproveSafe,
         };
         save_to(&path, &settings).unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded, settings);
+    }
+
+    #[test]
+    fn default_leo_approval_mode_is_the_real_non_negotiable_manual_every_step() {
+        assert_eq!(
+            Settings::default().leo_approval_mode,
+            LeoApprovalMode::ManualEveryStep
+        );
     }
 
     #[test]

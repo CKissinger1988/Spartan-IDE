@@ -78,6 +78,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Real Leo execute/verify loop wired into the Electron shell — READ BEFORE ASSUMING §9's ManualEveryStep approval gate is bypassed anywhere in this loop | §75.66 |
 | Real project-tier memory, read and written for the first time | §75.67 |
 | Leo enhancement toward modern coding-agent parity — search/list tools, real diff preview (first increment) | §75.68 |
+| Leo enhancement — configurable approval mode, auto-approve loop for Safe calls, generation guard (second increment) | §75.69 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -1966,6 +1967,40 @@ first — it's the parity reference until each row there is actually reimplement
   substring-only, not regex; no diff preview for non-`edit_file` calls (nothing to diff against).
   First of several planned increments -- configurable approval mode, a cancel/stop control, and
   the `Failed -> Recovering -> Executing` retry loop's UI wiring are the natural next pieces.
+- **Real, working code — real configurable approval mode, an auto-approve loop for Safe calls, and
+  a real generation guard, second increment of Leo's coding-agent enhancement (§75.69)**: every
+  real coding agent this product is measured against lets read-only calls run without a click while
+  keeping destructive ones gated -- `leo_start_task` previously always hardcoded
+  `ApprovalMode::ManualEveryStep`, so a real search-heavy task meant a real click per search.
+  `spartan_settings::Settings` gained `leo_approval_mode: LeoApprovalMode` (a real, self-contained
+  local enum, not a new `spartan-leo` dependency on the settings crate); `settings_set` now loads
+  current settings first and only overrides what's actually provided, fixing a real bug caught
+  along the way (a naive rewrite would've silently reset this field on every unrelated GPU-only
+  save). `leo_next_step`'s background thread now *loops* server-side when `AutoApproveSafe` is
+  configured: a proposed `Safe` call runs immediately via the existing `agent.execute_call`, its
+  result is appended to history, a real `leo_auto_step` event is pushed for visibility, and the
+  loop asks for the next action again -- all in one thread, no UI round trip. `Destructive` calls
+  are never auto-run; `Agent::may_auto_execute` (real, tested since §75.46) is the one unchanged
+  gate, matching §9's non-negotiable rule. A real, named `MAX_AUTO_STEPS = 25` bound forces the
+  next proposal through real human approval regardless of risk class if hit. **A real, load-bearing
+  correctness addition, not gold-plating**: `BackendState` gained `leo_generation: u64`,
+  incremented on every `leo_start_task` call -- both background threads now discard their result if
+  the generation no longer matches when they finish, since a real unattended up-to-25-step loop
+  meaningfully widens the window where a stale thread could otherwise clobber a newer task's state.
+  5 new tests (2 `spartan-settings`, 3 `spartan-backend`, including a real end-to-end confirmation
+  that `AutoApproveSafe` genuinely makes a Safe call auto-approvable while a Destructive call still
+  isn't). Four pre-existing wgpu-shell test fixtures needed a small `..Default::default()` fix to
+  keep compiling against the new settings field -- a real cross-shell ripple, fixed immediately.
+  `LeoChatPanel.tsx` renders each auto-approved call as an accent-colored, italicized log line;
+  `SettingsScreen.tsx` gained a real "Leo — Approval Mode" row. Real, screenshotted Playwright
+  verification confirmed a real search running with zero approval-card interruption under
+  Auto-approve mode, reaching Done normally -- a real mock-fidelity bug (modeling the server-side
+  loop as needing a second client call) was caught and fixed while building this verification. Full
+  `cargo fmt`/`clippy`/`test --workspace --release -- --test-threads=1` clean (481 tests, up from
+  477); `desktop`'s own `typecheck`/`build` clean. **What this does not confirm**: no live
+  model-driven exercise of the auto-loop (Ollama unreachable this session); no UI control to
+  interrupt an in-progress auto-loop mid-run (the natural next increment: a cancel/stop control);
+  the `Failed -> Recovering -> Executing` retry loop's UI wiring remains the last open piece.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2023,7 +2058,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 477 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 481 tests: 6 spikes + 12 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-editor-core,

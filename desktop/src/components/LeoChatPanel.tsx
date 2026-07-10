@@ -18,7 +18,7 @@ interface PendingCall {
 }
 
 interface LogEntry {
-  kind: "call" | "result" | "rejected" | "done" | "failed";
+  kind: "call" | "result" | "rejected" | "done" | "failed" | "auto";
   text: string;
 }
 
@@ -156,6 +156,15 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         setThinking(false);
         setPendingCall(call);
         setLog((prev) => [...prev, { kind: "call", text: describeCall(call) }]);
+      } else if (event === "leo_auto_step") {
+        // Real §75.69 auto-approved Safe call -- Leo already ran this
+        // itself (AutoApproveSafe mode) with no UI round trip; still
+        // logged for real visibility into what it actually did.
+        const step = data as PendingCall;
+        setLog((prev) => [
+          ...prev,
+          { kind: "auto", text: `Auto-approved: ${describeCall(step)}` },
+        ]);
       } else if (event === "leo_execute_done") {
         setThinking(false);
         setPendingCall(null);

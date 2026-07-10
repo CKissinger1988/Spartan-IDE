@@ -138,6 +138,19 @@ pub struct BackendState {
     /// own doc comment for how a caller is expected to drive the loop.
     leo_history: Vec<Message>,
     leo_pending_call: Option<PendingCall>,
+    /// Real §75.69 generation counter -- incremented every real
+    /// `leo_start_task` call. Every background thread this crate spawns
+    /// on Leo's behalf (`leo_start_task`'s own planning thread,
+    /// `leo_next_step`'s own execute-loop thread) captures the
+    /// generation it started with and refuses to apply a real, possibly
+    /// stale result once it completes unless the generation still
+    /// matches -- otherwise a late-arriving background thread from a
+    /// task the user has since replaced (by starting a new one) could
+    /// silently clobber the newer task's real state. Real, load-bearing
+    /// correctness, not defensive gold-plating: §75.69's own auto-
+    /// approve-safe loop can run several real, unattended iterations
+    /// before returning control, widening the exact window this guards.
+    leo_generation: u64,
     pty_sessions: HashMap<u64, pty::PtyHandle>,
     next_pty_id: u64,
 }
@@ -353,15 +366,29 @@ fn leo_status(state: &BackendState) -> Result<serde_json::Value, String> {
 /// `spartan-editor-core::leo_bridge::spawn_plan_request` exactly, moved
 /// to this crate's own `Arc<Mutex<BackendState>>` + `Event`-over-stdout
 /// shape instead of an in-process `mpsc` receiver a render loop polls.
+/// Real §75.69 mapping from the user-facing settings enum to
+/// `spartan_leo::approval::ApprovalMode` -- kept as one small function
+/// rather than duplicating the match at each of this crate's two real
+/// call sites (`leo_start_task`, and `leo_next_step`'s own re-read on
+/// every real step so a mid-task settings change takes effect on the
+/// very next step, not only on the next new task).
+fn approval_mode_from_settings(mode: spartan_settings::LeoApprovalMode) -> ApprovalMode {
+    match mode {
+        spartan_settings::LeoApprovalMode::ManualEveryStep => ApprovalMode::ManualEveryStep,
+        spartan_settings::LeoApprovalMode::AutoApproveSafe => ApprovalMode::AutoApproveSafe,
+    }
+}
+
 fn leo_start_task(
     state: &Arc<Mutex<BackendState>>,
     out_tx: Sender<String>,
     task: String,
     project_root: String,
 ) -> Result<serde_json::Value, String> {
-    {
+    let my_generation = {
         let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
-        let mut agent = Agent::new(PathBuf::from(&project_root), ApprovalMode::ManualEveryStep);
+        let approval_mode = approval_mode_from_settings(spartan_settings::load().leo_approval_mode);
+        let mut agent = Agent::new(PathBuf::from(&project_root), approval_mode);
         agent
             .begin_planning()
             .map_err(|e| format!("begin_planning: {e:?}"))?;
@@ -372,7 +399,9 @@ fn leo_start_task(
         // second task would start with the first task's stale history.
         guard.leo_history.clear();
         guard.leo_pending_call = None;
-    }
+        guard.leo_generation += 1;
+        guard.leo_generation
+    };
 
     let state = Arc::clone(state);
     thread::spawn(move || {
@@ -396,6 +425,13 @@ fn leo_start_task(
             let Ok(mut guard) = state.lock() else {
                 return;
             };
+            if guard.leo_generation != my_generation {
+                // A newer task has since started (or the agent was
+                // otherwise reset) -- this real, late-arriving result no
+                // longer belongs to the current one, discard it silently
+                // rather than clobbering real, newer state.
+                return;
+            }
             let Some(agent) = guard.leo_agent.as_mut() else {
                 return;
             };
@@ -588,6 +624,15 @@ fn compute_diff(old: &str, new: &str) -> String {
     out
 }
 
+/// Real §75.69 bound on how many `Safe` calls `leo_next_step`'s own
+/// auto-approve loop will run unattended before forcing the next
+/// proposal through real human approval regardless of its own risk
+/// class -- a real, named safety valve, not an expected steady state:
+/// no real task should legitimately need this many consecutive read-only
+/// calls, and a bound means a model stuck in a real search-only loop
+/// eventually surfaces to the human instead of running forever.
+const MAX_AUTO_STEPS: u32 = 25;
+
 /// Real §4.1 execute-step round trip (§75.66, closing the single largest
 /// gap task #5 has had open since §75.47/§75.56: "approving a plan
 /// creates a real checkpoint and then has nothing further to run"). Must
@@ -598,12 +643,25 @@ fn compute_diff(old: &str, new: &str) -> String {
 /// Mirrors `leo_start_task`'s own spawn-thread-report-back shape exactly:
 /// a real, possibly slow model call runs on its own thread; the caller
 /// gets an immediate synchronous ack and the real result arrives later as
-/// an unprompted `Event`.
+/// one or more unprompted `Event`s.
+///
+/// Since §75.69, this real background thread now *loops*: when the
+/// user's configured `LeoApprovalMode` is `AutoApproveSafe`, a proposed
+/// `Safe` call (`read_file`/`search_files`/`list_directory`) is executed
+/// immediately, server-side, without a UI round trip -- its real result
+/// is appended to history and a real `leo_auto_step` event is pushed for
+/// visibility, then the loop asks the model for the *next* action again,
+/// all within this same spawned thread. A `Destructive` call
+/// (`edit_file`/`run_terminal`) is never auto-run, matching §9's own
+/// non-negotiable rule (`Agent::may_auto_execute` is the one real gate,
+/// unchanged) -- the loop only ever shortens the real number of UI round
+/// trips for read-only exploration, it never widens what may run without
+/// a human.
 fn leo_next_step(
     state: &Arc<Mutex<BackendState>>,
     out_tx: Sender<String>,
 ) -> Result<serde_json::Value, String> {
-    let (provider_gpu, plan, history) = {
+    let (provider_gpu, plan, mut history, my_generation) = {
         let guard = state.lock().map_err(|_| "backend state poisoned")?;
         let agent = guard
             .leo_agent
@@ -620,53 +678,110 @@ fn leo_next_step(
         }
         let plan = agent.plan().cloned().ok_or("no approved plan to execute")?;
         let gpu_offload = spartan_settings::load().gpu_offload;
-        (gpu_offload.num_gpu(), plan, guard.leo_history.clone())
+        (
+            gpu_offload.num_gpu(),
+            plan,
+            guard.leo_history.clone(),
+            guard.leo_generation,
+        )
     };
 
     let state = Arc::clone(state);
     thread::spawn(move || {
         let provider = OllamaProvider::local(LEO_MODEL).with_gpu_layers(provider_gpu);
-        let result = execute::next_action(&provider, &plan, &history);
+        let mut auto_steps = 0u32;
 
-        let event = {
+        loop {
+            let result = execute::next_action(&provider, &plan, &history);
+
             let Ok(mut guard) = state.lock() else {
                 return;
             };
-            match result {
+            if guard.leo_generation != my_generation {
+                // A newer task has since started -- this real, possibly
+                // multi-iteration background loop no longer belongs to
+                // the current one. Discard silently.
+                return;
+            }
+
+            let event = match result {
                 Ok(step) => match step.action {
                     ExecuteAction::Call(call) => {
-                        // Real §75.68 diff preview -- computed here, once,
-                        // before the human ever sees the proposal, rather
-                        // than in the UI, so the exact same real "current
-                        // file content" `peek_file` reads is what gets
-                        // diffed (no risk of the UI's own, possibly
-                        // stale, view of the file disagreeing with what
-                        // Leo is actually about to write).
-                        let diff = if let ToolCall::EditFile { path, content } = &call {
-                            guard.leo_agent.as_ref().map(|agent| {
-                                let current = agent.peek_file(path).unwrap_or_default();
-                                compute_diff(&current, content)
-                            })
+                        let Some(agent) = guard.leo_agent.as_mut() else {
+                            return;
+                        };
+                        if auto_steps < MAX_AUTO_STEPS && agent.may_auto_execute(&call) {
+                            match agent.execute_call(call.clone()) {
+                                Ok(result) => {
+                                    let text = tool_result_text(&result);
+                                    execute::append_tool_result(
+                                        &mut guard.leo_history,
+                                        &step.call_id,
+                                        &text,
+                                    );
+                                    history = guard.leo_history.clone();
+                                    auto_steps += 1;
+                                    let auto_event = Event {
+                                        event: "leo_auto_step".to_string(),
+                                        data: serde_json::json!({
+                                            "tool": call.name(),
+                                            "args": tool_call_json(&call),
+                                            "result": tool_result_json(&result),
+                                        }),
+                                    };
+                                    drop(guard);
+                                    if let Ok(line) = serde_json::to_string(&auto_event) {
+                                        if out_tx.send(line).is_err() {
+                                            return;
+                                        }
+                                    }
+                                    continue;
+                                }
+                                Err(e) => {
+                                    let _ = agent.mark_failed();
+                                    Event {
+                                        event: "leo_execute_failed".to_string(),
+                                        data: serde_json::json!({
+                                            "error": format!("{e:?}")
+                                        }),
+                                    }
+                                }
+                            }
                         } else {
-                            None
-                        };
-                        let mut data = serde_json::json!({
-                            "call_id": step.call_id,
-                            "tool": call.name(),
-                            "args": tool_call_json(&call),
-                        });
-                        if let Some(d) = diff {
-                            data["diff"] = serde_json::Value::String(d);
+                            // Real §75.68 diff preview -- computed here,
+                            // once, before the human ever sees the
+                            // proposal, rather than in the UI, so the
+                            // exact same real "current file content"
+                            // `peek_file` reads is what gets diffed (no
+                            // risk of the UI's own, possibly stale, view
+                            // of the file disagreeing with what Leo is
+                            // actually about to write).
+                            let diff = if let ToolCall::EditFile { path, content } = &call {
+                                Some(compute_diff(
+                                    &agent.peek_file(path).unwrap_or_default(),
+                                    content,
+                                ))
+                            } else {
+                                None
+                            };
+                            let mut data = serde_json::json!({
+                                "call_id": step.call_id,
+                                "tool": call.name(),
+                                "args": tool_call_json(&call),
+                            });
+                            if let Some(d) = diff {
+                                data["diff"] = serde_json::Value::String(d);
+                            }
+                            let event = Event {
+                                event: "leo_action_proposed".to_string(),
+                                data,
+                            };
+                            guard.leo_pending_call = Some(PendingCall {
+                                call_id: step.call_id,
+                                call,
+                            });
+                            event
                         }
-                        let event = Event {
-                            event: "leo_action_proposed".to_string(),
-                            data,
-                        };
-                        guard.leo_pending_call = Some(PendingCall {
-                            call_id: step.call_id,
-                            call,
-                        });
-                        event
                     }
                     ExecuteAction::Done { summary } => {
                         let Some(agent) = guard.leo_agent.as_mut() else {
@@ -717,10 +832,11 @@ fn leo_next_step(
                         data: serde_json::json!({ "error": e.to_string() }),
                     }
                 }
+            };
+            if let Ok(line) = serde_json::to_string(&event) {
+                let _ = out_tx.send(line);
             }
-        };
-        if let Ok(line) = serde_json::to_string(&event) {
-            let _ = out_tx.send(line);
+            return;
         }
     });
 
@@ -939,12 +1055,24 @@ fn settings_get() -> Result<serde_json::Value, String> {
     serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
 }
 
-fn settings_set(gpu_enabled: bool, gpu_layers: Option<u32>) -> Result<serde_json::Value, String> {
+/// A real, optional third field alongside the always-present GPU pair
+/// (§75.69) -- `leo_approval_mode` is only ever sent when the Settings
+/// screen's own Leo row actually changed, so an unrelated GPU-only save
+/// must not silently reset it back to the real default; loading the
+/// current settings first and only overriding what was actually
+/// provided preserves it.
+fn settings_set(
+    gpu_enabled: bool,
+    gpu_layers: Option<u32>,
+    leo_approval_mode: Option<spartan_settings::LeoApprovalMode>,
+) -> Result<serde_json::Value, String> {
+    let current = spartan_settings::load();
     let settings = spartan_settings::Settings {
         gpu_offload: spartan_settings::GpuOffloadSettings {
             enabled: gpu_enabled,
             layers: gpu_layers,
         },
+        leo_approval_mode: leo_approval_mode.unwrap_or(current.leo_approval_mode),
     };
     spartan_settings::save(&settings).map_err(|e| format!("save settings: {e}"))?;
     serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
@@ -1079,7 +1207,13 @@ pub fn handle_request(
                 .get("gpu_layers")
                 .and_then(|v| v.as_u64())
                 .map(|n| n as u32);
-            settings_set(gpu_enabled, gpu_layers)
+            let leo_approval_mode = req
+                .params
+                .get("leo_approval_mode")
+                .map(|v| serde_json::from_value::<spartan_settings::LeoApprovalMode>(v.clone()))
+                .transpose()
+                .map_err(|e| format!("invalid leo_approval_mode: {e}"))?;
+            settings_set(gpu_enabled, gpu_layers, leo_approval_mode)
         })(),
         other => Err(format!("unknown method `{other}`")),
     };
@@ -1781,6 +1915,99 @@ mod tests {
         let status = call(&state, 2, "leo_status", serde_json::json!({}));
         assert_eq!(status.result.unwrap()["state"], "Planning");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn leo_start_task_increments_the_real_generation_counter() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-leo-generation-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = new_state();
+        call(
+            &state,
+            1,
+            "leo_start_task",
+            serde_json::json!({ "task": "a", "project_root": dir.to_string_lossy() }),
+        );
+        let gen1 = state.lock().unwrap().leo_generation;
+        call(
+            &state,
+            2,
+            "leo_start_task",
+            serde_json::json!({ "task": "b", "project_root": dir.to_string_lossy() }),
+        );
+        let gen2 = state.lock().unwrap().leo_generation;
+        assert_eq!(
+            gen2,
+            gen1 + 1,
+            "each real leo_start_task call must bump the generation"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn approval_mode_from_settings_maps_both_real_variants_correctly() {
+        assert_eq!(
+            approval_mode_from_settings(spartan_settings::LeoApprovalMode::ManualEveryStep),
+            ApprovalMode::ManualEveryStep
+        );
+        assert_eq!(
+            approval_mode_from_settings(spartan_settings::LeoApprovalMode::AutoApproveSafe),
+            ApprovalMode::AutoApproveSafe
+        );
+    }
+
+    #[test]
+    fn leo_start_task_picks_up_the_real_configured_approval_mode() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-leo-approval-mode-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        spartan_settings::save(&spartan_settings::Settings {
+            leo_approval_mode: spartan_settings::LeoApprovalMode::AutoApproveSafe,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let dir = scratch.join("project");
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = new_state();
+        call(
+            &state,
+            1,
+            "leo_start_task",
+            serde_json::json!({ "task": "a", "project_root": dir.to_string_lossy() }),
+        );
+        let guard = state.lock().unwrap();
+        let agent = guard.leo_agent.as_ref().unwrap();
+        assert!(
+            agent.may_auto_execute(&ToolCall::ReadFile {
+                path: "x".to_string()
+            }),
+            "a Safe call must be real-auto-approvable once settings say AutoApproveSafe"
+        );
+        assert!(
+            !agent.may_auto_execute(&ToolCall::EditFile {
+                path: "x".to_string(),
+                content: "y".to_string()
+            }),
+            "a Destructive call must never auto-approve, regardless of settings (§9)"
+        );
+        drop(guard);
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
     }
 
     #[test]

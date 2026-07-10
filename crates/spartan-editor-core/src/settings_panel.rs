@@ -207,6 +207,7 @@ mod tests {
                 enabled: false,
                 layers: Some(4),
             },
+            ..Default::default()
         };
         let state = SettingsPanelState::opened_with(settings, "test-renderer".to_string());
         assert_eq!(state.selected, SettingsRow::GpuOffloadEnabled);
@@ -280,6 +281,7 @@ mod tests {
                     enabled: true,
                     layers: Some(0),
                 },
+                ..Default::default()
             },
             "test-renderer".to_string(),
         );
@@ -296,6 +298,7 @@ mod tests {
                     enabled: true,
                     layers: Some(128),
                 },
+                ..Default::default()
             },
             "test-renderer".to_string(),
         );
@@ -312,6 +315,7 @@ mod tests {
                     enabled: true,
                     layers: Some(16),
                 },
+                ..Default::default()
             },
             "test-renderer".to_string(),
         );
