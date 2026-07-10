@@ -38,6 +38,7 @@ const ALLOWED_METHODS = new Set([
   "settings_get",
   "settings_set",
   "check_for_updates",
+  "create_project",
   "devcontainer_detect",
   "devcontainer_up",
   "devcontainer_down",
@@ -64,4 +65,14 @@ contextBridge.exposeInMainWorld("spartan", {
     ipcRenderer.on("spartan:event", handler);
     return () => ipcRenderer.removeListener("spartan:event", handler);
   },
+  // Two real, narrow, hardcoded-target main-process actions (§75.76) --
+  // deliberately separate from `call`/`ALLOWED_METHODS` above since
+  // neither is a `spartan-backend` protocol method; both open something
+  // main.ts itself decided, never a renderer-supplied path/URL.
+  openCrashReportsFolder: (): Promise<unknown> =>
+    ipcRenderer.invoke("spartan:open_crash_reports_folder"),
+  openRepositoryPage: (): Promise<unknown> => ipcRenderer.invoke("spartan:open_repository_page"),
+  openProject: (root: string): Promise<unknown> =>
+    ipcRenderer.invoke("spartan:open_project", { root }),
+  pickFolder: (): Promise<unknown> => ipcRenderer.invoke("spartan:pick_folder"),
 });

@@ -165,7 +165,7 @@ export default function DevContainersScreen({ root }: DevContainersScreenProps):
 
           <div className="devcontainer-actions">
             {(phase === "idle" || phase === "failed") && (
-              <button className="devcontainer-btn devcontainer-btn-start" onClick={start}>
+              <button className="devcontainer-btn devcontainer-btn-start sf-chamfer-sm" onClick={start}>
                 Start Dev Container
               </button>
             )}

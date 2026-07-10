@@ -478,7 +478,7 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
               <p>{plan.risk_notes}</p>
             </div>
             <div className="leo-plan-actions">
-              <button className="leo-btn leo-btn-approve" onClick={approve}>
+              <button className="leo-btn leo-btn-approve sf-chamfer-sm" onClick={approve}>
                 Approve
               </button>
               <button className="leo-btn leo-btn-reject" onClick={reject}>
@@ -523,7 +523,7 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
                     </pre>
                   ))}
                 <div className="leo-plan-actions">
-                  <button className="leo-btn leo-btn-approve" onClick={approveCall}>
+                  <button className="leo-btn leo-btn-approve sf-chamfer-sm" onClick={approveCall}>
                     Approve
                   </button>
                   <button className="leo-btn leo-btn-reject" onClick={rejectCall}>
@@ -581,7 +581,7 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
           </button>
         )}
         <button
-          className="leo-btn leo-btn-send"
+          className="leo-btn leo-btn-send sf-chamfer-sm"
           onClick={submitTask}
           disabled={
             agentState === "Planning" ||

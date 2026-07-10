@@ -13,6 +13,9 @@ import SessionsScreen from "./components/SessionsScreen";
 import SettingsScreen from "./components/SettingsScreen";
 import DevContainersScreen from "./components/DevContainersScreen";
 import LeoChatPanel from "./components/LeoChatPanel";
+import NewProjectWizard from "./components/NewProjectWizard";
+import OnboardingScreen from "./components/OnboardingScreen";
+import { applyReduceMotion } from "./reduceMotion";
 import { NAV, type ScreenId } from "./nav";
 import "./app.css";
 
@@ -26,6 +29,10 @@ export default function App(): React.ReactElement {
   // wgpu shell -- one left-rail region, not a second pane, shared between
   // the file tree and the real Source Control panel added in §75.65).
   const [sidebarView, setSidebarView] = useState<"files" | "git">("files");
+  const [showNewProjectWizard, setShowNewProjectWizard] = useState(false);
+  const [onboardingState, setOnboardingState] = useState<"checking" | "show" | "done">(
+    "checking"
+  );
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -36,6 +43,25 @@ export default function App(): React.ReactElement {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  // Real §75.76 startup settings read -- applies "reduce motion"
+  // immediately (so it's correct even if the user never opens Settings
+  // this session; `SettingsScreen.tsx` re-applies it live the moment the
+  // toggle changes) and decides whether first-run onboarding should show
+  // at all, gated by the real, persisted `onboarding_completed` flag.
+  useEffect(() => {
+    window.spartan
+      .call("settings_get", {})
+      .then((result) => {
+        const s = result as {
+          appearance?: { reduce_motion?: boolean };
+          onboarding_completed?: boolean;
+        };
+        applyReduceMotion(Boolean(s.appearance?.reduce_motion));
+        setOnboardingState(s.onboarding_completed ? "done" : "show");
+      })
+      .catch(() => setOnboardingState("done"));
   }, []);
 
   const openFile = useCallback(
@@ -77,6 +103,19 @@ export default function App(): React.ReactElement {
   const activeFile = files[activeIndex] ?? null;
   const screenLabel = NAV.flatMap((g) => g.items).find((i) => i.id === screen)?.label ?? screen;
 
+  // Real §75.76 first-run onboarding gate -- deliberately blank (not the
+  // main shell, not a spinner) during the brief real "checking" window
+  // so there's no visible flash of the main UI before onboarding
+  // decides whether to cover it.
+  if (onboardingState === "checking") {
+    return <div className="app-root" />;
+  }
+  if (onboardingState === "show") {
+    return (
+      <OnboardingScreen currentRoot={ROOT} onDone={() => setOnboardingState("done")} />
+    );
+  }
+
   return (
     <div className="app-root">
       <Sidebar active={screen} onSelect={setScreen} />
@@ -105,6 +144,13 @@ export default function App(): React.ReactElement {
                     onClick={() => setSidebarView("git")}
                   >
                     Git
+                  </button>
+                  <button
+                    className="sidebar-toggle-btn"
+                    title="New Project"
+                    onClick={() => setShowNewProjectWizard(true)}
+                  >
+                    + New
                   </button>
                 </div>
                 {sidebarView === "files" ? (
@@ -148,6 +194,12 @@ export default function App(): React.ReactElement {
         )}
       </div>
       <LeoChatPanel projectRoot={ROOT} />
+      {showNewProjectWizard && (
+        <NewProjectWizard
+          defaultParentDir={ROOT}
+          onClose={() => setShowNewProjectWizard(false)}
+        />
+      )}
     </div>
   );
 }

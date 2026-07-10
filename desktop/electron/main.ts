@@ -7,9 +7,10 @@
 // this workspace's own §9 "least privilege" posture even though this is
 // a new UI stack.
 
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, shell, dialog } from "electron";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import { BackendClient } from "./backend-client.js";
 import { GuiBuilderClient } from "./gui-builder-client.js";
 
@@ -62,6 +63,23 @@ function resolveGuiBuilderCliPath(): string {
 let backend: BackendClient | null = null;
 let guiBuilder: GuiBuilderClient | null = null;
 
+// Real §75.76 "open a different project" support -- the render process
+// itself has no way to change its own root query param after load, so
+// this is a real, narrow main-process action (reloading the existing
+// window at a new `?root=` URL) rather than a renderer-side hack. Used
+// both by the New Project wizard (open the just-created project) and
+// could equally back a future "Open Folder" picker.
+function loadRootIntoWindow(win: BrowserWindow, rootDir: string): void {
+  const query = `?root=${encodeURIComponent(rootDir)}`;
+  if (isDev) {
+    win.loadURL(`http://localhost:5173/${query}`);
+  } else {
+    win.loadFile(path.join(import.meta.dirname, "..", "dist", "index.html"), {
+      search: query,
+    });
+  }
+}
+
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1280,
@@ -79,15 +97,7 @@ function createWindow(): void {
   // opening the app immediately shows real, familiar project files
   // rather than an arbitrary empty directory.
   const rootDir = process.env.SPARTAN_ROOT ?? path.resolve(import.meta.dirname, "..", "..");
-  const query = `?root=${encodeURIComponent(rootDir)}`;
-
-  if (isDev) {
-    win.loadURL(`http://localhost:5173/${query}`);
-  } else {
-    win.loadFile(path.join(import.meta.dirname, "..", "dist", "index.html"), {
-      search: query,
-    });
-  }
+  loadRootIntoWindow(win, rootDir);
 }
 
 app.whenReady().then(() => {
@@ -121,12 +131,24 @@ app.whenReady().then(() => {
     "pty_input",
     "pty_resize",
     "pty_close",
+    "leo_cancel",
     "git_status",
     "git_stage",
     "git_unstage",
     "git_commit",
     "settings_get",
     "settings_set",
+    "check_for_updates",
+    "create_project",
+    "devcontainer_detect",
+    "devcontainer_up",
+    "devcontainer_down",
+    "devcontainer_status",
+    "devcontainer_list",
+    "devcontainer_exec_spawn",
+    "devcontainer_exec_input",
+    "devcontainer_exec_resize",
+    "devcontainer_exec_close",
   ];
   for (const method of methods) {
     ipcMain.handle(`spartan:${method}`, async (_event, params: Record<string, unknown>) => {
@@ -155,6 +177,51 @@ app.whenReady().then(() => {
       return guiBuilder.applyEdit(JSON.stringify(params.edit), params.source);
     }
   );
+
+  // Two real, deliberately narrow main-process-only conveniences for the
+  // new Settings "Diagnostics"/"About" section (§75.76) -- neither routes
+  // through spartan-backend (there is no real "open this in the OS file
+  // manager" or "open this URL in the system browser" concept in that
+  // headless Rust protocol, nor should there be). Both targets are
+  // hardcoded here, not supplied by the renderer, so a compromised
+  // renderer can't turn this into an arbitrary-path/arbitrary-URL opener.
+  ipcMain.handle("spartan:open_crash_reports_folder", async () => {
+    const home = process.env.HOME || process.env.USERPROFILE || os.homedir();
+    const dir = path.join(home, ".spartan", "crashes");
+    fs.mkdirSync(dir, { recursive: true });
+    const result = await shell.openPath(dir);
+    if (result) throw new Error(result);
+    return { ok: true, path: dir };
+  });
+  ipcMain.handle("spartan:open_repository_page", async () => {
+    await shell.openExternal("https://github.com/CKissinger1988/Spartan-IDE");
+    return { ok: true };
+  });
+  // Real "open project" action for the New Project wizard (and, later,
+  // any real "Open Folder" picker) -- reloads the *existing* window at
+  // the new root rather than spawning a second one, matching a
+  // conventional single-window desktop IDE's own "switch project" UX.
+  ipcMain.handle("spartan:open_project", async (event, params: { root: string }) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) throw new Error("no window to reload");
+    loadRootIntoWindow(win, params.root);
+    return { ok: true };
+  });
+  // Real native "choose a folder" dialog -- backs both onboarding's
+  // "Open Existing Project" and the New Project wizard's "Create in"
+  // field, closing a real, previously-total gap: before this, there was
+  // no way to point this shell at any folder other than its own
+  // `SPARTAN_ROOT` startup default.
+  ipcMain.handle("spartan:pick_folder", async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const options: Electron.OpenDialogOptions = {
+      properties: ["openDirectory", "createDirectory"],
+    };
+    const result = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options);
+    return { canceled: result.canceled, path: result.filePaths[0] ?? null };
+  });
 
   // Real, unprompted backend events (Leo's own async plan-ready/
   // plan-failed notifications) relayed to every real open window --

@@ -101,6 +101,44 @@ impl Default for LeoProviderSettings {
     }
 }
 
+/// Real §75.76 editor preferences -- font size, tab size, word wrap.
+/// Deliberately small: this is the same "thorough settings for every
+/// feature" pass that added `AppearanceSettings`/`onboarding_completed`
+/// below, not a general editor-config framework. `desktop/src/components/
+/// Editor.tsx` reads this once per file open and applies it as real
+/// inline style overrides on the highlight layer + textarea, matching
+/// the wgpu shell's own "no live cross-window reload" precedent
+/// (§75.48's own settings panel doc comment).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditorSettings {
+    pub font_size: u32,
+    pub tab_size: u32,
+    pub word_wrap: bool,
+}
+
+impl Default for EditorSettings {
+    fn default() -> Self {
+        Self {
+            font_size: 13,
+            tab_size: 2,
+            word_wrap: false,
+        }
+    }
+}
+
+/// Real §75.76 appearance preferences. `reduce_motion` is a real,
+/// accessibility-motivated toggle for the Sci-Fi theme's own new pulse/
+/// scan-line animations (§75.76) -- disabling it adds a `reduce-motion`
+/// class at the document root, which a small set of new CSS rules use to
+/// turn every such animation off, matching WCAG 2.1's own
+/// prefers-reduced-motion intent for users who opted out of OS-level
+/// motion but are running this app under a mocked/headless Chromium
+/// environment where that OS media query itself may not be honored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AppearanceSettings {
+    pub reduce_motion: bool,
+}
+
 /// `Settings` itself is no longer `Copy` (`LeoProviderSettings` owns a
 /// real, non-`Copy` `String`) -- a real, mechanical ripple from adding
 /// this field; every existing call site that relied on implicit copies
@@ -111,6 +149,13 @@ pub struct Settings {
     pub gpu_offload: GpuOffloadSettings,
     pub leo_approval_mode: LeoApprovalMode,
     pub leo_provider: LeoProviderSettings,
+    pub editor: EditorSettings,
+    pub appearance: AppearanceSettings,
+    /// Real §75.76 first-run onboarding flag -- `false` until the user
+    /// completes or explicitly skips the onboarding flow once; the
+    /// Electron shell checks this on startup and shows onboarding only
+    /// when it's still `false`.
+    pub onboarding_completed: bool,
 }
 
 /// `~/.spartan/settings.json` (`$HOME`, falling back to `$USERPROFILE` for
@@ -221,10 +266,37 @@ mod tests {
                 kind: LeoProviderKind::Claude,
                 model: "claude-3-5-sonnet-latest".to_string(),
             },
+            editor: EditorSettings {
+                font_size: 16,
+                tab_size: 4,
+                word_wrap: true,
+            },
+            appearance: AppearanceSettings {
+                reduce_motion: true,
+            },
+            onboarding_completed: true,
         };
         save_to(&path, &settings).unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded, settings);
+    }
+
+    #[test]
+    fn default_editor_settings_match_the_original_hardcoded_editor_values() {
+        let settings = EditorSettings::default();
+        assert_eq!(settings.font_size, 13);
+        assert_eq!(settings.tab_size, 2);
+        assert!(!settings.word_wrap);
+    }
+
+    #[test]
+    fn default_appearance_settings_do_not_reduce_motion() {
+        assert!(!AppearanceSettings::default().reduce_motion);
+    }
+
+    #[test]
+    fn default_onboarding_completed_is_false_so_a_fresh_install_sees_onboarding() {
+        assert!(!Settings::default().onboarding_completed);
     }
 
     #[test]

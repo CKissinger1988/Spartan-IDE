@@ -4988,6 +4988,7 @@ dependencies = [
  "spartan-buffer",
  "spartan-devcontainer",
  "spartan-git",
+ "spartan-languages",
  "spartan-leo",
  "spartan-model",
  "spartan-settings",

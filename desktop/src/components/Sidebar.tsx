@@ -9,7 +9,10 @@ interface SidebarProps {
 export default function Sidebar({ active, onSelect }: SidebarProps): React.ReactElement {
   return (
     <div className="nav-sidebar">
-      <div className="nav-brand mono">SPARTAN</div>
+      <div className="nav-brand mono sf-scanline">
+        <span className="nav-brand-glyph" aria-hidden="true" />
+        SPARTAN
+      </div>
       {NAV.map((group) => (
         <div className="nav-group" key={group.label}>
           <div className="nav-group-label">{group.label}</div>

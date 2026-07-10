@@ -84,6 +84,8 @@ first — it's the parity reference until each row there is actually reimplement
 | Repository professionalization — LICENSE, CI, README, "Check for Updates" wiring | §75.72 |
 | Leo cancel/stop control for in-progress planning/execute loops, closes task #58 | §75.73 |
 | Dev Containers (OCI/Docker-based, containers.dev spec) — READ §75.74 BEFORE ASSUMING THIS MEANS FULL VM/CROSS-KERNEL-OS SUPPORT (it does not; a real, explicit scope decision) | §75.74 |
+| Real Docker daemon started and verified inside a sandboxed session — not a universal guarantee for every future session | §75.75 |
+| Sci-Fi "Spartan Coding" theme, full Settings taxonomy, New Project wizard, first-run onboarding | §75.76 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2218,6 +2220,37 @@ first — it's the parity reference until each row there is actually reimplement
   `/dev/kvm`, and live Ollama reachability. The daemon was not left running as a permanent
   fixture; a fresh session must independently re-establish it, same as every other real-external-
   tool dependency in this project's history.
+- **Real, working code — Sci-Fi "Spartan Coding" theme overhaul, a thorough Settings expansion,
+  a New Project quick-start wizard, first-run onboarding, and two real bugs found and fixed along
+  the way (§75.76)**: user-requested. **A real, load-bearing bug found by code review, not by
+  running anything**: `preload.ts`'s allowlist included `leo_cancel`/`check_for_updates`/all nine
+  `devcontainer_*` methods, but `main.ts` never registered real `ipcMain.handle` channels for
+  them — invisible to every prior Playwright pass since those always fully mock `window.spartan`.
+  Fixed by adding the missing entries. **A real, CI-only test failure**, caught live via this PR's
+  own webhook: two `spartan-editor-core::cli_session` tests hardcoded "claude is installed" (true
+  in every interactive session, never true in CI) — fixed with a real, self-skipping availability
+  check matching `lsp_integration.rs`'s own established convention. **Theme**: new `theme.css`
+  tokens (a cool HUD-cyan accent alongside the existing warm rust one, glow box-shadows, a
+  chamfered-corner clip-path utility, an animated scanline sweep, a real `:focus-visible` cyan
+  ring), applied across nav/tabs/buttons/status badges; screenshotted across four screens with no
+  layout breakage. **Settings**: `spartan_settings::Settings` gained `EditorSettings` (font/tab
+  size/word wrap, now real inline overrides in `Editor.tsx`), `AppearanceSettings` (`reduce_motion`,
+  a real accessibility toggle), and `onboarding_completed`; `SettingsScreen.tsx` gained Editor,
+  Appearance, Privacy & Diagnostics (a real "Open Crash Reports Folder" button), Keyboard
+  Shortcuts, and About sections, backed by two new narrow, hardcoded-target main-process IPC
+  actions. **New Project wizard**: a real `create_project` backend method scaffolds one of 8 real
+  runnable templates (Rust/TS/JS/Python/Kotlin/Java/Go/C#), each confirmed by test to be correctly
+  detected by the real `spartan-languages` registry; a new real native folder picker
+  (`dialog.showOpenDialog`) and a real `openProject` action (reloads the existing window at a new
+  root) back it. **Onboarding**: a new gated `OnboardingScreen.tsx`, shown once via the real
+  persisted flag. **A real bug caught before shipping**: the first completion handler hardcoded
+  `gpu_enabled: true`, which would have silently clobbered a real disabled GPU setting — fixed by
+  reading current settings first, confirmed by a dedicated test. 8 new Rust tests, 536 total (up
+  from 528), full fmt/clippy/test clean; `desktop`'s typecheck/build clean; real, screenshotted
+  Playwright verification of every new surface. **What this does not confirm**: the real Electron
+  window remains unlaunchable in this session (same standing network-policy gap since §75.59); no
+  bundle code-splitting; no template customization in the New Project wizard; onboarding's feature
+  tour is a single static screen, not multi-step.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2275,7 +2308,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 528 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 536 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,

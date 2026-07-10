@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { applyReduceMotion } from "../reduceMotion";
+import pkg from "../../package.json";
 
 interface GpuOffloadSettings {
   enabled: boolean;
@@ -14,10 +16,23 @@ interface LeoProviderSettings {
   model: string;
 }
 
+interface EditorSettings {
+  font_size: number;
+  tab_size: number;
+  word_wrap: boolean;
+}
+
+interface AppearanceSettings {
+  reduce_motion: boolean;
+}
+
 interface Settings {
   gpu_offload: GpuOffloadSettings;
   leo_approval_mode: LeoApprovalMode;
   leo_provider: LeoProviderSettings;
+  editor: EditorSettings;
+  appearance: AppearanceSettings;
+  onboarding_completed: boolean;
 }
 
 /** Real, sensible default model per provider kind -- shown the moment the
@@ -144,16 +159,26 @@ export default function SettingsScreen(): React.ReactElement {
   }, []);
 
   const save = useCallback(
-    (overrides: Partial<Pick<Settings, "gpu_offload" | "leo_approval_mode" | "leo_provider">>) => {
+    (overrides: Partial<Settings>) => {
       if (!settings) return;
       setSaving(true);
       const next: Settings = { ...settings, ...overrides };
+      // Real §75.76 "reduce motion" optimistic UI update -- applied
+      // immediately rather than waiting for the round trip, so the
+      // animations actually stop/start the instant the checkbox is
+      // toggled.
+      if (overrides.appearance) {
+        applyReduceMotion(overrides.appearance.reduce_motion);
+      }
       window.spartan
         .call("settings_set", {
           gpu_enabled: next.gpu_offload.enabled,
           gpu_layers: next.gpu_offload.layers ?? undefined,
           leo_approval_mode: next.leo_approval_mode,
           leo_provider: next.leo_provider,
+          editor: next.editor,
+          appearance: next.appearance,
+          onboarding_completed: next.onboarding_completed,
         })
         .then((result) => setSettings(result as Settings))
         .catch((e: Error) => setError(e.message))
@@ -161,6 +186,14 @@ export default function SettingsScreen(): React.ReactElement {
     },
     [settings]
   );
+
+  const openCrashReportsFolder = useCallback(() => {
+    window.spartan.openCrashReportsFolder?.().catch((e: Error) => setError(e.message));
+  }, []);
+
+  const openRepositoryPage = useCallback(() => {
+    window.spartan.openRepositoryPage?.().catch((e: Error) => setError(e.message));
+  }, []);
 
   if (error) {
     return <div className="settings-screen mono">{error}</div>;
@@ -173,7 +206,83 @@ export default function SettingsScreen(): React.ReactElement {
 
   return (
     <div className="settings-screen">
-      <div className="settings-section-label mono">Local Model — GPU Offload</div>
+      <div className="settings-section-label mono">Editor</div>
+      <div className="settings-row">
+        <label className="settings-label mono">Font size</label>
+        <input
+          className="settings-select mono"
+          type="number"
+          min={9}
+          max={32}
+          disabled={saving}
+          value={settings.editor.font_size}
+          onChange={(e) => {
+            const font_size = Number(e.target.value) || settings.editor.font_size;
+            save({ editor: { ...settings.editor, font_size } });
+          }}
+          style={{ width: 64 }}
+        />
+      </div>
+      <div className="settings-row">
+        <label className="settings-label mono">Tab size</label>
+        <select
+          className="settings-select mono"
+          disabled={saving}
+          value={settings.editor.tab_size}
+          onChange={(e) =>
+            save({ editor: { ...settings.editor, tab_size: Number(e.target.value) } })
+          }
+        >
+          {[2, 4, 8].map((n) => (
+            <option key={n} value={n}>
+              {n} spaces
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label mono">
+          <input
+            type="checkbox"
+            checked={settings.editor.word_wrap}
+            disabled={saving}
+            onChange={(e) =>
+              save({ editor: { ...settings.editor, word_wrap: e.target.checked } })
+            }
+          />
+          {" "}Word wrap
+        </label>
+      </div>
+      <div className="settings-note mono">
+        Font size, tab size (also used by the Tab key), and word wrap apply the next time a file
+        is opened — an already-open tab is unaffected until you switch to it or reopen it.
+      </div>
+
+      <div className="settings-section-label mono" style={{ marginTop: 28 }}>
+        Appearance
+      </div>
+      <div className="settings-row">
+        <label className="settings-label mono">
+          <input
+            type="checkbox"
+            checked={settings.appearance.reduce_motion}
+            disabled={saving}
+            onChange={(e) =>
+              save({ appearance: { reduce_motion: e.target.checked } })
+            }
+          />
+          {" "}Reduce motion
+        </label>
+      </div>
+      <div className="settings-note mono">
+        Spartan's theme uses glow pulses and a scan-line sweep on a few real-time status
+        indicators (Leo's state badge, the running Dev Containers badge, the sidebar brand). This
+        turns all of it off instantly, everywhere, without changing color or layout.
+      </div>
+
+      <div className="settings-section-label mono" style={{ marginTop: 28 }}>
+        Local Model — GPU Offload
+      </div>
       <div className="settings-row">
         <label className="settings-label mono">
           <input
@@ -289,6 +398,45 @@ export default function SettingsScreen(): React.ReactElement {
         build exists, categorized by language definitions, Leo/agent core, or other IDE code.
         No download, install, or restart of any kind — this only tells you something is
         available so you can act on it yourself.
+      </div>
+
+      <div className="settings-section-label mono" style={{ marginTop: 28 }}>
+        Privacy &amp; Diagnostics
+      </div>
+      <div className="settings-row">
+        <button className="settings-button mono" onClick={openCrashReportsFolder}>
+          Open Crash Reports Folder
+        </button>
+      </div>
+      <div className="settings-note mono">
+        Spartan has no telemetry of any kind — nothing about your usage is ever sent anywhere.
+        A crash panic is caught locally, has any credential-shaped text redacted, and is written
+        as a plain JSON file under ~/.spartan/crashes/. Nothing in that folder is ever uploaded
+        automatically; deleting its contents is safe at any time.
+      </div>
+
+      <div className="settings-section-label mono" style={{ marginTop: 28 }}>
+        Keyboard Shortcuts
+      </div>
+      <div className="settings-note mono">
+        Ctrl/Cmd+S save · Ctrl/Cmd+Z undo · Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z redo · Ctrl/Cmd+G
+        toggle Files/Git sidebar · Tab inserts the configured tab size · Ctrl/Cmd+Enter (in Leo's
+        task box) submit a task to Leo.
+      </div>
+
+      <div className="settings-section-label mono" style={{ marginTop: 28 }}>
+        About
+      </div>
+      <div className="settings-note mono">
+        Spartan IDE v{pkg.version} — a from-scratch, agent-first desktop IDE. Real Rust core
+        (rope buffer, tree-sitter, in-house LSP/DAP, git), driven by this real Electron + React
+        shell over a local IPC service. No VS Code, Monaco, or CodeMirror code is forked or
+        vendored anywhere in this repository.
+      </div>
+      <div className="settings-row">
+        <button className="settings-button mono" onClick={openRepositoryPage}>
+          View on GitHub
+        </button>
       </div>
     </div>
   );

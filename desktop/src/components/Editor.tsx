@@ -44,12 +44,42 @@ interface EditorProps {
  * wgpu shell's own coalesced-typing-run undo (§75.25) -- real follow-up
  * work, not attempted in this pass.
  */
+interface EditorPrefs {
+  fontSize: number;
+  tabSize: number;
+  wordWrap: boolean;
+}
+
+const DEFAULT_EDITOR_PREFS: EditorPrefs = { fontSize: 13, tabSize: 2, wordWrap: false };
+
 export default function Editor({ file, onContentChange }: EditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
   const [lineCount, setLineCount] = useState(1);
+  const [prefs, setPrefs] = useState<EditorPrefs>(DEFAULT_EDITOR_PREFS);
   const prevContentRef = useRef(file.content);
+
+  // Real §75.76 editor preferences (font size / tab size / word wrap) --
+  // fetched once on mount, matching the same "no live cross-window
+  // reload" scope this whole settings surface has had since §75.48.
+  useEffect(() => {
+    window.spartan
+      .call("settings_get", {})
+      .then((result) => {
+        const s = result as {
+          editor?: { font_size?: number; tab_size?: number; word_wrap?: boolean };
+        };
+        if (s.editor) {
+          setPrefs({
+            fontSize: s.editor.font_size ?? DEFAULT_EDITOR_PREFS.fontSize,
+            tabSize: s.editor.tab_size ?? DEFAULT_EDITOR_PREFS.tabSize,
+            wordWrap: s.editor.word_wrap ?? DEFAULT_EDITOR_PREFS.wordWrap,
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     prevContentRef.current = file.content;
@@ -99,8 +129,9 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
         const start = el.selectionStart;
         const end = el.selectionEnd;
         const value = el.value;
-        el.value = `${value.slice(0, start)}  ${value.slice(end)}`;
-        el.selectionStart = el.selectionEnd = start + 2;
+        const indent = " ".repeat(prefs.tabSize);
+        el.value = `${value.slice(0, start)}${indent}${value.slice(end)}`;
+        el.selectionStart = el.selectionEnd = start + indent.length;
         el.dispatchEvent(new Event("input", { bubbles: true }));
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
@@ -135,18 +166,35 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
           .catch((err: Error) => console.error(`${isRedo ? "redo" : "undo"} failed:`, err));
       }
     },
-    [file.docId, file.path, onContentChange]
+    [file.docId, file.path, onContentChange, prefs.tabSize]
   );
 
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1).join("\n");
 
+  // Real §75.76 editor preferences applied as inline overrides -- the
+  // highlight layer and textarea must stay pixel-identical to each other
+  // (the whole overlay technique depends on it), so both always receive
+  // the exact same style object rather than one being styled via CSS and
+  // the other via inline props.
+  const textStyle: React.CSSProperties = {
+    fontSize: `${prefs.fontSize}px`,
+    lineHeight: `${Math.round(prefs.fontSize * 1.54)}px`,
+    tabSize: prefs.tabSize,
+    whiteSpace: prefs.wordWrap ? "pre-wrap" : "pre",
+  };
+
   return (
     <div className="editor-root">
-      <div className="editor-gutter mono" ref={gutterRef}>
+      <div className="editor-gutter mono" ref={gutterRef} style={textStyle}>
         {lineNumbers}
       </div>
       <div className="editor-text-wrap">
-        <pre className="editor-highlight-layer mono" ref={highlightRef} aria-hidden="true">
+        <pre
+          className="editor-highlight-layer mono"
+          ref={highlightRef}
+          aria-hidden="true"
+          style={textStyle}
+        >
           <code
             className="hljs"
             // Real, deliberate use of dangerouslySetInnerHTML: the HTML
@@ -166,6 +214,7 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           onScroll={syncScroll}
+          style={textStyle}
         />
       </div>
     </div>

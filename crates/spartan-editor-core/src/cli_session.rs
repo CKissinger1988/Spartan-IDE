@@ -192,6 +192,24 @@ impl CliSessionManager {
 mod tests {
     use super::*;
 
+    /// Real, self-skipping tool-availability check, matching this crate's
+    /// own established convention (`lsp_integration.rs`'s
+    /// `rust_analyzer_available`) -- checks whether the process can be
+    /// *spawned* at all (`Ok` from `.status()`), not whether `--version`
+    /// is a real subcommand it recognizes, since a real installed `claude`
+    /// binary may not support that flag and still be genuinely present.
+    /// `claude` being on `$PATH` is true in this interactive session (the
+    /// whole session runs on it) but was never guaranteed in a CI runner
+    /// -- found for real by a CI failure, not by inspection.
+    fn claude_cli_available() -> bool {
+        std::process::Command::new("claude")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+    }
+
     #[test]
     fn cli_tool_command_and_label_are_correct_for_each_real_variant() {
         assert_eq!(CliTool::Claude.command(), "claude");
@@ -205,6 +223,10 @@ mod tests {
 
     #[test]
     fn spawning_a_real_installed_tool_succeeds_and_traces_it() {
+        if !claude_cli_available() {
+            eprintln!("SKIP: claude CLI not found on this machine");
+            return;
+        }
         // `claude` is confirmed real and installed in this environment
         // (this whole session runs on it) -- a real, not mocked, spawn.
         let dir = std::env::temp_dir();
@@ -244,6 +266,10 @@ mod tests {
 
     #[test]
     fn send_input_appends_a_real_trace_entry() {
+        if !claude_cli_available() {
+            eprintln!("SKIP: claude CLI not found on this machine");
+            return;
+        }
         let dir = std::env::temp_dir();
         let mut session = CliSession::spawn(0, CliTool::Claude, &dir, 80, 24);
         session.send_input("--version\n");

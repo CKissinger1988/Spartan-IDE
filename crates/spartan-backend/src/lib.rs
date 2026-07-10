@@ -1463,16 +1463,20 @@ fn settings_get() -> Result<serde_json::Value, String> {
 }
 
 /// A real, optional set of fields alongside the always-present GPU pair
-/// (§75.69, §75.70) -- `leo_approval_mode`/`leo_provider` are only ever
-/// sent when the Settings screen's own Leo rows actually changed, so an
-/// unrelated GPU-only save must not silently reset them back to their
-/// real defaults; loading the current settings first and only
+/// (§75.69, §75.70, §75.76) -- every field here besides `gpu_*` is only
+/// ever sent when the Settings screen's own corresponding row actually
+/// changed, so an unrelated save must not silently reset the others back
+/// to their real defaults; loading the current settings first and only
 /// overriding what was actually provided preserves them.
+#[allow(clippy::too_many_arguments)]
 fn settings_set(
     gpu_enabled: bool,
     gpu_layers: Option<u32>,
     leo_approval_mode: Option<spartan_settings::LeoApprovalMode>,
     leo_provider: Option<spartan_settings::LeoProviderSettings>,
+    editor: Option<spartan_settings::EditorSettings>,
+    appearance: Option<spartan_settings::AppearanceSettings>,
+    onboarding_completed: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let current = spartan_settings::load();
     let settings = spartan_settings::Settings {
@@ -1482,6 +1486,9 @@ fn settings_set(
         },
         leo_approval_mode: leo_approval_mode.unwrap_or(current.leo_approval_mode),
         leo_provider: leo_provider.unwrap_or(current.leo_provider),
+        editor: editor.unwrap_or(current.editor),
+        appearance: appearance.unwrap_or(current.appearance),
+        onboarding_completed: onboarding_completed.unwrap_or(current.onboarding_completed),
     };
     spartan_settings::save(&settings).map_err(|e| format!("save settings: {e}"))?;
     serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
@@ -1533,6 +1540,167 @@ fn check_for_updates(out_tx: Sender<String>) -> Result<serde_json::Value, String
         }
     });
     Ok(serde_json::json!({ "status": "checking" }))
+}
+
+/// Real §75.76 "New Project" quick-start scaffolding -- one small, real,
+/// runnable starter file set per Tier 1 language (§35.4's original six
+/// plus C#, §75.51), each one deliberately matching `spartan-languages`'
+/// own real `languages.toml` marker files exactly, so a project created
+/// here is correctly detected by this app's own real language registry
+/// the moment it's opened -- not a separate, parallel "starter project"
+/// concept invented just for this wizard.
+fn project_template_files(template: &str) -> Result<Vec<(&'static str, &'static str)>, String> {
+    match template {
+        "rust" => Ok(vec![
+            (
+                "Cargo.toml",
+                "[package]\nname = \"{{name}}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+            ),
+            (
+                "src/main.rs",
+                "fn main() {\n    println!(\"Hello from {{name}}!\");\n}\n",
+            ),
+        ]),
+        "typescript" => Ok(vec![
+            (
+                "package.json",
+                "{\n  \"name\": \"{{name}}\",\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"start\": \"node index.js\"\n  }\n}\n",
+            ),
+            (
+                "tsconfig.json",
+                "{\n  \"compilerOptions\": {\n    \"target\": \"ES2020\",\n    \"module\": \"ESNext\",\n    \"strict\": true\n  }\n}\n",
+            ),
+            (
+                "index.ts",
+                "console.log(\"Hello from {{name}}!\");\n",
+            ),
+        ]),
+        "javascript" => Ok(vec![
+            (
+                "package.json",
+                "{\n  \"name\": \"{{name}}\",\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"start\": \"node index.js\"\n  }\n}\n",
+            ),
+            (
+                "index.js",
+                "console.log(\"Hello from {{name}}!\");\n",
+            ),
+        ]),
+        "python" => Ok(vec![
+            ("pyproject.toml", "[project]\nname = \"{{name}}\"\nversion = \"0.1.0\"\n"),
+            (
+                "main.py",
+                "def main():\n    print(\"Hello from {{name}}!\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+            ),
+        ]),
+        "kotlin" => Ok(vec![
+            (
+                "build.gradle.kts",
+                "plugins {\n    kotlin(\"jvm\") version \"1.9.0\"\n    application\n}\n\napplication {\n    mainClass.set(\"MainKt\")\n}\n",
+            ),
+            (
+                "src/main/kotlin/Main.kt",
+                "fun main() {\n    println(\"Hello from {{name}}!\")\n}\n",
+            ),
+        ]),
+        "java" => Ok(vec![
+            (
+                "pom.xml",
+                "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>com.example</groupId>\n  <artifactId>{{name}}</artifactId>\n  <version>0.1.0</version>\n</project>\n",
+            ),
+            (
+                "src/main/java/Main.java",
+                "public class Main {\n    public static void main(String[] args) {\n        System.out.println(\"Hello from {{name}}!\");\n    }\n}\n",
+            ),
+        ]),
+        "go" => Ok(vec![
+            ("go.mod", "module {{name}}\n\ngo 1.21\n"),
+            (
+                "main.go",
+                "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello from {{name}}!\")\n}\n",
+            ),
+        ]),
+        "csharp" => Ok(vec![
+            (
+                "{{name}}.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    <TargetFramework>net8.0</TargetFramework>\n  </PropertyGroup>\n</Project>\n",
+            ),
+            (
+                "Program.cs",
+                "System.Console.WriteLine(\"Hello from {{name}}!\");\n",
+            ),
+        ]),
+        other => Err(format!(
+            "unknown project template `{other}` -- expected one of rust, typescript, javascript, python, kotlin, java, go, csharp"
+        )),
+    }
+}
+
+/// Real, deliberately conservative sanitizer -- alphanumeric, `-`, `_`
+/// only, matching the same shape `sanitize_container_name` already
+/// established for Dev Containers, reused here for a real directory
+/// name rather than a Docker container name.
+fn sanitize_project_name(input: &str) -> String {
+    let mut out: String = input
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    out.truncate(64);
+    if out.is_empty() {
+        out = "new-project".to_string();
+    }
+    out
+}
+
+/// Real project scaffolding -- creates `<parent_dir>/<sanitized name>`,
+/// refuses to touch it if it already exists and is non-empty (never
+/// silently overwrites real, possibly unrelated existing files), then
+/// writes each real template file, substituting `{{name}}` for the real
+/// sanitized project name. Deliberately synchronous: writing a handful
+/// of small text files is fast enough that the async-event pattern
+/// `devcontainer_up`/`leo_start_task` use for genuinely slow operations
+/// would be pure overhead here.
+fn create_project(
+    parent_dir: &str,
+    template: &str,
+    name: &str,
+) -> Result<serde_json::Value, String> {
+    let files = project_template_files(template)?;
+    let safe_name = sanitize_project_name(name);
+    let project_root = std::path::Path::new(parent_dir).join(&safe_name);
+
+    if project_root.exists() {
+        let non_empty = std::fs::read_dir(&project_root)
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false);
+        if non_empty {
+            return Err(format!(
+                "{} already exists and is not empty -- refusing to overwrite it",
+                project_root.display()
+            ));
+        }
+    }
+
+    for (rel_path, template_content) in files {
+        let rel_path = rel_path.replace("{{name}}", &safe_name);
+        let content = template_content.replace("{{name}}", &safe_name);
+        let full_path = project_root.join(rel_path);
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("create directory: {e}"))?;
+        }
+        std::fs::write(&full_path, content).map_err(|e| format!("write file: {e}"))?;
+    }
+
+    Ok(serde_json::json!({
+        "project_root": project_root.to_string_lossy(),
+        "name": safe_name,
+    }))
 }
 
 fn get_str_param(params: &serde_json::Value, key: &str) -> Result<String, String> {
@@ -1707,9 +1875,39 @@ pub fn handle_request(
                 .map(|v| serde_json::from_value::<spartan_settings::LeoProviderSettings>(v.clone()))
                 .transpose()
                 .map_err(|e| format!("invalid leo_provider: {e}"))?;
-            settings_set(gpu_enabled, gpu_layers, leo_approval_mode, leo_provider)
+            let editor = req
+                .params
+                .get("editor")
+                .map(|v| serde_json::from_value::<spartan_settings::EditorSettings>(v.clone()))
+                .transpose()
+                .map_err(|e| format!("invalid editor: {e}"))?;
+            let appearance = req
+                .params
+                .get("appearance")
+                .map(|v| serde_json::from_value::<spartan_settings::AppearanceSettings>(v.clone()))
+                .transpose()
+                .map_err(|e| format!("invalid appearance: {e}"))?;
+            let onboarding_completed = req
+                .params
+                .get("onboarding_completed")
+                .and_then(|v| v.as_bool());
+            settings_set(
+                gpu_enabled,
+                gpu_layers,
+                leo_approval_mode,
+                leo_provider,
+                editor,
+                appearance,
+                onboarding_completed,
+            )
         })(),
         "check_for_updates" => check_for_updates(out_tx.clone()),
+        "create_project" => (|| {
+            let parent_dir = get_str_param(&req.params, "parent_dir")?;
+            let template = get_str_param(&req.params, "template")?;
+            let name = get_str_param(&req.params, "name")?;
+            create_project(&parent_dir, &template, &name)
+        })(),
         other => Err(format!("unknown method `{other}`")),
     };
     match result {
@@ -2535,6 +2733,205 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
         std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn settings_set_editor_appearance_and_onboarding_round_trip_and_preserve_each_other() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-settings-editor-appearance-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        let state = new_state();
+        // Set editor + onboarding first.
+        call(
+            &state,
+            1,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": true,
+                "editor": { "font_size": 18, "tab_size": 4, "word_wrap": true },
+                "onboarding_completed": true,
+            }),
+        );
+        // A later, unrelated appearance-only save must not reset the
+        // real, already-saved editor settings or onboarding flag.
+        let set_resp = call(
+            &state,
+            2,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": true,
+                "appearance": { "reduce_motion": true },
+            }),
+        );
+        let result = set_resp.result.unwrap();
+        assert_eq!(result["editor"]["font_size"], 18);
+        assert_eq!(result["editor"]["tab_size"], 4);
+        assert_eq!(result["editor"]["word_wrap"], true);
+        assert_eq!(result["appearance"]["reduce_motion"], true);
+        assert_eq!(result["onboarding_completed"], true);
+
+        let get_resp = call(&state, 3, "settings_get", serde_json::json!({}));
+        let result = get_resp.result.unwrap();
+        assert_eq!(result["editor"]["font_size"], 18);
+        assert_eq!(result["appearance"]["reduce_motion"], true);
+        assert_eq!(result["onboarding_completed"], true);
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn create_project_writes_a_real_runnable_rust_scaffold_to_disk() {
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-create-project-rust-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "create_project",
+            serde_json::json!({
+                "parent_dir": scratch.to_string_lossy(),
+                "template": "rust",
+                "name": "My Cool Crate!",
+            }),
+        );
+        assert!(
+            resp.error.is_none(),
+            "create_project errored: {:?}",
+            resp.error
+        );
+        let result = resp.result.unwrap();
+        // Real sanitization: spaces and punctuation become `-`.
+        assert_eq!(result["name"], "My-Cool-Crate-");
+
+        let project_root = scratch.join("My-Cool-Crate-");
+        let cargo_toml = std::fs::read_to_string(project_root.join("Cargo.toml")).unwrap();
+        assert!(cargo_toml.contains("name = \"My-Cool-Crate-\""));
+        let main_rs = std::fs::read_to_string(project_root.join("src/main.rs")).unwrap();
+        assert!(main_rs.contains("Hello from My-Cool-Crate-!"));
+
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn create_project_refuses_to_overwrite_a_real_nonempty_existing_directory() {
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-create-project-conflict-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let existing = scratch.join("taken");
+        std::fs::create_dir_all(&existing).unwrap();
+        std::fs::write(existing.join("real-preexisting-file.txt"), "do not touch").unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "create_project",
+            serde_json::json!({
+                "parent_dir": scratch.to_string_lossy(),
+                "template": "go",
+                "name": "taken",
+            }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("already exists"));
+        // The real pre-existing file must be completely untouched.
+        assert_eq!(
+            std::fs::read_to_string(existing.join("real-preexisting-file.txt")).unwrap(),
+            "do not touch"
+        );
+
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn create_project_rejects_an_unknown_template_honestly() {
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-create-project-unknown-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "create_project",
+            serde_json::json!({
+                "parent_dir": scratch.to_string_lossy(),
+                "template": "cobol",
+                "name": "legacy",
+            }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("unknown project template"));
+
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn create_project_every_real_template_produces_files_spartan_languages_can_detect() {
+        for template in [
+            "rust",
+            "typescript",
+            "javascript",
+            "python",
+            "kotlin",
+            "java",
+            "go",
+            "csharp",
+        ] {
+            let scratch = std::env::temp_dir().join(format!(
+                "spartan-backend-create-project-detect-{template}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+
+            let state = new_state();
+            let resp = call(
+                &state,
+                1,
+                "create_project",
+                serde_json::json!({
+                    "parent_dir": scratch.to_string_lossy(),
+                    "template": template,
+                    "name": "detectme",
+                }),
+            );
+            assert!(
+                resp.error.is_none(),
+                "template {template} errored: {:?}",
+                resp.error
+            );
+            let project_root = scratch.join("detectme");
+            let registry = spartan_languages::LanguageRegistry::curated_default();
+            let detected = registry.detect_project_languages(&project_root);
+            assert!(
+                !detected.is_empty(),
+                "template {template} produced a project spartan-languages could not detect at all"
+            );
+
+            std::fs::remove_dir_all(&scratch).ok();
+        }
     }
 
     #[test]
