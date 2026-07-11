@@ -9,6 +9,7 @@ members = [
     "spikes/ui-shell-spike",
     "spikes/wasm-buffer-spike",
     "crates/spartan-buffer",
+    "crates/spartan-buffer-wasm",
     "crates/spartan-languages",
     "crates/spartan-git",
     "crates/spartan-security",

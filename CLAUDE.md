@@ -98,6 +98,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Web app prep, second spike — real tree-sitter parsing/querying via web-tree-sitter in a real JS engine, a real grammar/library version-compatibility bug found and fixed | §75.86 |
 | Web app prep, third spike — real, zero-native-dependency git operations via isomorphic-git, cross-checked against the real native git CLI | §75.87 |
 | Web app prep — real WebSocket transport for spartan-backend, alongside stdio; a real unauthenticated-RCE-surface design caught and fixed before it compiled | §75.88 |
+| Web app — real `web/` npm project scaffold (first increment): File System Access API + WASM-compiled `spartan-buffer`, real Chromium verification, no LSP/DAP/Leo/git yet | §75.89 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2744,6 +2745,55 @@ first — it's the parity reference until each row there is actually reimplement
   performed (both transports were verified independently -- stdio via the existing, unchanged
   test suite, WebSocket via this pass's own new tests -- not together in one live process observed
   end-to-end).
+- **Real, working code — real `web/` npm project scaffold, closing task #81, real browser-context
+  verification of File System Access + WASM buffer, a real `vite preview`-vs-`vite dev` finding
+  (§75.89)**: user-requested ("Continue"), closing the last item on §75.85's own tracked
+  follow-up list. Deliberately scoped to the **pure client-side half** of the hybrid architecture
+  (§75.85) -- connecting to `spartan-backend`'s real WebSocket transport (§75.88) needs a real
+  answer to that pass's own explicitly-left-open token-delivery design question, not guessed at
+  here. Promotes `spikes/wasm-buffer-spike` into a real, separate production crate,
+  `crates/spartan-buffer-wasm` -- a fuller `WasmDocument` API (`insert`/`delete`/`replace`/
+  `text_between`/`undo`/`char_to_line`/`line_to_char`/`line`), with a real, deliberate, named
+  scope cut in its own doc comment: **no `redo`** -- every other real Spartan UI surface builds
+  redo as a layer *above* `Document`, not inside it, and that layer isn't built for this new
+  surface yet. New `web/`, a real, separate Vite+React npm project (not in the Cargo workspace):
+  `src/fsAccess.ts` (a real File System Access API wrapper plus an honest
+  `isFileSystemAccessSupported()` capability check -- Chromium-only, a real permanent platform
+  limit named plainly, not hidden), `src/buffer.ts` (loads the compiled WASM output),
+  `src/components/FileTree.tsx`/`Editor.tsx` (real UI adapted directly from `desktop/`'s own
+  equivalents -- the same lazy-directory-expansion design and the same custom, not Monaco/
+  CodeMirror, "transparent textarea over a highlighted overlay" editing surface, with IPC calls
+  swapped for direct File System Access API / WASM calls), `src/syntax.ts`/`theme.css` (copied
+  verbatim from `desktop/src/`, one shared source of truth across both web shells), and
+  `src/App.tsx` (single-file-open only, no tabs -- a real, narrow first-increment scope). Real,
+  executed verification: `npm install`/`typecheck`/`build` all succeed, including a real Vite
+  production bundle correctly packaging the compiled `.wasm` asset (~186KB/~65.5KB gzip). Real
+  Playwright+Chromium verification confirmed the initial UI renders correctly and that the
+  unsupported-browser fallback correctly does **not** appear in real Chromium. A second, deeper
+  real-browser test used the Origin Private File System (`navigator.storage.getDirectory()`) to
+  get a real, scriptable `FileSystemDirectoryHandle` (a necessary substitute for the native OS
+  picker dialog, which can't be driven headlessly) and directly exercised `fsAccess.ts` and the
+  WASM-backed `Document` together: created a real file, listed the real directory, read it back,
+  edited it through `WasmDocument.replace`, wrote it back, and read it a second time to confirm
+  the write genuinely persisted -- a real, complete round trip. **A real methodological finding,
+  recorded so it isn't rediscovered from scratch**: this test initially failed against a `vite
+  preview` server (`Failed to fetch dynamically imported module`) -- `vite preview` only serves
+  the pre-built `dist/` bundle, and dynamic `import()` of raw `.ts` source paths only resolves
+  through Vite's **dev server** transform pipeline; re-run against a real `vite dev` server, both
+  tests passed cleanly. A new `web` CI job installs the `wasm32-unknown-unknown` target and the
+  exact matching `wasm-bindgen-cli` version (0.2.126, pinned to `Cargo.lock`'s own version) before
+  running the same real `npm run build` verified locally. 5 new `spartan-buffer-wasm` tests, all
+  passing (586 tests total workspace-wide, up from 581), full `cargo fmt --all -- --check`/
+  `cargo clippy --workspace --release --all-targets`/`cargo test --workspace --release --
+  test-threads=1` clean. **What this does not confirm**: no LSP/DAP/Leo/git connectivity of any
+  kind; no multi-file/tab support; no redo; no Firefox/Safari verification (impossible by
+  construction); no real end-user native-picker-dialog flow was exercised (OPFS was a necessary,
+  honestly-named substitute for headless automation); no real CI run of the new `web` job has
+  completed in this session (added and locally cross-checked against the same commands verified
+  interactively, but GitHub Actions itself wasn't triggered from this environment). Task #81 is
+  now closed -- this is a real, working first increment of the vscode.dev-inspired web app, not
+  its full scope; LSP/DAP/Leo/git connectivity over the real WebSocket transport is the natural
+  next piece once the token-delivery design question is resolved.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2801,15 +2851,25 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 572 tests: 7 spikes + 13 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 586 tests: 7 spikes + 14 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
-                                    # spartan-editor-core, spartan-backend, xtask)
+                                    # spartan-editor-core, spartan-backend, spartan-buffer-wasm, xtask)
 # spikes/wasm-buffer-spike (§75.85) is a real Tier 0 spike for the planned web app -- its own
 # `cargo test` runs fine for the host target with no extra setup; reproducing its real WASM/Node
 # verification needs `rustup target add wasm32-unknown-unknown` + `wasm-bindgen-cli` (pinned to
 # match the `wasm-bindgen` crate version exactly) -- see spikes/wasm-buffer-spike/README.md.
+# crates/spartan-buffer-wasm (§75.89) is the real, promoted-from-spike production crate backing
+# web/'s own WASM-compiled editing -- `cargo test -p spartan-buffer-wasm` runs fine for the host
+# target; `web/npm run build:wasm` is what actually compiles it to wasm32-unknown-unknown + runs
+# wasm-bindgen, same toolchain requirement as the spike above. web/ itself is a real, separate
+# Vite+React npm project, not part of the Cargo workspace -- `cd web && npm install && npm run
+# build:wasm && npm run typecheck && npm run build` -- see web/README.md for what's real (File
+# System Access API + WASM-backed editing/save/undo, real Playwright+Chromium verification) vs.
+# explicitly deferred (LSP/DAP/Leo/git connectivity over spartan-backend's real WebSocket
+# transport, §75.88 -- pending that pass's own explicitly-left-open token-delivery design
+# question; multi-file tabs; redo).
 # spartan-model's own src/llamacpp.rs live_integration_tests module (§75.83, extended by §75.84
 # with a second, grammar-constrained tool-calling test) needs SPARTAN_TEST_GGUF_MODEL set to a
 # real, already-downloaded .gguf file path -- self-skips (prints a message) if unset or the path

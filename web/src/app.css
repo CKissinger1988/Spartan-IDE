@@ -1,0 +1,257 @@
+/*
+ * Real CSS, adapted for web/'s own real (smaller) first-increment layout
+ * -- reuses the exact same real tokens `theme.css` already established
+ * (copied verbatim from desktop/), and the exact same real class
+ * structure/rules `desktop/src/app.css` already proved for the editor,
+ * file tree, and syntax-highlighting overlay (§75.62/§75.63), not
+ * re-derived from scratch. Not a full copy of desktop's own stylesheet
+ * -- this app has no tabs, no Leo panel, no nav sidebar yet, so only the
+ * real, currently-used pieces are here.
+ */
+
+.app-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.toolbar-title {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.toolbar-btn {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-bright);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.toolbar-btn:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent);
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toolbar-note {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.main-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.file-tree-panel {
+  width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.file-tree {
+  padding: 8px 0;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-size: 12.5px;
+  cursor: pointer;
+  border-radius: 4px;
+  white-space: nowrap;
+  transition: background var(--transition-fast);
+}
+
+.tree-row:hover {
+  background: var(--accent-hover);
+}
+
+.tree-caret {
+  display: inline-block;
+  width: 12px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.tree-error {
+  color: #e05a4a;
+  padding: 8px;
+  font-size: 12px;
+}
+
+.content-area {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  background: var(--bg);
+}
+
+.editor-root {
+  display: flex;
+  height: 100%;
+}
+
+.editor-gutter {
+  width: 48px;
+  padding: 8px 8px 8px 0;
+  text-align: right;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 20px;
+  overflow: hidden;
+  white-space: pre;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  user-select: none;
+}
+
+.editor-text-wrap {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+}
+
+.editor-highlight-layer,
+.editor-textarea {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 20px;
+  white-space: pre;
+  tab-size: 2;
+  overflow: auto;
+}
+
+.editor-highlight-layer {
+  background: var(--bg);
+  color: var(--text);
+  pointer-events: none;
+  scrollbar-width: none;
+}
+
+.editor-highlight-layer::-webkit-scrollbar {
+  display: none;
+}
+
+.editor-highlight-layer code {
+  font-family: inherit;
+  background: none;
+  padding: 0;
+}
+
+.editor-textarea-overlay {
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+  border: none;
+  outline: none;
+  resize: none;
+}
+
+.editor-textarea-overlay::selection {
+  background: var(--accent-dim);
+}
+
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+  padding: 24px;
+}
+
+.status-bar {
+  display: flex;
+  gap: 16px;
+  padding: 4px 12px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+/* Real, hand-written highlight.js token theme (matching desktop/'s own
+ * §75.63 choice) -- token colors stay consistent with this app's real
+ * color tokens rather than an unrelated imported palette. */
+.hljs-keyword,
+.hljs-built_in,
+.hljs-type {
+  color: var(--accent);
+}
+
+.hljs-string,
+.hljs-regexp {
+  color: #9ece6a;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.hljs-number,
+.hljs-literal {
+  color: #e0af68;
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-title.class_ {
+  color: #7dcfff;
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-params {
+  color: #bb9af7;
+}
+
+.hljs-tag,
+.hljs-name {
+  color: var(--accent);
+}
+
+.hljs-symbol,
+.hljs-bullet,
+.hljs-meta {
+  color: var(--text-dim);
+}

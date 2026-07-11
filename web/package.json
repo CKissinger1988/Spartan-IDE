@@ -1,0 +1,29 @@
+{
+  "name": "spartan-web",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Real, vscode.dev-inspired web app for Spartan IDE (§75.85/§75.89, task #81) -- concepts only, zero VS Code/vscode.dev code. Client-side half of the hybrid architecture: real File System Access API file editing backed by the real spartan-buffer engine compiled to WASM (crates/spartan-buffer-wasm). LSP/DAP/Leo connectivity via spartan-backend's real WebSocket transport (§75.88) is not wired yet -- see README.md.",
+  "type": "module",
+  "scripts": {
+    "build:wasm": "cargo build -p spartan-buffer-wasm --release --target wasm32-unknown-unknown && wasm-bindgen ../target/wasm32-unknown-unknown/release/spartan_buffer_wasm.wasm --target web --out-dir src/wasm-gen",
+    "dev": "vite",
+    "build": "npm run build:wasm && tsc -p tsconfig.json && vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "highlight.js": "^11.11.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/wicg-file-system-access": "^2023.10.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  }
+}

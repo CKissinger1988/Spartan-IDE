@@ -5200,6 +5200,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "spartan-buffer-wasm"
+version = "0.1.0"
+dependencies = [
+ "spartan-buffer",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "spartan-crash"
 version = "0.1.0"
 dependencies = [

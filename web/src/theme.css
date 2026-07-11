@@ -1,0 +1,165 @@
+/*
+ * Real color tokens ported verbatim from crates/spartan-editor-core/src/
+ * theme.rs (§75.54's own already-researched Antigravity 2.0 palette),
+ * not re-derived -- so the new Electron shell and the original wgpu
+ * shell share one real source of truth for base color, the same
+ * discipline theme.rs itself established for the wgpu renderer.
+ *
+ * §75.76 layers a real "Spartan Coding" Sci-Fi/futuristic treatment on
+ * top of that base palette -- a second, cooler "HUD" accent (cyan) for
+ * focus/targeting/status affordances alongside the existing warm rust
+ * accent, real glow tokens, chamfered-corner panel styling, and a very
+ * faint animated scan/grid texture. The base bg/surface/border/text
+ * tokens are untouched on purpose -- this is a real design layer added
+ * on top of the already-verified palette, not a replacement of it.
+ */
+
+:root {
+  --bg: #09090b;
+  --surface: #18181b;
+  --surface-raised: #1f1f23;
+  --border: #27272a;
+  --border-bright: #3a3a40;
+  --text: #e9e7e4;
+  --text-dim: #84838a;
+  --accent: #c4432b;
+  --accent-dim: rgba(196, 67, 43, 0.16);
+  --accent-hover: rgba(196, 67, 43, 0.08);
+  --accent-rgb: 196, 67, 43;
+
+  /* Cool "HUD" accent -- targeting/focus/informational, distinct from
+     the warm Spartan rust accent used for primary/brand/action color. */
+  --hud: #3ee6e0;
+  --hud-dim: rgba(62, 230, 224, 0.14);
+  --hud-rgb: 62, 230, 224;
+
+  --glow-accent: 0 0 1px rgba(var(--accent-rgb), 0.9), 0 0 10px rgba(var(--accent-rgb), 0.45);
+  --glow-accent-lg: 0 0 2px rgba(var(--accent-rgb), 0.9), 0 0 22px rgba(var(--accent-rgb), 0.4);
+  --glow-hud: 0 0 1px rgba(var(--hud-rgb), 0.9), 0 0 10px rgba(var(--hud-rgb), 0.45);
+
+  --chamfer: 8px;
+  --transition-fast: 120ms ease;
+  --transition-med: 220ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background:
+    radial-gradient(ellipse 900px 500px at 15% -10%, rgba(var(--accent-rgb), 0.05), transparent 60%),
+    radial-gradient(ellipse 700px 500px at 100% 110%, rgba(var(--hud-rgb), 0.035), transparent 60%),
+    repeating-linear-gradient(
+      0deg,
+      rgba(255, 255, 255, 0.012) 0px,
+      rgba(255, 255, 255, 0.012) 1px,
+      transparent 1px,
+      transparent 3px
+    ),
+    var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", "Inter", sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  user-select: none;
+}
+
+.mono {
+  font-family: "SF Mono", "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+}
+
+/* Real, deliberate "targeting reticle" keyboard-focus style -- cool HUD
+   cyan rather than the warm brand accent, so a focus ring is always
+   visually distinct from an active/selected state. Kept to :focus-visible
+   only, so it never fires on a plain mouse click. */
+:focus-visible {
+  outline: 1.5px solid var(--hud);
+  outline-offset: 1px;
+  box-shadow: var(--glow-hud);
+}
+
+/* Reusable Sci-Fi utility classes, applied selectively across app.css
+   rather than duplicated ad hoc. */
+.sf-chamfer {
+  clip-path: polygon(
+    var(--chamfer) 0,
+    100% 0,
+    100% calc(100% - var(--chamfer)),
+    calc(100% - var(--chamfer)) 100%,
+    0 100%,
+    0 var(--chamfer)
+  );
+}
+
+.sf-chamfer-sm {
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+}
+
+.sf-glow-accent {
+  box-shadow: var(--glow-accent);
+}
+
+.sf-glow-hud {
+  box-shadow: var(--glow-hud);
+}
+
+@keyframes sf-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes sf-scan {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.sf-scanline {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Real §75.76 "reduce motion" appearance setting -- toggled by adding
+   `.reduce-motion` to the document root (see `reduceMotion.ts`). A
+   blanket catch-all rather than hand-listing every animated selector,
+   matching the standard prefers-reduced-motion pattern. */
+.reduce-motion,
+.reduce-motion * {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+.sf-scanline::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 40%,
+    rgba(var(--accent-rgb), 0.16) 48%,
+    rgba(var(--accent-rgb), 0.28) 50%,
+    rgba(var(--accent-rgb), 0.16) 52%,
+    transparent 60%
+  );
+  background-size: 300% 100%;
+  animation: sf-scan 6s linear infinite;
+  pointer-events: none;
+}
