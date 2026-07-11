@@ -39,6 +39,8 @@ const ALLOWED_METHODS = new Set([
   "settings_get",
   "settings_set",
   "check_for_updates",
+  "crash_reports_list",
+  "crash_report_upload",
   "create_project",
   "devcontainer_detect",
   "devcontainer_up",

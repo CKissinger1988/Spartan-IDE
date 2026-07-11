@@ -26,14 +26,30 @@ interface AppearanceSettings {
   reduce_motion: boolean;
 }
 
+interface CrashReportingSettings {
+  upload_endpoint: string | null;
+}
+
 interface Settings {
   gpu_offload: GpuOffloadSettings;
   leo_approval_mode: LeoApprovalMode;
   leo_provider: LeoProviderSettings;
   editor: EditorSettings;
   appearance: AppearanceSettings;
+  crash_reporting: CrashReportingSettings;
   onboarding_completed: boolean;
 }
+
+interface CrashReportEntry {
+  filename: string;
+  report: { unix_timestamp: number; message: string; location: string | null };
+}
+
+type UploadStatus =
+  | { kind: "idle" }
+  | { kind: "uploading" }
+  | { kind: "done"; status: number }
+  | { kind: "failed"; error: string };
 
 /** Real, sensible default model per provider kind -- shown the moment the
  * user switches kind in the UI, before they've typed anything of their
@@ -125,6 +141,9 @@ export default function SettingsScreen(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckDisplay>({ kind: "not_checked" });
+  const [crashReports, setCrashReports] = useState<CrashReportEntry[]>([]);
+  const [crashReportsError, setCrashReportsError] = useState<string | null>(null);
+  const [uploadStatus, setUploadStatus] = useState<Record<string, UploadStatus>>({});
 
   const refresh = useCallback(() => {
     window.spartan
@@ -139,6 +158,20 @@ export default function SettingsScreen(): React.ReactElement {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  const refreshCrashReports = useCallback(() => {
+    window.spartan
+      .call("crash_reports_list", {})
+      .then((result) => {
+        setCrashReports((result as { reports: CrashReportEntry[] }).reports);
+        setCrashReportsError(null);
+      })
+      .catch((e: Error) => setCrashReportsError(e.message));
+  }, []);
+
+  useEffect(() => {
+    refreshCrashReports();
+  }, [refreshCrashReports]);
 
   useEffect(() => {
     const unsubscribe = window.spartan.onEvent((event, data) => {
@@ -178,6 +211,7 @@ export default function SettingsScreen(): React.ReactElement {
           leo_provider: next.leo_provider,
           editor: next.editor,
           appearance: next.appearance,
+          crash_reporting: next.crash_reporting,
           onboarding_completed: next.onboarding_completed,
         })
         .then((result) => setSettings(result as Settings))
@@ -190,6 +224,29 @@ export default function SettingsScreen(): React.ReactElement {
   const openCrashReportsFolder = useCallback(() => {
     window.spartan.openCrashReportsFolder?.().catch((e: Error) => setError(e.message));
   }, []);
+
+  // Real, explicit, per-report upload -- never automatic (§18, §75.82).
+  // Each report gets its own independent status so uploading one doesn't
+  // block or misreport the state of any other.
+  const uploadReport = useCallback((filename: string) => {
+    setUploadStatus((prev) => ({ ...prev, [filename]: { kind: "uploading" } }));
+    window.spartan
+      .call("crash_report_upload", { filename })
+      .then((result) => {
+        const status = (result as { status: number }).status;
+        setUploadStatus((prev) => ({ ...prev, [filename]: { kind: "done", status } }));
+      })
+      .catch((e: Error) => {
+        setUploadStatus((prev) => ({ ...prev, [filename]: { kind: "failed", error: e.message } }));
+      });
+  }, []);
+
+  const uploadStatusLine = (status: UploadStatus | undefined): string | null => {
+    if (!status || status.kind === "idle") return null;
+    if (status.kind === "uploading") return "Uploading…";
+    if (status.kind === "done") return `Uploaded (HTTP ${status.status})`;
+    return `Failed: ${status.error}`;
+  };
 
   const openRepositoryPage = useCallback(() => {
     window.spartan.openRepositoryPage?.().catch((e: Error) => setError(e.message));
@@ -426,6 +483,60 @@ export default function SettingsScreen(): React.ReactElement {
         A crash panic is caught locally, has any credential-shaped text redacted, and is written
         as a plain JSON file under ~/.spartan/crashes/. Nothing in that folder is ever uploaded
         automatically; deleting its contents is safe at any time.
+      </div>
+      <div className="settings-row">
+        <label className="settings-label mono">Upload endpoint</label>
+        <input
+          className="settings-select mono"
+          type="text"
+          placeholder="https://your-beta-server.example.com/crashes"
+          disabled={saving}
+          defaultValue={settings.crash_reporting.upload_endpoint ?? ""}
+          key={settings.crash_reporting.upload_endpoint ?? ""}
+          onBlur={(e) => {
+            const trimmed = e.target.value.trim();
+            save({ crash_reporting: { upload_endpoint: trimmed.length > 0 ? trimmed : null } });
+          }}
+          style={{ width: 320 }}
+        />
+      </div>
+      <div className="settings-note mono">
+        No default or built-in endpoint of any kind — a report is only ever sent if you type an
+        endpoint here yourself and then click "Upload" on a specific report below. Nothing is
+        sent automatically, ever, regardless of whether an endpoint is configured.
+      </div>
+      <div className="settings-row" style={{ alignItems: "flex-start" }}>
+        <label className="settings-label mono">Local reports</label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
+          {crashReportsError && <span className="leo-error mono">{crashReportsError}</span>}
+          {crashReports.length === 0 && !crashReportsError && (
+            <span className="settings-update-status mono">No crash reports on this machine.</span>
+          )}
+          {crashReports.map((entry) => {
+            const status = uploadStatusLine(uploadStatus[entry.filename]);
+            return (
+              <div key={entry.filename} className="settings-row" style={{ marginBottom: 0 }}>
+                <span className="settings-update-status mono" style={{ flex: 1 }}>
+                  {entry.filename} — {entry.report.message.slice(0, 60)}
+                </span>
+                <button
+                  className="settings-button mono"
+                  disabled={
+                    !settings.crash_reporting.upload_endpoint ||
+                    uploadStatus[entry.filename]?.kind === "uploading"
+                  }
+                  onClick={() => uploadReport(entry.filename)}
+                >
+                  Upload
+                </button>
+                {status && <span className="settings-update-status mono">{status}</span>}
+              </div>
+            );
+          })}
+          <button className="settings-button mono" onClick={refreshCrashReports}>
+            Refresh
+          </button>
+        </div>
       </div>
 
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>

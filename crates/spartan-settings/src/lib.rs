@@ -139,6 +139,20 @@ pub struct AppearanceSettings {
     pub reduce_motion: bool,
 }
 
+/// Real §75.82 crash-report upload configuration, closing task #35 --
+/// `upload_endpoint` is deliberately `Option<String>`, defaulting to
+/// `None` (never a hardcoded/well-known endpoint of this project's own):
+/// there is no real telemetry backend this project operates, so "where do
+/// reports go" has to be something a beta tester or self-hoster explicitly
+/// types in themselves, not a default that could silently start sending
+/// data anywhere. Pairing with `spartan_crash::upload_report` (§75.82),
+/// which is likewise never called except from a real, explicit user
+/// action -- this field being set does not, by itself, cause any upload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CrashReportingSettings {
+    pub upload_endpoint: Option<String>,
+}
+
 /// `Settings` itself is no longer `Copy` (`LeoProviderSettings` owns a
 /// real, non-`Copy` `String`) -- a real, mechanical ripple from adding
 /// this field; every existing call site that relied on implicit copies
@@ -168,6 +182,7 @@ pub struct Settings {
     pub leo_provider: LeoProviderSettings,
     pub editor: EditorSettings,
     pub appearance: AppearanceSettings,
+    pub crash_reporting: CrashReportingSettings,
     /// Real §75.76 first-run onboarding flag -- `false` until the user
     /// completes or explicitly skips the onboarding flow once; the
     /// Electron shell checks this on startup and shows onboarding only
@@ -291,6 +306,9 @@ mod tests {
             appearance: AppearanceSettings {
                 reduce_motion: true,
             },
+            crash_reporting: CrashReportingSettings {
+                upload_endpoint: Some("https://reports.example.com/upload".to_string()),
+            },
             onboarding_completed: true,
         };
         save_to(&path, &settings).unwrap();
@@ -331,7 +349,15 @@ mod tests {
         // whole point -- this file simply never had the field).
         assert_eq!(loaded.editor, EditorSettings::default());
         assert_eq!(loaded.appearance, AppearanceSettings::default());
+        assert_eq!(loaded.crash_reporting, CrashReportingSettings::default());
         assert!(!loaded.onboarding_completed);
+    }
+
+    #[test]
+    fn default_crash_reporting_has_no_upload_endpoint_configured() {
+        // No default/well-known endpoint of this project's own -- a real
+        // upload target has to be something a user explicitly typed in.
+        assert_eq!(Settings::default().crash_reporting.upload_endpoint, None);
     }
 
     #[test]

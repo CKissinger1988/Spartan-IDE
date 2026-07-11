@@ -1525,6 +1525,72 @@ fn settings_get() -> Result<serde_json::Value, String> {
     serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
 }
 
+/// The real, shared `~/.spartan/crashes` directory both this crate's own
+/// `main.rs` (via `install_hook`) and `spartan-editor-core`'s reference
+/// shell already write real crash reports to (`crash_dir()` there,
+/// §75.32) -- kept byte-identical (same env-var fallback order) so a
+/// crash from either shell on one machine lands in the one place a user
+/// or beta program would actually go look.
+pub fn crash_dir() -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".spartan").join("crashes")
+}
+
+/// Real §75.82 listing of every local crash report on disk, newest
+/// first, closing task #35's own "beta testers need a way to see and
+/// send these" half. Returns each report's real filename and its real,
+/// already-redacted file contents parsed back to structured JSON --
+/// never raw, unredacted data, since `write_report` (§75.32) redacts
+/// before it ever touches disk in the first place.
+fn crash_reports_list() -> Result<serde_json::Value, String> {
+    let paths =
+        spartan_crash::list_reports(&crash_dir()).map_err(|e| format!("list reports: {e}"))?;
+    let reports: Vec<serde_json::Value> = paths
+        .iter()
+        .filter_map(|path| {
+            let filename = path.file_name()?.to_str()?.to_string();
+            let contents = std::fs::read_to_string(path).ok()?;
+            let parsed: serde_json::Value = serde_json::from_str(&contents).ok()?;
+            Some(serde_json::json!({ "filename": filename, "report": parsed }))
+        })
+        .collect();
+    Ok(serde_json::json!({ "reports": reports }))
+}
+
+/// Real, explicit, user-initiated upload of exactly one already-written,
+/// already-redacted local report to a user-configured endpoint -- never
+/// automatic, matching §18's own "never auto-uploads" contract and
+/// `spartan_crash::upload_report`'s own doc comment. `filename` is
+/// validated against a plain `crash-<digits>.json` shape (matching what
+/// `write_report`/`list_reports` themselves only ever produce) before
+/// being joined onto `crash_dir()`, so this can never be tricked into
+/// reading or sending an arbitrary path elsewhere on disk.
+fn crash_report_upload(filename: &str) -> Result<serde_json::Value, String> {
+    let is_valid_filename = filename.starts_with("crash-")
+        && filename.ends_with(".json")
+        && filename[6..filename.len() - 5]
+            .chars()
+            .all(|c| c.is_ascii_digit());
+    if !is_valid_filename {
+        return Err(format!(
+            "refusing to upload unexpected filename: {filename}"
+        ));
+    }
+    let settings = spartan_settings::load();
+    let endpoint = settings
+        .crash_reporting
+        .upload_endpoint
+        .ok_or("no crash-report upload endpoint configured in Settings")?;
+    let path = crash_dir().join(filename);
+    let report_json =
+        std::fs::read_to_string(&path).map_err(|e| format!("read report {filename}: {e}"))?;
+    let status = spartan_crash::upload_report(&endpoint, &report_json)
+        .map_err(|e| format!("upload failed: {e}"))?;
+    Ok(serde_json::json!({ "status": status }))
+}
+
 /// Real, deliberate patch shape -- found as a real "too many positional
 /// arguments" smell by a code-review pass (`settings_set` had grown to 7
 /// same-typed `Option<T>`-in-a-row parameters, needing a real
@@ -1545,6 +1611,7 @@ struct SettingsPatch {
     leo_provider: Option<spartan_settings::LeoProviderSettings>,
     editor: Option<spartan_settings::EditorSettings>,
     appearance: Option<spartan_settings::AppearanceSettings>,
+    crash_reporting: Option<spartan_settings::CrashReportingSettings>,
     onboarding_completed: Option<bool>,
 }
 
@@ -1559,6 +1626,7 @@ fn settings_set(patch: SettingsPatch) -> Result<serde_json::Value, String> {
         leo_provider: patch.leo_provider.unwrap_or(current.leo_provider),
         editor: patch.editor.unwrap_or(current.editor),
         appearance: patch.appearance.unwrap_or(current.appearance),
+        crash_reporting: patch.crash_reporting.unwrap_or(current.crash_reporting),
         onboarding_completed: patch
             .onboarding_completed
             .unwrap_or(current.onboarding_completed),
@@ -1949,6 +2017,14 @@ pub fn handle_request(
                 .map(|v| serde_json::from_value::<spartan_settings::AppearanceSettings>(v.clone()))
                 .transpose()
                 .map_err(|e| format!("invalid appearance: {e}"))?;
+            let crash_reporting = req
+                .params
+                .get("crash_reporting")
+                .map(|v| {
+                    serde_json::from_value::<spartan_settings::CrashReportingSettings>(v.clone())
+                })
+                .transpose()
+                .map_err(|e| format!("invalid crash_reporting: {e}"))?;
             let onboarding_completed = req
                 .params
                 .get("onboarding_completed")
@@ -1962,10 +2038,15 @@ pub fn handle_request(
                 leo_provider,
                 editor,
                 appearance,
+                crash_reporting,
                 onboarding_completed,
             })
         })(),
         "check_for_updates" => check_for_updates(out_tx.clone()),
+        "crash_reports_list" => crash_reports_list(),
+        "crash_report_upload" => {
+            get_str_param(&req.params, "filename").and_then(|f| crash_report_upload(&f))
+        }
         "create_project" => (|| {
             let parent_dir = get_str_param(&req.params, "parent_dir")?;
             let template = get_str_param(&req.params, "template")?;
@@ -2878,6 +2959,229 @@ mod tests {
         );
         assert!(resp.result.is_none());
         assert!(resp.error.unwrap().contains("invalid onboarding_completed"));
+    }
+
+    /// A real, minimal, hand-rolled HTTP/1.1 server for
+    /// `crash_report_upload`'s own real `ureq` POST -- the same technique
+    /// `spartan-crash`'s own test module already established, duplicated
+    /// here (not shared) since it's a small, self-contained test helper
+    /// and this crate has no existing precedent for cross-crate test-only
+    /// dependencies.
+    fn spawn_mock_upload_server(
+        response_status: u16,
+    ) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let body = loop {
+                let n = stream.read(&mut chunk).unwrap();
+                if n == 0 {
+                    break String::new();
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf);
+                if let Some(header_end) = text.find("\r\n\r\n") {
+                    let content_length: usize = text[..header_end]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    let body_start = header_end + 4;
+                    if buf.len() >= body_start + content_length {
+                        break String::from_utf8_lossy(
+                            &buf[body_start..body_start + content_length],
+                        )
+                        .to_string();
+                    }
+                }
+            };
+            let _ = tx.send(body);
+            let reason = if response_status == 200 {
+                "OK"
+            } else {
+                "Error"
+            };
+            let response =
+                format!("HTTP/1.1 {response_status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(response.as_bytes());
+        });
+        (format!("http://127.0.0.1:{port}"), rx)
+    }
+
+    #[test]
+    fn crash_reports_list_on_a_fresh_home_with_no_crashes_returns_a_real_empty_list() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-crash-list-empty-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        let state = new_state();
+        let resp = call(&state, 1, "crash_reports_list", serde_json::json!({}));
+        assert!(resp.error.is_none());
+        let reports = resp.result.unwrap()["reports"].as_array().unwrap().clone();
+        assert!(reports.is_empty());
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn crash_reports_list_finds_real_reports_written_by_the_real_crash_hook() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-crash-list-populated-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        spartan_crash::write_report(
+            &crash_dir(),
+            &spartan_crash::CrashReport {
+                unix_timestamp: 1,
+                message: "a real test panic message".to_string(),
+                location: Some("src/lib.rs:1:1".to_string()),
+            },
+        )
+        .unwrap();
+
+        let state = new_state();
+        let resp = call(&state, 1, "crash_reports_list", serde_json::json!({}));
+        assert!(resp.error.is_none());
+        let reports = resp.result.unwrap()["reports"].as_array().unwrap().clone();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0]["filename"], "crash-1.json");
+        assert_eq!(reports[0]["report"]["message"], "a real test panic message");
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn crash_report_upload_refuses_an_unexpected_filename_before_touching_disk() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "crash_report_upload",
+            serde_json::json!({ "filename": "../../etc/passwd" }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp
+            .error
+            .unwrap()
+            .contains("refusing to upload unexpected filename"));
+    }
+
+    #[test]
+    fn crash_report_upload_errors_honestly_with_no_endpoint_configured() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-crash-upload-no-endpoint-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        spartan_crash::write_report(
+            &crash_dir(),
+            &spartan_crash::CrashReport {
+                unix_timestamp: 2,
+                message: "m".to_string(),
+                location: None,
+            },
+        )
+        .unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "crash_report_upload",
+            serde_json::json!({ "filename": "crash-2.json" }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp
+            .error
+            .unwrap()
+            .contains("no crash-report upload endpoint configured"));
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn crash_report_upload_really_posts_the_exact_on_disk_report_to_a_real_local_server() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-crash-upload-real-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        let report = spartan_crash::CrashReport {
+            unix_timestamp: 3,
+            message: "real upload test".to_string(),
+            location: None,
+        };
+        spartan_crash::write_report(&crash_dir(), &report).unwrap();
+        let expected_body = spartan_crash::format_report(&report);
+
+        let (endpoint, rx) = spawn_mock_upload_server(200);
+        spartan_settings::save(&spartan_settings::Settings {
+            crash_reporting: spartan_settings::CrashReportingSettings {
+                upload_endpoint: Some(endpoint),
+            },
+            ..Default::default()
+        })
+        .unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "crash_report_upload",
+            serde_json::json!({ "filename": "crash-3.json" }),
+        );
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["status"], 200);
+        let received = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(received, expected_body);
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
     }
 
     #[test]

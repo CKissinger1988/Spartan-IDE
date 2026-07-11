@@ -16,9 +16,20 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use spartan_backend::{handle_request, BackendState, Request, Response};
+use spartan_backend::{crash_dir, handle_request, BackendState, Request, Response};
 
 fn main() {
+    // Real §75.82 fix for a real, previously-unnoticed gap: `spartan-
+    // editor-core`'s own `main.rs` has installed a real crash hook since
+    // §75.32, but this crate -- the actual IPC service process driving
+    // the primary Electron shell -- never did, so a real panic in this
+    // process (which would kill the whole backend Electron depends on)
+    // left nothing on disk to diagnose it with. Installed first, before
+    // anything else in `main` can possibly panic, matching the original
+    // hook's own ordering rationale exactly. Shares the same real
+    // `~/.spartan/crashes` directory both shells write to on one machine.
+    spartan_crash::install_hook(crash_dir());
+
     let (out_tx, out_rx) = mpsc::channel::<String>();
     thread::spawn(move || {
         let mut stdout = io::stdout();

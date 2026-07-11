@@ -91,6 +91,7 @@ first — it's the parity reference until each row there is actually reimplement
 | A real CI failure fixed at its root (a latent test race, not new breakage), a self-initiated multi-angle code review, four real bugs found and fixed | §75.79 |
 | Closing every named finding from §75.79's own review, plus a second real regression caught before it shipped | §75.80 |
 | Fixed the last named production-packaging gap: GUI Builder's CLI no longer assumes a system Node install | §75.81 |
+| Real crash-report upload service (task #35), a real spike-completeness audit | §75.82 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2382,6 +2383,49 @@ first — it's the parity reference until each row there is actually reimplement
   code path — this environment cannot produce a real installer to test it against, for the same
   network-policy reason named above; the real Electron window itself remains unlaunchable in this
   session.
+- **Real, working code — real crash-report upload service, closing task #35, plus a real spike-0
+  status audit (§75.82)**: user-requested ("make sure all tier spikes are complete and do whatever
+  necessary to complete this project quickly"). **Spike audit**: no GPU device (`/dev/dri`) exists
+  in this session, so render-spike's cold-open gap and ui-shell-spike's own remaining verdict
+  couldn't be advanced further here -- both already honestly self-report "not closed" in their own
+  READMEs, and both are also architecturally superseded by §75.59's real pivot to the Electron
+  shell as primary UI, so neither blocks anything the current architecture actually ships. Spikes
+  0.2 and 0.3 remain closed, as already documented. **Crash-report upload**: §75.32 shipped a
+  real, local-only crash reporter with an explicitly named future gap -- "an option to redact
+  before any optional upload" (§18) had the redact half but no upload path at all. This pass adds
+  it without weakening the "never auto-uploads" guarantee: `spartan-crash::upload_report` is the
+  *only* function in that crate that makes a network call, takes an already-redacted on-disk
+  report and a user-typed endpoint, and is never invoked from `install_hook`'s own panic path --
+  the guarantee holds because the reachable path is gated behind a real, separate, explicit user
+  click, not because no path exists. `spartan_settings::CrashReportingSettings.upload_endpoint`
+  defaults to `None` (no default/well-known endpoint of this project's own -- a real telemetry
+  backend doesn't exist, so "where do reports go" has to be typed in by a beta tester or
+  self-hoster themselves). `spartan-backend` gained `crash_reports_list`/`crash_report_upload` IPC
+  methods (the latter validates `filename` against a strict `crash-<digits>.json` shape before
+  ever joining it onto a path, so it can't be tricked into reading/sending an arbitrary file) and,
+  as a real, separate, incidentally-found gap: this crate's own `main.rs` -- the actual IPC service
+  process driving the primary Electron shell -- had never installed a crash hook at all, unlike
+  `spartan-editor-core`'s reference shell (§75.32); now both do, sharing the same real
+  `~/.spartan/crashes` directory on one machine. `SettingsScreen.tsx`'s existing "Privacy &
+  Diagnostics" section gained a real endpoint field and a real per-report list with independent
+  Upload buttons and status (uploading/done/failed), each tracked separately so one report's
+  failure never clobbers another's success. 11 new Rust tests (5 `spartan-crash`, including a real
+  round trip against a genuine local `TcpListener`-based mock HTTP server, not a mocking library;
+  5 `spartan-backend`, including an identical real local-server round trip through the full IPC
+  dispatch path; 1 `spartan-settings`), 554 tests total workspace-wide (up from 543), full
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release -- --test-threads=1` clean. `desktop`'s own `tsc --noEmit`/`npm run build`
+  clean. Real, screenshotted Playwright verification (same mocked-`window.spartan` harness this
+  whole `desktop/` effort has used since §75.59): the Upload button stays disabled with no endpoint
+  configured; typing and blurring a real endpoint fires a real `settings_set` call and enables both
+  buttons; uploading the first report shows "Uploaded (HTTP 200)"; uploading the second (a
+  simulated server error) shows its own independent "Failed: ... HTTP 500 ..." while the first
+  report's success status stays untouched. **What this does not confirm**: no live upload against
+  a real remote server (this project operates no real telemetry backend to test against); the
+  real Electron window itself remains unlaunchable in this session (same standing gap since
+  §75.59); a real, minor, named cosmetic gap -- the report list's filename/message column wraps
+  narrowly in a fixed-width flex layout, functionally correct but visually cramped, not fixed this
+  pass. Task #35 is now closed.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2439,7 +2483,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 543 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 554 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
