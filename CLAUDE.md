@@ -94,6 +94,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Real crash-report upload service (task #35), a real spike-completeness audit | §75.82 |
 | Real, direct llama.cpp integration — a fourth Leo model provider, in-process GGUF inference | §75.83 |
 | Real, native, grammar-constrained tool calling for llama.cpp — a real double-accept sampler bug found and fixed | §75.84 |
+| vscode.dev-inspired web app — architecture decision (hybrid client+optional-backend), a real client-side buffer→WASM feasibility spike, no VS Code code used anywhere — concepts only | §75.85 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2551,6 +2552,53 @@ first — it's the parity reference until each row there is actually reimplement
   not change the free-text path's *behavior* (its own pre-existing live test still passes
   unmodified) but no dedicated regression test asserts the accept-count itself, since nothing in
   the public API exposes it to assert against.
+- **Real, working code — vscode.dev-inspired web app: architecture decision made, a real
+  client-side buffer→WASM feasibility spike run (§75.85)**: user-requested ("prepare to build a
+  vscode.dev inspired web app... We will not be using any part of vs code only the concepts,
+  ideas, and features if possible"). No vscode.dev/VS Code source was ever fetched or read --
+  "concepts only" here means the same real, working idea vscode.dev itself demonstrates (a
+  browser-based editor with an optional connection to a real dev environment for full language
+  services), independently reasoned about and built from this project's own real stack, matching
+  this repo's own standing "no VS Code/Monaco/CodeMirror code, ever" rule exactly as it already
+  applies to the desktop shell. **A real architectural fork was surfaced and put to the user
+  via `AskUserQuestion` before any code was written** -- vscode.dev's own real design has two
+  very different halves (a pure client-side editor with zero server, vs. a full "connect to a
+  real dev environment" mode) -- the user chose a real third option: a **hybrid** model, editing/
+  tree-sitter/git working standalone in-browser, with LSP/DAP/Leo activating only when a local
+  `spartan-backend` is reachable. This is now the locked architecture decision for this feature,
+  the same weight this repo already gives §75.59's Electron pivot and §75.74's Dev Containers
+  scope decision -- both made the same way, via `AskUserQuestion` before implementation, not
+  assumed. **The single highest-risk unknown was spiked for real, not assumed**, matching this
+  project's own Tier 0 spike discipline: new `spikes/wasm-buffer-spike` proves the real
+  `spartan-buffer` crate -- the exact same rope/branching-undo-tree `Document` the whole product
+  already depends on, zero fork, zero simplified copy -- compiles to `wasm32-unknown-unknown`
+  with **zero code changes needed** (its one real dependency, `ropey`, is pure algorithmic Rust
+  with no OS bindings) and genuinely runs correctly inside a real JS engine. Real, executed
+  verification: a real `.wasm` binary was compiled, real JS bindings were generated via
+  `wasm-bindgen-cli` (version-pinned to exactly match the `wasm-bindgen` crate dependency, a
+  well-known hard requirement), and a real Node.js script loaded the compiled module and drove a
+  real insert → delete → undo → undo sequence through it, asserting the exact resulting text at
+  each step -- all passed, including the real branching undo tree correctly restoring two prior
+  states across two real `undo()` calls, run through compiled WASM, not the native test suite. 4
+  new headless Rust unit tests exercise the thin wrapper's own logic for the host target (no
+  Node/browser needed for these, matching what CI can run today). `cargo build --workspace
+  --release` was re-confirmed clean after adding this crate to the workspace -- a real,
+  positively-confirmed finding, not assumed: unlike `crates/plugins/*`'s own `wasm32-wasip1`
+  crates (excluded from this workspace for exactly this reason), a `wasm-bindgen`-based crate
+  compiles normally for every non-wasm target too, so it's a safe, ordinary workspace member. 572
+  tests total workspace-wide (up from 568), full `cargo fmt --all -- --check`/`cargo clippy
+  --workspace --release --all-targets` clean. See `spikes/wasm-buffer-spike/README.md` for the
+  complete account, including the real, honestly-named pieces **not** attempted this pass:
+  tree-sitter-in-WASM (likely `web-tree-sitter`, not yet downloaded or attempted), an actual
+  browser-environment run (only Node was exercised -- the generated bindings differ by
+  `--target nodejs` vs. `--target web`), real bundle-size measurement, git-in-browser (the
+  planned real, well-established `isomorphic-git`, not attempted), the File System Access API
+  wiring, the WebSocket extension to `spartan-backend`'s protocol (currently stdio-only, per
+  `crates/spartan-backend/src/lib.rs`) that the "optional backend" half of the hybrid model needs,
+  and a new `web/` npm project scaffold. **What this does not confirm**: none of the above --
+  this pass closes exactly the one real go/no-go risk-gate question (does the core buffer engine
+  even run in a browser at all) and locks the architecture decision; the remaining pieces are
+  real, substantial, separate, and unstarted, tracked as follow-up work.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2608,11 +2656,15 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 568 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 572 tests: 7 spikes + 13 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
                                     # spartan-editor-core, spartan-backend, xtask)
+# spikes/wasm-buffer-spike (§75.85) is a real Tier 0 spike for the planned web app -- its own
+# `cargo test` runs fine for the host target with no extra setup; reproducing its real WASM/Node
+# verification needs `rustup target add wasm32-unknown-unknown` + `wasm-bindgen-cli` (pinned to
+# match the `wasm-bindgen` crate version exactly) -- see spikes/wasm-buffer-spike/README.md.
 # spartan-model's own src/llamacpp.rs live_integration_tests module (§75.83, extended by §75.84
 # with a second, grammar-constrained tool-calling test) needs SPARTAN_TEST_GGUF_MODEL set to a
 # real, already-downloaded .gguf file path -- self-skips (prints a message) if unset or the path

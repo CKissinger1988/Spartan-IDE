@@ -13,6 +13,7 @@ and why).
 | `lsp-spike` | In-house LSP client against real language servers (§2.3, §39.2, §47.6, §47.7) | `rust-analyzer`; optionally `pyright-langserver` for the cross-language test |
 | `render-spike` | GPU-half of rope+renderer latency (§2.2, §39.1, §47.9, companion to `rope-spike`'s CPU half) | A Vulkan/DX12/Metal-capable GPU and a display |
 | `ui-shell-spike` | Native shell + embedded WebView integration risk (§8, §39.4, §47.11) | A Vulkan/DX12/Metal-capable GPU, a display, and the WebView2 Runtime (ships with Windows 11 by default) |
+| `wasm-buffer-spike` | Does `spartan-buffer`'s real rope/undo-tree `Document` compile to WASM and run correctly in a real JS engine, for the planned web app (§75.85) | `rustup target add wasm32-unknown-unknown` + `wasm-bindgen-cli` (pinned to the crate's exact version) to reproduce the real Node run; `cargo test -p wasm-buffer-spike` alone needs nothing extra |
 
 Every test in `dap-spike`/`lsp-spike` skips (prints a message, doesn't fail)
 if its required tool isn't on `$PATH` — these are meant to degrade gracefully

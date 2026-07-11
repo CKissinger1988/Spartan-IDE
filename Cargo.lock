@@ -6222,6 +6222,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-buffer-spike"
+version = "0.1.0"
+dependencies = [
+ "spartan-buffer",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "wasm-compose"
 version = "0.251.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
