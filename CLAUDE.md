@@ -90,6 +90,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Real Leo "Failed → Recovering → Executing" retry UI, closing task #58's last named remaining item | §75.78 |
 | A real CI failure fixed at its root (a latent test race, not new breakage), a self-initiated multi-angle code review, four real bugs found and fixed | §75.79 |
 | Closing every named finding from §75.79's own review, plus a second real regression caught before it shipped | §75.80 |
+| Fixed the last named production-packaging gap: GUI Builder's CLI no longer assumes a system Node install | §75.81 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2347,6 +2348,40 @@ first — it's the parity reference until each row there is actually reimplement
   tests, 543 tests total (up from 541), full fmt/clippy clean, `cargo test --workspace --release`
   run 3× at CI's own default parallelism with zero failures; `desktop`'s typecheck/build clean;
   real, screenshotted Playwright verification of the retry-open flow.
+- **Real, working code — fixed the last named production-packaging gap: `gui-builder-client.ts`
+  no longer assumes a system-wide Node.js install (§75.81)**: direct continuation of "continue
+  testing and building the production release build." §75.77 named this exact gap honestly rather
+  than shipping it silently: `runCli()` spawned a bare `"node"` off `$PATH`, which a real packaged
+  end-user machine has no guarantee of having installed at all — Electron's own distributable
+  bundles a full Node runtime, so this was a real, would-have-shipped bug, not a hypothetical one.
+  Fixed with the standard, documented technique for exactly this problem: `execFile(process.
+  execPath, [cliPath, ...args], { env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } })` — Electron's
+  own binary, told to behave as a plain Node executable for this one child process. Spreading
+  `process.env` first matters: setting `env` at all replaces the child's entire environment rather
+  than extending it, so omitting the spread would have silently dropped `PATH` and everything else
+  for no reason. Real, executed verification, not just a compile check: `npm run typecheck` and
+  `npm run build` (both renderer and electron/tsconfig.json projects) clean; the real, already-
+  proven `gui-builder/dist/cli.js` fixture round trip (§75.62's own recipe — a real `Card.jsx` +
+  real `npm install`ed react/react-dom) was re-run manually against the compiled output and produced
+  identical real results for all three operations (parse: correct 4-node tree; bundle: a real
+  ~1.1MB esbuild output; apply: a real `PropChange` correctly landing in regenerated source) —
+  confirming the fix changes only which binary launches the CLI, not the CLI's own behavior, for a
+  dev machine that still has `node` on `PATH` (this fix's actual target, a `node`-less packaged
+  machine, remains unverifiable in this environment, matching the same real, honest constraint the
+  Electron-launch gap itself has carried since §75.59). A real electron-builder packaging attempt
+  was re-run afterward to check whether anything about the standing network block had changed: it
+  did not — `@electron/rebuild` and electron-builder's own version-manifest lookup both succeeded
+  again, one step further than before this session (electron-builder logged
+  `downloaded label=electron progress=100%` immediately before), but the actual distributable
+  content fetch still returns a real `403 Forbidden` — the same standing, previously-confirmed,
+  deliberately-not-routed-around network policy block from §75.59/§75.77, not a regression. Full
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release -- --test-threads=1` all clean (543 tests, unchanged — this was a pure
+  TypeScript fix, no Rust touched); `gui-builder`'s own independent 35-test suite re-confirmed
+  clean. **What this does not confirm**: no real packaged (non-dev-machine) execution of the fixed
+  code path — this environment cannot produce a real installer to test it against, for the same
+  network-policy reason named above; the real Electron window itself remains unlaunchable in this
+  session.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

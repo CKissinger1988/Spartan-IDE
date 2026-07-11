@@ -4145,6 +4145,34 @@ Direct response to "Fix all issues and continue testing and building." §75.79 n
 
 2 new Rust tests (the `cat`-based stand-ins), 543 tests total workspace-wide (up from 541), full `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets` clean, `cargo test --workspace --release` run 3× at CI's own default parallelism with zero failures. `desktop`'s own `tsc --noEmit`/`npm run build` clean. Real, screenshotted Playwright verification of the retry-open flow. **What this does not confirm**: no live model-driven exercise of anything Leo-related (Ollama unreachable this session, unchanged from every prior pass); the real Electron window remains unlaunchable in this session for the same standing network-policy reason since §75.59.
 
+### 75.81 Fixing the Last Named Production-Packaging Gap: GUI Builder's CLI No Longer Assumes a System Node Install
+
+Direct continuation of "continue testing and building the production release build." §75.77 named a real, honest gap rather than shipping it silently: `gui-builder-client.ts`'s `runCli()` spawned a bare `"node"` off the child process's `$PATH`. That's fine on a developer machine, but a real packaged end-user install has no guarantee `node` is installed at all -- Electron's own distributable already bundles a complete Node runtime, so shipping this unfixed would have been a real, reproducible crash for any user without a separate Node.js install.
+
+**Fix**: the standard, documented Electron technique for exactly this situation --
+
+```ts
+const child = execFile(
+  process.execPath,
+  [cliPath, ...args],
+  {
+    maxBuffer: 32 * 1024 * 1024,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+  },
+  (error, stdout, stderr) => { ... }
+);
+```
+
+`process.execPath` is the real Electron binary itself; `ELECTRON_RUN_AS_NODE=1` tells it to behave as a plain Node executable for that one child process, rather than launching a second Electron/Chromium instance. Spreading `process.env` before adding the override matters: setting `env` at all replaces the child's entire environment rather than extending it, so skipping the spread would have silently dropped `PATH` and every other inherited variable for no reason.
+
+**Real, executed verification, not just a compile check**: `npm run typecheck` (both the renderer and `electron/tsconfig.json` projects) and `npm run build` both clean. The real, already-proven `gui-builder/dist/cli.js` fixture round trip (the same recipe §75.62's own verification used -- a fresh `Card.jsx` plus a real `npm install` of `react`/`react-dom`) was re-run manually against the freshly compiled output and produced results identical to before this change across all three real CLI operations: `parse` returned the correct 4-node tree; `bundle` produced a real ~1.1MB esbuild output; `apply` (`PropChange` on `disabled`) correctly regenerated source with the edit landed. This confirms the fix changes only *which binary* launches the CLI, not the CLI's own behavior, for a dev machine that still happens to have `node` on `PATH` -- this fix's actual target scenario, a `node`-less packaged end-user machine, remains unverifiable in this environment for the same reason the real Electron window itself has been unlaunchable in every session since §75.59.
+
+A real electron-builder packaging attempt was re-run afterward specifically to check whether anything about the standing network block had changed since §75.77. It had not, but got one step further before failing: `@electron/rebuild` succeeded, and electron-builder's own version-manifest lookup logged `downloaded label=electron progress=100%` immediately before the real distributable content fetch returned a `403 Forbidden` -- the same standing, previously-confirmed, deliberately-not-routed-around network policy block named in §75.59 and §75.77, not a regression introduced by this pass.
+
+Full `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test --workspace --release -- --test-threads=1` all clean -- 543 tests, unchanged from §75.80, since this was a pure TypeScript fix with no Rust code touched. `gui-builder`'s own independent 35-test suite re-confirmed clean.
+
+**What this does not confirm**: no real packaged (non-dev-machine) execution of the fixed code path was observed -- this environment cannot produce a real installer to test it against, for the same network-policy reason named above; the real Electron window itself remains unlaunchable in this session.
+
 ---
 
 *End of spec.*
