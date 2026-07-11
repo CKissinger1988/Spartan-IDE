@@ -7,6 +7,16 @@ import {
   registerNotificationCategories,
 } from './src/lib/notificationActions';
 import { RootNavigator } from './src/navigation/RootNavigator';
+import { ThemeProvider, useTheme } from './src/ThemeContext';
+
+// Real §75.93 status-bar content style, made reactive -- previously
+// hardcoded "light" (correct only for the dark theme, §50.3). Split into
+// its own inner component since it needs `useTheme()`, which only works
+// below `ThemeProvider`.
+function ThemedStatusBar() {
+  const { mode } = useTheme();
+  return <StatusBar style={mode === 'light' ? 'dark' : 'light'} />;
+}
 
 export default function App() {
   useEffect(() => {
@@ -21,10 +31,11 @@ export default function App() {
   }, []);
 
   return (
-    <SafeAreaProvider>
-      {/* light content for the dark theme (§50.3) -- see src/theme.ts */}
-      <StatusBar style="light" />
-      <RootNavigator />
-    </SafeAreaProvider>
+    <ThemeProvider>
+      <SafeAreaProvider>
+        <ThemedStatusBar />
+        <RootNavigator />
+      </SafeAreaProvider>
+    </ThemeProvider>
   );
 }

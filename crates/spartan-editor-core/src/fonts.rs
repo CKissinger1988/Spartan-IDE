@@ -52,14 +52,36 @@ pub const DEFAULT_FONT_FAMILY: &str = "JetBrains Mono";
 /// environment's own real value: `"FreeMono"`) -- silently overwriting an
 /// earlier call with the system's own default. Setting it after the scan
 /// is what actually makes the override stick.
-pub fn build_font_system() -> FontSystem {
+/// Real §75.93 font-family override, user-requested ("Add user
+/// customizable theme and font options to all Spartan interfaces") --
+/// `main.rs`'s one real call site passes
+/// `spartan_settings::EditorSettings.font_family` straight through
+/// (`None` for a fresh install, matching that field's own default).
+/// `None`, or a blank/whitespace-only override (the same "empty means
+/// unset" contract `spartan_settings::EditorSettings.font_family`'s own
+/// doc comment already establishes), keeps this crate's real bundled
+/// default exactly as before this pass. A real, honest "best effort"
+/// override, not a guarantee: the bundled JetBrains Mono TTFs are always
+/// loaded into the database regardless (so an unresolvable custom name
+/// still leaves a real font installed for `fontdb`'s own generic-family
+/// fallback to reach), but `set_monospace_family` is only ever pointed at
+/// a name this crate did not itself verify is actually installed -- if
+/// it isn't, resolution falls back to whatever `fontdb`/cosmic-text's own
+/// fallback logic picks, the identical honest caveat already documented
+/// for the Electron shell's own CSS font-family override
+/// (`desktop/src/applyFontFamily.ts`).
+pub fn build_font_system_with_override(font_family_override: Option<&str>) -> FontSystem {
     let locale = sys_locale::get_locale().unwrap_or_else(|| String::from("en-US"));
 
     let mut db = fontdb::Database::new();
     db.load_system_fonts();
     db.load_font_data(JETBRAINS_MONO_REGULAR.to_vec());
     db.load_font_data(JETBRAINS_MONO_BOLD.to_vec());
-    db.set_monospace_family(DEFAULT_FONT_FAMILY);
+    let monospace_family = font_family_override
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_FONT_FAMILY);
+    db.set_monospace_family(monospace_family);
 
     FontSystem::new_with_locale_and_db(locale, db)
 }
@@ -76,6 +98,36 @@ mod tests {
         // trusting anything built on top of them.
         assert!(ttf_parser::Face::parse(JETBRAINS_MONO_REGULAR, 0).is_ok());
         assert!(ttf_parser::Face::parse(JETBRAINS_MONO_BOLD, 0).is_ok());
+    }
+
+    #[test]
+    fn a_real_override_repoints_the_monospace_generic_family() {
+        let font_system = build_font_system_with_override(Some("Custom Test Font"));
+        assert_eq!(
+            font_system.db().family_name(&Family::Monospace),
+            "Custom Test Font"
+        );
+    }
+
+    #[test]
+    fn a_blank_or_whitespace_only_override_falls_back_to_the_real_bundled_default() {
+        for blank in ["", "   ", "\t"] {
+            let font_system = build_font_system_with_override(Some(blank));
+            assert_eq!(
+                font_system.db().family_name(&Family::Monospace),
+                DEFAULT_FONT_FAMILY,
+                "blank override {blank:?} should fall back to the real bundled default"
+            );
+        }
+    }
+
+    #[test]
+    fn a_real_override_is_trimmed() {
+        let font_system = build_font_system_with_override(Some("  Custom Test Font  "));
+        assert_eq!(
+            font_system.db().family_name(&Family::Monospace),
+            "Custom Test Font"
+        );
     }
 
     #[test]
@@ -110,7 +162,7 @@ mod tests {
         // which isn't part of its public API. Shaping a real string and
         // inspecting the real glyph's `font_id` is the real, public,
         // black-box way to observe that same resolution.
-        let mut font_system = build_font_system();
+        let mut font_system = build_font_system_with_override(None);
         let mut buffer = Buffer::new(&mut font_system, Metrics::new(16.0, 20.0));
         buffer.set_size(&mut font_system, 800.0, 100.0);
         buffer.set_text(

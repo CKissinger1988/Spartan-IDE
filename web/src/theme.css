@@ -40,6 +40,42 @@
   --chamfer: 8px;
   --transition-fast: 120ms ease;
   --transition-med: 220ms cubic-bezier(0.2, 0.7, 0.3, 1);
+
+  /* Real §75.93 user font-family override, applied app-wide (every
+     `.mono` element) via one shared CSS custom property rather than
+     per-component plumbing. `applyFontFamily.ts` is the only real
+     writer -- it either sets this to a real, user-typed font name
+     prepended onto the same real fallback chain, or removes the inline
+     override entirely, letting this default (real, bundled JetBrains
+     Mono) take back over. */
+  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
+}
+
+/*
+ * Real §75.93 Light theme, user-requested ("Add user customizable theme
+ * and font options to all Spartan interfaces"). Applied via a real
+ * `data-theme="light"` attribute on <html> (`applyTheme.ts`) -- kept in
+ * sync with `desktop/src/theme.css`'s own identical block (one shared
+ * source of truth for color tokens, matching this file's own existing
+ * "copied verbatim from desktop/" convention). SpartanDark (the `:root`
+ * block above) stays the real, unconditional default.
+ */
+:root[data-theme="light"] {
+  --bg: #f4f3f1;
+  --surface: #ffffff;
+  --surface-raised: #ececea;
+  --border: #dcdad5;
+  --border-bright: #c5c2bc;
+  --text: #1b1a19;
+  --text-dim: #6b6862;
+  --accent: #a3341f;
+  --accent-dim: rgba(163, 52, 31, 0.12);
+  --accent-hover: rgba(163, 52, 31, 0.08);
+  --accent-rgb: 163, 52, 31;
+
+  --hud: #0e7e78;
+  --hud-dim: rgba(14, 126, 120, 0.12);
+  --hud-rgb: 14, 126, 120;
 }
 
 * {
@@ -76,11 +112,11 @@ body {
 .mono {
   /* JetBrains Mono is the real default font across every Spartan
      project, self-hosted (not a system-font fallback bet) via
-     @fontsource/jetbrains-mono -- see main.tsx's own import. The
-     remaining names are only a real fallback chain for the brief
-     window before the webfont finishes loading, or the rare case it
-     somehow fails to. */
-  font-family: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
+     @fontsource/jetbrains-mono -- see main.tsx's own import. Reads the
+     real `--font-mono` custom property (§75.93) rather than a hardcoded
+     value, so a user-chosen font override applies to every real `.mono`
+     surface in the app at once, live, with no per-component wiring. */
+  font-family: var(--font-mono);
 }
 
 /* Real, deliberate "targeting reticle" keyboard-focus style -- cool HUD

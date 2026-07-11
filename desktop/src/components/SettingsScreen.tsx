@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { applyReduceMotion } from "../reduceMotion";
+import { applyTheme, type ThemeName } from "../applyTheme";
+import { applyFontFamily } from "../applyFontFamily";
 import pkg from "../../package.json";
 
 interface GpuOffloadSettings {
@@ -20,10 +22,12 @@ interface EditorSettings {
   font_size: number;
   tab_size: number;
   word_wrap: boolean;
+  font_family: string | null;
 }
 
 interface AppearanceSettings {
   reduce_motion: boolean;
+  theme: ThemeName;
 }
 
 interface CrashReportingSettings {
@@ -201,12 +205,15 @@ export default function SettingsScreen(): React.ReactElement {
       if (!settings) return;
       setSaving(true);
       const next: Settings = { ...settings, ...overrides };
-      // Real §75.76 "reduce motion" optimistic UI update -- applied
-      // immediately rather than waiting for the round trip, so the
-      // animations actually stop/start the instant the checkbox is
-      // toggled.
+      // Real §75.76 "reduce motion" / §75.93 theme+font optimistic UI
+      // update -- applied immediately rather than waiting for the round
+      // trip, so the effect is visible the instant the control changes.
       if (overrides.appearance) {
         applyReduceMotion(overrides.appearance.reduce_motion);
+        applyTheme(overrides.appearance.theme);
+      }
+      if (overrides.editor) {
+        applyFontFamily(overrides.editor.font_family);
       }
       window.spartan
         .call("settings_set", {
@@ -328,13 +335,50 @@ export default function SettingsScreen(): React.ReactElement {
           {" "}Word wrap
         </label>
       </div>
+      <div className="settings-row">
+        <label className="settings-label mono">Font family</label>
+        <input
+          className="settings-select mono"
+          type="text"
+          placeholder="JetBrains Mono (bundled default)"
+          disabled={saving}
+          defaultValue={settings.editor.font_family ?? ""}
+          key={settings.editor.font_family ?? ""}
+          onBlur={(e) => {
+            const trimmed = e.target.value.trim();
+            save({
+              editor: { ...settings.editor, font_family: trimmed.length > 0 ? trimmed : null },
+            });
+          }}
+          style={{ width: 220 }}
+        />
+      </div>
       <div className="settings-note mono">
         Font size, tab size (also used by the Tab key), and word wrap apply the next time a file
-        is opened — an already-open tab is unaffected until you switch to it or reopen it.
+        is opened — an already-open tab is unaffected until you switch to it or reopen it. Font
+        family applies live, everywhere in the app, immediately. Leave it blank to use the real
+        bundled JetBrains Mono; a name here must already be installed on this machine (or resolve
+        via a real system font-fallback) to actually take visible effect.
       </div>
 
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>
         Appearance
+      </div>
+      <div className="settings-row">
+        <label className="settings-label mono">Theme</label>
+        <select
+          className="settings-select mono"
+          disabled={saving}
+          value={settings.appearance.theme}
+          onChange={(e) =>
+            save({
+              appearance: { ...settings.appearance, theme: e.target.value as ThemeName },
+            })
+          }
+        >
+          <option value="SpartanDark">Spartan Dark</option>
+          <option value="SpartanLight">Spartan Light</option>
+        </select>
       </div>
       <div className="settings-row">
         <label className="settings-label mono">
@@ -343,7 +387,9 @@ export default function SettingsScreen(): React.ReactElement {
             checked={settings.appearance.reduce_motion}
             disabled={saving}
             onChange={(e) =>
-              save({ appearance: { reduce_motion: e.target.checked } })
+              save({
+                appearance: { ...settings.appearance, reduce_motion: e.target.checked },
+              })
             }
           />
           {" "}Reduce motion

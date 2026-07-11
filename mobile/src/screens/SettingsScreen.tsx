@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Alert, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
@@ -8,7 +8,8 @@ import { requestNotificationPermission } from '../lib/notifications';
 import { schedulePreviewNotification } from '../lib/notificationActions';
 import { clearQueue, getQueuedDecisions, replayQueue } from '../lib/offlineQueue';
 import { RootStackParamList } from '../navigation/types';
-import { C, MONO_FONT_FAMILY } from '../theme';
+import { useTheme } from '../ThemeContext';
+import { MONO_FONT_FAMILY, ThemeColors } from '../theme';
 import { QueuedDecision } from '../types/queue';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
@@ -18,6 +19,8 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
 // mobile-only ones — this screen is the client-side permission toggle only;
 // there's no backend yet to actually deliver a push to this toggle.
 export function SettingsScreen({ navigation }: Props) {
+  const { mode, colors, setMode } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [requesting, setRequesting] = useState(false);
   const [queue, setQueue] = useState<QueuedDecision[]>([]);
@@ -86,14 +89,44 @@ export function SettingsScreen({ navigation }: Props) {
           value={notificationsEnabled}
           onValueChange={handleToggle}
           disabled={requesting}
-          trackColor={{ false: C.s3, true: C.accent }}
-          thumbColor={C.text}
+          trackColor={{ false: colors.s3, true: colors.accent }}
+          thumbColor={colors.text}
         />
       </View>
       <Text style={styles.note}>
         No push backend exists yet — this only requests OS permission and configures how a
         notification would be presented. Nothing can actually be sent to this device yet.
       </Text>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionHeader}>Appearance</Text>
+        <View style={styles.row}>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>Theme</Text>
+            <Text style={styles.description}>
+              Applies live, everywhere in the app -- no restart needed.
+            </Text>
+          </View>
+          <View style={styles.queueActions}>
+            <Pressable
+              style={[styles.themeButton, mode === 'dark' && styles.themeButtonActive]}
+              onPress={() => setMode('dark')}
+            >
+              <Text style={[styles.themeButtonText, mode === 'dark' && styles.themeButtonTextActive]}>
+                Dark
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.themeButton, mode === 'light' && styles.themeButtonActive]}
+              onPress={() => setMode('light')}
+            >
+              <Text style={[styles.themeButtonText, mode === 'light' && styles.themeButtonTextActive]}>
+                Light
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
 
       <View style={styles.section}>
         <Text style={styles.sectionHeader}>Connectivity</Text>
@@ -166,71 +199,102 @@ export function SettingsScreen({ navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: C.bg,
-    padding: 16,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  rowText: {
-    flex: 1,
-  },
-  label: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: C.text,
-  },
-  description: {
-    marginTop: 4,
-    color: C.textMid,
-    fontSize: 13,
-  },
-  note: {
-    marginTop: 12,
-    color: C.textDim,
-    fontSize: 12,
-  },
-  section: {
-    marginTop: 28,
-  },
-  sectionHeader: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: C.text,
-  },
-  queueRow: {
-    marginTop: 8,
-    fontFamily: MONO_FONT_FAMILY,
-    fontSize: 12,
-    color: C.textMid,
-  },
-  queueActions: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 14,
-  },
-  queueButton: {
-    backgroundColor: C.accent,
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-  },
-  queueButtonSecondary: {
-    backgroundColor: C.s3,
-  },
-  historyButton: {
-    marginTop: 14,
-    alignSelf: 'flex-start',
-  },
-  queueButtonText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 13,
-  },
-});
+// Real §75.93 reactive stylesheet -- a function of the real, currently
+// selected theme's colors instead of a fixed module-scope `StyleSheet.
+// create` bound to the dark palette, so this screen re-renders correctly
+// the instant the theme changes (`useMemo(() => makeStyles(colors),
+// [colors])` above).
+function makeStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.bg,
+      padding: 16,
+    },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12,
+    },
+    rowText: {
+      flex: 1,
+    },
+    label: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: colors.text,
+    },
+    description: {
+      marginTop: 4,
+      color: colors.textMid,
+      fontSize: 13,
+    },
+    note: {
+      marginTop: 12,
+      color: colors.textDim,
+      fontSize: 12,
+    },
+    section: {
+      marginTop: 28,
+    },
+    sectionHeader: {
+      fontSize: 15,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    queueRow: {
+      marginTop: 8,
+      fontFamily: MONO_FONT_FAMILY,
+      fontSize: 12,
+      color: colors.textMid,
+    },
+    queueActions: {
+      flexDirection: 'row',
+      gap: 10,
+      marginTop: 14,
+    },
+    queueButton: {
+      backgroundColor: colors.accent,
+      borderRadius: 8,
+      paddingVertical: 10,
+      paddingHorizontal: 14,
+    },
+    queueButtonSecondary: {
+      backgroundColor: colors.s3,
+    },
+    historyButton: {
+      marginTop: 14,
+      alignSelf: 'flex-start',
+    },
+    queueButtonText: {
+      color: '#fff',
+      fontWeight: '700',
+      fontSize: 13,
+    },
+    themeButton: {
+      borderRadius: 8,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    themeButtonActive: {
+      backgroundColor: colors.accent,
+      borderColor: colors.accent,
+    },
+    themeButtonText: {
+      color: colors.text,
+      fontWeight: '600',
+      fontSize: 13,
+    },
+    themeButtonTextActive: {
+      // Always white, regardless of theme -- `themeButtonActive`'s own
+      // background is the real accent color in both themes, and plain
+      // `colors.text` (near-black in the light theme) would be
+      // unreadable against it, the same real reasoning `queueButtonText`
+      // above already applies to every other accent-colored button.
+      color: '#fff',
+    },
+  });
+}

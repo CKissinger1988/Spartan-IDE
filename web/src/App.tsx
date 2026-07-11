@@ -1,8 +1,18 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import FileTree from "./components/FileTree";
 import Editor, { type OpenFile } from "./components/Editor";
 import { ensureBufferWasmInit, Document as WasmDocument } from "./buffer";
 import { isFileSystemAccessSupported, pickProjectDirectory, readFileText } from "./fsAccess";
+import { applyTheme, type ThemeName } from "./applyTheme";
+import { applyFontFamily } from "./applyFontFamily";
+
+// Real §75.93 theme/font persistence -- this app has no `spartan-backend`
+// settings store to round-trip through (§75.89's own named scope: no
+// LSP/DAP/Leo/git connectivity yet), so a real, local `localStorage` key
+// stands in, the same pattern `desktop/`'s own Leo voice-output toggle
+// already established (§75.71) for a pure renderer preference.
+const THEME_STORAGE_KEY = "spartan.theme";
+const FONT_STORAGE_KEY = "spartan.fontFamily";
 
 /**
  * Real top-level shell for the web app's first real increment (task #81,
@@ -28,6 +38,24 @@ export default function App(): React.ReactElement {
   const [file, setFile] = useState<OpenFile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [wasmReady, setWasmReady] = useState(false);
+  const [theme, setTheme] = useState<ThemeName>(
+    () => (localStorage.getItem(THEME_STORAGE_KEY) as ThemeName | null) ?? "SpartanDark"
+  );
+  const [fontFamily, setFontFamily] = useState<string>(
+    () => localStorage.getItem(FONT_STORAGE_KEY) ?? ""
+  );
+
+  // Applied on mount and every real change, matching `desktop/`'s own
+  // startup-apply-then-live-apply pattern (`App.tsx`/`SettingsScreen.tsx`).
+  useEffect(() => {
+    applyTheme(theme);
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    applyFontFamily(fontFamily);
+    localStorage.setItem(FONT_STORAGE_KEY, fontFamily);
+  }, [fontFamily]);
 
   const openFolder = useCallback(async () => {
     setError(null);
@@ -91,6 +119,24 @@ export default function App(): React.ReactElement {
         <span className="toolbar-note">
           Client-side only in this increment -- no LSP/DAP/Leo/git yet, see README.md
         </span>
+        <select
+          className="toolbar-btn"
+          value={theme}
+          onChange={(e) => setTheme(e.target.value as ThemeName)}
+          title="Theme"
+        >
+          <option value="SpartanDark">Spartan Dark</option>
+          <option value="SpartanLight">Spartan Light</option>
+        </select>
+        <input
+          className="toolbar-btn mono"
+          type="text"
+          placeholder="Font (default: JetBrains Mono)"
+          defaultValue={fontFamily}
+          key={fontFamily}
+          onBlur={(e) => setFontFamily(e.target.value.trim())}
+          style={{ width: 180 }}
+        />
       </div>
       <div className="main-body">
         {root && (

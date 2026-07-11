@@ -124,11 +124,51 @@ impl Default for LeoProviderSettings {
 /// inline style overrides on the highlight layer + textarea, matching
 /// the wgpu shell's own "no live cross-window reload" precedent
 /// (§75.48's own settings panel doc comment).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `font_family` (§75.93, user-requested: "Add user customizable theme
+/// and font options to all Spartan interfaces") is deliberately
+/// `Option<String>`, not a required field with a hardcoded default -- the
+/// real default lives at each real call site (§75.92's bundled JetBrains
+/// Mono: `crates/spartan-editor-core::fonts::DEFAULT_FONT_FAMILY`,
+/// `desktop/`/`web/`'s own `--font-mono` CSS custom property), not
+/// duplicated here as a string literal that could drift from the actual
+/// bundled font name. `None` means "use the real bundled default";
+/// `Some(name)` is a real, honest best-effort override -- neither this
+/// crate nor its callers can guarantee `name` is actually installed/
+/// resolvable on every platform, matching the same "fontconfig picks
+/// whatever's actually available" reality §75.92 already documented for
+/// the wgpu shell's own font-loading code.
+///
+/// Adding this field is why `EditorSettings` is no longer `Copy` --
+/// `Option<String>` isn't `Copy` -- a real, mechanical ripple matching
+/// the identical one `LeoProviderSettings`'s own `String` field already
+/// caused for `Settings` itself; every call site the compiler flagged
+/// was fixed the same way (an explicit `.clone()` or accepting the
+/// already-correct partial-move behavior of `settings_set`'s own
+/// `unwrap_or(current.editor)` pattern, which needs no change at all
+/// since each field of `current` is only ever read once).
+///
+/// Real, load-bearing `#[serde(default)]` on this struct too, not just on
+/// the outer `Settings` container -- found by actually running this
+/// crate's own test suite after adding `font_family`, not by inspection:
+/// `spartan-backend`'s `settings_set` dispatch deserializes an incoming
+/// `"editor"` JSON object directly as a standalone `EditorSettings`
+/// (`crates/spartan-backend/src/lib.rs`'s own `settings_set` arm), and the
+/// container-level default on `Settings` only ever covers a *whole field
+/// missing entirely* -- it does nothing for a present `"editor"` object
+/// that's merely missing this one new sub-field, the exact real shape any
+/// caller (a real pre-existing settings request, or this crate's own
+/// pre-existing tests) built before `font_family` existed. Without this
+/// attribute, that real shape would fail to parse at all -- not "silently
+/// lose the new field," but reject the whole real request, dropping the
+/// user's real font_size/tab_size/word_wrap choices along with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct EditorSettings {
     pub font_size: u32,
     pub tab_size: u32,
     pub word_wrap: bool,
+    pub font_family: Option<String>,
 }
 
 impl Default for EditorSettings {
@@ -137,8 +177,24 @@ impl Default for EditorSettings {
             font_size: 13,
             tab_size: 2,
             word_wrap: false,
+            font_family: None,
         }
     }
+}
+
+/// Real §75.93 theme selection. `SpartanDark` (the real, only theme this
+/// project has ever shipped -- §50.3/§75.54/§75.55/§75.76's own
+/// Antigravity-2.0-researched, Sci-Fi-accented palette) is the
+/// non-negotiable default so every existing real user's already-running
+/// app looks unchanged after upgrading. `SpartanLight` is a real, new,
+/// second theme built specifically for this pass -- see
+/// `desktop/src/theme.css`'s own `[data-theme="light"]` override block
+/// for its real token values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ThemeName {
+    #[default]
+    SpartanDark,
+    SpartanLight,
 }
 
 /// Real §75.76 appearance preferences. `reduce_motion` is a real,
@@ -149,9 +205,19 @@ impl Default for EditorSettings {
 /// prefers-reduced-motion intent for users who opted out of OS-level
 /// motion but are running this app under a mocked/headless Chromium
 /// environment where that OS media query itself may not be honored.
+///
+/// `theme` (§75.93) is the real, user-facing theme choice -- see
+/// `ThemeName`'s own doc comment. Struct-level `#[serde(default)]` for the
+/// identical real reason `EditorSettings`'s own doc comment names --
+/// `spartan-backend`'s `settings_set` deserializes an incoming
+/// `"appearance"` object as a standalone `AppearanceSettings`, so a
+/// present-but-`theme`-missing object (any real request built before this
+/// field existed) must still parse rather than being rejected outright.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct AppearanceSettings {
     pub reduce_motion: bool,
+    pub theme: ThemeName,
 }
 
 /// Real §75.82 crash-report upload configuration, closing task #35 --
@@ -317,9 +383,11 @@ mod tests {
                 font_size: 16,
                 tab_size: 4,
                 word_wrap: true,
+                font_family: Some("Fira Code".to_string()),
             },
             appearance: AppearanceSettings {
                 reduce_motion: true,
+                theme: ThemeName::SpartanLight,
             },
             crash_reporting: CrashReportingSettings {
                 upload_endpoint: Some("https://reports.example.com/upload".to_string()),
@@ -368,6 +436,33 @@ mod tests {
         assert!(!loaded.onboarding_completed);
     }
 
+    /// Real regression test matching the exact shape `spartan-backend`'s
+    /// own `settings_set` dispatch actually deserializes: a standalone
+    /// `EditorSettings` JSON object (not wrapped in a full `Settings`)
+    /// missing the newer `font_family` field entirely -- the real shape
+    /// of every `"editor": {...}` payload written before this field
+    /// existed. Confirms the struct-level `#[serde(default)]` really
+    /// does its job at this granularity, not just at the outer
+    /// `Settings` container.
+    #[test]
+    fn deserializing_a_standalone_editor_object_missing_font_family_still_parses() {
+        let value = serde_json::json!({ "font_size": 18, "tab_size": 4, "word_wrap": true });
+        let settings: EditorSettings = serde_json::from_value(value).unwrap();
+        assert_eq!(settings.font_size, 18);
+        assert_eq!(settings.tab_size, 4);
+        assert!(settings.word_wrap);
+        assert_eq!(settings.font_family, None);
+    }
+
+    /// Same real check for `AppearanceSettings`'s own new `theme` field.
+    #[test]
+    fn deserializing_a_standalone_appearance_object_missing_theme_still_parses() {
+        let value = serde_json::json!({ "reduce_motion": true });
+        let settings: AppearanceSettings = serde_json::from_value(value).unwrap();
+        assert!(settings.reduce_motion);
+        assert_eq!(settings.theme, ThemeName::SpartanDark);
+    }
+
     #[test]
     fn default_crash_reporting_has_no_upload_endpoint_configured() {
         // No default/well-known endpoint of this project's own -- a real
@@ -381,11 +476,22 @@ mod tests {
         assert_eq!(settings.font_size, 13);
         assert_eq!(settings.tab_size, 2);
         assert!(!settings.word_wrap);
+        assert_eq!(
+            settings.font_family, None,
+            "no font override by default -- the real bundled JetBrains Mono default lives at \
+             each call site, not duplicated here as a string literal"
+        );
     }
 
     #[test]
     fn default_appearance_settings_do_not_reduce_motion() {
         assert!(!AppearanceSettings::default().reduce_motion);
+    }
+
+    #[test]
+    fn default_theme_is_spartan_dark_so_every_existing_user_sees_no_change() {
+        assert_eq!(AppearanceSettings::default().theme, ThemeName::SpartanDark);
+        assert_eq!(Settings::default().appearance.theme, ThemeName::SpartanDark);
     }
 
     #[test]

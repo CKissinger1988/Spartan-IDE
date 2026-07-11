@@ -773,6 +773,19 @@ fn main() {
     // setup completes.
     spartan_crash::install_hook(crash_dir());
 
+    // Real §75.93 theme selection, user-requested ("Add user
+    // customizable theme and font options to all Spartan interfaces") --
+    // loaded once, here, before any window/GPU/render state exists.
+    // `theme::init_theme` is a real one-shot `OnceLock` (see its own doc
+    // comment for the full "applies next launch, not live" scope this
+    // pass deliberately chose, given this environment's own no-display
+    // constraint on verifying a live mid-session palette swap). The
+    // loaded `Settings` is also reused a few lines below for the real
+    // font-family override, rather than calling `spartan_settings::load()`
+    // twice for two different fields of the one same real file.
+    let startup_settings = spartan_settings::load();
+    theme::init_theme(startup_settings.appearance.theme);
+
     // Real GTK initialization (§6.1, task #12) -- a real bug found only by
     // running this crate live on Linux, not by inspection: `wry`'s own
     // documented contract requires `gtk::init()` to have already run
@@ -1026,8 +1039,15 @@ fn main() {
     // now also loads the real bundled JetBrains Mono TTFs and repoints the
     // monospace generic-family mapping at them -- see `fonts.rs`'s own doc
     // comment for why every existing `Family::Monospace` call site needed
-    // no changes to pick this up.
-    let font_system_handle = thread::spawn(fonts::build_font_system);
+    // no changes to pick this up. Real §75.93 font-family override: reuses
+    // `startup_settings` (already loaded above for the real theme choice)
+    // rather than a second `spartan_settings::load()` call -- the closure
+    // owns a real, cloned `String` since it must outlive this stack frame
+    // on its own thread.
+    let font_family_override = startup_settings.editor.font_family.clone();
+    let font_system_handle = thread::spawn(move || {
+        fonts::build_font_system_with_override(font_family_override.as_deref())
+    });
 
     let mut gpu_state =
         pollster::block_on(gpu::GpuState::new(window.clone(), gpu_backend_override));
@@ -1112,7 +1132,7 @@ fn main() {
     let mut modal_renderer =
         selection::SelectionRenderer::new(&gpu_state.device, gpu_state.config.format);
     // Real §75.54 sidebar/tab-bar surface panels + hairline border
-    // separators (`theme::SURFACE`/`theme::BORDER`) -- a third instance of
+    // separators (`theme::surface()`/`theme::border()`) -- a third instance of
     // the same generic `SelectionRenderer`, rendered *first* (the base
     // layer every other quad and all text draws on top of), giving this
     // renderer real bg/surface/border layering for the first time instead
@@ -2078,9 +2098,35 @@ fn main() {
                                             panel.toggle_selected();
                                         }
                                     }
-                                    Key::Named(NamedKey::ArrowLeft) => panel.adjust_layers(-1),
-                                    Key::Named(NamedKey::ArrowRight) => panel.adjust_layers(1),
-                                    _ => {}
+                                    // Real §75.93 Theme row: Left/Right cycles the
+                                    // same as Space/Enter (`adjust_layers` is a
+                                    // real no-op on any row but `GpuOffloadLayers`,
+                                    // so this doesn't need its own guard here).
+                                    Key::Named(NamedKey::ArrowLeft) => {
+                                        panel.adjust_layers(-1);
+                                        panel.cycle_theme();
+                                    }
+                                    Key::Named(NamedKey::ArrowRight) => {
+                                        panel.adjust_layers(1);
+                                        panel.cycle_theme();
+                                    }
+                                    // Real §75.93 FontFamily row: real typed text
+                                    // (a real no-op on any other row, matching
+                                    // `push_font_family_text`'s own guard), the
+                                    // same free-text pattern the commit-message
+                                    // modal already established.
+                                    Key::Named(NamedKey::Backspace) => {
+                                        panel.backspace_font_family();
+                                    }
+                                    _ => {
+                                        if let Some(text) = &key_event.text {
+                                            if !text.is_empty()
+                                                && text.chars().all(|c| !c.is_control())
+                                            {
+                                                panel.push_font_family_text(text);
+                                            }
+                                        }
+                                    }
                                 }
                                 window.request_redraw();
                             }
@@ -3675,7 +3721,7 @@ fn main() {
                                     y: 0.0,
                                     width: text::SIDEBAR_WIDTH,
                                     height: window_h,
-                                    color: theme::SURFACE,
+                                    color: theme::surface(),
                                 },
                                 // Tab bar surface panel (right of the sidebar).
                                 selection::SelectionRect {
@@ -3683,7 +3729,7 @@ fn main() {
                                     y: 0.0,
                                     width: (window_w - text::SIDEBAR_WIDTH).max(0.0),
                                     height: text::TAB_BAR_HEIGHT,
-                                    color: theme::SURFACE,
+                                    color: theme::surface(),
                                 },
                                 // Vertical hairline between the sidebar and
                                 // the editor content area.
@@ -3692,7 +3738,7 @@ fn main() {
                                     y: 0.0,
                                     width: theme::BORDER_WIDTH_PX,
                                     height: window_h,
-                                    color: theme::BORDER,
+                                    color: theme::border(),
                                 },
                                 // Horizontal hairline beneath the tab bar.
                                 selection::SelectionRect {
@@ -3700,7 +3746,7 @@ fn main() {
                                     y: text::TAB_BAR_HEIGHT,
                                     width: (window_w - text::SIDEBAR_WIDTH).max(0.0),
                                     height: theme::BORDER_WIDTH_PX,
-                                    color: theme::BORDER,
+                                    color: theme::border(),
                                 },
                                 // Real §75.56 hairline beneath the activity
                                 // bar row, separating it from the file
@@ -3710,7 +3756,7 @@ fn main() {
                                     y: text::ACTIVITY_ROW_HEIGHT,
                                     width: text::SIDEBAR_WIDTH,
                                     height: theme::BORDER_WIDTH_PX,
-                                    color: theme::BORDER,
+                                    color: theme::border(),
                                 },
                                 // Real §75.57 status bar surface panel +
                                 // top hairline, full window width along the
@@ -3720,14 +3766,14 @@ fn main() {
                                     y: (window_h - text::STATUS_BAR_HEIGHT).max(0.0),
                                     width: window_w,
                                     height: text::STATUS_BAR_HEIGHT,
-                                    color: theme::SURFACE,
+                                    color: theme::surface(),
                                 },
                                 selection::SelectionRect {
                                     x: 0.0,
                                     y: (window_h - text::STATUS_BAR_HEIGHT).max(0.0),
                                     width: window_w,
                                     height: theme::BORDER_WIDTH_PX,
-                                    color: theme::BORDER,
+                                    color: theme::border(),
                                 },
                             ];
                             chrome_renderer.update(
@@ -4092,7 +4138,7 @@ fn main() {
                             // Deliberately a *separate* `Vec`/renderer from
                             // `active_tab_rects`/`glow_renderer`, not folded
                             // in: the real opaque `modal_renderer` "mode
-                            // cover" quad below (`theme::OPAQUE_MODE_COVER`,
+                            // cover" quad below (`theme::opaque_mode_cover()`,
                             // §75.56) is rendered *after* `glow_renderer` in
                             // this same pass to correctly hide stale editor
                             // content while Agent/Terminal/Workflow mode is
@@ -4117,7 +4163,7 @@ fn main() {
                                             width: w,
                                             height: h,
                                             radius: 0.0,
-                                            color: theme::BORDER,
+                                            color: theme::border(),
                                             glow_strength: 0.0,
                                         });
                                     }
@@ -4133,7 +4179,7 @@ fn main() {
                                             0.22,
                                         ]
                                     } else {
-                                        theme::SURFACE
+                                        theme::surface()
                                     };
                                     workflow_rects.push(glow_rect::GlowRect {
                                         x: canvas_x + node.pos.x,
@@ -4259,7 +4305,7 @@ fn main() {
                             // Real unsaved-changes modal dim overlay
                             // (§75.23) for a true dialog-over-content
                             // modal, vs. a real *opaque* cover (§75.56,
-                            // `theme::OPAQUE_MODE_COVER` -- see its own doc
+                            // `theme::opaque_mode_cover()` -- see its own doc
                             // comment for the real overlap bug this fixes)
                             // for a full mode swap that should hide the
                             // editor entirely rather than just dim it.
@@ -4301,7 +4347,7 @@ fn main() {
                                         height: (gpu_state.size.height as f32
                                             - text::TAB_BAR_HEIGHT)
                                             .max(0.0),
-                                        color: theme::OPAQUE_MODE_COVER,
+                                        color: theme::opaque_mode_cover(),
                                     }]
                                 } else {
                                     Vec::new()
@@ -4331,11 +4377,11 @@ fn main() {
                                                 resolve_target: None,
                                                 ops: wgpu::Operations {
                                                     // Real §75.54 Antigravity-researched `bg`
-                                                    // token (§50.3, `theme::BG_LINEAR`) --
+                                                    // token (§50.3, `theme::bg_linear()`) --
                                                     // previously an unrelated, lighter,
                                                     // undifferentiated color used for every
                                                     // region in this renderer.
-                                                    load: wgpu::LoadOp::Clear(theme::BG_LINEAR),
+                                                    load: wgpu::LoadOp::Clear(theme::bg_linear()),
                                                     store: wgpu::StoreOp::Store,
                                                 },
                                             },

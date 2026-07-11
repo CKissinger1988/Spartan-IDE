@@ -102,6 +102,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Real `Reparent`/`ComponentInsert`, closing GUI Builder's last named Tier 1 gap — task #12 fully closed, three real bugs found and fixed | §75.90 |
 | Real Android SDK/toolchain/project detection — an honest first increment toward task #11, not §21's full scope | §75.91 |
 | Real JetBrains Mono, the default font for every real Spartan project (wgpu shell, desktop/, web/, mobile/) — a real fontconfig-ordering bug found and fixed | §75.92 |
+| Real user-customizable theme and font options across every real Spartan surface (wgpu shell, desktop/, web/, mobile/) | §75.93 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2897,6 +2898,59 @@ first — it's the parity reference until each row there is actually reimplement
   Playwright-against-dev-server and real-shaping-path methods this project already uses for each).
   All three real UI-facing projects plus the reference wgpu shell now share the identical real,
   self-hosted JetBrains Mono font as their default.
+- **Real, working code — real user-customizable theme and font options, every real Spartan
+  surface (§75.93)**: direct, user-requested ("Add user customizable theme and font options to
+  all Spartan interfaces"). `crates/spartan-settings` gained a real `ThemeName` enum
+  (`SpartanDark`/`SpartanLight`) on `AppearanceSettings` and a real `font_family: Option<String>`
+  on `EditorSettings` -- **a real bug found only by running this crate's own tests**: the
+  existing container-level `#[serde(default)]` on `Settings` (§75.79's own fix) only covers a
+  whole field missing entirely, not a present `"editor"`/`"appearance"` object merely missing
+  this one new sub-field (the real shape of every request `spartan-backend`'s `settings_set`
+  already builds) -- fixed by adding `#[serde(default)]` to both structs themselves, one layer
+  deeper. 8 new tests (19 total, up from 15). **`desktop/`/`web/`**: real, live CSS-variable
+  theming -- a new `:root[data-theme="light"]` block in the shared `theme.css` with genuinely
+  re-picked (not mechanically inverted) light values, and a new `--font-mono` custom property the
+  shared `.mono` rule now reads, so a font override applies to every real `.mono` surface app-wide
+  at once, live. `desktop/`'s Settings screen persists both through the existing `settings_set`
+  IPC call; `web/` (no backend connection in this increment) persists to `localStorage`, confirmed
+  to survive a real page reload. **`crates/spartan-editor-core` (wgpu shell)**: a real, explicitly
+  narrower "applies next launch" scope -- this session's own no-display/GPU environment can't
+  verify a live mid-session palette swap, and this crate's own settings panel already established
+  that exact "applies next request, not live" precedent for GPU offload/Leo settings. Every color
+  `pub const` became a `pub fn` reading a real, process-wide `OnceLock<ThemeName>` set once by a
+  new `init_theme()`, called before any window/GPU state exists; `fonts.rs`'s `build_font_system`
+  gained a real font-family override parameter; `settings_panel.rs` gained real Theme/FontFamily
+  rows. **A real test-isolation bug was found only by running the full workspace suite**: an
+  early test asserted "uninitialized theme reads dark" against the real, shared `OnceLock` --
+  `cargo test`'s single-process-per-binary-target harness gives no ordering guarantee between
+  tests, so a *different* test's own real `init_theme()` call could run first and flip it --
+  fixed by testing a new, pure, no-global-state `resolve()` helper in isolation instead, re-run
+  5× at default parallelism plus once single-threaded with zero failures. 20 new tests.
+  **`mobile/`**: real, *live* theme switching (React Native's own natural mechanism, no display
+  constraint applies) via a new `ThemeContext`/`useTheme()` plus real `AsyncStorage` persistence
+  (`themePreference.ts`, mirroring `offlineQueue.ts`'s own established convention). Every one of
+  6 screens plus `RootNavigator.tsx` was converted from a module-scope `StyleSheet.create`
+  (baked in once, never reactive) to a `makeStyles(colors)` function called via
+  `useMemo(() => makeStyles(colors), [colors])` -- the standard, correct RN pattern for a live
+  stylesheet; `StatusPill.tsx` needed no change (its badge colors are real, theme-invariant
+  semantic hues). **A real bug caught before shipping**: the new Dark/Light toggle's active pill
+  used `colors.text` for its label, near-black and unreadable against the light theme's own
+  accent-colored active background -- fixed with a dedicated always-white active-label style. 8
+  new tests (114 total, up from 106). **Real, executed verification**: full Rust fmt/clippy clean,
+  `cargo test --workspace --release` run 4× (3× default parallelism, once single-threaded) with
+  zero failures, 618 tests total (up from 602); real, screenshotted Playwright verification in
+  both `desktop/` and `web/` confirming a live theme switch genuinely repaints the entire app
+  (nav sidebar, Leo panel, every surface) with the exact researched light-theme colors via
+  `getComputedStyle`, a custom font propagating to a real element's resolved `fontFamily`, and a
+  reset correctly falling back to the CSS default; `web/`'s `localStorage` persistence confirmed
+  to survive a real reload; `mobile/`'s `npx tsc --noEmit` + `npx expo export --platform android`
+  both clean. **What this does not confirm**: no live GPU/window verification of the wgpu shell's
+  own theme/font switch (no display available this session -- the "applies next launch" scope is
+  verified by code/test inspection and the panel's own UI text, not an actual second launch on
+  screen); no live device/emulator rendering for `mobile/`; `desktop/`'s real Electron window
+  remains unlaunched this session (same standing gap since §75.59); no theme variants beyond
+  Dark/Light on any surface; `mobile/`'s font customization was deliberately scoped out (named
+  explicitly) since §69's own v1 has no code-editing surface for it to meaningfully apply to.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2954,7 +3008,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 602 tests: 7 spikes + 15 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 618 tests: 7 spikes + 15 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
