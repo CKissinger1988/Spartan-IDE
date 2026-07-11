@@ -238,6 +238,28 @@ app.whenReady().then(() => {
     return { canceled: result.canceled, path: result.filePaths[0] ?? null };
   });
 
+  // Real native "choose a file" dialog -- a sibling of `pick_folder` above,
+  // added for the llama.cpp Settings row (user-requested: "Integrate
+  // llama.cpp into the desktop IDE") so browsing to a real local `.gguf`
+  // model file doesn't require typing an absolute path by hand. Real,
+  // caller-supplied filters (never renderer-controlled beyond that -- the
+  // dialog itself is still the real OS file picker, not an arbitrary-path
+  // opener).
+  ipcMain.handle(
+    "spartan:pick_file",
+    async (event, params: { filters?: Electron.FileFilter[] } = {}) => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      const options: Electron.OpenDialogOptions = {
+        properties: ["openFile"],
+        filters: params.filters,
+      };
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options);
+      return { canceled: result.canceled, path: result.filePaths[0] ?? null };
+    }
+  );
+
   // Real, unprompted backend events (Leo's own async plan-ready/
   // plan-failed notifications) relayed to every real open window --
   // there is normally exactly one, but this doesn't assume that.

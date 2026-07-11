@@ -131,8 +131,16 @@ pub enum ProviderHealth {
 #[derive(Debug)]
 pub enum ProviderError {
     Network(String),
-    Http { status: u16, body: String },
+    Http {
+        status: u16,
+        body: String,
+    },
     Parse(String),
+    /// A real error from a provider with no HTTP layer at all --
+    /// `LlamaCppProvider`'s own in-process model load/tokenize/decode
+    /// failures, none of which are meaningfully a "network," "HTTP," or
+    /// "parse" error in the sense the other three variants mean.
+    Local(String),
 }
 
 impl fmt::Display for ProviderError {
@@ -143,6 +151,7 @@ impl fmt::Display for ProviderError {
                 write!(f, "HTTP {status}: {body}")
             }
             ProviderError::Parse(msg) => write!(f, "parse error: {msg}"),
+            ProviderError::Local(msg) => write!(f, "{msg}"),
         }
     }
 }

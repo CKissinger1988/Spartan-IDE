@@ -78,4 +78,6 @@ contextBridge.exposeInMainWorld("spartan", {
   openProject: (root: string): Promise<unknown> =>
     ipcRenderer.invoke("spartan:open_project", { root }),
   pickFolder: (): Promise<unknown> => ipcRenderer.invoke("spartan:pick_folder"),
+  pickFile: (filters?: { name: string; extensions: string[] }[]): Promise<unknown> =>
+    ipcRenderer.invoke("spartan:pick_file", { filters }),
 });

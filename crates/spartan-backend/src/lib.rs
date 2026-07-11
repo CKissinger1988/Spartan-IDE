@@ -38,7 +38,9 @@ use spartan_leo::execute::{self, ExecuteAction};
 use spartan_leo::plan::{generate_plan, ImplementationPlan, PlanError};
 use spartan_leo::tool::{ToolCall, ToolResult};
 use spartan_model::provider::Message;
-use spartan_model::{ClaudeProvider, LiteLLMProvider, ModelProvider, OllamaProvider};
+use spartan_model::{
+    ClaudeProvider, LiteLLMProvider, LlamaCppProvider, ModelProvider, OllamaProvider,
+};
 
 mod pty;
 
@@ -413,6 +415,17 @@ fn build_leo_provider(
         }
         spartan_settings::LeoProviderKind::LiteLLM => {
             Ok(Box::new(LiteLLMProvider::local(&provider_settings.model)))
+        }
+        spartan_settings::LeoProviderKind::LlamaCpp => {
+            if provider_settings.model.trim().is_empty() {
+                return Err(
+                    "no .gguf model file path configured -- required to use llama.cpp as Leo's provider"
+                        .to_string(),
+                );
+            }
+            let provider = LlamaCppProvider::new(&provider_settings.model)
+                .map_err(|e| format!("failed to load llama.cpp model: {e}"))?;
+            Ok(Box::new(provider))
         }
     }
 }
@@ -3392,6 +3405,60 @@ mod tests {
             Some(key) => std::env::set_var("ANTHROPIC_API_KEY", key),
             None => std::env::remove_var("ANTHROPIC_API_KEY"),
         }
+    }
+
+    #[test]
+    fn build_leo_provider_errors_clearly_when_llamacpp_has_no_model_path_configured() {
+        let settings = spartan_settings::LeoProviderSettings {
+            kind: spartan_settings::LeoProviderKind::LlamaCpp,
+            model: String::new(),
+        };
+        let result = build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default());
+        match result {
+            Err(message) => assert!(message.contains("no .gguf model file path configured")),
+            Ok(_) => panic!("llama.cpp must fail clearly, not silently, with no model path set"),
+        }
+    }
+
+    #[test]
+    fn build_leo_provider_errors_clearly_when_llamacpp_model_path_does_not_exist() {
+        let settings = spartan_settings::LeoProviderSettings {
+            kind: spartan_settings::LeoProviderKind::LlamaCpp,
+            model: "/nonexistent/path/to/a/model.gguf".to_string(),
+        };
+        let result = build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default());
+        match result {
+            Err(message) => assert!(message.contains("failed to load llama.cpp model")),
+            Ok(_) => panic!("llama.cpp must fail clearly on a real nonexistent model path"),
+        }
+    }
+
+    /// Real, self-skipping live test -- matches this crate's own established
+    /// convention for tests needing a real, possibly-absent external
+    /// dependency: `SPARTAN_TEST_GGUF_MODEL` must point at a real,
+    /// already-downloaded `.gguf` file. No model file is bundled with this
+    /// repository (hundreds of megabytes, a real, deliberate choice not to
+    /// commit one).
+    #[test]
+    fn build_leo_provider_constructs_a_real_llamacpp_provider_from_a_real_model_file() {
+        let Ok(model_path) = std::env::var("SPARTAN_TEST_GGUF_MODEL") else {
+            eprintln!("SKIP: SPARTAN_TEST_GGUF_MODEL not set, skipping real llama.cpp provider construction test");
+            return;
+        };
+        if !std::path::Path::new(&model_path).exists() {
+            eprintln!("SKIP: {model_path} does not exist, skipping real llama.cpp provider construction test");
+            return;
+        }
+
+        let settings = spartan_settings::LeoProviderSettings {
+            kind: spartan_settings::LeoProviderKind::LlamaCpp,
+            model: model_path,
+        };
+        let provider =
+            build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default())
+                .expect("a real, valid .gguf file must construct successfully");
+        assert!(provider.is_local());
+        assert!(!provider.supports_native_tool_calling());
     }
 
     #[test]

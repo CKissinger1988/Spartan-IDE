@@ -9,6 +9,7 @@ declare global {
       openRepositoryPage: () => Promise<unknown>;
       openProject: (root: string) => Promise<unknown>;
       pickFolder: () => Promise<unknown>;
+      pickFile: (filters?: { name: string; extensions: string[] }[]) => Promise<unknown>;
     };
   }
 }

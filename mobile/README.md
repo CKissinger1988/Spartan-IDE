@@ -16,7 +16,10 @@ leaving it an unstated gap.
 **v1 scope — all built:**
 
 - Inbox / Agent Manager mirror — session threads across workspaces, same running/review/done
-  model as desktop, with search (title/workspace) and status filtering
+  model as desktop, with search (title/workspace), status filtering, a workspace filter (options
+  derived from whatever workspace names are actually present, never hardcoded), and pull-to-
+  refresh (re-runs the same live/cache load the initial mount does — honest today since mock data
+  can't meaningfully "refresh," and becomes the real re-fetch path once a live client exists)
 - Chat with Leo, same conversation history as desktop/CLI, with a real message composer (no fake
   Leo replies — see Current status below)
 - Approve/Reject on Diff Cards and Implementation Plans, gated behind biometric approval (§69.5)
@@ -32,7 +35,9 @@ leaving it an unstated gap.
 - Notification-surface actions: Approve/Reject buttons directly on the notification for
   low-stakes artifacts; destructive-class artifacts only open the app to the gated review screen
 - Decision History (§69.7) — a local, persistent log of every Approve/Reject decision made on the
-  device, reachable from Settings; a local audit log, not a synced one
+  device, reachable from Settings; a local audit log, not a synced one. Search (by artifact title)
+  and a decision-type filter (All/Approved/Rejected) narrow it once it grows past a handful of
+  entries; both are hidden entirely when the log is genuinely empty rather than shown uselessly
 
 **v2 scope — built where genuinely possible, honestly stubbed where not:**
 
@@ -62,8 +67,8 @@ running:
 
 ```bash
 npx tsc --noEmit          # clean
-npx expo export --platform android   # real Metro bundle, 931 modules, succeeds
-npm test                  # jest-expo + @testing-library/react-native, 93 tests, real assertions
+npx expo export --platform android   # real Metro bundle, 934 modules, succeeds
+npm test                  # jest-expo + @testing-library/react-native, 106 tests, real assertions
 ```
 
 **Real Jest coverage exists for both the business-logic layer and the screens themselves.**
@@ -80,6 +85,17 @@ One dependency-version quirk worth knowing if you add more screen tests: this re
 `@testing-library/react-native` 14.x, paired with React 19's concurrent renderer, makes `render()`
 and `fireEvent.*` asynchronous — they must be `await`ed, or queries silently fail or events never
 flush before assertions run. This isn't documented prominently in most RNTL examples online.
+
+A second one, found while adding the workspace filter test above: don't reach for
+`jest.isolateModules`/`jest.doMock` inside a single test to get a screen rendering against
+different fixture data than the rest of the file uses. `isolateModules` creates a fresh module
+registry for *everything* required inside its callback, including React itself — a freshly
+`require`d screen component then calls hooks against a second, different React instance than the
+one `render()` is using, producing a real "Invalid hook call" failure that has nothing to do with
+the actual feature under test. The safe pattern (see `InboxScreen.test.tsx`'s single-workspace
+test): `jest.mock` the fixture module once, normally, at the top of the file with a *mutable*
+array; temporarily mutate its contents in place for the one test that needs different data, and
+restore them in a `finally` block.
 
 **Backed entirely by mock data** (`src/data/mockData.ts`) — there is no session-store backend to
 talk to yet. Every screen reads local placeholder data; nothing here syncs, persists, or sends a

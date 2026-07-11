@@ -7,3 +7,5 @@ edition = "2021"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
+llama-cpp-2 = "0.1"
+encoding_rs = "0.8"

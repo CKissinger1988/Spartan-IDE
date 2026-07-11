@@ -9,7 +9,7 @@ interface GpuOffloadSettings {
 
 type LeoApprovalMode = "ManualEveryStep" | "AutoApproveSafe";
 
-type LeoProviderKind = "Ollama" | "Claude" | "LiteLLM";
+type LeoProviderKind = "Ollama" | "Claude" | "LiteLLM" | "LlamaCpp";
 
 interface LeoProviderSettings {
   kind: LeoProviderKind;
@@ -59,6 +59,11 @@ const DEFAULT_MODEL_FOR_KIND: Record<LeoProviderKind, string> = {
   Ollama: "llama3.1:8b",
   Claude: "claude-3-5-sonnet-latest",
   LiteLLM: "gpt-4o",
+  // Real, deliberate empty default -- unlike the other three providers'
+  // real, valid model-name defaults, there is no universal real .gguf
+  // path this could point at; the user must Browse to (or type) a real
+  // local file.
+  LlamaCpp: "",
 };
 
 interface UpdateCheckCategories {
@@ -426,28 +431,59 @@ export default function SettingsScreen(): React.ReactElement {
           <option value="Ollama">Ollama (local)</option>
           <option value="Claude">Claude (Anthropic API)</option>
           <option value="LiteLLM">LiteLLM (local proxy → cloud backends)</option>
+          <option value="LlamaCpp">llama.cpp (local, in-process GGUF)</option>
         </select>
       </div>
       <div className="settings-row">
-        <label className="settings-label mono">Model</label>
+        <label className="settings-label mono">
+          {settings.leo_provider.kind === "LlamaCpp" ? "Model file (.gguf)" : "Model"}
+        </label>
         <input
           className="settings-select mono"
           type="text"
+          placeholder={
+            settings.leo_provider.kind === "LlamaCpp" ? "/path/to/model.gguf" : undefined
+          }
           disabled={saving}
           defaultValue={settings.leo_provider.model}
-          key={settings.leo_provider.kind}
+          key={`${settings.leo_provider.kind}-${settings.leo_provider.model}`}
           onBlur={(e) => {
             const model = e.target.value.trim();
             if (model && model !== settings.leo_provider.model) {
               save({ leo_provider: { kind: settings.leo_provider.kind, model } });
             }
           }}
+          style={{ width: settings.leo_provider.kind === "LlamaCpp" ? 320 : undefined }}
         />
+        {settings.leo_provider.kind === "LlamaCpp" && (
+          <button
+            className="settings-button mono"
+            disabled={saving}
+            onClick={() => {
+              window.spartan
+                .pickFile([{ name: "GGUF models", extensions: ["gguf"] }])
+                .then((result) => {
+                  const r = result as { canceled: boolean; path: string | null };
+                  if (!r.canceled && r.path) {
+                    save({ leo_provider: { kind: "LlamaCpp", model: r.path } });
+                  }
+                })
+                .catch((e: Error) => setError(e.message));
+            }}
+          >
+            Browse…
+          </button>
+        )}
       </div>
       <div className="settings-note mono">
         Ollama runs fully local (GPU offload above applies). Claude reads ANTHROPIC_API_KEY from
         the environment — no key storage exists in this settings screen yet. LiteLLM routes
         through a local proxy at localhost:4000 to whichever cloud backend it's configured for.
+        llama.cpp runs a real local GGUF model in-process (no separate server, no Ollama install
+        required) — point it at a real `.gguf` file on disk. Tool calling is real and native here
+        too, via grammar-constrained sampling: the model's output is structurally forced to match
+        the tool schema, so Leo's plan/execute loop works fully through it, not just free-text
+        completion.
       </div>
 
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>

@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { StatusPill } from '../components/StatusPill';
@@ -20,6 +20,8 @@ const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
   { key: 'done', label: 'Done' },
 ];
 
+const ALL_WORKSPACES = 'All Workspaces';
+
 // §69.1's "Inbox/Agent Manager mirror" — the same task-thread list as
 // desktop's Inbox (§8, §50.1), read from the same session store once one
 // exists. Backed by mock data for now (src/data/mockData.ts), cached
@@ -28,14 +30,28 @@ const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
 // screen. Also merges in tasks dictated locally (§69.5's voice-to-task
 // capture) via localTaskStore, since there's no backend yet to submit them
 // to.
+//
+// Workspace filter and pull-to-refresh (new feature, this pass): threads
+// already carry a real `workspaceName` (desktop's own multi-workspace
+// concept, §8), but the Inbox never let a reviewer narrow to just one --
+// with more than a couple of active workspaces this list only gets
+// noisier. The filter's own option list is derived from whatever
+// workspace names are actually present (mock + local tasks combined),
+// never hardcoded, so it stays correct as threads come and go. Pull-to-
+// refresh re-runs the exact same live/cache load the initial mount does
+// -- honest today (mock data can't meaningfully "refresh"), and becomes
+// the real re-fetch path for free once a live session-store client
+// replaces `mockSessionThreads`.
 export function InboxScreen({ navigation }: Props) {
   const [threads, setThreads] = useState<SessionThread[]>(mockSessionThreads);
   const [fromCache, setFromCache] = useState(false);
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [workspaceFilter, setWorkspaceFilter] = useState<string>(ALL_WORKSPACES);
+  const [refreshing, setRefreshing] = useState(false);
   const localTasks = useSyncExternalStore(subscribeLocalTasks, getLocalTasks);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     // Mock data always "succeeds" today, so this always takes the live
     // branch and just warms the cache — the fallback branch is exercised
     // once a real, sometimes-unreachable session-store client replaces
@@ -44,10 +60,10 @@ export function InboxScreen({ navigation }: Props) {
       setThreads(mockSessionThreads);
       setFromCache(false);
       cacheSessionThreads(mockSessionThreads);
-      return;
+      return Promise.resolve();
     }
 
-    getCachedSessionThreads().then((cached) => {
+    return getCachedSessionThreads().then((cached) => {
       if (cached) {
         setThreads(cached);
         setFromCache(true);
@@ -55,7 +71,17 @@ export function InboxScreen({ navigation }: Props) {
     });
   }, []);
 
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    load().finally(() => setRefreshing(false));
+  }, [load]);
+
   const allThreads = [...localTasks, ...threads];
+  const workspaceNames = Array.from(new Set(allThreads.map((item) => item.workspaceName))).sort();
   const normalizedQuery = query.trim().toLowerCase();
   const visibleThreads = allThreads.filter((item) => {
     const matchesQuery =
@@ -63,7 +89,9 @@ export function InboxScreen({ navigation }: Props) {
       item.title.toLowerCase().includes(normalizedQuery) ||
       item.workspaceName.toLowerCase().includes(normalizedQuery);
     const matchesStatus = statusFilter === 'all' || item.status === statusFilter;
-    return matchesQuery && matchesStatus;
+    const matchesWorkspace =
+      workspaceFilter === ALL_WORKSPACES || item.workspaceName === workspaceFilter;
+    return matchesQuery && matchesStatus && matchesWorkspace;
   });
 
   return (
@@ -100,9 +128,33 @@ export function InboxScreen({ navigation }: Props) {
           );
         })}
       </View>
+      {workspaceNames.length > 1 && (
+        <View style={styles.filterRow}>
+          {[ALL_WORKSPACES, ...workspaceNames].map((name) => {
+            const active = workspaceFilter === name;
+            return (
+              <Pressable
+                key={name}
+                style={[
+                  styles.filterPill,
+                  active && { backgroundColor: C.accent, borderColor: C.accent },
+                ]}
+                onPress={() => setWorkspaceFilter(name)}
+              >
+                <Text style={[styles.filterPillText, active && styles.filterPillTextActive]}>
+                  {name}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
       <FlatList
+        testID="inbox-thread-list"
         data={visibleThreads}
         keyExtractor={(item) => item.id}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
         renderItem={({ item }) => (
           <Pressable
             style={styles.row}

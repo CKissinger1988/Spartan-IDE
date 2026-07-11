@@ -23,6 +23,19 @@ jest.mock('../../lib/edgeCache', () => ({
   getCachedSessionThreads: jest.fn(),
 }));
 
+// A mutable copy of the real fixture, not the real module's own array --
+// every test but one reads it unmodified, so its default content must
+// stay byte-identical to the real `mockSessionThreads`; the workspace-
+// filter-visibility test below temporarily replaces its contents to
+// construct a genuine single-workspace scenario, then restores it. This
+// avoids `jest.isolateModules`, which duplicates React itself (a second
+// module registry means a second React copy) and breaks every hook call
+// in a freshly `require`d component.
+jest.mock('../../data/mockData', () => {
+  const actual = jest.requireActual('../../data/mockData');
+  return { mockSessionThreads: [...actual.mockSessionThreads] };
+});
+
 afterEach(async () => {
   await cleanup();
 });
@@ -125,6 +138,80 @@ describe('InboxScreen', () => {
     expect(screen.queryByText('Fix checkout race condition')).toBeNull();
     expect(screen.queryByText('Add retry backoff to webhook sender')).toBeNull();
     expect(screen.queryByText('Migrate settings panel to new theme tokens')).toBeNull();
+  });
+
+  test('workspace filter pills show one option per distinct workspace, plus an All option', async () => {
+    await renderScreen();
+    const workspaceNames = new Set(mockSessionThreads.map((thread) => thread.workspaceName));
+    expect(workspaceNames.size).toBeGreaterThan(1);
+    expect(screen.getByText('All Workspaces')).toBeTruthy();
+    for (const workspaceName of workspaceNames) {
+      expect(screen.getAllByText(workspaceName).length).toBeGreaterThan(0);
+    }
+  });
+
+  test('workspace filter pill narrows the list to that workspace only', async () => {
+    await renderScreen();
+    await pressFilterPill('spartan-ide-desktop');
+    expect(screen.getByText('Migrate settings panel to new theme tokens')).toBeTruthy();
+    expect(screen.queryByText('Fix checkout race condition')).toBeNull();
+    expect(screen.queryByText('Add retry backoff to webhook sender')).toBeNull();
+  });
+
+  test('workspace filter combines with status filter and search', async () => {
+    await renderScreen();
+    await pressFilterPill('storefront-api');
+    await pressFilterPill('Running');
+    await typeSearch('webhook');
+    expect(screen.getByText('Add retry backoff to webhook sender')).toBeTruthy();
+    expect(screen.queryByText('Fix checkout race condition')).toBeNull();
+    expect(screen.queryByText('Migrate settings panel to new theme tokens')).toBeNull();
+  });
+
+  test('selecting All Workspaces after narrowing shows every thread again', async () => {
+    await renderScreen();
+    await pressFilterPill('spartan-ide-desktop');
+    expect(screen.queryByText('Fix checkout race condition')).toBeNull();
+    await pressFilterPill('All Workspaces');
+    expect(screen.getByText('Fix checkout race condition')).toBeTruthy();
+    expect(screen.getByText('Migrate settings panel to new theme tokens')).toBeTruthy();
+  });
+
+  test('a single-workspace thread list renders no workspace filter row at all', async () => {
+    // Temporarily replaces the shared mutable fixture's contents with a
+    // genuine single-workspace scenario, restoring the real two-workspace
+    // fixture afterward so every other test in this file keeps seeing the
+    // content its own assertions depend on.
+    const original = [...mockSessionThreads];
+    mockSessionThreads.length = 0;
+    mockSessionThreads.push({
+      id: 'solo-1',
+      title: 'Only thread in one workspace',
+      workspaceName: 'solo-workspace',
+      status: 'running',
+      updatedAt: new Date().toISOString(),
+      unreadCount: 0,
+    });
+    try {
+      await renderScreen();
+      expect(screen.getByText('Only thread in one workspace')).toBeTruthy();
+      expect(screen.queryByText('All Workspaces')).toBeNull();
+    } finally {
+      mockSessionThreads.length = 0;
+      mockSessionThreads.push(...original);
+    }
+  });
+
+  test('pull-to-refresh re-loads threads without throwing', async () => {
+    await renderScreen();
+    await act(async () => {
+      fireEvent(screen.getByTestId('inbox-thread-list'), 'refresh');
+    });
+    // The mock data path always resolves synchronously and re-shows the
+    // same threads -- the meaningful assertion is that refreshing doesn't
+    // crash or clear the list, not that content changes (nothing here can
+    // meaningfully "change" without a live backend).
+    expect(screen.getByText(mockSessionThreads[0].title)).toBeTruthy();
   });
 
   // Regression for a bug where the unread badge was absolutely positioned
