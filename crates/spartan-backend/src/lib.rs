@@ -43,8 +43,14 @@ use spartan_model::{
 };
 
 mod pty;
+pub mod ws_transport;
 
-#[derive(Debug, Clone, Deserialize)]
+// Both `Serialize` and `Deserialize`: the server only ever deserializes a
+// `Request` and serializes a `Response` in production, but `ws_transport`'s
+// own tests act as a real client (over an actual WebSocket connection),
+// which legitimately needs the opposite direction of both -- the same
+// shape a real `web/` client will eventually need too.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
     pub id: u64,
     pub method: String,
@@ -52,7 +58,7 @@ pub struct Request {
     pub params: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Response {
     pub id: u64,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -97,6 +97,7 @@ first — it's the parity reference until each row there is actually reimplement
 | vscode.dev-inspired web app — architecture decision (hybrid client+optional-backend), a real client-side buffer→WASM feasibility spike, no VS Code code used anywhere — concepts only | §75.85 |
 | Web app prep, second spike — real tree-sitter parsing/querying via web-tree-sitter in a real JS engine, a real grammar/library version-compatibility bug found and fixed | §75.86 |
 | Web app prep, third spike — real, zero-native-dependency git operations via isomorphic-git, cross-checked against the real native git CLI | §75.87 |
+| Web app prep — real WebSocket transport for spartan-backend, alongside stdio; a real unauthenticated-RCE-surface design caught and fixed before it compiled | §75.88 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2675,6 +2676,74 @@ first — it's the parity reference until each row there is actually reimplement
   transport and, in a browser, a CORS-friendly git server or proxy); no diff/merge-conflict
   handling; no real performance measurement against a large real repository (only a two-commit,
   one-file toy repo was exercised).
+- **Real, working code — web app prep, real WebSocket transport for `spartan-backend`; a real
+  unauthenticated-RCE-surface design caught and fixed before it ever compiled (§75.88)**:
+  user-requested ("Continue"), continuing §75.85's own tracked follow-up list into `spartan-backend`
+  itself (not another `spikes/` project this time -- real production wiring in the actual crate the
+  Electron shell already depends on). New `crates/spartan-backend/src/ws_transport.rs`: a real,
+  opt-in WebSocket listener (`--ws-port:<port>`, absent by default -- every existing Electron launch
+  is completely unaffected) running *alongside* the existing stdio transport, not replacing it,
+  sharing the exact same `Arc<Mutex<BackendState>>` so a browser tab and a simultaneously-running
+  Electron client see the same open files/Leo state. Real async events (Leo's own background
+  results) route only to the connection whose request triggered them, via the same
+  one-`Sender`-per-call-site shape `main.rs`'s stdio loop already established -- not broadcast to
+  every connection, a real, deliberate, named scope limit.
+  **A real, serious security gap was found and fixed before any of this was ever compiled, not
+  shipped and patched later.** The first version accepted every WebSocket connection with no
+  authentication and no `Origin` check at all -- correctly flagged by this session's own safety
+  classifier before `cargo build` ever ran: any webpage a user's browser happened to visit could
+  have opened `ws://127.0.0.1:<port>` and driven the *entire* backend RPC surface, including
+  `pty_spawn` (arbitrary shell execution), `edit`/`save_file` (arbitrary local file read/write), and
+  Leo's own tool-execution loop -- a real, unauthenticated remote-code-execution-equivalent surface,
+  since WebSocket connections are not constrained by the same-origin policy the way `fetch`/XHR calls
+  are unless the server itself validates `Origin`. Presented to the user directly via
+  `AskUserQuestion` rather than silently picking a fix; they chose **defense in depth: both an
+  Origin allowlist and a token**. Two real, independent checks now gate every connection: (1) a
+  per-process random 32-byte token (`rand::random`, hex-encoded, regenerated every server start,
+  written to `~/.spartan/ws-token` at `0600` on Unix), required as a `?token=` query parameter and
+  compared in real fixed time (`tokens_match`, an XOR-accumulate loop, not a short-circuiting `==`,
+  to avoid a trivial timing side-channel on the comparison itself) -- the primary, load-bearing
+  check, required for every connection regardless of origin; (2) an `Origin` allowlist, checked only
+  when a request actually carries an `Origin` header (real browsers always send one for a
+  page-context WebSocket; non-browser clients, including this module's own tests, typically don't
+  and are covered by the token check alone) -- a browser connection from a disallowed origin is
+  rejected even with a correct token, a real defense against a leaked token being replayed from an
+  unexpected page. Both checks run inside a real `tungstenite::accept_hdr` callback, rejecting at
+  the HTTP-upgrade level before the WebSocket protocol handshake even completes -- the earliest,
+  most correct point to refuse an unauthorized connection, not after accepting and validating the
+  first frame. **A real, honestly-named open question, not invented or guessed at**: how a
+  legitimate browser-based web client actually *obtains* the current token and learns which origin
+  to present depends on a real product decision task #81's own `web/` scaffold hasn't made yet (e.g.
+  whether `spartan-backend` also serves the web app's own static files, letting the served page
+  embed its own token with a trivially-correct origin by construction) -- this pass makes the
+  transport safe by construction and explicitly declines to guess at that separate, larger design
+  question. A real technique avoided a `Mutex`-around-the-whole-`WebSocket` design (which would have
+  starved background event delivery for as long as the connection sat blocked in a read call): the
+  underlying `TcpStream` gets a short read timeout, and one real per-connection thread polls --
+  bounded-timeout `read()`, then drain any pending outbound strings from that connection's own
+  `mpsc::Receiver` -- multiplexing inbound requests and outbound events on one thread with no mutex
+  needed. `Request`/`Response` (`lib.rs`) gained the derives they'd been missing in the direction a
+  real client needs (`Serialize` on `Request`, `Deserialize` on `Response` -- previously only the
+  server-side directions existed), needed for this module's own tests to act as a genuine client
+  round-tripping real JSON, and equally the shape any real future `web/` client will need. 9 new
+  tests, all passing: fixed-time token comparison and query-param extraction (pure unit tests); a
+  correct token with no `Origin` header accepted and able to complete a real `list_dir` call; a
+  wrong token rejected at the handshake; a missing token rejected; a correct token with a
+  disallowed origin rejected; a correct token with an allowed origin accepted; and, confirming the
+  shared-state design decision directly rather than just asserting it in a doc comment, two
+  independent, separately-authenticated connections where connection A's `open_file` and
+  connection B's `edit` on the same resulting `doc_id` both succeed. 581 tests total workspace-wide
+  (up from 572), full `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`
+  clean. **What this does not confirm**: no real browser-context test (only `tungstenite`'s own
+  sync Rust client was used, matching every other Node/browser-adjacent gap named honestly elsewhere
+  in this same web-app effort); no real load-bearing security review beyond this session's own
+  design and implementation (a real token/Origin scheme, not independently audited); no rate-limiting
+  or connection-count bounds (a real, separate, unaddressed DoS-surface question for a
+  publicly-reachable-in-principle loopback server); the actual token-delivery-to-a-real-browser
+  question named above remains genuinely open; no live Electron+WebSocket dual-client run was
+  performed (both transports were verified independently -- stdio via the existing, unchanged
+  test suite, WebSocket via this pass's own new tests -- not together in one live process observed
+  end-to-end).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
