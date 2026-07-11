@@ -16,73 +16,60 @@ import { GuiBuilderClient } from "./gui-builder-client.js";
 
 const isDev = !app.isPackaged;
 
-function resolveBackendBinaryPath(): string {
-  // Real §75.76 packaged-app path: electron-builder's own real
-  // `extraResources` config (`package.json`'s `build.extraResources`)
-  // copies the real release binary to `<resourcesPath>/spartan-backend`
-  // -- `process.resourcesPath` is Electron's own real, cross-platform
-  // constant for exactly that directory (`Resources/` on macOS,
-  // `resources/` alongside the executable on Windows/Linux), populated
-  // correctly regardless of platform without this file needing to know
-  // the platform-specific layout itself.
-  if (app.isPackaged) {
-    const packagedPath = path.join(
-      process.resourcesPath,
-      process.platform === "win32" ? "spartan-backend.exe" : "spartan-backend"
-    );
-    if (!fs.existsSync(packagedPath)) {
-      throw new Error(`spartan-backend binary not found in the packaged app at ${packagedPath}`);
-    }
-    return packagedPath;
-  }
-  // Real release binary built by `cargo build --release -p spartan-backend`
-  // from the repo root -- `desktop/` is a direct child of the repo root,
-  // so this is a fixed, real relative path during development.
-  const devPath = path.resolve(
-    import.meta.dirname,
-    "..",
-    "..",
-    "target",
-    "release",
-    process.platform === "win32" ? "spartan-backend.exe" : "spartan-backend"
-  );
-  if (!fs.existsSync(devPath)) {
+/**
+ * Real, shared packaged-vs-dev resource resolver -- found duplicated
+ * (near-identical, by a code-review pass) across
+ * `resolveBackendBinaryPath`/`resolveGuiBuilderCliPath` below. Real §75.76
+ * packaged-app path: electron-builder's own `extraResources` config
+ * (`package.json`'s `build.extraResources`) copies real files to
+ * `<resourcesPath>/...` -- `process.resourcesPath` is Electron's own
+ * real, cross-platform constant for that directory (`Resources/` on
+ * macOS, `resources/` alongside the executable on Windows/Linux),
+ * resolved correctly regardless of platform without either caller
+ * needing to know the platform-specific layout itself. `devSegments`
+ * resolves relative to `desktop/`'s own real position as a direct child
+ * of the repo root.
+ */
+function resolveResourcePath(
+  label: string,
+  devSegments: string[],
+  packagedSegments: string[],
+  devHint: string
+): string {
+  const candidate = app.isPackaged
+    ? path.join(process.resourcesPath, ...packagedSegments)
+    : path.resolve(import.meta.dirname, "..", "..", ...devSegments);
+  if (!fs.existsSync(candidate)) {
     throw new Error(
-      `spartan-backend binary not found at ${devPath} -- run "cargo build --release -p spartan-backend" from the repo root first.`
+      app.isPackaged
+        ? `${label} not found in the packaged app at ${candidate}`
+        : `${label} not found at ${candidate} -- ${devHint}`
     );
   }
-  return devPath;
+  return candidate;
+}
+
+function resolveBackendBinaryPath(): string {
+  const binaryName = process.platform === "win32" ? "spartan-backend.exe" : "spartan-backend";
+  return resolveResourcePath(
+    "spartan-backend binary",
+    ["target", "release", binaryName],
+    [binaryName],
+    'run "cargo build --release -p spartan-backend" from the repo root first.'
+  );
 }
 
 function resolveGuiBuilderCliPath(): string {
-  // Same real packaged-vs-dev split as `resolveBackendBinaryPath` above
-  // -- electron-builder's config copies `gui-builder/dist` and its own
-  // real `node_modules` into `<resourcesPath>/gui-builder`.
-  if (app.isPackaged) {
-    const packagedPath = path.join(process.resourcesPath, "gui-builder", "cli.js");
-    if (!fs.existsSync(packagedPath)) {
-      throw new Error(`gui-builder CLI not found in the packaged app at ${packagedPath}`);
-    }
-    return packagedPath;
-  }
   // Real, already-built `gui-builder/` npm project (§75.38-§75.53) -- the
   // actual GUI Builder AST-sync/bundling engine, a sibling of `desktop/`
   // at the repo root, not a dependency of it (deliberately its own
   // separate npm project since day one, see its own README.md).
-  const cliPath = path.resolve(
-    import.meta.dirname,
-    "..",
-    "..",
-    "gui-builder",
-    "dist",
-    "cli.js"
+  return resolveResourcePath(
+    "gui-builder CLI",
+    ["gui-builder", "dist", "cli.js"],
+    ["gui-builder", "cli.js"],
+    'run "npm run build" inside gui-builder/ first.'
   );
-  if (!fs.existsSync(cliPath)) {
-    throw new Error(
-      `gui-builder CLI not found at ${cliPath} -- run "npm run build" inside gui-builder/ first.`
-    );
-  }
-  return cliPath;
 }
 
 let backend: BackendClient | null = null;

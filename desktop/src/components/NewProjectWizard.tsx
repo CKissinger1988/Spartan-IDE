@@ -38,8 +38,19 @@ interface NewProjectWizardProps {
    * it; `OnboardingScreen.tsx` persists completion *first*, then opens
    * it, matching what its `onClose`-based Skip/Open-Existing paths
    * already correctly did.
+   *
+   * Returns a real `Promise` (not fire-and-forget) so this component can
+   * distinguish and surface a failure here -- a second real bug caught
+   * before it shipped: an earlier version of this same fix made
+   * `onCreated` void/fire-and-forget, which meant a real failure in the
+   * caller's own post-creation step (e.g. `openProject` rejecting) was
+   * silently swallowed with no error shown and no way to retry, strictly
+   * worse than the original bug. Since `create_project` itself already
+   * succeeded by the time `onCreated` runs, a real retry must not call
+   * it again (its own real non-empty-directory guard would then refuse
+   * the already-created folder) -- see `createdRoot` below.
    */
-  onCreated: (projectRoot: string) => void;
+  onCreated: (projectRoot: string) => Promise<void>;
 }
 
 /**
@@ -70,8 +81,24 @@ export default function NewProjectWizard({
   const [parentDir, setParentDir] = useState(defaultParentDir);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Real, deliberate state: set only once `create_project` has actually
+  // succeeded. Its presence is what lets `create()` below tell "never
+  // attempted" apart from "the files exist on disk, only the navigation
+  // step failed" -- the latter must retry `onCreated` alone, never
+  // `create_project` again (which would now correctly, but unhelpfully,
+  // refuse the real, already-created, non-empty directory).
+  const [createdRoot, setCreatedRoot] = useState<string | null>(null);
 
   const create = useCallback(() => {
+    if (createdRoot) {
+      setCreating(true);
+      setError(null);
+      onCreated(createdRoot).catch((e: Error) => {
+        setError(e.message);
+        setCreating(false);
+      });
+      return;
+    }
     if (!name.trim()) {
       setError("Give the project a name first.");
       return;
@@ -82,13 +109,14 @@ export default function NewProjectWizard({
       .call("create_project", { parent_dir: parentDir, template, name })
       .then((result) => {
         const r = result as { project_root: string };
-        onCreated(r.project_root);
+        setCreatedRoot(r.project_root);
+        return onCreated(r.project_root);
       })
       .catch((e: Error) => {
         setError(e.message);
         setCreating(false);
       });
-  }, [name, parentDir, template, onCreated]);
+  }, [name, parentDir, template, onCreated, createdRoot]);
 
   return (
     <div className="np-overlay" onClick={onClose}>
@@ -103,7 +131,7 @@ export default function NewProjectWizard({
             className="settings-select mono np-input"
             type="text"
             autoFocus
-            disabled={creating}
+            disabled={creating || createdRoot !== null}
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="my-project"
@@ -113,7 +141,7 @@ export default function NewProjectWizard({
           <label className="settings-label mono">Template</label>
           <select
             className="settings-select mono np-input"
-            disabled={creating}
+            disabled={creating || createdRoot !== null}
             value={template}
             onChange={(e) => setTemplate(e.target.value)}
           >
@@ -130,14 +158,14 @@ export default function NewProjectWizard({
             <input
               className="settings-select mono np-input"
               type="text"
-              disabled={creating}
+              disabled={creating || createdRoot !== null}
               value={parentDir}
               onChange={(e) => setParentDir(e.target.value)}
             />
             <button
               className="settings-button mono"
               type="button"
-              disabled={creating}
+              disabled={creating || createdRoot !== null}
               onClick={() => {
                 window.spartan
                   .pickFolder()
@@ -153,8 +181,17 @@ export default function NewProjectWizard({
           </div>
         </div>
         <div className="settings-note mono">
-          Creates a real, runnable starter project (a real project manifest plus a real
-          hello-world file) at {parentDir}/{name.trim() || "<name>"}, then opens it here.
+          {createdRoot ? (
+            <>
+              The project was created at <strong>{createdRoot}</strong>, but opening it here
+              failed. Nothing further will be created — retrying only reopens it.
+            </>
+          ) : (
+            <>
+              Creates a real, runnable starter project (a real project manifest plus a real
+              hello-world file) at {parentDir}/{name.trim() || "<name>"}, then opens it here.
+            </>
+          )}
         </div>
         {error && <div className="leo-error mono">{error}</div>}
         <div className="np-actions">
@@ -166,7 +203,7 @@ export default function NewProjectWizard({
             disabled={creating}
             onClick={create}
           >
-            {creating ? "Creating…" : "Create Project"}
+            {creating ? "Creating…" : createdRoot ? "Retry Opening" : "Create Project"}
           </button>
         </div>
       </div>

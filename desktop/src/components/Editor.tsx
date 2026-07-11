@@ -8,9 +8,27 @@ export interface OpenFile {
   dirty: boolean;
 }
 
+export interface EditorPrefs {
+  fontSize: number;
+  tabSize: number;
+  wordWrap: boolean;
+}
+
+export const DEFAULT_EDITOR_PREFS: EditorPrefs = { fontSize: 13, tabSize: 2, wordWrap: false };
+
 interface EditorProps {
   file: OpenFile;
   onContentChange: (path: string, content: string, saved?: boolean) => void;
+  /**
+   * Real bug fix, found by a code-review pass: this component used to
+   * fetch the exact same settings object `App.tsx` already fetches on
+   * its own mount, a fully redundant second IPC round trip on every
+   * cold start. `App.tsx` now owns the one real fetch and passes the
+   * result down; this stays optional (defaulting to
+   * `DEFAULT_EDITOR_PREFS`) so a standalone render (e.g. a future test)
+   * doesn't need a parent to supply it.
+   */
+  prefs?: EditorPrefs;
 }
 
 /**
@@ -44,42 +62,16 @@ interface EditorProps {
  * wgpu shell's own coalesced-typing-run undo (§75.25) -- real follow-up
  * work, not attempted in this pass.
  */
-interface EditorPrefs {
-  fontSize: number;
-  tabSize: number;
-  wordWrap: boolean;
-}
-
-const DEFAULT_EDITOR_PREFS: EditorPrefs = { fontSize: 13, tabSize: 2, wordWrap: false };
-
-export default function Editor({ file, onContentChange }: EditorProps): React.ReactElement {
+export default function Editor({
+  file,
+  onContentChange,
+  prefs = DEFAULT_EDITOR_PREFS,
+}: EditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
   const [lineCount, setLineCount] = useState(1);
-  const [prefs, setPrefs] = useState<EditorPrefs>(DEFAULT_EDITOR_PREFS);
   const prevContentRef = useRef(file.content);
-
-  // Real §75.76 editor preferences (font size / tab size / word wrap) --
-  // fetched once on mount, matching the same "no live cross-window
-  // reload" scope this whole settings surface has had since §75.48.
-  useEffect(() => {
-    window.spartan
-      .call("settings_get", {})
-      .then((result) => {
-        const s = result as {
-          editor?: { font_size?: number; tab_size?: number; word_wrap?: boolean };
-        };
-        if (s.editor) {
-          setPrefs({
-            fontSize: s.editor.font_size ?? DEFAULT_EDITOR_PREFS.fontSize,
-            tabSize: s.editor.tab_size ?? DEFAULT_EDITOR_PREFS.tabSize,
-            wordWrap: s.editor.word_wrap ?? DEFAULT_EDITOR_PREFS.wordWrap,
-          });
-        }
-      })
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     prevContentRef.current = file.content;

@@ -1162,16 +1162,40 @@ fn devcontainer_detect(project_root: &str) -> Result<serde_json::Value, String> 
 /// charset is `[a-zA-Z0-9][a-zA-Z0-9_.-]+`) -- deterministic per project
 /// path, so re-running "up" against the same project reuses the same
 /// real name rather than accumulating a new container every time.
-fn sanitize_container_name(input: &str) -> String {
+/// Real, shared sanitizer -- found duplicated (with silently different
+/// semantics) by a code-review pass: `sanitize_container_name` and
+/// `sanitize_project_name` each hand-rolled the same real
+/// map-non-matching-to-dash/truncate/fallback-on-empty shape, differing
+/// only in which extra characters survive, the length cap, and the
+/// fallback string. One real function, parameterized, so a future rule
+/// change (e.g. disallowing a leading dash) applies to both real
+/// call sites at once instead of needing to be found and applied twice.
+fn sanitize_identifier(
+    input: &str,
+    extra_allowed: &[char],
+    max_len: usize,
+    fallback: &str,
+) -> String {
     let mut out: String = input
+        .trim()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || extra_allowed.contains(&c) {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
-    out.truncate(48);
+    out.truncate(max_len);
     if out.is_empty() {
-        out = "project".to_string();
+        out = fallback.to_string();
     }
     out
+}
+
+fn sanitize_container_name(input: &str) -> String {
+    sanitize_identifier(input, &[], 48, "project")
 }
 
 /// Real "build or pull, then create+start, then run postCreateCommand"
@@ -1501,14 +1525,20 @@ fn settings_get() -> Result<serde_json::Value, String> {
     serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
 }
 
-/// A real, optional set of fields alongside the always-present GPU pair
-/// (§75.69, §75.70, §75.76) -- every field here besides `gpu_*` is only
-/// ever sent when the Settings screen's own corresponding row actually
-/// changed, so an unrelated save must not silently reset the others back
-/// to their real defaults; loading the current settings first and only
-/// overriding what was actually provided preserves them.
-#[allow(clippy::too_many_arguments)]
-fn settings_set(
+/// Real, deliberate patch shape -- found as a real "too many positional
+/// arguments" smell by a code-review pass (`settings_set` had grown to 7
+/// same-typed `Option<T>`-in-a-row parameters, needing a real
+/// `#[allow(clippy::too_many_arguments)]`, the only one anywhere in
+/// `crates/`). Every field besides `gpu_*` is only ever sent when the
+/// Settings screen's own corresponding row actually changed, so an
+/// unrelated save must not silently reset the others back to their real
+/// defaults -- `settings_set` loads the current settings first and only
+/// overrides what was actually provided here. The dispatch arm still
+/// parses each field individually from `req.params` (unchanged, so every
+/// existing `"invalid X: ..."` error message stays byte-identical) and
+/// simply collects the results into one real struct instead of passing
+/// them as 7 separate positional arguments.
+struct SettingsPatch {
     gpu_enabled: bool,
     gpu_layers: Option<u32>,
     leo_approval_mode: Option<spartan_settings::LeoApprovalMode>,
@@ -1516,18 +1546,22 @@ fn settings_set(
     editor: Option<spartan_settings::EditorSettings>,
     appearance: Option<spartan_settings::AppearanceSettings>,
     onboarding_completed: Option<bool>,
-) -> Result<serde_json::Value, String> {
+}
+
+fn settings_set(patch: SettingsPatch) -> Result<serde_json::Value, String> {
     let current = spartan_settings::load();
     let settings = spartan_settings::Settings {
         gpu_offload: spartan_settings::GpuOffloadSettings {
-            enabled: gpu_enabled,
-            layers: gpu_layers,
+            enabled: patch.gpu_enabled,
+            layers: patch.gpu_layers,
         },
-        leo_approval_mode: leo_approval_mode.unwrap_or(current.leo_approval_mode),
-        leo_provider: leo_provider.unwrap_or(current.leo_provider),
-        editor: editor.unwrap_or(current.editor),
-        appearance: appearance.unwrap_or(current.appearance),
-        onboarding_completed: onboarding_completed.unwrap_or(current.onboarding_completed),
+        leo_approval_mode: patch.leo_approval_mode.unwrap_or(current.leo_approval_mode),
+        leo_provider: patch.leo_provider.unwrap_or(current.leo_provider),
+        editor: patch.editor.unwrap_or(current.editor),
+        appearance: patch.appearance.unwrap_or(current.appearance),
+        onboarding_completed: patch
+            .onboarding_completed
+            .unwrap_or(current.onboarding_completed),
     };
     spartan_settings::save(&settings).map_err(|e| format!("save settings: {e}"))?;
     serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
@@ -1675,26 +1709,14 @@ fn project_template_files(template: &str) -> Result<Vec<(&'static str, &'static 
 }
 
 /// Real, deliberately conservative sanitizer -- alphanumeric, `-`, `_`
-/// only, matching the same shape `sanitize_container_name` already
-/// established for Dev Containers, reused here for a real directory
-/// name rather than a Docker container name.
+/// only, matching the same real `sanitize_identifier` shape
+/// `sanitize_container_name` already established for Dev Containers,
+/// reused here for a real directory name rather than a Docker container
+/// name (a longer cap and an underscore allowance, since project
+/// directory names have real, different conventions than container
+/// names do).
 fn sanitize_project_name(input: &str) -> String {
-    let mut out: String = input
-        .trim()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    out.truncate(64);
-    if out.is_empty() {
-        out = "new-project".to_string();
-    }
-    out
+    sanitize_identifier(input, &['-', '_'], 64, "new-project")
 }
 
 /// Real project scaffolding -- creates `<parent_dir>/<sanitized name>`,
@@ -1933,7 +1955,7 @@ pub fn handle_request(
                 .map(|v| serde_json::from_value::<bool>(v.clone()))
                 .transpose()
                 .map_err(|e| format!("invalid onboarding_completed: {e}"))?;
-            settings_set(
+            settings_set(SettingsPatch {
                 gpu_enabled,
                 gpu_layers,
                 leo_approval_mode,
@@ -1941,7 +1963,7 @@ pub fn handle_request(
                 editor,
                 appearance,
                 onboarding_completed,
-            )
+            })
         })(),
         "check_for_updates" => check_for_updates(out_tx.clone()),
         "create_project" => (|| {

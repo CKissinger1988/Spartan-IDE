@@ -4,7 +4,7 @@ import FileTree from "./components/FileTree";
 import GitPanel from "./components/GitPanel";
 import TabBar from "./components/TabBar";
 import StatusBar from "./components/StatusBar";
-import Editor, { type OpenFile } from "./components/Editor";
+import Editor, { type EditorPrefs, DEFAULT_EDITOR_PREFS, type OpenFile } from "./components/Editor";
 import Placeholder from "./components/Placeholder";
 import WorkflowsScreen from "./components/WorkflowsScreen";
 import DesignScreen from "./components/DesignScreen";
@@ -33,6 +33,14 @@ export default function App(): React.ReactElement {
   const [onboardingState, setOnboardingState] = useState<"checking" | "show" | "done">(
     "checking"
   );
+  // Real bug fix, found by a code-review pass: `Editor.tsx` used to fetch
+  // this exact same settings object independently on its own mount,
+  // costing a second, fully redundant IPC round trip to the backend
+  // subprocess for data already fetched here a moment earlier. Lifted up
+  // and passed down as a prop instead -- `Editor.tsx` still has its own
+  // real default if this hasn't resolved yet (e.g. a file opened via a
+  // deep link before the very first paint).
+  const [editorPrefs, setEditorPrefs] = useState<EditorPrefs>(DEFAULT_EDITOR_PREFS);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -57,9 +65,17 @@ export default function App(): React.ReactElement {
         const s = result as {
           appearance?: { reduce_motion?: boolean };
           onboarding_completed?: boolean;
+          editor?: { font_size?: number; tab_size?: number; word_wrap?: boolean };
         };
         applyReduceMotion(Boolean(s.appearance?.reduce_motion));
         setOnboardingState(s.onboarding_completed ? "done" : "show");
+        if (s.editor) {
+          setEditorPrefs({
+            fontSize: s.editor.font_size ?? DEFAULT_EDITOR_PREFS.fontSize,
+            tabSize: s.editor.tab_size ?? DEFAULT_EDITOR_PREFS.tabSize,
+            wordWrap: s.editor.word_wrap ?? DEFAULT_EDITOR_PREFS.wordWrap,
+          });
+        }
       })
       .catch(() => setOnboardingState("done"));
   }, []);
@@ -161,7 +177,7 @@ export default function App(): React.ReactElement {
               </div>
               <div className="content-area">
                 {activeFile ? (
-                  <Editor file={activeFile} onContentChange={handleContentChange} />
+                  <Editor file={activeFile} onContentChange={handleContentChange} prefs={editorPrefs} />
                 ) : (
                   <div className="empty-state mono">Open a file from the sidebar to start editing.</div>
                 )}
@@ -198,9 +214,7 @@ export default function App(): React.ReactElement {
         <NewProjectWizard
           defaultParentDir={ROOT}
           onClose={() => setShowNewProjectWizard(false)}
-          onCreated={(root) => {
-            window.spartan.openProject(root).catch(() => {});
-          }}
+          onCreated={(root) => window.spartan.openProject(root).then(() => {})}
         />
       )}
     </div>

@@ -102,7 +102,7 @@ export default function OnboardingScreen({
             .then(onDone)
             .catch((e: Error) => setError(e.message));
         }}
-        onCreated={(root) => {
+        onCreated={(root) =>
           // Real bug fix: this used to never run at all -- the wizard's
           // old success path called `openProject` directly, reloading
           // the window before `markComplete()` (below) ever got a
@@ -110,11 +110,13 @@ export default function OnboardingScreen({
           // who created their first project right from onboarding would
           // see onboarding again on every future launch. Matches
           // `openExisting`'s own already-correct sequencing: persist
-          // completion first, then navigate.
-          markComplete()
-            .then(() => window.spartan.openProject(root))
-            .catch((e: Error) => setError(e.message));
-        }}
+          // completion first, then navigate. Deliberately returns the
+          // real promise chain (not caught here) so `NewProjectWizard`
+          // itself can surface a real failure and offer a real retry --
+          // catching and swallowing it here was the exact second bug an
+          // earlier version of this fix introduced.
+          markComplete().then(() => window.spartan.openProject(root).then(() => {}))
+        }
       />
     );
   }

@@ -277,4 +277,36 @@ mod tests {
         assert_eq!(session.trace[1].kind, TraceKind::Input);
         assert_eq!(session.trace[1].text, "--version\n");
     }
+
+    // Real bug found by a code-review pass: the two `claude`-gated tests
+    // above self-skip forever in CI (no `claude` CLI there), leaving this
+    // module's real success path -- an actual spawn that works, and
+    // sending real input to a real live session -- never exercised by
+    // any CI run. `cat` (real, portable, present on every Ubuntu CI
+    // runner this workflow targets, blocks reading stdin until EOF/
+    // killed, so it's still genuinely alive when `send_input` writes to
+    // it) exercises the identical code path unconditionally, with no
+    // self-skip needed. The `claude`-gated tests above stay, since they
+    // remain real and useful whenever `claude` does happen to be present
+    // (e.g. this project's own interactive sessions).
+
+    #[test]
+    fn spawning_a_real_portable_stand_in_tool_succeeds_and_traces_it() {
+        let dir = std::env::temp_dir();
+        let session = CliSession::spawn(0, CliTool::Custom("cat".to_string()), &dir, 80, 24);
+        assert!(session.spawn_error.is_none());
+        assert!(session.panel.is_some());
+        assert_eq!(session.trace.len(), 1);
+        assert_eq!(session.trace[0].kind, TraceKind::Spawned);
+    }
+
+    #[test]
+    fn send_input_to_a_real_portable_stand_in_tool_appends_a_real_trace_entry() {
+        let dir = std::env::temp_dir();
+        let mut session = CliSession::spawn(0, CliTool::Custom("cat".to_string()), &dir, 80, 24);
+        session.send_input("hello\n");
+        assert_eq!(session.trace.len(), 2);
+        assert_eq!(session.trace[1].kind, TraceKind::Input);
+        assert_eq!(session.trace[1].text, "hello\n");
+    }
 }

@@ -89,6 +89,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Real electron-builder packaging config, a packaged-app path-resolution fix — READ §75.77 BEFORE ASSUMING A REAL INSTALLER WAS PRODUCED (it wasn't; the same standing network block, confirmed one layer deeper) | §75.77 |
 | Real Leo "Failed → Recovering → Executing" retry UI, closing task #58's last named remaining item | §75.78 |
 | A real CI failure fixed at its root (a latent test race, not new breakage), a self-initiated multi-angle code review, four real bugs found and fixed | §75.79 |
+| Closing every named finding from §75.79's own review, plus a second real regression caught before it shipped | §75.80 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2324,6 +2325,28 @@ first — it's the parity reference until each row there is actually reimplement
   against a portable stand-in binary) were named honestly but not fixed this pass. 2 new Rust
   tests, 541 tests total (up from 539), full fmt/clippy clean, `cargo test --workspace --release`
   run 3× at CI's own default parallelism with zero failures; `desktop`'s typecheck/build clean.
+- **Real, working code — closing every named finding from §75.79's own review, plus a second real
+  regression caught before it shipped (§75.80)**: direct response to "Fix all issues and continue
+  testing and building." Consolidated the duplicate sanitizers into one real, parameterized
+  `sanitize_identifier`; replaced `settings_set`'s 7-argument signature with a real `SettingsPatch`
+  struct, removing the only `#[allow(clippy::too_many_arguments)]` anywhere in `crates/`; lifted
+  `App.tsx`/`Editor.tsx`'s redundant duplicate `settings_get` fetch into one real, shared fetch
+  passed down as a prop; extracted `main.ts`'s near-identical packaged/dev path-resolution
+  branches into one real, shared `resolveResourcePath` helper; added two new, always-on
+  `cli_session.rs` tests using `cat` (real, portable, present on every CI runner, genuinely alive
+  when input is sent) as a stand-in so the real spawn/send-input success path is finally exercised
+  in CI, unconditionally. Fixed the create-then-fail-to-open dead-end at the root with a new
+  `createdRoot` state in `NewProjectWizard` — a failed navigation now shows a real "Retry Opening"
+  action that never re-runs `create_project` (whose own real guard would otherwise correctly
+  refuse the directory it just created), confirmed live via Playwright asserting `create_project`
+  fires exactly once despite a simulated failure and retry. **A second real regression caught
+  before it shipped, not by inspection**: implementing that fix required making `onCreated` return
+  a real `Promise` instead of §75.79's own fire-and-forget version — the fire-and-forget shape
+  meant a real `openProject` failure was silently swallowed with no error and no retry at all,
+  strictly worse than the bug §75.79 set out to fix. Corrected before ever being pushed. 2 new Rust
+  tests, 543 tests total (up from 541), full fmt/clippy clean, `cargo test --workspace --release`
+  run 3× at CI's own default parallelism with zero failures; `desktop`'s typecheck/build clean;
+  real, screenshotted Playwright verification of the retry-open flow.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2381,7 +2404,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 541 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 543 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
