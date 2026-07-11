@@ -46,14 +46,19 @@ deleted).
 
 ## Known feature gaps vs. the original wgpu shell (`crates/spartan-editor-core`)
 
-A real audit (§75.62) found these real, working wgpu-shell features not
-yet ported here: syntax highlighting (`Editor.tsx` is a plain
-`<textarea>`), LSP, DAP, a Git/Source Control panel, a real terminal
-(Console) and multi-CLI Sessions (both blocked on the same real, scoped
-need: reusing Leo's own async `Event` mechanism for streaming PTY
-output), a Settings screen, and the unsaved-changes confirmation modal.
-Each has a specific, honest note in `nav.ts`'s `SCREEN_NOTES` rather
-than a generic "coming soon."
+A real audit (§75.62) originally found several real, working wgpu-shell
+features not yet ported here. Since closed: syntax highlighting (§75.63,
+via `highlight.js` client-side rather than tree-sitter -- see
+`src/syntax.ts`'s own doc comment for the named fidelity tradeoff), a real
+terminal (Console) and multi-CLI Sessions (§75.64, streaming PTY output
+over Leo's own async `Event` mechanism), and a real Git panel + Settings
+screen (§75.65). **Still real, open gaps**: LSP and DAP (this shell has
+no language-server or debugger wiring at all -- `spartan-editor-core`
+remains the only place either is real), and the unsaved-changes
+confirmation modal on close/switch (closing a dirty tab here currently
+discards changes silently). Each screen without real content still has a
+specific, honest note in `nav.ts`'s `SCREEN_NOTES` rather than a generic
+"coming soon."
 
 ## Leo's async event protocol
 
@@ -89,6 +94,25 @@ npm run dev:renderer     # Vite dev server on :5173
 npm run build:electron   # compiles electron/*.ts once, then:
 electron .                # (or `npm run start` after both are built)
 ```
+
+## Package a distributable (Linux AppImage)
+
+```bash
+# From the repo root, build every real artifact electron-builder bundles:
+cargo build --release -p spartan-backend
+cd gui-builder && npm install && npm run build && cd ..
+
+cd desktop
+npm install               # needs real internet access -- see the gap below
+npm run package:linux     # runs `npm run build` then electron-builder --linux
+```
+
+The result lands in `desktop/dist-package/` (gitignored). `package.json`'s
+`build` config bundles the real `spartan-backend` binary and `gui-builder`'s
+`dist/`+`node_modules/` as `extraResources`, and targets a Linux `AppImage`
+(§75.77) -- no code signing is configured (this is a private, unsigned
+build, not a publicly distributed release). Windows/macOS targets aren't
+configured; this environment has no way to build or verify them.
 
 ## A real, environment-specific gap in the session that built this
 
