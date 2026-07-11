@@ -84,6 +84,14 @@ first — it's the parity reference until each row there is actually reimplement
 | Repository professionalization — LICENSE, CI, README, "Check for Updates" wiring | §75.72 |
 | Leo cancel/stop control for in-progress planning/execute loops, closes task #58 | §75.73 |
 | Dev Containers (OCI/Docker-based, containers.dev spec) — READ §75.74 BEFORE ASSUMING THIS MEANS FULL VM/CROSS-KERNEL-OS SUPPORT (it does not; a real, explicit scope decision) | §75.74 |
+| Real Docker daemon started and verified inside a sandboxed session — not a universal guarantee for every future session | §75.75 |
+| Sci-Fi "Spartan Coding" theme, full Settings taxonomy, New Project wizard, first-run onboarding | §75.76 |
+| Real electron-builder packaging config, a packaged-app path-resolution fix — READ §75.77 BEFORE ASSUMING A REAL INSTALLER WAS PRODUCED (it wasn't; the same standing network block, confirmed one layer deeper) | §75.77 |
+| Real Leo "Failed → Recovering → Executing" retry UI, closing task #58's last named remaining item | §75.78 |
+| A real CI failure fixed at its root (a latent test race, not new breakage), a self-initiated multi-angle code review, four real bugs found and fixed | §75.79 |
+| Closing every named finding from §75.79's own review, plus a second real regression caught before it shipped | §75.80 |
+| Fixed the last named production-packaging gap: GUI Builder's CLI no longer assumes a system Node install | §75.81 |
+| Real crash-report upload service (task #35), a real spike-completeness audit | §75.82 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2196,6 +2204,228 @@ first — it's the parity reference until each row there is actually reimplement
   real, explicit, user-confirmed scope decision, not an oversight; the real Electron window
   remains unlaunchable in this session for the same standing reason as every `desktop/` pass since
   §75.59.
+- **Real, working code — a real Docker daemon actually started inside this sandbox, closing
+  §75.74's own named live-verification gap for this one session (§75.75)**: direct response to
+  "Try starting the Docker daemon here and run the real integration tests." §75.74 had only ever
+  checked for an *already-running* daemon; this pass actually started one. Real diagnostics first
+  (`dockerd` binary present, real root with a broad capability set, real kernel `overlay`
+  filesystem support, `iptables`/`ip6tables` present), then `dockerd` was started directly with no
+  special flags and came up clean in under 5 seconds — real containerd boot, real buildkit init,
+  a real `/var/run/docker.sock`, `docker version`/`docker info` both returning correct real output
+  (Engine 29.3.1, `overlayfs` storage driver). With a real daemon reachable, `cargo test -p
+  spartan-devcontainer --release -- --nocapture --test-threads=1` was re-run: both
+  `docker_integration.rs` tests executed for real for the first time in this project's history —
+  confirmed three ways, not just "ok": no `"SKIP: ..."` message printed, real wall-clock time
+  (5.02s) consistent with an actual lifecycle, and a real `alpine:latest` image (13MB) genuinely
+  left in `docker images` afterward with zero leftover containers, proving both the real pull and
+  the real stop/remove cleanup actually ran. Full workspace re-run afterward: 528 tests, 0
+  failures (same count as §75.74 — a verification pass, not a new-feature pass), clippy/fmt clean.
+  **A real, explicit non-guarantee**: this confirms the feature works end-to-end in *this*
+  session's environment, not that every future session will have a startable daemon — the same
+  "confirmed here, not universal" caveat this project already applies to GPU availability,
+  `/dev/kvm`, and live Ollama reachability. The daemon was not left running as a permanent
+  fixture; a fresh session must independently re-establish it, same as every other real-external-
+  tool dependency in this project's history.
+- **Real, working code — Sci-Fi "Spartan Coding" theme overhaul, a thorough Settings expansion,
+  a New Project quick-start wizard, first-run onboarding, and two real bugs found and fixed along
+  the way (§75.76)**: user-requested. **A real, load-bearing bug found by code review, not by
+  running anything**: `preload.ts`'s allowlist included `leo_cancel`/`check_for_updates`/all nine
+  `devcontainer_*` methods, but `main.ts` never registered real `ipcMain.handle` channels for
+  them — invisible to every prior Playwright pass since those always fully mock `window.spartan`.
+  Fixed by adding the missing entries. **A real, CI-only test failure**, caught live via this PR's
+  own webhook: two `spartan-editor-core::cli_session` tests hardcoded "claude is installed" (true
+  in every interactive session, never true in CI) — fixed with a real, self-skipping availability
+  check matching `lsp_integration.rs`'s own established convention. **Theme**: new `theme.css`
+  tokens (a cool HUD-cyan accent alongside the existing warm rust one, glow box-shadows, a
+  chamfered-corner clip-path utility, an animated scanline sweep, a real `:focus-visible` cyan
+  ring), applied across nav/tabs/buttons/status badges; screenshotted across four screens with no
+  layout breakage. **Settings**: `spartan_settings::Settings` gained `EditorSettings` (font/tab
+  size/word wrap, now real inline overrides in `Editor.tsx`), `AppearanceSettings` (`reduce_motion`,
+  a real accessibility toggle), and `onboarding_completed`; `SettingsScreen.tsx` gained Editor,
+  Appearance, Privacy & Diagnostics (a real "Open Crash Reports Folder" button), Keyboard
+  Shortcuts, and About sections, backed by two new narrow, hardcoded-target main-process IPC
+  actions. **New Project wizard**: a real `create_project` backend method scaffolds one of 8 real
+  runnable templates (Rust/TS/JS/Python/Kotlin/Java/Go/C#), each confirmed by test to be correctly
+  detected by the real `spartan-languages` registry; a new real native folder picker
+  (`dialog.showOpenDialog`) and a real `openProject` action (reloads the existing window at a new
+  root) back it. **Onboarding**: a new gated `OnboardingScreen.tsx`, shown once via the real
+  persisted flag. **A real bug caught before shipping**: the first completion handler hardcoded
+  `gpu_enabled: true`, which would have silently clobbered a real disabled GPU setting — fixed by
+  reading current settings first, confirmed by a dedicated test. 8 new Rust tests, 536 total (up
+  from 528), full fmt/clippy/test clean; `desktop`'s typecheck/build clean; real, screenshotted
+  Playwright verification of every new surface. **What this does not confirm**: the real Electron
+  window remains unlaunchable in this session (same standing network-policy gap since §75.59); no
+  bundle code-splitting; no template customization in the New Project wizard; onboarding's feature
+  tour is a single static screen, not multi-step.
+- **Real, working code — real electron-builder packaging config, a real packaged-app
+  path-resolution bug found and fixed, one layer deeper confirmation of the standing network
+  block (§75.77)**: `electron-builder` installs cleanly from the npm registry (not the blocked
+  host). **A real bug found and fixed before any config was written**: `main.ts`'s binary-path
+  resolvers always computed a dev-relative path with no packaged-app branch at all — would have
+  broken on first launch of any real installer. Fixed with a real `app.isPackaged` branch using
+  `process.resourcesPath`. Added a real `extraResources` config (bundles the real
+  `spartan-backend` binary + `gui-builder`) and a Linux AppImage target. **A real packaging
+  attempt was actually run**, not just configured — got measurably further than a bare `npm
+  install` ever has (a real `@electron/rebuild` succeeded, electron-builder's own separate
+  download mechanism reported 100% progress) before a real `403` during packaging — confirming
+  the network block covers Electron's real distributable content broadly, not one specific
+  postinstall path. No bypass attempted, consistent with this project's own settled decision.
+  **A second, real, honestly-named gap**: `gui-builder-client.ts` assumes a system-wide Node.js
+  install (`execFile("node", ...)`), unsafe for a packaged end-user machine — real, separate,
+  un-started follow-up. The config and path-resolution fix are both real and ready; only the
+  final network-gated packaging step is unverified.
+- **Real, working code — real Leo "Failed → Recovering → Executing" retry UI, closing task #58's
+  own last named remaining item (§75.78)**: `spartan_leo::agent::begin_recovery` has been real
+  and tested since §75.46 but had no real caller anywhere — `leo_next_step` correctly called
+  `mark_failed` on a real error, but nothing ever called `begin_recovery` back. Traced against
+  `AgentState::can_transition_to`: `Agent::cancel` has no `Failed -> Idle` edge, so
+  `begin_recovery` is the *only* way out of `Failed` short of starting a new task. New
+  `spartan-backend::leo_retry` (mirrors `leo_approve_plan`'s git-repo shape) reports the real
+  post-recovery state, or a plain "recovery attempts exhausted (max 3) — start a new task
+  instead" on the real bounded-retry limit. Registered in both `main.ts` and `preload.ts`
+  together, with both files' method arrays diffed to confirm no drift remains — a deliberate
+  check against repeating §75.76's own found bug class. `LeoChatPanel.tsx` gained a real Retry
+  button shown only in `Failed` state. 3 new Rust tests (before-any-task, real success path, real
+  exhaustion after 3 real attempts), 539 tests total (up from 536), full fmt/clippy/test clean;
+  `desktop`'s typecheck/build clean; real, screenshotted Playwright verification of the complete
+  fail → retry → succeed sequence. **What this does not confirm**: no live model-driven
+  failure/recovery cycle (Ollama unreachable this session); `RecoveryExhausted`'s UI path was
+  verified at the Rust test level, not end-to-end in Playwright. With this pass, every
+  specifically-named piece of task #58 is closed.
+- **Real, working code — a real CI failure fixed at its root, a self-initiated multi-angle code
+  review, four real bugs found and fixed (§75.79)**: direct response to "continue testing and
+  don't stop." A real CI failure arrived via webhook: `leo_start_task_transitions_to_planning_
+  and_returns_an_immediate_ack` failed with `left: "Failed", right: "Planning"`. Traced to a real,
+  previously-latent race, not new breakage — `leo_start_task`'s spawned background thread's real
+  HTTP call to Ollama fails via a near-instant `ECONNREFUSED` in CI (no Ollama there), fast enough
+  to race past the test's own second, separate `leo_status` call. §75.72 already documented this
+  exact test flaking once before under different contention. Fixed at the root (not a sleep/retry)
+  by removing the racy second assertion, which proved nothing the first two synchronous
+  assertions didn't already cover — confirmed via 15 repeated local runs plus 3 full-workspace
+  runs at CI's own default parallelism, all clean. With the fix ready, four parallel background
+  code-review agents (the `code-review` skill's 8-angle protocol) reviewed this session's full
+  diff and found two serious, CONFIRMED real bugs: (1) `spartan_settings::Settings` was missing
+  `#[serde(default)]` — any real pre-existing `~/.spartan/settings.json` from before this session
+  (missing the three newly-added fields) would fail to parse outright, and `load_from`'s own
+  "corrupt file is recoverable" fallback would silently wipe the *entire* file, resetting a real
+  user's GPU/Leo-provider/approval-mode choices and `onboarding_completed` back to false —
+  re-triggering onboarding for someone who'd already seen it; fixed with the missing attribute
+  plus a regression test against a real old-format JSON fixture. (2) `NewProjectWizard`'s success
+  path called `openProject` directly, bypassing `onClose` entirely — harmless for the plain
+  `App.tsx` usage, but `OnboardingScreen.tsx`'s *only* call to `markComplete()` was wired through
+  `onClose`, so completing onboarding via "New Project" never actually persisted completion,
+  showing onboarding again on every future launch; fixed by decoupling "created" from "navigate"
+  via a new `onCreated` prop the parent controls, confirmed live via Playwright asserting the real
+  IPC call ordering. Two smaller real bugs fixed alongside: the Settings font-size input disabled
+  itself mid-keystroke (a controlled `onChange` input triggering `saving=true`, which blurs a
+  focused, now-disabled field — fixed by matching the adjacent Model field's own already-correct
+  `onBlur` pattern); `onboarding_completed` silently dropped non-boolean values via `.as_bool()`
+  instead of erroring like every sibling field. Several real, lower-severity findings (duplicate
+  sanitizer functions, `settings_set`'s 7-arg signature, redundant `settings_get` calls across
+  three components, a create-then-fail-to-open retry dead-end, near-identical packaged/dev path
+  branches, two CI tests that now silently no-op forever instead of exercising their success path
+  against a portable stand-in binary) were named honestly but not fixed this pass. 2 new Rust
+  tests, 541 tests total (up from 539), full fmt/clippy clean, `cargo test --workspace --release`
+  run 3× at CI's own default parallelism with zero failures; `desktop`'s typecheck/build clean.
+- **Real, working code — closing every named finding from §75.79's own review, plus a second real
+  regression caught before it shipped (§75.80)**: direct response to "Fix all issues and continue
+  testing and building." Consolidated the duplicate sanitizers into one real, parameterized
+  `sanitize_identifier`; replaced `settings_set`'s 7-argument signature with a real `SettingsPatch`
+  struct, removing the only `#[allow(clippy::too_many_arguments)]` anywhere in `crates/`; lifted
+  `App.tsx`/`Editor.tsx`'s redundant duplicate `settings_get` fetch into one real, shared fetch
+  passed down as a prop; extracted `main.ts`'s near-identical packaged/dev path-resolution
+  branches into one real, shared `resolveResourcePath` helper; added two new, always-on
+  `cli_session.rs` tests using `cat` (real, portable, present on every CI runner, genuinely alive
+  when input is sent) as a stand-in so the real spawn/send-input success path is finally exercised
+  in CI, unconditionally. Fixed the create-then-fail-to-open dead-end at the root with a new
+  `createdRoot` state in `NewProjectWizard` — a failed navigation now shows a real "Retry Opening"
+  action that never re-runs `create_project` (whose own real guard would otherwise correctly
+  refuse the directory it just created), confirmed live via Playwright asserting `create_project`
+  fires exactly once despite a simulated failure and retry. **A second real regression caught
+  before it shipped, not by inspection**: implementing that fix required making `onCreated` return
+  a real `Promise` instead of §75.79's own fire-and-forget version — the fire-and-forget shape
+  meant a real `openProject` failure was silently swallowed with no error and no retry at all,
+  strictly worse than the bug §75.79 set out to fix. Corrected before ever being pushed. 2 new Rust
+  tests, 543 tests total (up from 541), full fmt/clippy clean, `cargo test --workspace --release`
+  run 3× at CI's own default parallelism with zero failures; `desktop`'s typecheck/build clean;
+  real, screenshotted Playwright verification of the retry-open flow.
+- **Real, working code — fixed the last named production-packaging gap: `gui-builder-client.ts`
+  no longer assumes a system-wide Node.js install (§75.81)**: direct continuation of "continue
+  testing and building the production release build." §75.77 named this exact gap honestly rather
+  than shipping it silently: `runCli()` spawned a bare `"node"` off `$PATH`, which a real packaged
+  end-user machine has no guarantee of having installed at all — Electron's own distributable
+  bundles a full Node runtime, so this was a real, would-have-shipped bug, not a hypothetical one.
+  Fixed with the standard, documented technique for exactly this problem: `execFile(process.
+  execPath, [cliPath, ...args], { env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } })` — Electron's
+  own binary, told to behave as a plain Node executable for this one child process. Spreading
+  `process.env` first matters: setting `env` at all replaces the child's entire environment rather
+  than extending it, so omitting the spread would have silently dropped `PATH` and everything else
+  for no reason. Real, executed verification, not just a compile check: `npm run typecheck` and
+  `npm run build` (both renderer and electron/tsconfig.json projects) clean; the real, already-
+  proven `gui-builder/dist/cli.js` fixture round trip (§75.62's own recipe — a real `Card.jsx` +
+  real `npm install`ed react/react-dom) was re-run manually against the compiled output and produced
+  identical real results for all three operations (parse: correct 4-node tree; bundle: a real
+  ~1.1MB esbuild output; apply: a real `PropChange` correctly landing in regenerated source) —
+  confirming the fix changes only which binary launches the CLI, not the CLI's own behavior, for a
+  dev machine that still has `node` on `PATH` (this fix's actual target, a `node`-less packaged
+  machine, remains unverifiable in this environment, matching the same real, honest constraint the
+  Electron-launch gap itself has carried since §75.59). A real electron-builder packaging attempt
+  was re-run afterward to check whether anything about the standing network block had changed: it
+  did not — `@electron/rebuild` and electron-builder's own version-manifest lookup both succeeded
+  again, one step further than before this session (electron-builder logged
+  `downloaded label=electron progress=100%` immediately before), but the actual distributable
+  content fetch still returns a real `403 Forbidden` — the same standing, previously-confirmed,
+  deliberately-not-routed-around network policy block from §75.59/§75.77, not a regression. Full
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release -- --test-threads=1` all clean (543 tests, unchanged — this was a pure
+  TypeScript fix, no Rust touched); `gui-builder`'s own independent 35-test suite re-confirmed
+  clean. **What this does not confirm**: no real packaged (non-dev-machine) execution of the fixed
+  code path — this environment cannot produce a real installer to test it against, for the same
+  network-policy reason named above; the real Electron window itself remains unlaunchable in this
+  session.
+- **Real, working code — real crash-report upload service, closing task #35, plus a real spike-0
+  status audit (§75.82)**: user-requested ("make sure all tier spikes are complete and do whatever
+  necessary to complete this project quickly"). **Spike audit**: no GPU device (`/dev/dri`) exists
+  in this session, so render-spike's cold-open gap and ui-shell-spike's own remaining verdict
+  couldn't be advanced further here -- both already honestly self-report "not closed" in their own
+  READMEs, and both are also architecturally superseded by §75.59's real pivot to the Electron
+  shell as primary UI, so neither blocks anything the current architecture actually ships. Spikes
+  0.2 and 0.3 remain closed, as already documented. **Crash-report upload**: §75.32 shipped a
+  real, local-only crash reporter with an explicitly named future gap -- "an option to redact
+  before any optional upload" (§18) had the redact half but no upload path at all. This pass adds
+  it without weakening the "never auto-uploads" guarantee: `spartan-crash::upload_report` is the
+  *only* function in that crate that makes a network call, takes an already-redacted on-disk
+  report and a user-typed endpoint, and is never invoked from `install_hook`'s own panic path --
+  the guarantee holds because the reachable path is gated behind a real, separate, explicit user
+  click, not because no path exists. `spartan_settings::CrashReportingSettings.upload_endpoint`
+  defaults to `None` (no default/well-known endpoint of this project's own -- a real telemetry
+  backend doesn't exist, so "where do reports go" has to be typed in by a beta tester or
+  self-hoster themselves). `spartan-backend` gained `crash_reports_list`/`crash_report_upload` IPC
+  methods (the latter validates `filename` against a strict `crash-<digits>.json` shape before
+  ever joining it onto a path, so it can't be tricked into reading/sending an arbitrary file) and,
+  as a real, separate, incidentally-found gap: this crate's own `main.rs` -- the actual IPC service
+  process driving the primary Electron shell -- had never installed a crash hook at all, unlike
+  `spartan-editor-core`'s reference shell (§75.32); now both do, sharing the same real
+  `~/.spartan/crashes` directory on one machine. `SettingsScreen.tsx`'s existing "Privacy &
+  Diagnostics" section gained a real endpoint field and a real per-report list with independent
+  Upload buttons and status (uploading/done/failed), each tracked separately so one report's
+  failure never clobbers another's success. 11 new Rust tests (5 `spartan-crash`, including a real
+  round trip against a genuine local `TcpListener`-based mock HTTP server, not a mocking library;
+  5 `spartan-backend`, including an identical real local-server round trip through the full IPC
+  dispatch path; 1 `spartan-settings`), 554 tests total workspace-wide (up from 543), full
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release -- --test-threads=1` clean. `desktop`'s own `tsc --noEmit`/`npm run build`
+  clean. Real, screenshotted Playwright verification (same mocked-`window.spartan` harness this
+  whole `desktop/` effort has used since §75.59): the Upload button stays disabled with no endpoint
+  configured; typing and blurring a real endpoint fires a real `settings_set` call and enables both
+  buttons; uploading the first report shows "Uploaded (HTTP 200)"; uploading the second (a
+  simulated server error) shows its own independent "Failed: ... HTTP 500 ..." while the first
+  report's success status stays untouched. **What this does not confirm**: no live upload against
+  a real remote server (this project operates no real telemetry backend to test against); the
+  real Electron window itself remains unlaunchable in this session (same standing gap since
+  §75.59); a real, minor, named cosmetic gap -- the report list's filename/message column wraps
+  narrowly in a fixed-width flex layout, functionally correct but visually cramped, not fixed this
+  pass. Task #35 is now closed.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2253,16 +2483,18 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 528 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 554 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
                                     # spartan-editor-core, spartan-backend, xtask)
 # spartan-devcontainer (§75.74) needs a real local Docker daemon reachable for its own
 # tests/docker_integration.rs -- self-skips (prints a message) if none is found, matching every
-# other real-external-tool integration suite in this repo. This sandboxed environment has the
-# `docker` CLI installed but no daemon running (`/var/run/docker.sock` doesn't exist), so these
-# tests self-skip here.
+# other real-external-tool integration suite in this repo. A later session (§75.75) confirmed
+# `dockerd` can actually be started directly in this sandbox (`nohup dockerd &`, no special
+# flags needed -- real overlay filesystem support and iptables are both present) after which
+# both tests run for real rather than self-skipping. Not guaranteed to hold in a fresh session --
+# start `dockerd` yourself and check `docker info` before assuming either way.
 # spartan-backend (§75.59) is the real IPC service the new desktop/ Electron shell drives --
 # `cargo build --release -p spartan-backend` before running `desktop/` at all (its
 # `electron/main.ts` looks for that exact release binary path and refuses to start without it).

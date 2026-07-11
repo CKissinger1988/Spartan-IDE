@@ -192,6 +192,24 @@ impl CliSessionManager {
 mod tests {
     use super::*;
 
+    /// Real, self-skipping tool-availability check, matching this crate's
+    /// own established convention (`lsp_integration.rs`'s
+    /// `rust_analyzer_available`) -- checks whether the process can be
+    /// *spawned* at all (`Ok` from `.status()`), not whether `--version`
+    /// is a real subcommand it recognizes, since a real installed `claude`
+    /// binary may not support that flag and still be genuinely present.
+    /// `claude` being on `$PATH` is true in this interactive session (the
+    /// whole session runs on it) but was never guaranteed in a CI runner
+    /// -- found for real by a CI failure, not by inspection.
+    fn claude_cli_available() -> bool {
+        std::process::Command::new("claude")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+    }
+
     #[test]
     fn cli_tool_command_and_label_are_correct_for_each_real_variant() {
         assert_eq!(CliTool::Claude.command(), "claude");
@@ -205,6 +223,10 @@ mod tests {
 
     #[test]
     fn spawning_a_real_installed_tool_succeeds_and_traces_it() {
+        if !claude_cli_available() {
+            eprintln!("SKIP: claude CLI not found on this machine");
+            return;
+        }
         // `claude` is confirmed real and installed in this environment
         // (this whole session runs on it) -- a real, not mocked, spawn.
         let dir = std::env::temp_dir();
@@ -244,11 +266,47 @@ mod tests {
 
     #[test]
     fn send_input_appends_a_real_trace_entry() {
+        if !claude_cli_available() {
+            eprintln!("SKIP: claude CLI not found on this machine");
+            return;
+        }
         let dir = std::env::temp_dir();
         let mut session = CliSession::spawn(0, CliTool::Claude, &dir, 80, 24);
         session.send_input("--version\n");
         assert_eq!(session.trace.len(), 2);
         assert_eq!(session.trace[1].kind, TraceKind::Input);
         assert_eq!(session.trace[1].text, "--version\n");
+    }
+
+    // Real bug found by a code-review pass: the two `claude`-gated tests
+    // above self-skip forever in CI (no `claude` CLI there), leaving this
+    // module's real success path -- an actual spawn that works, and
+    // sending real input to a real live session -- never exercised by
+    // any CI run. `cat` (real, portable, present on every Ubuntu CI
+    // runner this workflow targets, blocks reading stdin until EOF/
+    // killed, so it's still genuinely alive when `send_input` writes to
+    // it) exercises the identical code path unconditionally, with no
+    // self-skip needed. The `claude`-gated tests above stay, since they
+    // remain real and useful whenever `claude` does happen to be present
+    // (e.g. this project's own interactive sessions).
+
+    #[test]
+    fn spawning_a_real_portable_stand_in_tool_succeeds_and_traces_it() {
+        let dir = std::env::temp_dir();
+        let session = CliSession::spawn(0, CliTool::Custom("cat".to_string()), &dir, 80, 24);
+        assert!(session.spawn_error.is_none());
+        assert!(session.panel.is_some());
+        assert_eq!(session.trace.len(), 1);
+        assert_eq!(session.trace[0].kind, TraceKind::Spawned);
+    }
+
+    #[test]
+    fn send_input_to_a_real_portable_stand_in_tool_appends_a_real_trace_entry() {
+        let dir = std::env::temp_dir();
+        let mut session = CliSession::spawn(0, CliTool::Custom("cat".to_string()), &dir, 80, 24);
+        session.send_input("hello\n");
+        assert_eq!(session.trace.len(), 2);
+        assert_eq!(session.trace[1].kind, TraceKind::Input);
+        assert_eq!(session.trace[1].text, "hello\n");
     }
 }

@@ -21,6 +21,7 @@ gui-builder/dist/
 desktop/node_modules/
 desktop/dist/
 desktop/dist-electron/
+desktop/dist-package/
 
 # Legacy Agent Deck console (Electron/Node/Python) — kept for reference, not built here
 legacy/agent-deck-console/node_modules/

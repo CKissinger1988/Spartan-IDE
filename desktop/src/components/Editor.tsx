@@ -8,9 +8,27 @@ export interface OpenFile {
   dirty: boolean;
 }
 
+export interface EditorPrefs {
+  fontSize: number;
+  tabSize: number;
+  wordWrap: boolean;
+}
+
+export const DEFAULT_EDITOR_PREFS: EditorPrefs = { fontSize: 13, tabSize: 2, wordWrap: false };
+
 interface EditorProps {
   file: OpenFile;
   onContentChange: (path: string, content: string, saved?: boolean) => void;
+  /**
+   * Real bug fix, found by a code-review pass: this component used to
+   * fetch the exact same settings object `App.tsx` already fetches on
+   * its own mount, a fully redundant second IPC round trip on every
+   * cold start. `App.tsx` now owns the one real fetch and passes the
+   * result down; this stays optional (defaulting to
+   * `DEFAULT_EDITOR_PREFS`) so a standalone render (e.g. a future test)
+   * doesn't need a parent to supply it.
+   */
+  prefs?: EditorPrefs;
 }
 
 /**
@@ -44,7 +62,11 @@ interface EditorProps {
  * wgpu shell's own coalesced-typing-run undo (§75.25) -- real follow-up
  * work, not attempted in this pass.
  */
-export default function Editor({ file, onContentChange }: EditorProps): React.ReactElement {
+export default function Editor({
+  file,
+  onContentChange,
+  prefs = DEFAULT_EDITOR_PREFS,
+}: EditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
@@ -99,8 +121,9 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
         const start = el.selectionStart;
         const end = el.selectionEnd;
         const value = el.value;
-        el.value = `${value.slice(0, start)}  ${value.slice(end)}`;
-        el.selectionStart = el.selectionEnd = start + 2;
+        const indent = " ".repeat(prefs.tabSize);
+        el.value = `${value.slice(0, start)}${indent}${value.slice(end)}`;
+        el.selectionStart = el.selectionEnd = start + indent.length;
         el.dispatchEvent(new Event("input", { bubbles: true }));
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
@@ -135,18 +158,35 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
           .catch((err: Error) => console.error(`${isRedo ? "redo" : "undo"} failed:`, err));
       }
     },
-    [file.docId, file.path, onContentChange]
+    [file.docId, file.path, onContentChange, prefs.tabSize]
   );
 
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1).join("\n");
 
+  // Real §75.76 editor preferences applied as inline overrides -- the
+  // highlight layer and textarea must stay pixel-identical to each other
+  // (the whole overlay technique depends on it), so both always receive
+  // the exact same style object rather than one being styled via CSS and
+  // the other via inline props.
+  const textStyle: React.CSSProperties = {
+    fontSize: `${prefs.fontSize}px`,
+    lineHeight: `${Math.round(prefs.fontSize * 1.54)}px`,
+    tabSize: prefs.tabSize,
+    whiteSpace: prefs.wordWrap ? "pre-wrap" : "pre",
+  };
+
   return (
     <div className="editor-root">
-      <div className="editor-gutter mono" ref={gutterRef}>
+      <div className="editor-gutter mono" ref={gutterRef} style={textStyle}>
         {lineNumbers}
       </div>
       <div className="editor-text-wrap">
-        <pre className="editor-highlight-layer mono" ref={highlightRef} aria-hidden="true">
+        <pre
+          className="editor-highlight-layer mono"
+          ref={highlightRef}
+          aria-hidden="true"
+          style={textStyle}
+        >
           <code
             className="hljs"
             // Real, deliberate use of dangerouslySetInnerHTML: the HTML
@@ -166,6 +206,7 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           onScroll={syncScroll}
+          style={textStyle}
         />
       </div>
     </div>

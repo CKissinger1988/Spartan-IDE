@@ -5,6 +5,10 @@ declare global {
     spartan: {
       call: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
       onEvent: (listener: (event: string, data: unknown) => void) => () => void;
+      openCrashReportsFolder: () => Promise<unknown>;
+      openRepositoryPage: () => Promise<unknown>;
+      openProject: (root: string) => Promise<unknown>;
+      pickFolder: () => Promise<unknown>;
     };
   }
 }

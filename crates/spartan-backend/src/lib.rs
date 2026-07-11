@@ -587,6 +587,45 @@ fn leo_cancel(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value, Str
     Ok(serde_json::json!({ "ok": true, "state": state_name }))
 }
 
+/// Real §75.78 retry -- closes the one last piece the "Failed ->
+/// Recovering -> Executing" retry loop has been missing since
+/// `spartan-leo::agent::begin_recovery` was first built (§75.46): a real
+/// caller. Every prior pass since then correctly called `mark_failed`
+/// on a real tool-execution or model error (`leo_next_step`'s own two
+/// call sites), but nothing ever called `begin_recovery` -- a task that
+/// failed had no way forward except abandoning it for a brand new one.
+/// `Agent::cancel` cannot reach `Failed` at all (`AgentState::
+/// can_transition_to` has no `Failed -> Idle` edge, by design -- see
+/// `leo_cancel`'s own doc comment), so `begin_recovery` really is the
+/// only real exit from this state. Mirrors `leo_approve_plan`'s exact
+/// git-repo-discovery shape, since `begin_recovery` needs the same real
+/// checkpoint-restore access `approve_plan` does. A real, honest,
+/// non-generic error on `RecoveryExhausted` (the bounded-retry limit
+/// `spartan-leo` itself enforces, §4.1's "default max 3 attempts") tells
+/// the user plainly that this task is done for and a new one is the
+/// only way forward, rather than a caller silently retrying forever or
+/// the UI showing a confusing generic failure.
+fn leo_retry(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value, String> {
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    let project_root = guard
+        .leo_project_root
+        .clone()
+        .ok_or("no Leo task has been started yet")?;
+    let agent = guard
+        .leo_agent
+        .as_mut()
+        .ok_or("no Leo task has been started yet")?;
+    let mut repo = spartan_git::GitRepo::discover(&project_root)
+        .ok_or("project root is not a real git repository -- Leo needs one for checkpoints")?;
+    match agent.begin_recovery(repo.raw_repo_mut()) {
+        Ok(()) => Ok(serde_json::json!({ "ok": true, "state": agent_state_name(agent) })),
+        Err(AgentError::RecoveryExhausted) => {
+            Err("recovery attempts exhausted (max 3) -- start a new task instead".to_string())
+        }
+        Err(e) => Err(format!("begin_recovery: {e:?}")),
+    }
+}
+
 /// Real, honest JSON rendering of a proposed `ToolCall`'s arguments --
 /// the UI needs to show the human *what* Leo wants to do before they
 /// approve or reject it.
@@ -1123,16 +1162,40 @@ fn devcontainer_detect(project_root: &str) -> Result<serde_json::Value, String> 
 /// charset is `[a-zA-Z0-9][a-zA-Z0-9_.-]+`) -- deterministic per project
 /// path, so re-running "up" against the same project reuses the same
 /// real name rather than accumulating a new container every time.
-fn sanitize_container_name(input: &str) -> String {
+/// Real, shared sanitizer -- found duplicated (with silently different
+/// semantics) by a code-review pass: `sanitize_container_name` and
+/// `sanitize_project_name` each hand-rolled the same real
+/// map-non-matching-to-dash/truncate/fallback-on-empty shape, differing
+/// only in which extra characters survive, the length cap, and the
+/// fallback string. One real function, parameterized, so a future rule
+/// change (e.g. disallowing a leading dash) applies to both real
+/// call sites at once instead of needing to be found and applied twice.
+fn sanitize_identifier(
+    input: &str,
+    extra_allowed: &[char],
+    max_len: usize,
+    fallback: &str,
+) -> String {
     let mut out: String = input
+        .trim()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || extra_allowed.contains(&c) {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
-    out.truncate(48);
+    out.truncate(max_len);
     if out.is_empty() {
-        out = "project".to_string();
+        out = fallback.to_string();
     }
     out
+}
+
+fn sanitize_container_name(input: &str) -> String {
+    sanitize_identifier(input, &[], 48, "project")
 }
 
 /// Real "build or pull, then create+start, then run postCreateCommand"
@@ -1462,26 +1525,111 @@ fn settings_get() -> Result<serde_json::Value, String> {
     serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
 }
 
-/// A real, optional set of fields alongside the always-present GPU pair
-/// (§75.69, §75.70) -- `leo_approval_mode`/`leo_provider` are only ever
-/// sent when the Settings screen's own Leo rows actually changed, so an
-/// unrelated GPU-only save must not silently reset them back to their
-/// real defaults; loading the current settings first and only
-/// overriding what was actually provided preserves them.
-fn settings_set(
+/// The real, shared `~/.spartan/crashes` directory both this crate's own
+/// `main.rs` (via `install_hook`) and `spartan-editor-core`'s reference
+/// shell already write real crash reports to (`crash_dir()` there,
+/// §75.32) -- kept byte-identical (same env-var fallback order) so a
+/// crash from either shell on one machine lands in the one place a user
+/// or beta program would actually go look.
+pub fn crash_dir() -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".spartan").join("crashes")
+}
+
+/// Real §75.82 listing of every local crash report on disk, newest
+/// first, closing task #35's own "beta testers need a way to see and
+/// send these" half. Returns each report's real filename and its real,
+/// already-redacted file contents parsed back to structured JSON --
+/// never raw, unredacted data, since `write_report` (§75.32) redacts
+/// before it ever touches disk in the first place.
+fn crash_reports_list() -> Result<serde_json::Value, String> {
+    let paths =
+        spartan_crash::list_reports(&crash_dir()).map_err(|e| format!("list reports: {e}"))?;
+    let reports: Vec<serde_json::Value> = paths
+        .iter()
+        .filter_map(|path| {
+            let filename = path.file_name()?.to_str()?.to_string();
+            let contents = std::fs::read_to_string(path).ok()?;
+            let parsed: serde_json::Value = serde_json::from_str(&contents).ok()?;
+            Some(serde_json::json!({ "filename": filename, "report": parsed }))
+        })
+        .collect();
+    Ok(serde_json::json!({ "reports": reports }))
+}
+
+/// Real, explicit, user-initiated upload of exactly one already-written,
+/// already-redacted local report to a user-configured endpoint -- never
+/// automatic, matching §18's own "never auto-uploads" contract and
+/// `spartan_crash::upload_report`'s own doc comment. `filename` is
+/// validated against a plain `crash-<digits>.json` shape (matching what
+/// `write_report`/`list_reports` themselves only ever produce) before
+/// being joined onto `crash_dir()`, so this can never be tricked into
+/// reading or sending an arbitrary path elsewhere on disk.
+fn crash_report_upload(filename: &str) -> Result<serde_json::Value, String> {
+    let is_valid_filename = filename.starts_with("crash-")
+        && filename.ends_with(".json")
+        && filename[6..filename.len() - 5]
+            .chars()
+            .all(|c| c.is_ascii_digit());
+    if !is_valid_filename {
+        return Err(format!(
+            "refusing to upload unexpected filename: {filename}"
+        ));
+    }
+    let settings = spartan_settings::load();
+    let endpoint = settings
+        .crash_reporting
+        .upload_endpoint
+        .ok_or("no crash-report upload endpoint configured in Settings")?;
+    let path = crash_dir().join(filename);
+    let report_json =
+        std::fs::read_to_string(&path).map_err(|e| format!("read report {filename}: {e}"))?;
+    let status = spartan_crash::upload_report(&endpoint, &report_json)
+        .map_err(|e| format!("upload failed: {e}"))?;
+    Ok(serde_json::json!({ "status": status }))
+}
+
+/// Real, deliberate patch shape -- found as a real "too many positional
+/// arguments" smell by a code-review pass (`settings_set` had grown to 7
+/// same-typed `Option<T>`-in-a-row parameters, needing a real
+/// `#[allow(clippy::too_many_arguments)]`, the only one anywhere in
+/// `crates/`). Every field besides `gpu_*` is only ever sent when the
+/// Settings screen's own corresponding row actually changed, so an
+/// unrelated save must not silently reset the others back to their real
+/// defaults -- `settings_set` loads the current settings first and only
+/// overrides what was actually provided here. The dispatch arm still
+/// parses each field individually from `req.params` (unchanged, so every
+/// existing `"invalid X: ..."` error message stays byte-identical) and
+/// simply collects the results into one real struct instead of passing
+/// them as 7 separate positional arguments.
+struct SettingsPatch {
     gpu_enabled: bool,
     gpu_layers: Option<u32>,
     leo_approval_mode: Option<spartan_settings::LeoApprovalMode>,
     leo_provider: Option<spartan_settings::LeoProviderSettings>,
-) -> Result<serde_json::Value, String> {
+    editor: Option<spartan_settings::EditorSettings>,
+    appearance: Option<spartan_settings::AppearanceSettings>,
+    crash_reporting: Option<spartan_settings::CrashReportingSettings>,
+    onboarding_completed: Option<bool>,
+}
+
+fn settings_set(patch: SettingsPatch) -> Result<serde_json::Value, String> {
     let current = spartan_settings::load();
     let settings = spartan_settings::Settings {
         gpu_offload: spartan_settings::GpuOffloadSettings {
-            enabled: gpu_enabled,
-            layers: gpu_layers,
+            enabled: patch.gpu_enabled,
+            layers: patch.gpu_layers,
         },
-        leo_approval_mode: leo_approval_mode.unwrap_or(current.leo_approval_mode),
-        leo_provider: leo_provider.unwrap_or(current.leo_provider),
+        leo_approval_mode: patch.leo_approval_mode.unwrap_or(current.leo_approval_mode),
+        leo_provider: patch.leo_provider.unwrap_or(current.leo_provider),
+        editor: patch.editor.unwrap_or(current.editor),
+        appearance: patch.appearance.unwrap_or(current.appearance),
+        crash_reporting: patch.crash_reporting.unwrap_or(current.crash_reporting),
+        onboarding_completed: patch
+            .onboarding_completed
+            .unwrap_or(current.onboarding_completed),
     };
     spartan_settings::save(&settings).map_err(|e| format!("save settings: {e}"))?;
     serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
@@ -1533,6 +1681,155 @@ fn check_for_updates(out_tx: Sender<String>) -> Result<serde_json::Value, String
         }
     });
     Ok(serde_json::json!({ "status": "checking" }))
+}
+
+/// Real §75.76 "New Project" quick-start scaffolding -- one small, real,
+/// runnable starter file set per Tier 1 language (§35.4's original six
+/// plus C#, §75.51), each one deliberately matching `spartan-languages`'
+/// own real `languages.toml` marker files exactly, so a project created
+/// here is correctly detected by this app's own real language registry
+/// the moment it's opened -- not a separate, parallel "starter project"
+/// concept invented just for this wizard.
+fn project_template_files(template: &str) -> Result<Vec<(&'static str, &'static str)>, String> {
+    match template {
+        "rust" => Ok(vec![
+            (
+                "Cargo.toml",
+                "[package]\nname = \"{{name}}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+            ),
+            (
+                "src/main.rs",
+                "fn main() {\n    println!(\"Hello from {{name}}!\");\n}\n",
+            ),
+        ]),
+        "typescript" => Ok(vec![
+            (
+                "package.json",
+                "{\n  \"name\": \"{{name}}\",\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"start\": \"node index.js\"\n  }\n}\n",
+            ),
+            (
+                "tsconfig.json",
+                "{\n  \"compilerOptions\": {\n    \"target\": \"ES2020\",\n    \"module\": \"ESNext\",\n    \"strict\": true\n  }\n}\n",
+            ),
+            (
+                "index.ts",
+                "console.log(\"Hello from {{name}}!\");\n",
+            ),
+        ]),
+        "javascript" => Ok(vec![
+            (
+                "package.json",
+                "{\n  \"name\": \"{{name}}\",\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"start\": \"node index.js\"\n  }\n}\n",
+            ),
+            (
+                "index.js",
+                "console.log(\"Hello from {{name}}!\");\n",
+            ),
+        ]),
+        "python" => Ok(vec![
+            ("pyproject.toml", "[project]\nname = \"{{name}}\"\nversion = \"0.1.0\"\n"),
+            (
+                "main.py",
+                "def main():\n    print(\"Hello from {{name}}!\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+            ),
+        ]),
+        "kotlin" => Ok(vec![
+            (
+                "build.gradle.kts",
+                "plugins {\n    kotlin(\"jvm\") version \"1.9.0\"\n    application\n}\n\napplication {\n    mainClass.set(\"MainKt\")\n}\n",
+            ),
+            (
+                "src/main/kotlin/Main.kt",
+                "fun main() {\n    println(\"Hello from {{name}}!\")\n}\n",
+            ),
+        ]),
+        "java" => Ok(vec![
+            (
+                "pom.xml",
+                "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>com.example</groupId>\n  <artifactId>{{name}}</artifactId>\n  <version>0.1.0</version>\n</project>\n",
+            ),
+            (
+                "src/main/java/Main.java",
+                "public class Main {\n    public static void main(String[] args) {\n        System.out.println(\"Hello from {{name}}!\");\n    }\n}\n",
+            ),
+        ]),
+        "go" => Ok(vec![
+            ("go.mod", "module {{name}}\n\ngo 1.21\n"),
+            (
+                "main.go",
+                "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello from {{name}}!\")\n}\n",
+            ),
+        ]),
+        "csharp" => Ok(vec![
+            (
+                "{{name}}.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    <TargetFramework>net8.0</TargetFramework>\n  </PropertyGroup>\n</Project>\n",
+            ),
+            (
+                "Program.cs",
+                "System.Console.WriteLine(\"Hello from {{name}}!\");\n",
+            ),
+        ]),
+        other => Err(format!(
+            "unknown project template `{other}` -- expected one of rust, typescript, javascript, python, kotlin, java, go, csharp"
+        )),
+    }
+}
+
+/// Real, deliberately conservative sanitizer -- alphanumeric, `-`, `_`
+/// only, matching the same real `sanitize_identifier` shape
+/// `sanitize_container_name` already established for Dev Containers,
+/// reused here for a real directory name rather than a Docker container
+/// name (a longer cap and an underscore allowance, since project
+/// directory names have real, different conventions than container
+/// names do).
+fn sanitize_project_name(input: &str) -> String {
+    sanitize_identifier(input, &['-', '_'], 64, "new-project")
+}
+
+/// Real project scaffolding -- creates `<parent_dir>/<sanitized name>`,
+/// refuses to touch it if it already exists and is non-empty (never
+/// silently overwrites real, possibly unrelated existing files), then
+/// writes each real template file, substituting `{{name}}` for the real
+/// sanitized project name. Deliberately synchronous: writing a handful
+/// of small text files is fast enough that the async-event pattern
+/// `devcontainer_up`/`leo_start_task` use for genuinely slow operations
+/// would be pure overhead here.
+fn create_project(
+    parent_dir: &str,
+    template: &str,
+    name: &str,
+) -> Result<serde_json::Value, String> {
+    let files = project_template_files(template)?;
+    let safe_name = sanitize_project_name(name);
+    let project_root = std::path::Path::new(parent_dir).join(&safe_name);
+
+    if project_root.exists() {
+        let non_empty = std::fs::read_dir(&project_root)
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false);
+        if non_empty {
+            return Err(format!(
+                "{} already exists and is not empty -- refusing to overwrite it",
+                project_root.display()
+            ));
+        }
+    }
+
+    for (rel_path, template_content) in files {
+        let rel_path = rel_path.replace("{{name}}", &safe_name);
+        let content = template_content.replace("{{name}}", &safe_name);
+        let full_path = project_root.join(rel_path);
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("create directory: {e}"))?;
+        }
+        std::fs::write(&full_path, content).map_err(|e| format!("write file: {e}"))?;
+    }
+
+    Ok(serde_json::json!({
+        "project_root": project_root.to_string_lossy(),
+        "name": safe_name,
+    }))
 }
 
 fn get_str_param(params: &serde_json::Value, key: &str) -> Result<String, String> {
@@ -1608,6 +1905,7 @@ pub fn handle_request(
         "leo_next_step" => leo_next_step(state, out_tx.clone()),
         "leo_approve_call" => leo_approve_call(state),
         "leo_reject_call" => leo_reject_call(state),
+        "leo_retry" => leo_retry(state),
         "pty_spawn" => (|| {
             let cwd = get_str_param(&req.params, "cwd")?;
             let cols = get_u64_param(&req.params, "cols")? as u16;
@@ -1707,9 +2005,54 @@ pub fn handle_request(
                 .map(|v| serde_json::from_value::<spartan_settings::LeoProviderSettings>(v.clone()))
                 .transpose()
                 .map_err(|e| format!("invalid leo_provider: {e}"))?;
-            settings_set(gpu_enabled, gpu_layers, leo_approval_mode, leo_provider)
+            let editor = req
+                .params
+                .get("editor")
+                .map(|v| serde_json::from_value::<spartan_settings::EditorSettings>(v.clone()))
+                .transpose()
+                .map_err(|e| format!("invalid editor: {e}"))?;
+            let appearance = req
+                .params
+                .get("appearance")
+                .map(|v| serde_json::from_value::<spartan_settings::AppearanceSettings>(v.clone()))
+                .transpose()
+                .map_err(|e| format!("invalid appearance: {e}"))?;
+            let crash_reporting = req
+                .params
+                .get("crash_reporting")
+                .map(|v| {
+                    serde_json::from_value::<spartan_settings::CrashReportingSettings>(v.clone())
+                })
+                .transpose()
+                .map_err(|e| format!("invalid crash_reporting: {e}"))?;
+            let onboarding_completed = req
+                .params
+                .get("onboarding_completed")
+                .map(|v| serde_json::from_value::<bool>(v.clone()))
+                .transpose()
+                .map_err(|e| format!("invalid onboarding_completed: {e}"))?;
+            settings_set(SettingsPatch {
+                gpu_enabled,
+                gpu_layers,
+                leo_approval_mode,
+                leo_provider,
+                editor,
+                appearance,
+                crash_reporting,
+                onboarding_completed,
+            })
         })(),
         "check_for_updates" => check_for_updates(out_tx.clone()),
+        "crash_reports_list" => crash_reports_list(),
+        "crash_report_upload" => {
+            get_str_param(&req.params, "filename").and_then(|f| crash_report_upload(&f))
+        }
+        "create_project" => (|| {
+            let parent_dir = get_str_param(&req.params, "parent_dir")?;
+            let template = get_str_param(&req.params, "template")?;
+            let name = get_str_param(&req.params, "name")?;
+            create_project(&parent_dir, &template, &name)
+        })(),
         other => Err(format!("unknown method `{other}`")),
     };
     match result {
@@ -2538,6 +2881,454 @@ mod tests {
     }
 
     #[test]
+    fn settings_set_editor_appearance_and_onboarding_round_trip_and_preserve_each_other() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-settings-editor-appearance-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        let state = new_state();
+        // Set editor + onboarding first.
+        call(
+            &state,
+            1,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": true,
+                "editor": { "font_size": 18, "tab_size": 4, "word_wrap": true },
+                "onboarding_completed": true,
+            }),
+        );
+        // A later, unrelated appearance-only save must not reset the
+        // real, already-saved editor settings or onboarding flag.
+        let set_resp = call(
+            &state,
+            2,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": true,
+                "appearance": { "reduce_motion": true },
+            }),
+        );
+        let result = set_resp.result.unwrap();
+        assert_eq!(result["editor"]["font_size"], 18);
+        assert_eq!(result["editor"]["tab_size"], 4);
+        assert_eq!(result["editor"]["word_wrap"], true);
+        assert_eq!(result["appearance"]["reduce_motion"], true);
+        assert_eq!(result["onboarding_completed"], true);
+
+        let get_resp = call(&state, 3, "settings_get", serde_json::json!({}));
+        let result = get_resp.result.unwrap();
+        assert_eq!(result["editor"]["font_size"], 18);
+        assert_eq!(result["appearance"]["reduce_motion"], true);
+        assert_eq!(result["onboarding_completed"], true);
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    /// Real regression test for a real bug found live by code review:
+    /// `onboarding_completed` used to be parsed via `.as_bool()`, which
+    /// silently returns `None` (treated identically to "not provided,
+    /// keep the current value") for *any* non-boolean JSON value --
+    /// unlike every sibling optional field (`editor`/`appearance`/
+    /// `leo_provider`), which all report an honest `"invalid X: ..."`
+    /// error on a real type mismatch. A caller sending a genuine bug
+    /// (e.g. `"onboarding_completed": "true"`, a string) got back a
+    /// silent `Ok` with the flag left unchanged, believing it had been
+    /// set.
+    #[test]
+    fn settings_set_with_a_non_boolean_onboarding_completed_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": true,
+                "onboarding_completed": "true",
+            }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("invalid onboarding_completed"));
+    }
+
+    /// A real, minimal, hand-rolled HTTP/1.1 server for
+    /// `crash_report_upload`'s own real `ureq` POST -- the same technique
+    /// `spartan-crash`'s own test module already established, duplicated
+    /// here (not shared) since it's a small, self-contained test helper
+    /// and this crate has no existing precedent for cross-crate test-only
+    /// dependencies.
+    fn spawn_mock_upload_server(
+        response_status: u16,
+    ) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let body = loop {
+                let n = stream.read(&mut chunk).unwrap();
+                if n == 0 {
+                    break String::new();
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf);
+                if let Some(header_end) = text.find("\r\n\r\n") {
+                    let content_length: usize = text[..header_end]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    let body_start = header_end + 4;
+                    if buf.len() >= body_start + content_length {
+                        break String::from_utf8_lossy(
+                            &buf[body_start..body_start + content_length],
+                        )
+                        .to_string();
+                    }
+                }
+            };
+            let _ = tx.send(body);
+            let reason = if response_status == 200 {
+                "OK"
+            } else {
+                "Error"
+            };
+            let response =
+                format!("HTTP/1.1 {response_status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(response.as_bytes());
+        });
+        (format!("http://127.0.0.1:{port}"), rx)
+    }
+
+    #[test]
+    fn crash_reports_list_on_a_fresh_home_with_no_crashes_returns_a_real_empty_list() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-crash-list-empty-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        let state = new_state();
+        let resp = call(&state, 1, "crash_reports_list", serde_json::json!({}));
+        assert!(resp.error.is_none());
+        let reports = resp.result.unwrap()["reports"].as_array().unwrap().clone();
+        assert!(reports.is_empty());
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn crash_reports_list_finds_real_reports_written_by_the_real_crash_hook() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-crash-list-populated-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        spartan_crash::write_report(
+            &crash_dir(),
+            &spartan_crash::CrashReport {
+                unix_timestamp: 1,
+                message: "a real test panic message".to_string(),
+                location: Some("src/lib.rs:1:1".to_string()),
+            },
+        )
+        .unwrap();
+
+        let state = new_state();
+        let resp = call(&state, 1, "crash_reports_list", serde_json::json!({}));
+        assert!(resp.error.is_none());
+        let reports = resp.result.unwrap()["reports"].as_array().unwrap().clone();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0]["filename"], "crash-1.json");
+        assert_eq!(reports[0]["report"]["message"], "a real test panic message");
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn crash_report_upload_refuses_an_unexpected_filename_before_touching_disk() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "crash_report_upload",
+            serde_json::json!({ "filename": "../../etc/passwd" }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp
+            .error
+            .unwrap()
+            .contains("refusing to upload unexpected filename"));
+    }
+
+    #[test]
+    fn crash_report_upload_errors_honestly_with_no_endpoint_configured() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-crash-upload-no-endpoint-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        spartan_crash::write_report(
+            &crash_dir(),
+            &spartan_crash::CrashReport {
+                unix_timestamp: 2,
+                message: "m".to_string(),
+                location: None,
+            },
+        )
+        .unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "crash_report_upload",
+            serde_json::json!({ "filename": "crash-2.json" }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp
+            .error
+            .unwrap()
+            .contains("no crash-report upload endpoint configured"));
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn crash_report_upload_really_posts_the_exact_on_disk_report_to_a_real_local_server() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-crash-upload-real-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        let report = spartan_crash::CrashReport {
+            unix_timestamp: 3,
+            message: "real upload test".to_string(),
+            location: None,
+        };
+        spartan_crash::write_report(&crash_dir(), &report).unwrap();
+        let expected_body = spartan_crash::format_report(&report);
+
+        let (endpoint, rx) = spawn_mock_upload_server(200);
+        spartan_settings::save(&spartan_settings::Settings {
+            crash_reporting: spartan_settings::CrashReportingSettings {
+                upload_endpoint: Some(endpoint),
+            },
+            ..Default::default()
+        })
+        .unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "crash_report_upload",
+            serde_json::json!({ "filename": "crash-3.json" }),
+        );
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["status"], 200);
+        let received = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(received, expected_body);
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn create_project_writes_a_real_runnable_rust_scaffold_to_disk() {
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-create-project-rust-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "create_project",
+            serde_json::json!({
+                "parent_dir": scratch.to_string_lossy(),
+                "template": "rust",
+                "name": "My Cool Crate!",
+            }),
+        );
+        assert!(
+            resp.error.is_none(),
+            "create_project errored: {:?}",
+            resp.error
+        );
+        let result = resp.result.unwrap();
+        // Real sanitization: spaces and punctuation become `-`.
+        assert_eq!(result["name"], "My-Cool-Crate-");
+
+        let project_root = scratch.join("My-Cool-Crate-");
+        let cargo_toml = std::fs::read_to_string(project_root.join("Cargo.toml")).unwrap();
+        assert!(cargo_toml.contains("name = \"My-Cool-Crate-\""));
+        let main_rs = std::fs::read_to_string(project_root.join("src/main.rs")).unwrap();
+        assert!(main_rs.contains("Hello from My-Cool-Crate-!"));
+
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn create_project_refuses_to_overwrite_a_real_nonempty_existing_directory() {
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-create-project-conflict-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let existing = scratch.join("taken");
+        std::fs::create_dir_all(&existing).unwrap();
+        std::fs::write(existing.join("real-preexisting-file.txt"), "do not touch").unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "create_project",
+            serde_json::json!({
+                "parent_dir": scratch.to_string_lossy(),
+                "template": "go",
+                "name": "taken",
+            }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("already exists"));
+        // The real pre-existing file must be completely untouched.
+        assert_eq!(
+            std::fs::read_to_string(existing.join("real-preexisting-file.txt")).unwrap(),
+            "do not touch"
+        );
+
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn create_project_rejects_an_unknown_template_honestly() {
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-create-project-unknown-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "create_project",
+            serde_json::json!({
+                "parent_dir": scratch.to_string_lossy(),
+                "template": "cobol",
+                "name": "legacy",
+            }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("unknown project template"));
+
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn create_project_every_real_template_produces_files_spartan_languages_can_detect() {
+        for template in [
+            "rust",
+            "typescript",
+            "javascript",
+            "python",
+            "kotlin",
+            "java",
+            "go",
+            "csharp",
+        ] {
+            let scratch = std::env::temp_dir().join(format!(
+                "spartan-backend-create-project-detect-{template}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+
+            let state = new_state();
+            let resp = call(
+                &state,
+                1,
+                "create_project",
+                serde_json::json!({
+                    "parent_dir": scratch.to_string_lossy(),
+                    "template": template,
+                    "name": "detectme",
+                }),
+            );
+            assert!(
+                resp.error.is_none(),
+                "template {template} errored: {:?}",
+                resp.error
+            );
+            let project_root = scratch.join("detectme");
+            let registry = spartan_languages::LanguageRegistry::curated_default();
+            let detected = registry.detect_project_languages(&project_root);
+            assert!(
+                !detected.is_empty(),
+                "template {template} produced a project spartan-languages could not detect at all"
+            );
+
+            std::fs::remove_dir_all(&scratch).ok();
+        }
+    }
+
+    #[test]
     fn build_leo_provider_constructs_a_real_ollama_provider_by_default() {
         let settings = spartan_settings::LeoProviderSettings::default();
         let provider =
@@ -2696,8 +3487,19 @@ mod tests {
         );
         assert!(resp.error.is_none());
         assert_eq!(resp.result.unwrap()["status"], "planning");
-        let status = call(&state, 2, "leo_status", serde_json::json!({}));
-        assert_eq!(status.result.unwrap()["state"], "Planning");
+        // Real bug found live via a CI failure, not by inspection: a
+        // second `leo_status` call here (removed) raced a real spawned
+        // background thread -- `begin_planning()` itself is synchronous
+        // (already fully proven by the assertion above), but
+        // `generate_plan`'s real HTTP call to Ollama can fail via a fast
+        // `ECONNREFUSED` (no Ollama reachable in CI) quickly enough to
+        // transition Planning -> Failed before this test's own next
+        // instruction runs, an environment-dependent race no sleep or
+        // retry fixes at its root. `Idle -> Planning` is already fully,
+        // deterministically covered by the two assertions above; a
+        // second, later state read adds no real guarantee this test's
+        // own name promises.
+        state.lock().unwrap().leo_agent = None;
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2975,6 +3777,71 @@ mod tests {
         let resp = call(&state, 1, "leo_next_step", serde_json::json!({}));
         assert!(resp.error.is_some());
         assert!(resp.error.unwrap().contains("already awaiting approval"));
+    }
+
+    #[test]
+    fn leo_retry_before_any_task_errors_honestly() {
+        let state = new_state();
+        let resp = call(&state, 1, "leo_retry", serde_json::json!({}));
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn leo_retry_real_transitions_a_failed_agent_back_to_executing() {
+        let tmp = TempRepo::new("leo-retry-success");
+        let mut agent = agent_in_executing_state(&tmp.dir);
+        // A real `Executing -> Failed` transition, matching exactly what
+        // `leo_next_step`'s own two real call sites do on a genuine tool-
+        // execution or model error.
+        agent.mark_failed().unwrap();
+        assert_eq!(agent.state(), spartan_leo::state::AgentState::Failed);
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            leo_project_root: Some(tmp.dir.clone()),
+            ..Default::default()
+        }));
+        let resp = call(&state, 1, "leo_retry", serde_json::json!({}));
+        assert!(resp.error.is_none(), "leo_retry errored: {:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["state"], "Executing");
+        let guard = state.lock().unwrap();
+        assert_eq!(
+            guard.leo_agent.as_ref().unwrap().state(),
+            spartan_leo::state::AgentState::Executing
+        );
+    }
+
+    #[test]
+    fn leo_retry_reports_recovery_exhausted_honestly_after_the_real_bound() {
+        let tmp = TempRepo::new("leo-retry-exhausted");
+        let mut agent = agent_in_executing_state(&tmp.dir);
+        let mut repo = git2::Repository::open(&tmp.dir).unwrap();
+        // Real §4.1 bound is 3 -- exhaust it for real via the same
+        // `mark_failed`/`begin_recovery` pair `leo_retry` itself uses,
+        // called directly here to drive the agent to the real exhausted
+        // state without needing three separate IPC round trips.
+        for _ in 0..3 {
+            agent.mark_failed().unwrap();
+            agent.begin_recovery(&mut repo).unwrap();
+        }
+        agent.mark_failed().unwrap();
+        assert_eq!(agent.state(), spartan_leo::state::AgentState::Failed);
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            leo_project_root: Some(tmp.dir.clone()),
+            ..Default::default()
+        }));
+        let resp = call(&state, 1, "leo_retry", serde_json::json!({}));
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("exhausted"));
+        // A real, deliberate consequence: the agent stays in `Failed` --
+        // `begin_recovery` never even attempted the transition once the
+        // bound check failed, matching `Agent::begin_recovery`'s own
+        // real early-return-before-transitioning behavior.
+        let guard = state.lock().unwrap();
+        assert_eq!(
+            guard.leo_agent.as_ref().unwrap().state(),
+            spartan_leo::state::AgentState::Failed
+        );
     }
 
     #[test]

@@ -101,16 +101,93 @@ impl Default for LeoProviderSettings {
     }
 }
 
+/// Real §75.76 editor preferences -- font size, tab size, word wrap.
+/// Deliberately small: this is the same "thorough settings for every
+/// feature" pass that added `AppearanceSettings`/`onboarding_completed`
+/// below, not a general editor-config framework. `desktop/src/components/
+/// Editor.tsx` reads this once per file open and applies it as real
+/// inline style overrides on the highlight layer + textarea, matching
+/// the wgpu shell's own "no live cross-window reload" precedent
+/// (§75.48's own settings panel doc comment).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditorSettings {
+    pub font_size: u32,
+    pub tab_size: u32,
+    pub word_wrap: bool,
+}
+
+impl Default for EditorSettings {
+    fn default() -> Self {
+        Self {
+            font_size: 13,
+            tab_size: 2,
+            word_wrap: false,
+        }
+    }
+}
+
+/// Real §75.76 appearance preferences. `reduce_motion` is a real,
+/// accessibility-motivated toggle for the Sci-Fi theme's own new pulse/
+/// scan-line animations (§75.76) -- disabling it adds a `reduce-motion`
+/// class at the document root, which a small set of new CSS rules use to
+/// turn every such animation off, matching WCAG 2.1's own
+/// prefers-reduced-motion intent for users who opted out of OS-level
+/// motion but are running this app under a mocked/headless Chromium
+/// environment where that OS media query itself may not be honored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AppearanceSettings {
+    pub reduce_motion: bool,
+}
+
+/// Real §75.82 crash-report upload configuration, closing task #35 --
+/// `upload_endpoint` is deliberately `Option<String>`, defaulting to
+/// `None` (never a hardcoded/well-known endpoint of this project's own):
+/// there is no real telemetry backend this project operates, so "where do
+/// reports go" has to be something a beta tester or self-hoster explicitly
+/// types in themselves, not a default that could silently start sending
+/// data anywhere. Pairing with `spartan_crash::upload_report` (§75.82),
+/// which is likewise never called except from a real, explicit user
+/// action -- this field being set does not, by itself, cause any upload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CrashReportingSettings {
+    pub upload_endpoint: Option<String>,
+}
+
 /// `Settings` itself is no longer `Copy` (`LeoProviderSettings` owns a
 /// real, non-`Copy` `String`) -- a real, mechanical ripple from adding
 /// this field; every existing call site that relied on implicit copies
 /// needed an explicit `.clone()`, found and fixed by the compiler, not
 /// missed silently.
+///
+/// Real, load-bearing `#[serde(default)]` on the container -- found live
+/// by a code-review pass, not by inspection: without it, any real
+/// pre-existing `~/.spartan/settings.json` written by a build before
+/// `editor`/`appearance`/`onboarding_completed` existed has no way to
+/// satisfy a plain (non-defaulted) `Deserialize` for those fields, so
+/// `serde_json::from_str` fails outright -- and `load_from`'s own
+/// "a corrupt file is a recoverable, not fatal, state" `.unwrap_or_
+/// default()` then silently discards the *entire* real file, wiping a
+/// real user's already-chosen GPU offload/Leo provider/approval mode
+/// and, worse, resetting `onboarding_completed` back to `false`,
+/// re-triggering onboarding for an already-onboarded real user. This
+/// attribute makes each individual missing field fall back to its own
+/// type's default instead, the correct real schema-evolution behavior
+/// this struct's own settings-file-is-forward-compatible design already
+/// assumed but didn't actually implement.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct Settings {
     pub gpu_offload: GpuOffloadSettings,
     pub leo_approval_mode: LeoApprovalMode,
     pub leo_provider: LeoProviderSettings,
+    pub editor: EditorSettings,
+    pub appearance: AppearanceSettings,
+    pub crash_reporting: CrashReportingSettings,
+    /// Real §75.76 first-run onboarding flag -- `false` until the user
+    /// completes or explicitly skips the onboarding flow once; the
+    /// Electron shell checks this on startup and shows onboarding only
+    /// when it's still `false`.
+    pub onboarding_completed: bool,
 }
 
 /// `~/.spartan/settings.json` (`$HOME`, falling back to `$USERPROFILE` for
@@ -221,10 +298,84 @@ mod tests {
                 kind: LeoProviderKind::Claude,
                 model: "claude-3-5-sonnet-latest".to_string(),
             },
+            editor: EditorSettings {
+                font_size: 16,
+                tab_size: 4,
+                word_wrap: true,
+            },
+            appearance: AppearanceSettings {
+                reduce_motion: true,
+            },
+            crash_reporting: CrashReportingSettings {
+                upload_endpoint: Some("https://reports.example.com/upload".to_string()),
+            },
+            onboarding_completed: true,
         };
         save_to(&path, &settings).unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded, settings);
+    }
+
+    /// Real regression test for a real bug found live by code review, not
+    /// by inspection: a genuine `~/.spartan/settings.json` written by any
+    /// build before `editor`/`appearance`/`onboarding_completed` existed
+    /// has exactly this shape -- missing all three fields. Confirms the
+    /// container-level `#[serde(default)]` actually does its job: the
+    /// real, already-chosen values are preserved, and only the genuinely
+    /// missing fields fall back to their own defaults, rather than the
+    /// whole file failing to parse and silently discarding everything
+    /// (including a real user's `onboarding_completed: true`, which would
+    /// have re-triggered onboarding for someone who'd already seen it).
+    #[test]
+    fn loading_a_real_pre_existing_file_missing_the_newer_fields_preserves_the_old_ones() {
+        let path = temp_path("old-format-upgrade");
+        std::fs::write(
+            &path,
+            r#"{
+                "gpu_offload": { "enabled": false, "layers": 8 },
+                "leo_approval_mode": "AutoApproveSafe",
+                "leo_provider": { "kind": "Claude", "model": "claude-3-5-sonnet-latest" }
+            }"#,
+        )
+        .unwrap();
+        let loaded = load_from(&path);
+        assert!(!loaded.gpu_offload.enabled);
+        assert_eq!(loaded.gpu_offload.layers, Some(8));
+        assert_eq!(loaded.leo_approval_mode, LeoApprovalMode::AutoApproveSafe);
+        assert_eq!(loaded.leo_provider.kind, LeoProviderKind::Claude);
+        // The genuinely missing fields fall back to real defaults --
+        // never `onboarding_completed: false` wiping a real user's
+        // already-set `true` (there was none to wipe here; that's the
+        // whole point -- this file simply never had the field).
+        assert_eq!(loaded.editor, EditorSettings::default());
+        assert_eq!(loaded.appearance, AppearanceSettings::default());
+        assert_eq!(loaded.crash_reporting, CrashReportingSettings::default());
+        assert!(!loaded.onboarding_completed);
+    }
+
+    #[test]
+    fn default_crash_reporting_has_no_upload_endpoint_configured() {
+        // No default/well-known endpoint of this project's own -- a real
+        // upload target has to be something a user explicitly typed in.
+        assert_eq!(Settings::default().crash_reporting.upload_endpoint, None);
+    }
+
+    #[test]
+    fn default_editor_settings_match_the_original_hardcoded_editor_values() {
+        let settings = EditorSettings::default();
+        assert_eq!(settings.font_size, 13);
+        assert_eq!(settings.tab_size, 2);
+        assert!(!settings.word_wrap);
+    }
+
+    #[test]
+    fn default_appearance_settings_do_not_reduce_motion() {
+        assert!(!AppearanceSettings::default().reduce_motion);
+    }
+
+    #[test]
+    fn default_onboarding_completed_is_false_so_a_fresh_install_sees_onboarding() {
+        assert!(!Settings::default().onboarding_completed);
     }
 
     #[test]

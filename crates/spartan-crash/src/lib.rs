@@ -1,17 +1,21 @@
-//! Real local-first crash reporting (§18, task #13). "Crash dumps are
+//! Real local-first crash reporting (§18, task #13/#35). "Crash dumps are
 //! inspected locally first with an option to redact before any optional
-//! upload -- never auto-uploads raw crash data silently" (§18). This pass
-//! is deliberately local-only: it writes a real, redacted crash report to
-//! disk and never makes a network call of any kind -- there is no upload
-//! path at all yet, optional or otherwise, so "never auto-uploads" is
-//! trivially true by construction rather than by a gate that could be
-//! bypassed. A future upload feature adds a genuinely new, explicit,
-//! user-initiated action on top of this, not a change to this crate.
+//! upload -- never auto-uploads raw crash data silently" (§18). §75.32
+//! shipped the local-only half: a real, redacted crash report written to
+//! disk, no network call anywhere in this crate. This pass (§75.82) adds
+//! the other half §18 always named as future work -- a real, explicit,
+//! user-initiated upload -- without weakening that guarantee: `upload_report`
+//! is the *only* function in this crate that ever makes a network call, it
+//! takes an already-redacted report and an endpoint the user must have
+//! typed in themselves, and nothing else in this crate (in particular,
+//! `install_hook`'s own panic path) ever calls it. "Never auto-uploads" stays
+//! true not because no upload path exists, but because the one that exists
+//! is never reachable except through a real, separate, explicit user click.
 
 use serde::Serialize;
 use std::panic::PanicHookInfo;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CrashReport {
@@ -107,6 +111,71 @@ pub fn install_hook(crash_dir: PathBuf) {
     }));
 }
 
+/// Real listing of every `crash-*.json` report currently on disk in
+/// `crash_dir`, newest first by filename (which is itself the report's
+/// real unix timestamp, so a plain reverse-sort is correct and doesn't
+/// need to re-parse or re-stat anything). A missing directory (no crash
+/// has ever been written) is a real, expected empty result, not an
+/// error.
+pub fn list_reports(crash_dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    if !crash_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(crash_dir)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("crash-") && n.ends_with(".json"))
+        })
+        .collect();
+    paths.sort();
+    paths.reverse();
+    Ok(paths)
+}
+
+#[derive(Debug)]
+pub enum UploadError {
+    Network(String),
+    Http { status: u16, body: String },
+}
+
+impl std::fmt::Display for UploadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UploadError::Network(msg) => write!(f, "network error: {msg}"),
+            UploadError::Http { status, body } => write!(f, "HTTP {status}: {body}"),
+        }
+    }
+}
+
+impl std::error::Error for UploadError {}
+
+/// Real, explicit, user-initiated upload of one already-written,
+/// already-redacted report file's exact on-disk bytes to `endpoint` --
+/// no re-serialization, no fresh unredacted round trip through
+/// `CrashReport` at all, so there is no way for this function to upload
+/// anything other than what a human could already read on disk
+/// themselves. `endpoint` is never defaulted or hardcoded anywhere in
+/// this crate; the caller (a real, explicit user action one layer up)
+/// supplies it every time. Returns the real HTTP status code on success.
+pub fn upload_report(endpoint: &str, report_json: &str) -> Result<u16, UploadError> {
+    let resp = ureq::post(endpoint)
+        .set("Content-Type", "application/json")
+        .set("User-Agent", "spartan-ide-crash-reporter")
+        .timeout(Duration::from_secs(15))
+        .send_string(report_json)
+        .map_err(|e| match e {
+            ureq::Error::Status(status, resp) => UploadError::Http {
+                status,
+                body: resp.into_string().unwrap_or_default(),
+            },
+            ureq::Error::Transport(t) => UploadError::Network(t.to_string()),
+        })?;
+    Ok(resp.status())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,5 +256,145 @@ mod tests {
         let report = sample_report();
         let json = format_report(&report);
         assert!(json.contains("index out of bounds: the len is 3 but the index is 5"));
+    }
+
+    #[test]
+    fn list_reports_on_a_directory_that_has_never_been_written_to_is_a_real_empty_result_not_an_error(
+    ) {
+        let dir = std::env::temp_dir().join("spartan_crash_test_list_missing");
+        let _ = std::fs::remove_dir_all(&dir);
+        let reports = list_reports(&dir).unwrap();
+        assert!(reports.is_empty());
+    }
+
+    #[test]
+    fn list_reports_finds_real_written_reports_newest_first_and_ignores_unrelated_files() {
+        let dir = std::env::temp_dir().join("spartan_crash_test_list_populated");
+        let _ = std::fs::remove_dir_all(&dir);
+        write_report(
+            &dir,
+            &CrashReport {
+                unix_timestamp: 100,
+                message: "first".to_string(),
+                location: None,
+            },
+        )
+        .unwrap();
+        write_report(
+            &dir,
+            &CrashReport {
+                unix_timestamp: 200,
+                message: "second".to_string(),
+                location: None,
+            },
+        )
+        .unwrap();
+        std::fs::write(dir.join("not-a-crash-report.txt"), "ignore me").unwrap();
+        let reports = list_reports(&dir).unwrap();
+        let names: Vec<String> = reports
+            .iter()
+            .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["crash-200.json", "crash-100.json"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A real, minimal, hand-rolled HTTP/1.1 server -- not a mocking
+    /// library, an actual `TcpListener` -- so `upload_report`'s own real
+    /// `ureq` POST is exercised against a genuine socket, not a stubbed
+    /// function. Reads exactly one request (headers + a real
+    /// `Content-Length`-bounded body), replies with `response_status`/
+    /// `response_body`, and hands the real received body back to the
+    /// caller so a test can assert on exactly what `ureq` actually sent
+    /// over the wire.
+    fn spawn_mock_upload_server(
+        response_status: u16,
+        response_body: &'static str,
+    ) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let body = loop {
+                let n = stream.read(&mut chunk).unwrap();
+                if n == 0 {
+                    break String::new();
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf);
+                if let Some(header_end) = text.find("\r\n\r\n") {
+                    let content_length: usize = text[..header_end]
+                        .lines()
+                        .find_map(|l| {
+                            let lower = l.to_ascii_lowercase();
+                            lower
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    let body_start = header_end + 4;
+                    if buf.len() >= body_start + content_length {
+                        break String::from_utf8_lossy(
+                            &buf[body_start..body_start + content_length],
+                        )
+                        .to_string();
+                    }
+                }
+            };
+            let _ = tx.send(body);
+            let reason = if response_status == 200 {
+                "OK"
+            } else {
+                "Error"
+            };
+            let response = format!(
+                "HTTP/1.1 {response_status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                response_body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        (format!("http://127.0.0.1:{port}"), rx)
+    }
+
+    #[test]
+    fn upload_report_really_posts_the_exact_report_bytes_to_a_real_local_server_and_reports_the_real_status(
+    ) {
+        let (endpoint, rx) = spawn_mock_upload_server(200, "");
+        let report_json = r#"{"unix_timestamp":1,"message":"real body","location":null}"#;
+        let status = upload_report(&endpoint, report_json).unwrap();
+        assert_eq!(status, 200);
+        let received = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(received, report_json);
+    }
+
+    #[test]
+    fn upload_report_surfaces_a_real_non_2xx_response_as_a_real_honest_http_error() {
+        let (endpoint, _rx) = spawn_mock_upload_server(500, "server exploded");
+        let err = upload_report(&endpoint, "{}").unwrap_err();
+        match err {
+            UploadError::Http { status, body } => {
+                assert_eq!(status, 500);
+                assert_eq!(body, "server exploded");
+            }
+            UploadError::Network(msg) => panic!("expected Http error, got Network({msg})"),
+        }
+    }
+
+    #[test]
+    fn upload_report_surfaces_a_real_connection_failure_honestly() {
+        // A real, guaranteed-unused local port (nothing is listening) --
+        // a genuine connection-refused, not a simulated one.
+        let err = upload_report("http://127.0.0.1:1", "{}").unwrap_err();
+        match err {
+            UploadError::Network(_) => {}
+            UploadError::Http { status, body } => {
+                panic!("expected Network error, got Http {{ status: {status}, body: {body} }}")
+            }
+        }
     }
 }

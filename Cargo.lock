@@ -4986,8 +4986,10 @@ dependencies = [
  "serde_json",
  "similar",
  "spartan-buffer",
+ "spartan-crash",
  "spartan-devcontainer",
  "spartan-git",
+ "spartan-languages",
  "spartan-leo",
  "spartan-model",
  "spartan-settings",
@@ -5008,6 +5010,7 @@ dependencies = [
  "serde",
  "serde_json",
  "spartan-security",
+ "ureq",
 ]
 
 [[package]]
