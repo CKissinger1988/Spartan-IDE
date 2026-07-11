@@ -40,7 +40,8 @@ crates/spartan-languages/   Real LanguageProfile registry — LSP/DAP commands, 
                              Python, Kotlin, Java, Go, C#)
 crates/spartan-leo/         Real agentic core — state machine, sandboxed tool execution,
                              risk-classified approval gating, project-tier memory
-crates/spartan-model/       Real ModelProvider implementations — Ollama, Claude, LiteLLM
+crates/spartan-model/       Real ModelProvider implementations — Ollama, Claude, LiteLLM,
+                             llama.cpp (direct, in-process GGUF inference)
 crates/spartan-git/         Real git integration (via libgit2) — status, stage, commit,
                              Leo's own checkpoint/rollback mechanism
 crates/spartan-settings/    Real persisted settings (~/.spartan/settings.json)
@@ -75,8 +76,11 @@ legacy/agent-deck-console/  This repo's prior product, preserved for feature-par
   auto-approved, by construction, regardless of setting)
 - **Real project-tier memory**: a plain, hand-editable Markdown file at
   `.spartan/memory/project.md`, read into planning context and appended to on completion
-- **Multi-provider**: switch Leo between local Ollama, Anthropic's Claude API, or a local
-  LiteLLM proxy — from Settings, no code changes
+- **Multi-provider**: switch Leo between local Ollama, Anthropic's Claude API, a local
+  LiteLLM proxy, or direct in-process llama.cpp (point it at a local `.gguf` file, no
+  separate server) — from Settings, no code changes. llama.cpp has no native tool-calling
+  support yet, so it's a real, working text-completion provider today, not yet a full Leo
+  execution backend — see `crates/spartan-model/src/llamacpp.rs`'s own doc comment
 - **Voice input/output**: dictate a task via the browser's native speech recognition;
   optionally have plan/completion/error events read aloud
 

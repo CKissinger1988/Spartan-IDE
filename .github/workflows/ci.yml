@@ -21,12 +21,21 @@ jobs:
         # build requirements found the first time this workspace was ever
         # compiled in a Linux container (§75.12) -- spartan-editor-core and
         # ui-shell-spike embed a real wry/WebView2 control that needs GTK's
-        # headers to even link, not just run.
+        # headers to even link, not just run. cmake/build-essential/
+        # libclang-dev are what llama-cpp-sys-2 (§75.83) needs to compile
+        # its own vendored llama.cpp C++ source and generate FFI bindings
+        # via bindgen -- confirmed already present without any explicit
+        # install in this project's own development sandbox, but listed
+        # here explicitly rather than relying on an unconfirmed assumption
+        # about GitHub's own runner image contents.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libgtk-3-dev \
-            libwebkit2gtk-4.1-dev
+            libwebkit2gtk-4.1-dev \
+            cmake \
+            build-essential \
+            libclang-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

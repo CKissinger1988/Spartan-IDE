@@ -72,12 +72,21 @@ pub enum LeoApprovalMode {
 /// `ClaudeProvider`, `LiteLLMProvider`) have existed in `spartan-model`
 /// since §75.43/§75.57, but Leo itself had always hardcoded Ollama --
 /// this is the first real setting choosing between them.
+///
+/// `LlamaCpp` (user-requested: "Integrate llama.cpp into the desktop
+/// IDE") is a real fourth option -- unlike the other three, it's not an
+/// HTTP client to a separate server process, it's real in-process GGUF
+/// inference via `spartan_model::LlamaCppProvider`. See that module's own
+/// doc comment for what's real (streamed text completion) and what's
+/// explicitly out of scope this pass (native tool-calling through Leo's
+/// existing plan/execute loop).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum LeoProviderKind {
     #[default]
     Ollama,
     Claude,
     LiteLLM,
+    LlamaCpp,
 }
 
 /// `model` is a real, free-form string (not an enum) since each real
@@ -86,6 +95,12 @@ pub enum LeoProviderKind {
 /// crate silently going stale every time a provider ships a new model
 /// name. The UI supplies a sensible real default per `kind` when the
 /// user switches providers; this struct just stores whatever was chosen.
+///
+/// For `LeoProviderKind::LlamaCpp`, this field holds a real local
+/// filesystem path to a `.gguf` model file instead of a model-name string
+/// -- the closest fit to this struct's existing "whatever the provider's
+/// own real identifier namespace expects" contract, since llama.cpp's own
+/// real identifier for a model *is* the path to its weights file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeoProviderSettings {
     pub kind: LeoProviderKind,

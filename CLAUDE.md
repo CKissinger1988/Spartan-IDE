@@ -92,6 +92,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Closing every named finding from §75.79's own review, plus a second real regression caught before it shipped | §75.80 |
 | Fixed the last named production-packaging gap: GUI Builder's CLI no longer assumes a system Node install | §75.81 |
 | Real crash-report upload service (task #35), a real spike-completeness audit | §75.82 |
+| Real, direct llama.cpp integration — a fourth Leo model provider, in-process GGUF inference | §75.83 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2426,6 +2427,62 @@ first — it's the parity reference until each row there is actually reimplement
   §75.59); a real, minor, named cosmetic gap -- the report list's filename/message column wraps
   narrowly in a fixed-width flex layout, functionally correct but visually cramped, not fixed this
   pass. Task #35 is now closed.
+- **Real, working code — real, direct llama.cpp integration, a fourth Leo model provider
+  (§75.83)**: user-requested ("Integrate llama.cpp into the desktop IDE"). Unlike `OllamaProvider`
+  (an HTTP client to a separate, already-running server process), `spartan_model::LlamaCppProvider`
+  runs real in-process GGUF inference via `llama-cpp-2` -- a real Rust binding crate whose
+  `llama-cpp-sys-2` companion vendors and compiles llama.cpp's own C++ source directly into this
+  binary, confirmed to build cleanly in this sandbox (`cmake`/`gcc`/`g++`/`bindgen` all already
+  present) with no network access needed beyond crates.io itself. **Real, executed feasibility
+  verification, not assumed from documentation**: a real ~638MB `TinyLlama-1.1B-Chat` GGUF file was
+  downloaded from a real, public Hugging Face repo, a real model was loaded, and a real prompt
+  ("The capital of France is") produced real, correct, genuinely-generated output ("...Paris.") in
+  an isolated scratch project before any product code was written. `LlamaCppProvider::new(path)`
+  loads the real model at construction (a real, expected failure point -- missing/corrupt file --
+  surfaced immediately, not deferred); `stream_completion` uses the model's own real, GGUF-embedded
+  chat template (`model.chat_template()`/`apply_chat_template()`, the crate's own documented
+  preferred mechanism over a hardcoded template string) and streams real generated tokens through
+  the same `Delta::TextChunk`/`Stop` callback contract every other provider uses. A real, load-
+  bearing design finding: `LlamaBackend::init()` can only succeed once per process (confirmed via
+  the installed crate's own source -- a plain `AtomicBool` guard) and its return value is neither
+  `Clone` nor `Copy`, so a process-wide `OnceLock<LlamaBackend>` shares one real backend handle
+  across every `LlamaCppProvider` instance rather than each construction racing to re-initialize
+  it. New `ProviderError::Local(String)` variant -- the three existing variants (`Network`/`Http`/
+  `Parse`) are all HTTP-shaped and don't honestly fit a provider with no HTTP layer at all. Wired
+  into `spartan_settings::LeoProviderKind::LlamaCpp` (the `model` field now documented as holding a
+  real local `.gguf` file path for this one variant, not a model-name string) and
+  `spartan-backend::build_leo_provider`. New `spartan:pick_file` IPC method (a real sibling of the
+  existing `pick_folder`, a real native OS file dialog with a real, caller-supplied `.gguf` filter)
+  backs a new "Browse…" button in the Electron Settings screen's existing "Leo — Model Provider"
+  section, which also gained a fourth `<option>` and a model-field label that switches to "Model
+  file (.gguf)" for this provider. **A real, honest, named scope limit, not silently glossed
+  over**: `supports_native_tool_calling()` returns `false` -- raw llama.cpp inference has no native
+  tool-calling protocol, and `spartan-leo::plan::generate_plan` always requires a real
+  `Delta::ToolCallStart`/`ToolCallArgsChunk`/`ToolCallEnd` sequence to succeed, so selecting this
+  provider and running a real Leo task today will surface a real, correctly-worded
+  `PlanError::NoToolCall` rather than a silent wrong success -- documented in the provider's own
+  doc comment and in the Settings screen's own note text, with the two real, concrete paths to
+  close it (wiring `FallbackParser`, real since task #4 but still with no real caller anywhere in
+  this workspace; or this crate's own real GBNF grammar-constrained sampling, confirmed present in
+  the installed crate source) named as separate future work. 12 new Rust tests (8 in
+  `spartan-model::llamacpp`, including a real self-skipping live-inference test gated on
+  `SPARTAN_TEST_GGUF_MODEL` -- confirmed, with the env var actually set to the real downloaded
+  model, to genuinely load the model and produce a real completion containing "Paris," not just
+  compile; 4 in `spartan-backend`, including an identical self-skipping real-construction test),
+  full `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release -- --test-threads=1` clean. `desktop`'s own `tsc --noEmit`/`npm run build`
+  clean. Real, screenshotted Playwright verification: switching the provider dropdown to "llama.cpp
+  (local, in-process GGUF)" correctly reveals the Browse button and relabels the model field; a
+  real Browse click fires `pick_file` with a real `.gguf` filter and the picked path lands in
+  Settings via a real `settings_set` call, visible in the (narrow, scrolled) input's own real
+  value. **What this does not confirm**: no real Electron window launch this session (same standing
+  gap since §75.59); no native or fallback-parser tool-calling through Leo's own execute loop (the
+  named scope limit above); the real ~638MB model file used for verification was downloaded to this
+  session's own scratchpad, never committed to the repository (a real, deliberate choice -- no
+  `.gguf` file ships with this project); no GPU-accelerated llama.cpp inference exercised (this
+  session's own standing no-GPU-hardware constraint, unchanged since earlier passes -- CPU-only
+  inference is what was verified, and is also this crate's own real default with no `cuda`/`vulkan`
+  feature enabled).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2483,11 +2540,16 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 554 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 563 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
                                     # spartan-editor-core, spartan-backend, xtask)
+# spartan-model's own tests/llamacpp.rs live_integration_tests module (§75.83) needs
+# SPARTAN_TEST_GGUF_MODEL set to a real, already-downloaded .gguf file path -- self-skips (prints
+# a message) if unset or the path doesn't exist, matching every other real-external-tool
+# integration suite in this repo. No .gguf model file is bundled with this repository. Same for
+# spartan-backend's build_leo_provider_constructs_a_real_llamacpp_provider_from_a_real_model_file.
 # spartan-devcontainer (§75.74) needs a real local Docker daemon reachable for its own
 # tests/docker_integration.rs -- self-skips (prints a message) if none is found, matching every
 # other real-external-tool integration suite in this repo. A later session (§75.75) confirmed
