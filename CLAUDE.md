@@ -103,6 +103,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Real Android SDK/toolchain/project detection — an honest first increment toward task #11, not §21's full scope | §75.91 |
 | Real JetBrains Mono, the default font for every real Spartan project (wgpu shell, desktop/, web/, mobile/) — a real fontconfig-ordering bug found and fixed | §75.92 |
 | Real user-customizable theme and font options across every real Spartan surface (wgpu shell, desktop/, web/, mobile/) | §75.93 |
+| Production-readiness pass — a real light-theme bug in the Workflows canvas found and fixed by actually looking | §75.94 |
 
 ## Current status (check this before assuming anything is built)
 

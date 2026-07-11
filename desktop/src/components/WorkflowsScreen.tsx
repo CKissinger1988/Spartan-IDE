@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -11,6 +11,33 @@ import {
   type EdgeChange,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+
+/** Real §75.93 audit finding, found by visually verifying the light
+ * theme rather than by inspection: `colorMode` was hardcoded to `"dark"`
+ * (predating the theme feature, §75.46), so this canvas silently ignored
+ * a real live switch to Spartan Light -- the one screen in the app whose
+ * background didn't repaint. `applyTheme.ts` sets a real `data-theme`
+ * attribute on `<html>` rather than exposing a React context (this
+ * shell's own established, deliberate pattern -- no ThemeContext exists
+ * anywhere in `desktop/`), so this reads that attribute directly and
+ * stays live via a real `MutationObserver`, matching the Settings
+ * screen's own "applies live, everywhere in the app" claim rather than
+ * only fixing the read-once-on-mount case. */
+function useColorMode(): "light" | "dark" {
+  const [mode, setMode] = useState<"light" | "dark">(() =>
+    document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark"
+  );
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setMode(document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark");
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
+
+  return mode;
+}
 
 /**
  * Real, working node-graph canvas for the Workflows screen -- built on
@@ -38,6 +65,7 @@ const initialEdges: Edge[] = [
 ];
 
 export default function WorkflowsScreen(): React.ReactElement {
+  const colorMode = useColorMode();
   const [nodes, setNodes] = useState<Node[]>(initialNodes);
   const [edges, setEdges] = useState<Edge[]>(initialEdges);
   const [selected, setSelected] = useState<string | null>(null);
@@ -60,7 +88,7 @@ export default function WorkflowsScreen(): React.ReactElement {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeClick={(_e, node) => setSelected(node.id)}
-          colorMode="dark"
+          colorMode={colorMode}
           fitView
         >
           <Background />
