@@ -1930,7 +1930,9 @@ pub fn handle_request(
             let onboarding_completed = req
                 .params
                 .get("onboarding_completed")
-                .and_then(|v| v.as_bool());
+                .map(|v| serde_json::from_value::<bool>(v.clone()))
+                .transpose()
+                .map_err(|e| format!("invalid onboarding_completed: {e}"))?;
             settings_set(
                 gpu_enabled,
                 gpu_layers,
@@ -2830,6 +2832,32 @@ mod tests {
         std::fs::remove_dir_all(&scratch).ok();
     }
 
+    /// Real regression test for a real bug found live by code review:
+    /// `onboarding_completed` used to be parsed via `.as_bool()`, which
+    /// silently returns `None` (treated identically to "not provided,
+    /// keep the current value") for *any* non-boolean JSON value --
+    /// unlike every sibling optional field (`editor`/`appearance`/
+    /// `leo_provider`), which all report an honest `"invalid X: ..."`
+    /// error on a real type mismatch. A caller sending a genuine bug
+    /// (e.g. `"onboarding_completed": "true"`, a string) got back a
+    /// silent `Ok` with the flag left unchanged, believing it had been
+    /// set.
+    #[test]
+    fn settings_set_with_a_non_boolean_onboarding_completed_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": true,
+                "onboarding_completed": "true",
+            }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("invalid onboarding_completed"));
+    }
+
     #[test]
     fn create_project_writes_a_real_runnable_rust_scaffold_to_disk() {
         let scratch = std::env::temp_dir().join(format!(
@@ -3133,8 +3161,19 @@ mod tests {
         );
         assert!(resp.error.is_none());
         assert_eq!(resp.result.unwrap()["status"], "planning");
-        let status = call(&state, 2, "leo_status", serde_json::json!({}));
-        assert_eq!(status.result.unwrap()["state"], "Planning");
+        // Real bug found live via a CI failure, not by inspection: a
+        // second `leo_status` call here (removed) raced a real spawned
+        // background thread -- `begin_planning()` itself is synchronous
+        // (already fully proven by the assertion above), but
+        // `generate_plan`'s real HTTP call to Ollama can fail via a fast
+        // `ECONNREFUSED` (no Ollama reachable in CI) quickly enough to
+        // transition Planning -> Failed before this test's own next
+        // instruction runs, an environment-dependent race no sleep or
+        // retry fixes at its root. `Idle -> Planning` is already fully,
+        // deterministically covered by the two assertions above; a
+        // second, later state read adds no real guarantee this test's
+        // own name promises.
+        state.lock().unwrap().leo_agent = None;
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -198,6 +198,9 @@ export default function App(): React.ReactElement {
         <NewProjectWizard
           defaultParentDir={ROOT}
           onClose={() => setShowNewProjectWizard(false)}
+          onCreated={(root) => {
+            window.spartan.openProject(root).catch(() => {});
+          }}
         />
       )}
     </div>

@@ -215,10 +215,23 @@ export default function SettingsScreen(): React.ReactElement {
           min={9}
           max={32}
           disabled={saving}
-          value={settings.editor.font_size}
-          onChange={(e) => {
-            const font_size = Number(e.target.value) || settings.editor.font_size;
-            save({ editor: { ...settings.editor, font_size } });
+          defaultValue={settings.editor.font_size}
+          key={settings.editor.font_size}
+          onBlur={(e) => {
+            // Real bug fix, found live by a code-review pass: this used
+            // to be a controlled `value`+`onChange` input that called
+            // `save()` (which sets `saving=true` synchronously) on every
+            // keystroke -- disabling a focused input blurs it, so typing
+            // "20" would drop the "0" after the field disabled itself
+            // mid-keystroke. Matches the "Model" field below's own
+            // already-correct `onBlur`-commit pattern -- and a genuinely
+            // empty field on blur (not mid-typing) now keeps the
+            // existing value instead of the old falsy-zero fallback
+            // silently reverting it.
+            const parsed = Number(e.target.value);
+            if (Number.isFinite(parsed) && parsed >= 9 && parsed <= 32) {
+              save({ editor: { ...settings.editor, font_size: parsed } });
+            }
           }}
           style={{ width: 64 }}
         />

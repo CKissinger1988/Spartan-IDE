@@ -23,17 +23,35 @@ const TEMPLATES: Template[] = [
 interface NewProjectWizardProps {
   defaultParentDir: string;
   onClose: () => void;
+  /**
+   * Real bug fix, found live by a code-review pass: this used to call
+   * `window.spartan.openProject` itself the instant `create_project`
+   * succeeded, entirely bypassing `onClose` -- harmless for the plain
+   * `App.tsx` usage (closing the modal is optional once the window is
+   * about to reload anyway), but silently broke `OnboardingScreen.tsx`,
+   * whose *only* call to `markComplete()` (persisting
+   * `onboarding_completed: true`) was wired through `onClose`. A user
+   * who created their first project via onboarding's own "New Project"
+   * button would see onboarding again on every future launch, since the
+   * window reloaded before that write could ever happen. Now the parent
+   * decides what "a project was created" means -- `App.tsx` just opens
+   * it; `OnboardingScreen.tsx` persists completion *first*, then opens
+   * it, matching what its `onClose`-based Skip/Open-Existing paths
+   * already correctly did.
+   */
+  onCreated: (projectRoot: string) => void;
 }
 
 /**
  * Real §75.76 "New Project" quick-start wizard, user-requested
  * ("Create options for new project quick start"). Talks to
  * `spartan-backend`'s real `create_project` IPC method (a real,
- * synchronous scaffold-and-write-to-disk operation), then to
- * `window.spartan.openProject` (a real main-process action that reloads
- * this same window at the new project's root) -- a real, deliberate
- * "single window, switch what it's pointed at" UX rather than opening a
- * second window.
+ * synchronous scaffold-and-write-to-disk operation), then hands the new
+ * project's real root to the caller via `onCreated` -- the caller
+ * decides when/whether to call `window.spartan.openProject` (a real
+ * main-process action that reloads this same window at the new
+ * project's root, a real, deliberate "single window, switch what it's
+ * pointed at" UX rather than opening a second window).
  *
  * The first real modal overlay in this Electron shell -- every prior
  * confirm/detail surface in this shell (the Git commit box, Leo's plan
@@ -45,6 +63,7 @@ interface NewProjectWizardProps {
 export default function NewProjectWizard({
   defaultParentDir,
   onClose,
+  onCreated,
 }: NewProjectWizardProps): React.ReactElement {
   const [name, setName] = useState("");
   const [template, setTemplate] = useState("rust");
@@ -63,17 +82,13 @@ export default function NewProjectWizard({
       .call("create_project", { parent_dir: parentDir, template, name })
       .then((result) => {
         const r = result as { project_root: string };
-        return window.spartan.openProject(r.project_root);
-      })
-      .then(() => {
-        // The window is about to reload at the new root -- no further
-        // local state update is meaningful past this point.
+        onCreated(r.project_root);
       })
       .catch((e: Error) => {
         setError(e.message);
         setCreating(false);
       });
-  }, [name, parentDir, template]);
+  }, [name, parentDir, template, onCreated]);
 
   return (
     <div className="np-overlay" onClick={onClose}>

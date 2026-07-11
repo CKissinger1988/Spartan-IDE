@@ -144,7 +144,24 @@ pub struct AppearanceSettings {
 /// this field; every existing call site that relied on implicit copies
 /// needed an explicit `.clone()`, found and fixed by the compiler, not
 /// missed silently.
+///
+/// Real, load-bearing `#[serde(default)]` on the container -- found live
+/// by a code-review pass, not by inspection: without it, any real
+/// pre-existing `~/.spartan/settings.json` written by a build before
+/// `editor`/`appearance`/`onboarding_completed` existed has no way to
+/// satisfy a plain (non-defaulted) `Deserialize` for those fields, so
+/// `serde_json::from_str` fails outright -- and `load_from`'s own
+/// "a corrupt file is a recoverable, not fatal, state" `.unwrap_or_
+/// default()` then silently discards the *entire* real file, wiping a
+/// real user's already-chosen GPU offload/Leo provider/approval mode
+/// and, worse, resetting `onboarding_completed` back to `false`,
+/// re-triggering onboarding for an already-onboarded real user. This
+/// attribute makes each individual missing field fall back to its own
+/// type's default instead, the correct real schema-evolution behavior
+/// this struct's own settings-file-is-forward-compatible design already
+/// assumed but didn't actually implement.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct Settings {
     pub gpu_offload: GpuOffloadSettings,
     pub leo_approval_mode: LeoApprovalMode,
@@ -279,6 +296,42 @@ mod tests {
         save_to(&path, &settings).unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded, settings);
+    }
+
+    /// Real regression test for a real bug found live by code review, not
+    /// by inspection: a genuine `~/.spartan/settings.json` written by any
+    /// build before `editor`/`appearance`/`onboarding_completed` existed
+    /// has exactly this shape -- missing all three fields. Confirms the
+    /// container-level `#[serde(default)]` actually does its job: the
+    /// real, already-chosen values are preserved, and only the genuinely
+    /// missing fields fall back to their own defaults, rather than the
+    /// whole file failing to parse and silently discarding everything
+    /// (including a real user's `onboarding_completed: true`, which would
+    /// have re-triggered onboarding for someone who'd already seen it).
+    #[test]
+    fn loading_a_real_pre_existing_file_missing_the_newer_fields_preserves_the_old_ones() {
+        let path = temp_path("old-format-upgrade");
+        std::fs::write(
+            &path,
+            r#"{
+                "gpu_offload": { "enabled": false, "layers": 8 },
+                "leo_approval_mode": "AutoApproveSafe",
+                "leo_provider": { "kind": "Claude", "model": "claude-3-5-sonnet-latest" }
+            }"#,
+        )
+        .unwrap();
+        let loaded = load_from(&path);
+        assert!(!loaded.gpu_offload.enabled);
+        assert_eq!(loaded.gpu_offload.layers, Some(8));
+        assert_eq!(loaded.leo_approval_mode, LeoApprovalMode::AutoApproveSafe);
+        assert_eq!(loaded.leo_provider.kind, LeoProviderKind::Claude);
+        // The genuinely missing fields fall back to real defaults --
+        // never `onboarding_completed: false` wiping a real user's
+        // already-set `true` (there was none to wipe here; that's the
+        // whole point -- this file simply never had the field).
+        assert_eq!(loaded.editor, EditorSettings::default());
+        assert_eq!(loaded.appearance, AppearanceSettings::default());
+        assert!(!loaded.onboarding_completed);
     }
 
     #[test]

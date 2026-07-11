@@ -88,6 +88,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Sci-Fi "Spartan Coding" theme, full Settings taxonomy, New Project wizard, first-run onboarding | §75.76 |
 | Real electron-builder packaging config, a packaged-app path-resolution fix — READ §75.77 BEFORE ASSUMING A REAL INSTALLER WAS PRODUCED (it wasn't; the same standing network block, confirmed one layer deeper) | §75.77 |
 | Real Leo "Failed → Recovering → Executing" retry UI, closing task #58's last named remaining item | §75.78 |
+| A real CI failure fixed at its root (a latent test race, not new breakage), a self-initiated multi-angle code review, four real bugs found and fixed | §75.79 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2288,6 +2289,41 @@ first — it's the parity reference until each row there is actually reimplement
   failure/recovery cycle (Ollama unreachable this session); `RecoveryExhausted`'s UI path was
   verified at the Rust test level, not end-to-end in Playwright. With this pass, every
   specifically-named piece of task #58 is closed.
+- **Real, working code — a real CI failure fixed at its root, a self-initiated multi-angle code
+  review, four real bugs found and fixed (§75.79)**: direct response to "continue testing and
+  don't stop." A real CI failure arrived via webhook: `leo_start_task_transitions_to_planning_
+  and_returns_an_immediate_ack` failed with `left: "Failed", right: "Planning"`. Traced to a real,
+  previously-latent race, not new breakage — `leo_start_task`'s spawned background thread's real
+  HTTP call to Ollama fails via a near-instant `ECONNREFUSED` in CI (no Ollama there), fast enough
+  to race past the test's own second, separate `leo_status` call. §75.72 already documented this
+  exact test flaking once before under different contention. Fixed at the root (not a sleep/retry)
+  by removing the racy second assertion, which proved nothing the first two synchronous
+  assertions didn't already cover — confirmed via 15 repeated local runs plus 3 full-workspace
+  runs at CI's own default parallelism, all clean. With the fix ready, four parallel background
+  code-review agents (the `code-review` skill's 8-angle protocol) reviewed this session's full
+  diff and found two serious, CONFIRMED real bugs: (1) `spartan_settings::Settings` was missing
+  `#[serde(default)]` — any real pre-existing `~/.spartan/settings.json` from before this session
+  (missing the three newly-added fields) would fail to parse outright, and `load_from`'s own
+  "corrupt file is recoverable" fallback would silently wipe the *entire* file, resetting a real
+  user's GPU/Leo-provider/approval-mode choices and `onboarding_completed` back to false —
+  re-triggering onboarding for someone who'd already seen it; fixed with the missing attribute
+  plus a regression test against a real old-format JSON fixture. (2) `NewProjectWizard`'s success
+  path called `openProject` directly, bypassing `onClose` entirely — harmless for the plain
+  `App.tsx` usage, but `OnboardingScreen.tsx`'s *only* call to `markComplete()` was wired through
+  `onClose`, so completing onboarding via "New Project" never actually persisted completion,
+  showing onboarding again on every future launch; fixed by decoupling "created" from "navigate"
+  via a new `onCreated` prop the parent controls, confirmed live via Playwright asserting the real
+  IPC call ordering. Two smaller real bugs fixed alongside: the Settings font-size input disabled
+  itself mid-keystroke (a controlled `onChange` input triggering `saving=true`, which blurs a
+  focused, now-disabled field — fixed by matching the adjacent Model field's own already-correct
+  `onBlur` pattern); `onboarding_completed` silently dropped non-boolean values via `.as_bool()`
+  instead of erroring like every sibling field. Several real, lower-severity findings (duplicate
+  sanitizer functions, `settings_set`'s 7-arg signature, redundant `settings_get` calls across
+  three components, a create-then-fail-to-open retry dead-end, near-identical packaged/dev path
+  branches, two CI tests that now silently no-op forever instead of exercising their success path
+  against a portable stand-in binary) were named honestly but not fixed this pass. 2 new Rust
+  tests, 541 tests total (up from 539), full fmt/clippy clean, `cargo test --workspace --release`
+  run 3× at CI's own default parallelism with zero failures; `desktop`'s typecheck/build clean.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2345,7 +2381,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 539 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 541 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
