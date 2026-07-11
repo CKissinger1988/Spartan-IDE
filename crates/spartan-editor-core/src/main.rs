@@ -1,5 +1,6 @@
 mod cursor;
 mod fixture;
+mod fonts;
 mod glow_rect;
 mod gpu;
 mod input;
@@ -1016,12 +1017,17 @@ fn main() {
     window.set_visible(true);
     let t_window = Instant::now();
 
-    // `FontSystem::new()` scans and parses every font on the system -- a
-    // real, measured ~93-97ms cost (§75.9) with no dependency on the GPU
-    // device/queue `GpuState::new()` is about to spend ~220-330ms creating.
-    // Building it on its own thread lets that cost overlap with the async
-    // GPU setup instead of paying both back-to-back on the same thread.
-    let font_system_handle = thread::spawn(glyphon::FontSystem::new);
+    // `fonts::build_font_system()` scans and parses every font on the
+    // system -- a real, measured ~93-97ms cost (§75.9) with no dependency
+    // on the GPU device/queue `GpuState::new()` is about to spend
+    // ~220-330ms creating. Building it on its own thread lets that cost
+    // overlap with the async GPU setup instead of paying both back-to-back
+    // on the same thread. Real, user-requested default-font change: this
+    // now also loads the real bundled JetBrains Mono TTFs and repoints the
+    // monospace generic-family mapping at them -- see `fonts.rs`'s own doc
+    // comment for why every existing `Family::Monospace` call site needed
+    // no changes to pick this up.
+    let font_system_handle = thread::spawn(fonts::build_font_system);
 
     let mut gpu_state =
         pollster::block_on(gpu::GpuState::new(window.clone(), gpu_backend_override));

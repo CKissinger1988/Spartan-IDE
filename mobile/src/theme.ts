@@ -31,6 +31,13 @@ export const C = {
   tealBg: 'rgba(61,156,147,0.13)',
 } as const;
 
+// Real, bundled JetBrains Mono (see assets/fonts/README.md) -- the same
+// default-monospace-font choice as every other Spartan project (desktop/,
+// web/, crates/spartan-editor-core), registered via the `expo-font` config
+// plugin in app.json rather than left to whatever `'Courier'` happens to
+// resolve to per-platform.
+export const MONO_FONT_FAMILY = 'JetBrainsMono-Regular';
+
 // Matches STATUS_META in interface-prototype.jsx exactly -- desktop has no
 // "paused" state on mobile's SessionStatus, so it's omitted here rather
 // than invented.

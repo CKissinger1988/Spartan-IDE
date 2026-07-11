@@ -74,7 +74,13 @@ body {
 }
 
 .mono {
-  font-family: "SF Mono", "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  /* JetBrains Mono is the real default font across every Spartan
+     project, self-hosted (not a system-font fallback bet) via
+     @fontsource/jetbrains-mono -- see main.tsx's own import. The
+     remaining names are only a real fallback chain for the brief
+     window before the webfont finishes loading, or the rare case it
+     somehow fails to. */
+  font-family: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
 }
 
 /* Real, deliberate "targeting reticle" keyboard-focus style -- cool HUD

@@ -8,7 +8,7 @@ import { requestNotificationPermission } from '../lib/notifications';
 import { schedulePreviewNotification } from '../lib/notificationActions';
 import { clearQueue, getQueuedDecisions, replayQueue } from '../lib/offlineQueue';
 import { RootStackParamList } from '../navigation/types';
-import { C } from '../theme';
+import { C, MONO_FONT_FAMILY } from '../theme';
 import { QueuedDecision } from '../types/queue';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
@@ -206,7 +206,7 @@ const styles = StyleSheet.create({
   },
   queueRow: {
     marginTop: 8,
-    fontFamily: 'Courier',
+    fontFamily: MONO_FONT_FAMILY,
     fontSize: 12,
     color: C.textMid,
   },

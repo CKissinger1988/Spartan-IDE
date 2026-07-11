@@ -42,7 +42,9 @@
       }
     ],
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "category": "Development"
     }
   },
@@ -57,6 +59,7 @@
     "vite": "^6.0.3"
   },
   "dependencies": {
+    "@fontsource/jetbrains-mono": "^5.2.8",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "@xyflow/react": "^12.3.6",

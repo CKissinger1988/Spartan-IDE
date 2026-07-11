@@ -8,7 +8,7 @@ import { recordDecision } from '../lib/decisionActions';
 import { DiffLineType, parseDiff } from '../lib/diffHighlight';
 import { localModelClient } from '../lib/localModel';
 import { RootStackParamList } from '../navigation/types';
-import { C } from '../theme';
+import { C, MONO_FONT_FAMILY } from '../theme';
 import { Artifact, ArtifactComment } from '../types/domain';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ArtifactReview'>;
@@ -260,14 +260,14 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   filePath: {
-    fontFamily: 'Courier',
+    fontFamily: MONO_FONT_FAMILY,
     fontWeight: '600',
     paddingHorizontal: 10,
     paddingTop: 8,
     color: C.text,
   },
   fileStats: {
-    fontFamily: 'Courier',
+    fontFamily: MONO_FONT_FAMILY,
     color: C.textMid,
     paddingHorizontal: 10,
     paddingBottom: 6,
@@ -279,7 +279,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   patchLine: {
-    fontFamily: 'Courier',
+    fontFamily: MONO_FONT_FAMILY,
     fontSize: 12,
     color: C.text,
     paddingHorizontal: 10,
@@ -317,7 +317,7 @@ const styles = StyleSheet.create({
   commentTargetText: {
     color: C.accent,
     fontSize: 12,
-    fontFamily: 'Courier',
+    fontFamily: MONO_FONT_FAMILY,
     flexShrink: 1,
   },
   commentTargetCancel: {

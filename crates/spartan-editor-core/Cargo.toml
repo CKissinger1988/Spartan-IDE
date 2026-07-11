@@ -16,6 +16,8 @@ spartan-updater = { path = "../spartan-updater" }
 wgpu = "0.19"
 winit = "0.29"
 glyphon = "0.5"
+sys-locale = "0.3"
+ttf-parser = "0.19"
 pollster = "0.3"
 bytemuck = { version = "1", features = ["derive"] }
 rand = "0.8"

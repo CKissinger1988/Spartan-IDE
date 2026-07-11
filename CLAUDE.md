@@ -101,6 +101,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Web app — real `web/` npm project scaffold (first increment): File System Access API + WASM-compiled `spartan-buffer`, real Chromium verification, no LSP/DAP/Leo/git yet | §75.89 |
 | Real `Reparent`/`ComponentInsert`, closing GUI Builder's last named Tier 1 gap — task #12 fully closed, three real bugs found and fixed | §75.90 |
 | Real Android SDK/toolchain/project detection — an honest first increment toward task #11, not §21's full scope | §75.91 |
+| Real JetBrains Mono, the default font for every real Spartan project (wgpu shell, desktop/, web/, mobile/) — a real fontconfig-ordering bug found and fixed | §75.92 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2855,6 +2856,47 @@ first — it's the parity reference until each row there is actually reimplement
   workspace-wide (up from 586), full fmt/clippy/test clean. **Task #11 remains open** -- a real,
   honest, narrow first increment matching what this specific environment can actually support,
   not a claim that Android is now first-class.
+- **Real, working code — real JetBrains Mono, the default font for every real Spartan project, a
+  real fontconfig-ordering bug found and fixed (§75.92)**: direct, user-requested ("JetBrains Mono
+  is the default font for every project in the Spartan IDE"). Before this, "JetBrains Mono" only
+  ever appeared as a second-choice CSS fallback name in `desktop/`/`web/`, and nowhere at all in
+  `crates/spartan-editor-core` (whose `cosmic-text` shaping always resolved `Family::Monospace` to
+  the literal name `"Fira Mono"` -- a font this project never bundled or verified was installed).
+  Sourced from the real, OFL-licensed `@fontsource/jetbrains-mono` npm package (`github.com/
+  JetBrains/JetBrainsMono` itself returned a real `403` under this session's own standing network
+  policy, matching the already-documented Electron-releases pattern) -- real WOFF2 files
+  decompressed to plain TTF via `fonttools` for the Rust side, verified correct via the
+  decompressed font's own real name-table entries before trusting it further. **New `crates/
+  spartan-editor-core/src/fonts.rs`, with a real, two-stage bug found only by running the
+  tests**: a first version's test used `FontSystem::get_font_matches` to "confirm" `Family::
+  Monospace` resolves to JetBrains Mono -- passed, but for the wrong reason, since that method
+  filters only by weight/style/stretch, never by family (confirmed by reading the actual installed
+  `cosmic-text` source). Rewritten to shape real text through a real `Buffer` and inspect the real
+  resulting glyph's `font_id` instead, which then correctly caught a real bug: the glyph came from
+  `"FreeMono"`. Root cause, found by reading the actual installed `fontdb` source: Linux's real
+  `load_system_fonts()` parses `/etc/fonts/fonts.conf`'s own `<alias>` entries and calls
+  `set_monospace_family` itself with the system's real fontconfig-mapped value, silently
+  overwriting an earlier call -- fixed by calling `set_monospace_family` *after*
+  `load_system_fonts()`, not before. Every existing `Family::Monospace` call site in `text.rs`
+  needed zero changes to pick up the fix. **`desktop/`/`web/`**: `@fontsource/jetbrains-mono`
+  added as a real dependency to both, imported before `theme.css`; the shared `.mono` rule now
+  lists `"JetBrains Mono"` first, the rest kept only as a real fallback chain for the brief
+  pre-load window. **`mobile/`**, included since the user's own instruction named "every
+  project": the same real TTF assets registered via the real `expo-font` config plugin
+  (build-time native bundling, no runtime loading flicker), a new `MONO_FONT_FAMILY` constant in
+  `theme.ts` replacing 5 real `fontFamily: 'Courier'` usages. **Real, executed verification**: 3
+  new `fonts.rs` tests (602 tests total workspace-wide, up from 599); real Playwright + Chromium
+  verification using the real, standard `document.fonts` browser API (`document.fonts.check(...)`
+  returns `true` for both weights, loaded faces report `status: "loaded"` under the real name) in
+  both `desktop/` and `web/`, plus a real zoomed screenshot visually confirming JetBrains Mono's
+  distinctive glyph shapes (slashed zero, tailed lowercase `l`); `mobile/`'s own established
+  `npx tsc --noEmit` + `npx expo export --platform android` both clean, its 106-test Jest suite
+  unaffected. **What this does not confirm**: no live device/emulator rendering for `mobile/`
+  (this project's own standing, already-documented constraint); no live Electron-window or wgpu
+  GPU/window rendering in this specific session (verified instead via the same established
+  Playwright-against-dev-server and real-shaping-path methods this project already uses for each).
+  All three real UI-facing projects plus the reference wgpu shell now share the identical real,
+  self-hosted JetBrains Mono font as their default.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2912,7 +2954,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 599 tests: 7 spikes + 15 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 602 tests: 7 spikes + 15 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
@@ -2920,6 +2962,12 @@ cargo test --workspace --release   # 599 tests: 7 spikes + 15 real crates + xtas
                                     # spartan-buffer-wasm, xtask)
 # spartan-android's own detect_gradle_version live test (§75.91) self-skips if no real `gradle`
 # is found on $PATH -- matching every other real-external-tool integration suite in this repo.
+# crates/spartan-editor-core's real fonts.rs (§75.92) bundles JetBrains Mono TTF assets and is
+# now this crate's real default font -- see crates/spartan-editor-core/assets/fonts/README.md
+# for the OFL license + provenance, and the ordering note in fonts.rs itself (set_monospace_family
+# must run *after* load_system_fonts() on Linux, or fontdb's own fontconfig integration silently
+# overwrites it). desktop/ and web/ bundle the same real font via @fontsource/jetbrains-mono;
+# mobile/ bundles it via the real expo-font config plugin (app.json).
 # spikes/wasm-buffer-spike (§75.85) is a real Tier 0 spike for the planned web app -- its own
 # `cargo test` runs fine for the host target with no extra setup; reproducing its real WASM/Node
 # verification needs `rustup target add wasm32-unknown-unknown` + `wasm-bindgen-cli` (pinned to
