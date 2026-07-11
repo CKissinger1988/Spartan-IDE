@@ -95,6 +95,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Real, direct llama.cpp integration — a fourth Leo model provider, in-process GGUF inference | §75.83 |
 | Real, native, grammar-constrained tool calling for llama.cpp — a real double-accept sampler bug found and fixed | §75.84 |
 | vscode.dev-inspired web app — architecture decision (hybrid client+optional-backend), a real client-side buffer→WASM feasibility spike, no VS Code code used anywhere — concepts only | §75.85 |
+| Web app prep, second spike — real tree-sitter parsing/querying via web-tree-sitter in a real JS engine, a real grammar/library version-compatibility bug found and fixed | §75.86 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2599,6 +2600,52 @@ first — it's the parity reference until each row there is actually reimplement
   this pass closes exactly the one real go/no-go risk-gate question (does the core buffer engine
   even run in a browser at all) and locks the architecture decision; the remaining pieces are
   real, substantial, separate, and unstarted, tracked as follow-up work.
+- **Real, working code — web app prep, second real spike: tree-sitter parsing/querying via
+  `web-tree-sitter`, a real grammar/library version-compatibility bug found and fixed (§75.86)**:
+  user-requested ("Start the tree-sitter-in-WASM spike"), continuing directly from §75.85's own
+  named follow-up list. New `spikes/tree-sitter-wasm-spike` -- a real, separate npm project (like
+  `gui-builder/`/`mobile/`, no Cargo equivalent makes sense here), using `web-tree-sitter` (the
+  standard WASM build of tree-sitter for browser/JS use) against real, prebuilt language grammars
+  from the `tree-sitter-wasms` npm package. **A real, load-bearing version-compatibility bug was
+  found and fixed, not assumed away**: the first attempt used the latest `web-tree-sitter`
+  (0.26.10) and failed immediately inside `Language.load()` with a low-level WASM "dylink"
+  module-format error -- traced by reading `web-tree-sitter`'s own bundled source, 0.26.x's loader
+  now requires grammars built as Emscripten dynamic-link ("side module") WASM binaries, a newer
+  build convention `tree-sitter-wasms` (which pins `tree-sitter-cli: ^0.20.8`, a much older CLI
+  generation, in its own `package.json`) predates. Fixed by pinning `web-tree-sitter@0.20.8` --
+  the same era the grammars were actually built for, with a correspondingly different real API
+  shape (`Parser.Language.load()`, a nested class, not 0.26.x's top-level `Language` export) --
+  confirmed both by reading that version's own real `.d.ts` and by it working. A second, smaller
+  real finding from the same investigation: reusing the exact current `tree-sitter-rust` crate's
+  own bundled `highlights.scm` (the same query `crates/spartan-editor-core`'s Rust-side
+  `highlight.rs` uses) against the older bundled grammar threw a real `RangeError: Bad node name
+  'doc_comment'` -- that node type doesn't exist in the older grammar generation. Not worked around
+  by weakening anything: the two `queries/*.scm` files this spike ships are deliberately minimal,
+  hand-written, version-safe subsets (comment/string/function-name/number captures only), with
+  reusing the real production queries named as real, separate follow-up work. Real, executed
+  verification via `node --test` (matching `gui-builder`'s own established convention): 6 tests,
+  all passing, against two real, different Tier 1 languages (Rust and Python, deliberately not
+  just one -- `spikes/README.md`'s own §47.7 section already names the general lesson that passing
+  against one implementation isn't evidence of correctness in general, and this pass follows it
+  even though that lesson was originally about DAP/LSP adapters, not WASM grammars) -- real parsing
+  with zero errors on valid source, a real reported error on deliberately invalid source, a real
+  field-lookup resolving a function's actual name, and real query captures with correct names and
+  correct underlying node text. **One real test-writing mistake was caught only by running the
+  suite, not by inspection**: the first version of the Rust fixture had no integer literals at all
+  (`a + b` are variables, not literals), so the `@number` capture assertion correctly failed --
+  fixed by adding a real literal to the fixture, not by weakening the assertion. A real, small
+  documentation mistake was also caught and corrected before this section was even written: an
+  early README draft claimed Go had no bundled wasm grammar in `tree-sitter-wasms`, contradicted by
+  the file listing already captured earlier in this same session -- corrected to state accurately
+  that all 7 Tier 1 languages' grammars are present in the package, though only Rust and Python
+  have actually been loaded/parsed/queried so far. A new CI job (`tree-sitter-wasm-spike`) runs
+  this spike's real test suite on every push, matching `gui-builder`'s/`mobile`'s own established
+  per-project CI job pattern. See `spikes/tree-sitter-wasm-spike/README.md` for the complete,
+  standalone account. **What this does not confirm**: reusing the real production highlight
+  queries (blocked on the grammar-generation mismatch above); a real browser-environment run (only
+  Node was exercised); incremental re-parsing; the other 5 bundled Tier 1 grammars beyond Rust and
+  Python (present in the package, not yet exercised); real bundle-size measurement of the WASM
+  runtime plus a realistic multi-language grammar set.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2758,6 +2805,11 @@ parses/edits `prototypes/*.jsx` as real AST data (proven against both real proto
 does **not** build or render them as a running app — there is still no dev server, no bundler
 config, no way to actually view either `.jsx` file in a browser. Don't add one without discussing
 it first; that's a separate, larger piece of §6.1's own "Canvas Engine" work, not yet started.
+
+`spikes/tree-sitter-wasm-spike/` (§75.86) is also a real, separate npm project, not a Cargo crate
+— `cd spikes/tree-sitter-wasm-spike && npm install && npm test`. It's pinned to
+`web-tree-sitter@0.20.8` deliberately, not the latest release — see its own README.md for the
+real grammar/library version-compatibility finding that pin exists to work around.
 
 ## Rules, not suggestions
 

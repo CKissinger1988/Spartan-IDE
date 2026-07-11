@@ -140,3 +140,24 @@ jobs:
       - name: Test
         working-directory: mobile
         run: npm test -- --ci
+
+  tree-sitter-wasm-spike:
+    name: spikes/tree-sitter-wasm-spike (web app prep, §75.86)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: spikes/tree-sitter-wasm-spike/package-lock.json
+
+      - name: npm ci
+        working-directory: spikes/tree-sitter-wasm-spike
+        run: npm ci
+
+      - name: Test
+        working-directory: spikes/tree-sitter-wasm-spike
+        run: npm test

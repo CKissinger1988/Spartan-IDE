@@ -1,9 +1,12 @@
 # Tier 0 spikes
 
-Real, tested Rust code — not pseudocode, not mocked servers/adapters. See
-`docs/architecture-spec.md` §39 for what each spike is meant to validate and
-§47 for the honest, ongoing execution log (what actually ran, what didn't,
-and why).
+Real, tested code — not pseudocode, not mocked servers/adapters. Every spike
+here is a real Rust crate (a Cargo workspace member) except
+`tree-sitter-wasm-spike`, a real, separate npm project (matching
+`gui-builder/`'s and `mobile/`'s own precedent for JS-native feasibility
+work no Rust equivalent makes sense for). See `docs/architecture-spec.md`
+§39 for what each spike is meant to validate and §47 for the honest,
+ongoing execution log (what actually ran, what didn't, and why).
 
 | Spike | What it proves | Needs |
 |---|---|---|
@@ -14,6 +17,7 @@ and why).
 | `render-spike` | GPU-half of rope+renderer latency (§2.2, §39.1, §47.9, companion to `rope-spike`'s CPU half) | A Vulkan/DX12/Metal-capable GPU and a display |
 | `ui-shell-spike` | Native shell + embedded WebView integration risk (§8, §39.4, §47.11) | A Vulkan/DX12/Metal-capable GPU, a display, and the WebView2 Runtime (ships with Windows 11 by default) |
 | `wasm-buffer-spike` | Does `spartan-buffer`'s real rope/undo-tree `Document` compile to WASM and run correctly in a real JS engine, for the planned web app (§75.85) | `rustup target add wasm32-unknown-unknown` + `wasm-bindgen-cli` (pinned to the crate's exact version) to reproduce the real Node run; `cargo test -p wasm-buffer-spike` alone needs nothing extra |
+| `tree-sitter-wasm-spike` | Does real tree-sitter parsing/querying work via `web-tree-sitter` in a real JS engine, for the same planned web app (§75.86) — a real npm project, not a Cargo crate | `cd spikes/tree-sitter-wasm-spike && npm install && npm test` |
 
 Every test in `dap-spike`/`lsp-spike` skips (prints a message, doesn't fail)
 if its required tool isn't on `$PATH` — these are meant to degrade gracefully
