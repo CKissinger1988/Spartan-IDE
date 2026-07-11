@@ -161,3 +161,24 @@ jobs:
       - name: Test
         working-directory: spikes/tree-sitter-wasm-spike
         run: npm test
+
+  git-browser-spike:
+    name: spikes/git-browser-spike (web app prep, §75.87)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: spikes/git-browser-spike/package-lock.json
+
+      - name: npm ci
+        working-directory: spikes/git-browser-spike
+        run: npm ci
+
+      - name: Test
+        working-directory: spikes/git-browser-spike
+        run: npm test

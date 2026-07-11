@@ -1,0 +1,17 @@
+{
+  "name": "@spartan-ide/git-browser-spike",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Real Tier 0 spike (task #79, docs/architecture-spec.md §75.87): does isomorphic-git (pure JS, no native libgit2 dependency) perform real git operations correctly, for the client-side half of the vscode.dev-inspired web app's hybrid architecture (§75.85)? See README.md for the full, honest account.",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test src/**/*.test.js"
+  },
+  "dependencies": {
+    "isomorphic-git": "^1.38.6"
+  }
+}

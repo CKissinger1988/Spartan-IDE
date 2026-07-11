@@ -28,6 +28,9 @@ desktop/dist-package/
 # ignored (tree-sitter-wasms alone is ~52MB unpacked, never committed).
 spikes/tree-sitter-wasm-spike/node_modules/
 
+# git-browser-spike (§75.87) -- same real-npm-project pattern as above.
+spikes/git-browser-spike/node_modules/
+
 # Legacy Agent Deck console (Electron/Node/Python) — kept for reference, not built here
 legacy/agent-deck-console/node_modules/
 legacy/agent-deck-console/package-lock.json

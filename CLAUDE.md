@@ -96,6 +96,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Real, native, grammar-constrained tool calling for llama.cpp — a real double-accept sampler bug found and fixed | §75.84 |
 | vscode.dev-inspired web app — architecture decision (hybrid client+optional-backend), a real client-side buffer→WASM feasibility spike, no VS Code code used anywhere — concepts only | §75.85 |
 | Web app prep, second spike — real tree-sitter parsing/querying via web-tree-sitter in a real JS engine, a real grammar/library version-compatibility bug found and fixed | §75.86 |
+| Web app prep, third spike — real, zero-native-dependency git operations via isomorphic-git, cross-checked against the real native git CLI | §75.87 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2646,6 +2647,34 @@ first — it's the parity reference until each row there is actually reimplement
   Node was exercised); incremental re-parsing; the other 5 bundled Tier 1 grammars beyond Rust and
   Python (present in the package, not yet exercised); real bundle-size measurement of the WASM
   runtime plus a realistic multi-language grammar set.
+- **Real, working code — web app prep, third real spike: real git operations via
+  `isomorphic-git`, zero native dependency (§75.87)**: user-requested ("Continue"), directly
+  continuing §75.85/§75.86's own tracked follow-up list. New `spikes/git-browser-spike` -- another
+  real, separate npm project (same category as `tree-sitter-wasm-spike`) -- uses `isomorphic-git`
+  (a pure JS reimplementation of git, zero native `libgit2` dependency at all, unlike
+  `spartan-git`'s own real `git2`/vendored-`libgit2` approach on the desktop side) to perform real
+  init/add/commit/status/log operations. Real, executed verification via `node --test`, 4 tests,
+  **all passing on the first run** -- reported plainly rather than manufacturing a finding: a real
+  well-formed 40-char commit SHA; `git.status()` correctly distinguishing an unstaged
+  modification (`"*modified"`) from a staged one (`"modified"`), the same real independent
+  staged/unstaged split `spartan-git`'s own Rust implementation already exposes; `git.log()`
+  returning real commits in the correct newest-first order with the real messages intact. **A
+  real cross-tool check, not just internal self-consistency**: a repository written entirely by
+  `isomorphic-git` was read back by the actual native `git` CLI (`git log --format=%H %s`,
+  `git show HEAD:<path>`) and matched exactly -- same commit SHA, same message, same file content
+  -- confirming these are genuinely valid git objects any real git tooling can read, mirroring the
+  same cross-tool discipline §75.30's own Source Control panel work already established for
+  `spartan-git`. That check self-skips (rather than failing) if `git` isn't on `$PATH`, matching
+  this project's own established convention for real-external-tool checks. A matching CI job
+  (`git-browser-spike`) was added, same pattern as `tree-sitter-wasm-spike`'s own. See
+  `spikes/git-browser-spike/README.md` for the complete, standalone account. **What this does not
+  confirm**: this spike used Node's real, native `fs` module directly -- a real browser deployment
+  needs a browser-compatible filesystem backend instead (most likely `lightning-fs`, an
+  IndexedDB-backed implementation purpose-built for `isomorphic-git`, or an adapter over the File
+  System Access API); no real remote operations (`clone`/`fetch`/`push`, which need a real HTTP
+  transport and, in a browser, a CORS-friendly git server or proxy); no diff/merge-conflict
+  handling; no real performance measurement against a large real repository (only a two-commit,
+  one-file toy repo was exercised).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2810,6 +2839,11 @@ it first; that's a separate, larger piece of §6.1's own "Canvas Engine" work, n
 — `cd spikes/tree-sitter-wasm-spike && npm install && npm test`. It's pinned to
 `web-tree-sitter@0.20.8` deliberately, not the latest release — see its own README.md for the
 real grammar/library version-compatibility finding that pin exists to work around.
+
+`spikes/git-browser-spike/` (§75.87) is the same category of real, separate npm project — `cd
+spikes/git-browser-spike && npm install && npm test`. One of its 4 tests self-skips a real
+cross-check against the native `git` CLI if `git` isn't on `$PATH` (every environment this
+project has run in so far has had it).
 
 ## Rules, not suggestions
 
