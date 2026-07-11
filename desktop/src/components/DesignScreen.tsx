@@ -67,6 +67,19 @@ function findNode(roots: ComponentNode[], id: string): ComponentNode | null {
   return null;
 }
 
+/** Flattens the real tree into one list for the Reparent/Insert target
+ * dropdowns -- both operations need to name a node that isn't necessarily
+ * the currently-selected one, so a simple id+tagName picker is the real,
+ * minimal v1 UI for it (matching this form's own established "narrow,
+ * functional, not fancy" style, same as the existing Prop/Style radio
+ * pair). */
+function flattenNodes(roots: ComponentNode[], depth = 0): { id: string; tagName: string; depth: number }[] {
+  return roots.flatMap((node) => [
+    { id: node.id, tagName: node.tagName, depth },
+    ...flattenNodes(node.children, depth + 1),
+  ]);
+}
+
 /**
  * Real, working GUI Builder + live preview screen (§75.62,
  * user-requested: "the visual GUI Builder and live app preview are
@@ -91,6 +104,16 @@ function findNode(roots: ComponentNode[], id: string): ComponentNode | null {
  * buffer from `activeFile.content` and its result is fed back through
  * the exact same `edit` IPC call typing already uses, so a canvas edit
  * gets the same undo/dirty tracking as any other edit.
+ *
+ * All four real `CanvasEdit` kinds `gui-builder` itself supports are now
+ * wired here: `PropChange`/`StyleChange` (mutate the selected node) and
+ * `Reparent`/`ComponentInsert` (structural edits, closing the gap this
+ * screen's own edit form used to leave unreachable even after
+ * `gui-builder`'s own backend implemented them). Both structural kinds
+ * reuse the same real `design_apply_edit` IPC call and the same
+ * post-edit `refresh()` -- no new IPC method was needed, only new form
+ * state naming a *second* node (the target parent) beyond the tree's
+ * existing single-selection state.
  */
 export default function DesignScreen({
   activeFile,
@@ -102,7 +125,11 @@ export default function DesignScreen({
   const [error, setError] = useState<string | null>(null);
   const [propKey, setPropKey] = useState("");
   const [propValue, setPropValue] = useState("");
-  const [editKind, setEditKind] = useState<"PropChange" | "StyleChange">("PropChange");
+  const [editKind, setEditKind] = useState<"PropChange" | "StyleChange" | "Reparent" | "ComponentInsert">(
+    "PropChange"
+  );
+  const [reparentTargetId, setReparentTargetId] = useState("");
+  const [insertTagName, setInsertTagName] = useState("");
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const refresh = useCallback(async (path: string) => {
@@ -144,12 +171,35 @@ export default function DesignScreen({
     return () => window.removeEventListener("message", handler);
   }, []);
 
+  // Real, per-kind readiness check -- each structural kind names a
+  // different second operand (`reparentTargetId` vs. `insertTagName`)
+  // beyond the shared `selectedId`, so "can Apply be pressed" isn't one
+  // single condition across all four real edit kinds.
+  const canApply =
+    !!activeFile &&
+    !!selectedId &&
+    (editKind === "PropChange" || editKind === "StyleChange"
+      ? !!propKey.trim()
+      : editKind === "Reparent"
+        ? !!reparentTargetId && reparentTargetId !== selectedId
+        : !!insertTagName.trim());
+
   const applyEdit = useCallback(async () => {
-    if (!activeFile || !selectedId || !propKey.trim()) return;
-    const edit =
-      editKind === "PropChange"
-        ? { kind: "PropChange", nodeId: selectedId, prop: propKey, value: propValue }
-        : { kind: "StyleChange", nodeId: selectedId, property: propKey, value: propValue };
+    if (!activeFile || !selectedId) return;
+    let edit: Record<string, unknown>;
+    if (editKind === "PropChange") {
+      if (!propKey.trim()) return;
+      edit = { kind: "PropChange", nodeId: selectedId, prop: propKey, value: propValue };
+    } else if (editKind === "StyleChange") {
+      if (!propKey.trim()) return;
+      edit = { kind: "StyleChange", nodeId: selectedId, property: propKey, value: propValue };
+    } else if (editKind === "Reparent") {
+      if (!reparentTargetId || reparentTargetId === selectedId) return;
+      edit = { kind: "Reparent", nodeId: selectedId, newParentId: reparentTargetId };
+    } else {
+      if (!insertTagName.trim()) return;
+      edit = { kind: "ComponentInsert", parentId: selectedId, tagName: insertTagName.trim() };
+    }
     try {
       const result = (await window.spartan.call("design_apply_edit", {
         edit,
@@ -165,11 +215,13 @@ export default function DesignScreen({
       onContentChange(activeFile.path, result.source);
       setPropKey("");
       setPropValue("");
+      setReparentTargetId("");
+      setInsertTagName("");
       await refresh(activeFile.path);
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [activeFile, selectedId, propKey, propValue, editKind, onContentChange, refresh]);
+  }, [activeFile, selectedId, propKey, propValue, editKind, reparentTargetId, insertTagName, onContentChange, refresh]);
 
   if (!activeFile || !isComponentFile(activeFile.path)) {
     return (
@@ -229,20 +281,64 @@ export default function DesignScreen({
                 />
                 Style
               </label>
+              <label>
+                <input
+                  type="radio"
+                  checked={editKind === "Reparent"}
+                  onChange={() => setEditKind("Reparent")}
+                />
+                Move into
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  checked={editKind === "ComponentInsert"}
+                  onChange={() => setEditKind("ComponentInsert")}
+                />
+                Insert child
+              </label>
             </div>
-            <input
-              className="design-input mono"
-              placeholder={editKind === "PropChange" ? "prop name" : "style property"}
-              value={propKey}
-              onChange={(e) => setPropKey(e.target.value)}
-            />
-            <input
-              className="design-input mono"
-              placeholder="value"
-              value={propValue}
-              onChange={(e) => setPropValue(e.target.value)}
-            />
-            <button className="leo-btn leo-btn-approve" onClick={applyEdit} disabled={!propKey.trim()}>
+            {(editKind === "PropChange" || editKind === "StyleChange") && (
+              <>
+                <input
+                  className="design-input mono"
+                  placeholder={editKind === "PropChange" ? "prop name" : "style property"}
+                  value={propKey}
+                  onChange={(e) => setPropKey(e.target.value)}
+                />
+                <input
+                  className="design-input mono"
+                  placeholder="value"
+                  value={propValue}
+                  onChange={(e) => setPropValue(e.target.value)}
+                />
+              </>
+            )}
+            {editKind === "Reparent" && (
+              <select
+                className="design-input mono"
+                value={reparentTargetId}
+                onChange={(e) => setReparentTargetId(e.target.value)}
+              >
+                <option value="">Select target parent…</option>
+                {flattenNodes(roots)
+                  .filter((n) => n.id !== selectedId)
+                  .map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {"  ".repeat(n.depth)}&lt;{n.tagName}&gt; #{n.id}
+                    </option>
+                  ))}
+              </select>
+            )}
+            {editKind === "ComponentInsert" && (
+              <input
+                className="design-input mono"
+                placeholder="new tag name (e.g. Button)"
+                value={insertTagName}
+                onChange={(e) => setInsertTagName(e.target.value)}
+              />
+            )}
+            <button className="leo-btn leo-btn-approve" onClick={applyEdit} disabled={!canApply}>
               Apply
             </button>
           </>

@@ -8,10 +8,15 @@
  * real JS/JSX AST work actually happens, per §6.1's own "lightweight
  * dev-server bridge" description).
  *
- * Deliberately a real, honest v1 subset of the full spec: only
- * `StyleChange` and `PropChange` are implemented by `applyCanvasEdit`
- * (see edit.ts's own doc comment for why `Reparent`/`ComponentInsert`
- * are named, not attempted, in this pass).
+ * All four members of the full spec's `CanvasEdit` union are now real and
+ * implemented by `applyCanvasEdit`: `StyleChange`/`PropChange` (original
+ * v1), and `Reparent`/`ComponentInsert` (closing the gap this file's own
+ * doc comment used to name as unattempted -- see edit.ts's doc comment
+ * for how the earlier "the id scheme can't survive a structural edit"
+ * concern was resolved: both new edits resolve every id they reference
+ * against one single fresh parse, the same guarantee `StyleChange`/
+ * `PropChange` already relied on, so no cross-parse id stability is
+ * actually needed).
  */
 
 /** A single style object entry's value -- a real literal (safely editable
@@ -52,4 +57,26 @@ export interface ComponentNode {
 
 export type CanvasEdit =
   | { kind: "StyleChange"; nodeId: string; property: string; value: string }
-  | { kind: "PropChange"; nodeId: string; prop: string; value: string };
+  | { kind: "PropChange"; nodeId: string; prop: string; value: string }
+  /** Moves an existing element to become a child of a different (or the
+   * same, for reordering) parent element. `index` is the position within
+   * the *target* parent's children array after the move (default:
+   * append at the end) -- plain `Array.splice` semantics, evaluated
+   * against the target parent's children array state at insert time
+   * (i.e. after the node has already been detached from its old
+   * parent). Refused, with a real descriptive error rather than
+   * producing a broken tree, for: reparenting a top-level root (it has
+   * no parent `JSXElement` to detach from), reparenting an element into
+   * itself, and reparenting an element into one of its own descendants
+   * (a real cycle). */
+  | { kind: "Reparent"; nodeId: string; newParentId: string; index?: number }
+  /** Creates a brand-new element and inserts it as a child of `parentId`
+   * at `index` (default: append). `tagName` must be a single valid JSX
+   * identifier (e.g. `"div"`, `"Card"`) -- member-expression tag names
+   * (`Foo.Bar`) are a real, deliberate v1 scope cut, refused with a
+   * clear error rather than silently mishandled. `props`, if given, are
+   * always inserted as plain string-literal JSX attributes (the same
+   * real limitation `PropChange` already has). The new element is
+   * always self-closing (`<Tag />`); giving it real children is a
+   * separate, unstarted future increment. */
+  | { kind: "ComponentInsert"; parentId: string; tagName: string; index?: number; props?: Record<string, string> };

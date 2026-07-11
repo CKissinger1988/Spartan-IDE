@@ -99,6 +99,8 @@ first — it's the parity reference until each row there is actually reimplement
 | Web app prep, third spike — real, zero-native-dependency git operations via isomorphic-git, cross-checked against the real native git CLI | §75.87 |
 | Web app prep — real WebSocket transport for spartan-backend, alongside stdio; a real unauthenticated-RCE-surface design caught and fixed before it compiled | §75.88 |
 | Web app — real `web/` npm project scaffold (first increment): File System Access API + WASM-compiled `spartan-buffer`, real Chromium verification, no LSP/DAP/Leo/git yet | §75.89 |
+| Real `Reparent`/`ComponentInsert`, closing GUI Builder's last named Tier 1 gap — task #12 fully closed, three real bugs found and fixed | §75.90 |
+| Real Android SDK/toolchain/project detection — an honest first increment toward task #11, not §21's full scope | §75.91 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2794,6 +2796,65 @@ first — it's the parity reference until each row there is actually reimplement
   now closed -- this is a real, working first increment of the vscode.dev-inspired web app, not
   its full scope; LSP/DAP/Leo/git connectivity over the real WebSocket transport is the natural
   next piece once the token-delivery design question is resolved.
+- **Real, working code — real `Reparent`/`ComponentInsert`, closing GUI Builder's last named
+  Tier 1 gap, task #12 fully closed, three real bugs found and fixed (§75.90)**: user-requested
+  ("Continue with the roadmap," §35). With every other Tier 1 row real, the two remaining named
+  gaps were GUI Builder's own `Reparent`/`ComponentInsert` and Android (§21, the latter
+  explicitly flagged by §35.9 as the biggest scope risk, with a sanctioned fallback to defer it).
+  This pass closes the smaller, fully-achievable one first. The earlier stated blocker --
+  "the id scheme can't survive a structural edit" -- was re-examined and found not to actually
+  apply: every id a `CanvasEdit` references is resolved against the one fresh parse
+  `applyCanvasEdit` performs per call, the same guarantee `StyleChange`/`PropChange` already
+  relied on, and the real UI already re-fetches fresh ids after every edit. `tree.ts`'s
+  `buildComponentTree` now also tracks a real `parentOf` map (parent `JSXElement` AST node per
+  id, or `null` for a root); `edit.ts` gained `applyReparent` (detach/splice via real `.children`
+  arrays, a hand-rolled `isDescendant` cycle guard) and `applyComponentInsert` (builds a new
+  self-closing element via `recast`'s own builders). **Three real bugs found only by running the
+  tests**: (1) a real, load-bearing recast/Babel printer behavior -- `openingElement.selfClosing`
+  alone decides whether a tag prints as `<div />`, regardless of `.children` content, so a child
+  pushed into a previously-childless element silently vanished from the printed output until a
+  new `ensureOpenForChildren` helper explicitly cleared `selfClosing` and built a real
+  `closingElement`; (2) a test asserting "refuses to move a root" was itself wrong -- its fixture
+  also triggered a real cycle, which correctly fired first, fixed by rewriting the fixture with
+  two independent, unrelated roots; (3) a real 4-argument call against `recast`'s actual
+  3-argument `jsxElement` builder, caught by `tsc`. 12 new tests (47 total in `gui-builder`, up
+  from 35), all passing; a real manual stdio smoke test against the *compiled* `dist/cli.js`
+  independently confirmed a real `Reparent`. `desktop/src/components/DesignScreen.tsx` gained two
+  new radio options ("Move into" / "Insert child"), a `flattenNodes()`-populated target dropdown,
+  and a per-kind `canApply` guard -- reusing the exact same `design_apply_edit` IPC call the
+  existing edit kinds already use, no new IPC method needed. **Real, live, end-to-end Playwright
+  verification driving the actual compiled `gui-builder` logic** (via `page.exposeFunction`
+  bridging the real `dist/edit.js`/`parse.js`, not a mock): a real `Card.jsx` fixture's
+  `<footer />` was moved into `<h1>` and a new `<span />` was inserted into `<p>`, both confirmed
+  in the regenerated source and in the re-fetched structure tree, screenshotted, zero page
+  errors. **Task #12 (GUI Builder MVP) is now fully closed** -- every §35.4 Tier 1 row is real
+  except a component-library browser (never separately scoped as its own gap before, named here
+  as the one real remaining piece). Full fmt/clippy/test clean.
+- **Real, working code — real Android SDK/toolchain/project detection, an honest first increment
+  toward task #11, not §21's full scope (§75.91)**: direct continuation of "Continue with the
+  roadmap." Android is the one remaining unclosed Tier 1 row; full scope needs a real SDK, a
+  real emulator/device, and real JDWP debugging, none of which exist in this environment
+  (confirmed directly: no `adb`/`sdkmanager`/`avdmanager`/`emulator` on `$PATH`, no
+  `ANDROID_HOME`/`ANDROID_SDK_ROOT` set) -- but a real Gradle 8.14.3 and real Java 21 are both
+  genuinely present. New `crates/spartan-android`: `detect_toolchain()` (real `$PATH` +
+  `ANDROID_HOME`/`ANDROID_SDK_ROOT` checks, preferring paths inside a detected SDK root's own
+  real subdirectory layout before falling back to a bare `$PATH` lookup), `is_android_project()`
+  (real detection of the standard AGP module layout -- `AndroidManifest.xml` under
+  `app/src/main/`, or a `build.gradle`/`build.gradle.kts` naming the real `com.android.
+  application`/`com.android.library` plugin id, a deliberate plain substring check matching this
+  workspace's own established "smallest real mechanism" precedent), `detect_gradle_version()`
+  (a real, live `gradle --version` subprocess call). 10 new tests, including a real, live,
+  self-skipping integration test that -- confirmed in this environment, no skip message printed
+  -- genuinely reached the real installed Gradle and parsed a real version starting with a digit.
+  New `spartan-backend` `android_detect` IPC method (real, fast, synchronous, matching
+  `devcontainer_detect`'s own precedent) with 3 new tests, including a real live confirmation
+  through the full dispatch path. **What this does not confirm**: no SDK install flow, no
+  emulator/device management, no Kotlin+Compose LSP beyond the already-real plain-Kotlin one, no
+  JDWP debugging, no Compose preview, no signing/release tooling, no Leo Android tools, no UI
+  surface in either shell yet (backend-only, a deliberate, named scope cut). 599 tests total
+  workspace-wide (up from 586), full fmt/clippy/test clean. **Task #11 remains open** -- a real,
+  honest, narrow first increment matching what this specific environment can actually support,
+  not a claim that Android is now first-class.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2851,11 +2912,14 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 586 tests: 7 spikes + 14 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 599 tests: 7 spikes + 15 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
-                                    # spartan-editor-core, spartan-backend, spartan-buffer-wasm, xtask)
+                                    # spartan-android, spartan-editor-core, spartan-backend,
+                                    # spartan-buffer-wasm, xtask)
+# spartan-android's own detect_gradle_version live test (§75.91) self-skips if no real `gradle`
+# is found on $PATH -- matching every other real-external-tool integration suite in this repo.
 # spikes/wasm-buffer-spike (§75.85) is a real Tier 0 spike for the planned web app -- its own
 # `cargo test` runs fine for the host target with no extra setup; reproducing its real WASM/Node
 # verification needs `rustup target add wasm32-unknown-unknown` + `wasm-bindgen-cli` (pinned to

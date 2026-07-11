@@ -20,6 +20,7 @@ members = [
     "crates/spartan-settings",
     "crates/spartan-updater",
     "crates/spartan-devcontainer",
+    "crates/spartan-android",
     "crates/spartan-editor-core",
     "crates/spartan-backend",
     "xtask",

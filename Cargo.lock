@@ -5171,6 +5171,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "spartan-android"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tempfile",
+]
+
+[[package]]
 name = "spartan-backend"
 version = "0.1.0"
 dependencies = [
@@ -5180,6 +5188,7 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
+ "spartan-android",
  "spartan-buffer",
  "spartan-crash",
  "spartan-devcontainer",

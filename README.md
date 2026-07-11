@@ -72,6 +72,7 @@ crates/spartan-crash/       Real local-first crash reporter (panic hook, redacte
 crates/spartan-updater/     Real "check for updates" against this repo's own GitHub API
 crates/spartan-plugin-host/ Real WASM Component Model plugin host (wasmtime), capability-gated
 crates/spartan-devcontainer/ Real OCI/Docker dev containers (containers.dev spec) via bollard
+crates/spartan-android/     Real Android SDK/toolchain + project detection (first increment)
 crates/spartan-editor-core/ The original wgpu-native shell — kept as the tested reference
                              implementation and backend proof-of-concept, not deleted; every
                              feature it proved was later promoted into the crates above
@@ -157,11 +158,12 @@ touching security, sandboxing, or approval flows (§9, §36).
 ## What's actually real right now
 
 - **Real, working, tested code**: everything under [Architecture](#architecture) above.
-  586 Rust tests across 14 real crates + 7 Tier 0 spikes + `xtask`, all passing; clippy and
+  599 Rust tests across 15 real crates + 7 Tier 0 spikes + `xtask`, all passing; clippy and
   `cargo fmt` clean. The Electron shell's own TypeScript typechecks and builds clean, and
   every increment of it has been verified via a live, screenshotted Playwright pass driving
   a real Vite dev server against a test-only mock of the Electron preload bridge — see
-  [Screenshots](#screenshots) above for real captures.
+  [Screenshots](#screenshots) above for real captures. GUI Builder's two-way AST sync is now
+  fully closed (`Reparent`/`ComponentInsert` included), the last named Tier 1 gap for that row.
 - **`web/` — a real, separate, first-increment browser IDE**: a vscode.dev-inspired
   Vite+React app running a real WASM compilation of `spartan-buffer` against the browser's
   File System Access API. No LSP/DAP/Leo/git yet — see [`web/README.md`](web/README.md)
@@ -177,8 +179,14 @@ touching security, sandboxing, or approval flows (§9, §36).
 - **Reference-only**: [`prototypes/*.jsx`](prototypes/) are early React mockups of the
   intended UI, not wired to anything. [`legacy/agent-deck-console/`](legacy/agent-deck-console/)
   is this repo's prior, different product, kept for feature-parity reference (§55).
-- **Not yet built**: Android support, a packaged/signed Electron installer, a
-  `Reparent`/`ComponentInsert` GUI Builder operation, LSP/DAP/Leo/git connectivity for
+- **Android (§21) is a real, narrow first increment, not first-class yet**: `crates/
+  spartan-android` does real SDK/toolchain detection (`ANDROID_HOME`/`ANDROID_SDK_ROOT`,
+  `adb`/`sdkmanager`/`avdmanager`/`emulator`) and real Android-project detection (the
+  standard Gradle module layout), wired into `spartan-backend` as `android_detect`. No SDK
+  install flow, emulator/device management, Compose LSP/preview, JDWP debugging, or UI
+  surface yet — §35.9 itself names Android as Tier 1's biggest scope risk and explicitly
+  sanctions shipping without it, which is exactly where this stands.
+- **Not yet built**: a packaged/signed Electron installer, LSP/DAP/Leo/git connectivity for
   `web/` (pending an open token-delivery design question for its WebSocket transport), and
   the larger design-stage surface (§35 is the prioritized roadmap). Local-first crash
   reporting now has a real, user-triggered *upload* path too (never automatic) — see
