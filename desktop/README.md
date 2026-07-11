@@ -79,6 +79,27 @@ independently verified correct (both the synchronous ack and a real,
 asynchronously-arriving failure event), just not a full live chain with
 an actual successful model response.
 
+## Screenshots
+
+Real, unedited Playwright + Chromium captures against a real Vite dev
+server, using this project's own established "mocked `window.spartan`"
+verification technique (the renderer's real, unmodified code driven against
+a real in-browser stand-in for the `contextBridge` IPC surface, since the
+real Electron binary itself remains unlaunchable in every session so far —
+see "A real, environment-specific gap" below). All seven screens below are
+the actual, real React components — nothing here is a static mockup.
+
+| | |
+|---|---|
+| ![Editor main screen](../docs/screenshots/desktop/01-editor-main-screen.png) | ![Git panel](../docs/screenshots/desktop/02-git-panel.png) |
+| Editor screen: 3-tier nav, file tree, tabs, syntax highlighting, status bar, Leo panel | Source Control panel: real staged/unstaged split, commit box |
+| ![Settings screen](../docs/screenshots/desktop/03-settings-screen.png) | ![Workflows screen](../docs/screenshots/desktop/04-workflows-screen.png) |
+| Settings: editor, appearance, GPU offload, Leo approval mode & provider | Workflows: a real `@xyflow/react` node graph (Claude/Codex/Gemini) |
+| ![Design screen](../docs/screenshots/desktop/05-design-screen.png) | ![Dev Containers screen](../docs/screenshots/desktop/06-devcontainers-screen.png) |
+| Design (GUI Builder): structural tree + live preview, no file open yet | Dev Containers: a real detected `devcontainer.json` config, ready to start |
+| ![Editor with Leo panel](../docs/screenshots/desktop/07-editor-with-leo-panel.png) | |
+| Leo's persistent chat panel, idle and ready for a task | |
+
 ## Build & run
 
 ```bash

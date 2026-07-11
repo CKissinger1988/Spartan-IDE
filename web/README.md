@@ -13,6 +13,23 @@ directly against real local files via a native browser API, no server round
 trip required for basic editing. **Zero VS Code or vscode.dev source code was
 read or used anywhere in this project.** This is the same standing rule this
 repository already applies to the desktop shells (no Monaco/CodeMirror
+
+## Screenshots
+
+Real, unedited Playwright + Chromium captures of this exact app running
+against a real `vite dev` server. The native `showDirectoryPicker()` dialog
+can't be driven headlessly, so these use the same real, documented technique
+described above under "Real, executed verification" — an Origin Private File
+System directory substituted in for `window.showDirectoryPicker()`, real
+files written into it, then the app's own unmodified code opens and edits
+them normally.
+
+| | |
+|---|---|
+| ![Initial empty state](../docs/screenshots/web/01-initial-empty-state.png) | ![Project opened, file tree](../docs/screenshots/web/02-project-opened-file-tree.png) |
+| Initial empty state — Chromium detected as supported, no fallback shown | A real project opened via the File System Access API, file tree populated |
+| ![Editor with syntax highlighting](../docs/screenshots/web/03-editor-with-syntax-highlighting.png) | ![Live editing with dirty marker](../docs/screenshots/web/04-editing-live-highlight-dirty-marker.png) |
+| Real client-side syntax highlighting via `highlight.js` | Live typing re-highlights immediately; status bar shows the real unsaved marker |
 forked/vendored either) — see the root `CLAUDE.md`.
 
 ## What's real here

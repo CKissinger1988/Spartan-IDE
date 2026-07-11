@@ -2931,7 +2931,7 @@ cargo test --workspace --release   # 586 tests: 7 spikes + 14 real crates + xtas
 # --workspace`/`cargo test --workspace` from the repo root never touch them; build them with
 # `cargo component build` from inside crates/plugins/<name> instead.
 # gui-builder/ (task #12, §75.38) is a real, separate npm/TypeScript project, not part of the
-# Cargo workspace at all -- `cd gui-builder && npm install && npm test` (41 tests, Node's built-in
+# Cargo workspace at all -- `cd gui-builder && npm install && npm test` (35 tests, Node's built-in
 # `node:test` runner). Several of its own tests (§75.52, §75.53) perform a real `npm install` of a
 # temp react/react-dom fixture and self-skip if that install fails (no network reachable).
 # spartan-editor-core's Design mode now embeds a real wry WebView (§6.1, §75.39) -- on Linux, live

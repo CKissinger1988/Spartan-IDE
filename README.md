@@ -23,6 +23,28 @@ editing surface" is a locked decision, not an open question revisited per featur
 text-editing surface in `desktop/src/components/Editor.tsx` is real, hand-built React
 chrome, backed by the real Rust buffer over IPC, not a vendored component.
 
+## Screenshots
+
+Real, unedited Playwright + Chromium captures of the actual running React components —
+not mockups. The desktop shots use this project's own established "mocked
+`window.spartan`" verification technique (see `desktop/README.md`), since the real
+Electron binary itself remains unlaunchable in every session so far (a standing,
+reported-not-routed-around network policy block — see `desktop/README.md`'s own
+"environment-specific gap" section). The web shots run against a real `vite dev`
+server with no mocking beyond substituting the native folder-picker dialog, which can't
+be driven headlessly.
+
+| | |
+|---|---|
+| ![Editor screen](docs/screenshots/desktop/01-editor-main-screen.png) | ![Git panel](docs/screenshots/desktop/02-git-panel.png) |
+| Desktop: Editor screen — 3-tier nav, file tree, tabs, real syntax highlighting, Leo panel | Desktop: real Source Control panel |
+| ![Web app editor](docs/screenshots/web/03-editor-with-syntax-highlighting.png) | ![Workflows screen](docs/screenshots/desktop/04-workflows-screen.png) |
+| Web: the browser-based editor (`web/`), File System Access API + WASM buffer | Desktop: Workflows — a real `@xyflow/react` multi-CLI node graph |
+
+More screens (Settings, Design/GUI Builder, Dev Containers, the web app's file tree and
+live-editing states) are in `docs/screenshots/desktop/` and `docs/screenshots/web/`, and
+embedded with full captions in `desktop/README.md` and `web/README.md`.
+
 ## Architecture
 
 ```
@@ -56,6 +78,9 @@ crates/spartan-editor-core/ The original wgpu-native shell — kept as the teste
 
 gui-builder/                Real, separate npm project — parses/edits JSX via Babel + recast,
                              bundles a live preview via esbuild, powers the Design screen
+web/                        Real, separate Vite+React npm project — a vscode.dev-inspired
+                             browser IDE, first increment: File System Access API + a real
+                             WASM-compiled spartan-buffer, no LSP/DAP/Leo/git yet
 mobile/                     Real Expo/React Native companion app — Spartan Mobile IDE
 spikes/                     Real Tier 0 risk-gate spikes (rope perf, LSP/DAP clients, GPU
                              rendering, local-model tool-call parsing) — not the product itself
@@ -132,10 +157,15 @@ touching security, sandboxing, or approval flows (§9, §36).
 ## What's actually real right now
 
 - **Real, working, tested code**: everything under [Architecture](#architecture) above.
-  488 Rust tests across 12 real crates + 6 Tier 0 spikes + `xtask`, all passing; clippy and
+  586 Rust tests across 14 real crates + 7 Tier 0 spikes + `xtask`, all passing; clippy and
   `cargo fmt` clean. The Electron shell's own TypeScript typechecks and builds clean, and
   every increment of it has been verified via a live, screenshotted Playwright pass driving
-  a real Vite dev server against a test-only mock of the Electron preload bridge.
+  a real Vite dev server against a test-only mock of the Electron preload bridge — see
+  [Screenshots](#screenshots) above for real captures.
+- **`web/` — a real, separate, first-increment browser IDE**: a vscode.dev-inspired
+  Vite+React app running a real WASM compilation of `spartan-buffer` against the browser's
+  File System Access API. No LSP/DAP/Leo/git yet — see [`web/README.md`](web/README.md)
+  for exactly what's built and what's deliberately deferred.
 - **One honest, standing gap**: the *actual* Electron window has never been launched from
   inside this project's own development sessions, because Electron's postinstall script
   downloads its runtime binary from `github.com/electron/electron/releases`, and every
@@ -147,9 +177,12 @@ touching security, sandboxing, or approval flows (§9, §36).
 - **Reference-only**: [`prototypes/*.jsx`](prototypes/) are early React mockups of the
   intended UI, not wired to anything. [`legacy/agent-deck-console/`](legacy/agent-deck-console/)
   is this repo's prior, different product, kept for feature-parity reference (§55).
-- **Not yet built**: Android support, a packaged/signed Electron installer, an automated
-  crash-report *upload* service (local-only today), a `Reparent`/`ComponentInsert` GUI
-  Builder operation, and the larger design-stage surface (§35 is the prioritized roadmap).
+- **Not yet built**: Android support, a packaged/signed Electron installer, a
+  `Reparent`/`ComponentInsert` GUI Builder operation, LSP/DAP/Leo/git connectivity for
+  `web/` (pending an open token-delivery design question for its WebSocket transport), and
+  the larger design-stage surface (§35 is the prioritized roadmap). Local-first crash
+  reporting now has a real, user-triggered *upload* path too (never automatic) — see
+  `crates/spartan-crash`.
 
 This project's own history includes real bugs found only by actually running code and
 adversarially testing it — a UTF-8 char-boundary panic, a cross-adapter DAP deadlock, an
@@ -194,22 +227,40 @@ npm install
 npm test
 ```
 
+### Web app (browser IDE)
+
+```bash
+cd web
+npm install
+npm run build:wasm   # compiles crates/spartan-buffer-wasm to WASM via wasm-bindgen
+npm run dev          # real Vite dev server, http://localhost:5174
+```
+
+Needs `wasm-bindgen-cli` installed at the exact version pinned in `Cargo.lock`
+(`cargo install wasm-bindgen-cli --version 0.2.126`). See [`web/README.md`](web/README.md)
+for what's real (File System Access API + WASM-backed editing) vs. deferred (LSP/DAP/Leo/git).
+
 ## Repository layout
 
 ```
 CLAUDE.md                    Index + behavioral contract for this repo
 docs/architecture-spec.md    Full technical & design spec (source of truth, 75+ sections)
+docs/screenshots/            Real Playwright + Chromium captures (desktop/ and web/)
 desktop/                     Electron + React desktop shell — the current primary UI
 gui-builder/                 Real, separate npm project — JSX AST sync + live preview
+web/                         Real, separate npm project — vscode.dev-inspired browser IDE
 crates/                      Real Rust product code (spartan-backend, spartan-buffer,
-                              spartan-leo, spartan-model, spartan-git, spartan-editor-core,
-                              and more — see Architecture above)
-spikes/                      Real, tested Tier 0 Rust spikes (see spikes/README.md)
+                              spartan-buffer-wasm, spartan-leo, spartan-model, spartan-git,
+                              spartan-editor-core, and more — see Architecture above)
+spikes/                      Real, tested Tier 0 Rust spikes + npm-based web-prep spikes
+                              (tree-sitter-wasm-spike, git-browser-spike) — see
+                              spikes/README.md
 mobile/                      Spartan Mobile IDE — real Expo/React Native companion app
 prototypes/                  Reference-only React UI mockups, not wired to anything
 legacy/agent-deck-console/   Prior product, preserved for feature-parity reference (§55)
-.github/workflows/           CI — fmt/clippy/test for Rust, typecheck/build/test for the
-                              three npm projects (desktop/, gui-builder/, mobile/)
+.github/workflows/           CI — fmt/clippy/test for Rust, typecheck/build/test for every
+                              real npm project (desktop/, gui-builder/, mobile/, web/,
+                              spikes/tree-sitter-wasm-spike, spikes/git-browser-spike)
 LICENSE                      Proprietary, all rights reserved
 Cargo.toml / Cargo.lock      Rust workspace (spikes/ + crates/, excluding crates/plugins/
                               and mobile/, which are separate toolchains)
