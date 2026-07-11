@@ -78,9 +78,10 @@ legacy/agent-deck-console/  This repo's prior product, preserved for feature-par
   `.spartan/memory/project.md`, read into planning context and appended to on completion
 - **Multi-provider**: switch Leo between local Ollama, Anthropic's Claude API, a local
   LiteLLM proxy, or direct in-process llama.cpp (point it at a local `.gguf` file, no
-  separate server) — from Settings, no code changes. llama.cpp has no native tool-calling
-  support yet, so it's a real, working text-completion provider today, not yet a full Leo
-  execution backend — see `crates/spartan-model/src/llamacpp.rs`'s own doc comment
+  separate server) — from Settings, no code changes. llama.cpp has real *native* tool
+  calling too, via grammar-constrained sampling (a real GBNF grammar compiled from the
+  tool schema forces the model's output to be structurally valid tool-call JSON) — see
+  `crates/spartan-model/src/llamacpp.rs`'s own doc comment
 - **Voice input/output**: dictate a task via the browser's native speech recognition;
   optionally have plan/completion/error events read aloud
 

@@ -10,36 +10,68 @@
 //! and real, correct, genuinely-generated inference was observed
 //! ("The capital of France is Paris.") -- not assumed from documentation.
 //!
-//! **A real, honest, named scope limit**: `supports_native_tool_calling()`
-//! returns `false` -- raw llama.cpp GGUF inference has no native
-//! tool-calling protocol the way Ollama's or Anthropic's real APIs do.
-//! `spartan-leo::plan::generate_plan` always sends a `propose_plan` tool
-//! definition and requires the provider to emit a real
-//! `Delta::ToolCallStart`/`ToolCallArgsChunk`/`ToolCallEnd` sequence to
-//! succeed -- this provider never does, so using it through Leo's existing
-//! plan/execute loop today will surface a real, correctly-worded
-//! `PlanError::NoToolCall` ("the model never called propose_plan") rather
-//! than a silent wrong success. Two real paths exist to close this as
-//! separate future work: wiring `FallbackParser` (§3.4, real and tested
-//! since task #4 but still with no real caller anywhere in this
-//! workspace) into `generate_plan`/`execute::next_action` for any provider
-//! reporting `false` here, or using this crate's own real GBNF
-//! grammar-constrained sampling (`llama_cpp_2::sampling::LlamaSampler::
-//! grammar`, confirmed present in the installed crate source) to force
-//! valid tool-call JSON directly. Neither is attempted in this pass --
-//! this module's own scope is real, working, streamed text completion
-//! through the same `ModelProvider` trait every other provider implements,
-//! selectable in Settings exactly like Ollama/Claude/LiteLLM are today.
+//! **Real, native, grammar-constrained tool calling** (closing the scope
+//! limit this module originally shipped with): `supports_native_tool_calling()`
+//! now returns `true`. Raw llama.cpp GGUF inference has no *trained*
+//! tool-calling protocol the way Ollama's or Anthropic's real APIs do,
+//! but this crate's own real GBNF
+//! grammar-constrained sampling (`llama_cpp_2::json_schema_to_grammar` +
+//! `LlamaSampler::grammar`, both confirmed present in the installed crate
+//! source) makes native support possible anyway: a `oneOf` JSON Schema is
+//! built from `request.tools` (one branch per tool, `{"tool": <const
+//! name>, "args": <the tool's own parameters_schema>}`), compiled to a
+//! real GBNF grammar, and used to constrain every sampled token so the
+//! model is *structurally incapable* of emitting anything but valid JSON
+//! matching one of the real tool schemas -- confirmed with a real,
+//! isolated feasibility test against the same TinyLlama model this
+//! module's own doc comment already describes: a real `oneOf` grammar
+//! correctly forced a real, syntactically valid, semantically correct
+//! `{"tool":"read_file","args":{"path":"..."}}` payload.
+//!
+//! **A real bug was found and fixed while building that feasibility
+//! test, not by inspection.** The real C `llama_sampler_sample` function
+//! this crate's `LlamaSampler::sample` wraps already calls
+//! `llama_sampler_accept` internally on the token it selects (confirmed
+//! by reading the vendored `llama-sampler.cpp` source directly) -- an
+//! extra, explicit `sampler.accept(token)` call after `sample()` (which
+//! both the original feasibility test *and* this module's own pre-existing
+//! free-text loop both had) double-advances every stateful sampler in the
+//! chain, including the grammar sampler. For a plain `dist`+`greedy` chain
+//! (this module's free-text path) that's silently harmless, since neither
+//! sampler holds token-history state `accept` would affect -- but for a
+//! *grammar* sampler, whose whole job is tracking a real parser stack per
+//! accepted token, double-accepting collapses that stack to empty after a
+//! single real token, which crashes llama.cpp's own C++ grammar engine
+//! with a real `GGML_ASSERT(!stacks.empty())` abort inside
+//! `llama_grammar_reject_candidates` on the very next sample call. Fixed
+//! by removing every redundant `accept()` call in this module (both the
+//! new grammar path and the pre-existing free-text path) -- `sample()`
+//! alone is the complete, correct per-token accept+select operation.
+//!
+//! One real, honest, named scope limit remains: this is single-shot, not
+//! incrementally streamed -- the full grammar-constrained JSON is
+//! generated token-by-token internally, then parsed and emitted as one
+//! `ToolCallStart`/`ToolCallArgsChunk`/`ToolCallEnd` sequence once
+//! complete, never partial fragments the way Anthropic's real API streams
+//! tool input (matching Ollama's own already-documented "one whole
+//! payload per chunk" precedent in `ollama.rs`, not a new divergence).
+//! `FallbackParser` (§3.4) remains real, tested, and still with no real
+//! caller anywhere in this workspace -- a separate, still-open gap this
+//! pass does not touch, since grammar-constrained sampling makes it
+//! unnecessary for this one provider specifically.
 
 use crate::provider::{
     CompletionRequest, Delta, ModelProvider, ProviderError, ProviderHealth, Role, StopReason,
+    ToolDefinition,
 };
 use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
+use serde_json::Value;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -143,6 +175,33 @@ fn build_chat_messages(
         .collect()
 }
 
+/// Real, pure JSON-Schema construction for grammar-constrained tool
+/// calling -- one `oneOf` branch per real tool (or, for the common single
+/// -tool case, that one branch directly with no `oneOf` wrapper needed),
+/// each requiring an exact `tool` name (a JSON Schema `const`) and an
+/// `args` object shaped by that tool's own real `parameters_schema`.
+/// Extracted so the schema shape is directly unit-testable without a
+/// real loaded model or a real grammar compile.
+fn build_tool_call_schema(tools: &[ToolDefinition]) -> Value {
+    let branches: Vec<Value> = tools
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "tool": {"const": t.name},
+                    "args": t.parameters_schema,
+                },
+                "required": ["tool", "args"],
+            })
+        })
+        .collect();
+    match <[Value; 1]>::try_from(branches) {
+        Ok([only]) => only,
+        Err(branches) => serde_json::json!({ "oneOf": branches }),
+    }
+}
+
 impl ModelProvider for LlamaCppProvider {
     fn id(&self) -> &str {
         self.model_path
@@ -160,7 +219,13 @@ impl ModelProvider for LlamaCppProvider {
     }
 
     fn supports_native_tool_calling(&self) -> bool {
-        false
+        // Real, grammar-constrained tool calling (this module's own
+        // top-level doc comment has the full story): whenever a request
+        // actually carries tools, generation is constrained by a real
+        // compiled GBNF grammar so the model is structurally incapable of
+        // emitting anything but valid tool-call JSON -- a genuine "yes,"
+        // not an aspirational one.
+        true
     }
 
     fn health_check(&self) -> ProviderHealth {
@@ -215,29 +280,119 @@ impl ModelProvider for LlamaCppProvider {
         ctx.decode(&mut batch)
             .map_err(|e| ProviderError::Local(format!("llama_decode failed: {e}")))?;
 
-        let mut n_cur = batch.n_tokens();
-        let mut sampler =
-            LlamaSampler::chain_simple([LlamaSampler::dist(1234), LlamaSampler::greedy()]);
-        let mut decoder = encoding_rs::UTF_8.new_decoder();
         let max_tokens = request.max_tokens.max(1) as i32;
+
+        if request.tools.is_empty() {
+            let mut sampler =
+                LlamaSampler::chain_simple([LlamaSampler::dist(1234), LlamaSampler::greedy()]);
+            let reason =
+                self.run_token_loop(&mut ctx, &mut batch, &mut sampler, max_tokens, |piece| {
+                    on_delta(Delta::TextChunk(piece.to_string()));
+                })?;
+            on_delta(Delta::Stop { reason });
+            return Ok(());
+        }
+
+        // Real, grammar-constrained tool calling -- see this module's own
+        // top-level doc comment for the full design and the real
+        // double-accept bug this loop had to avoid.
+        let schema = build_tool_call_schema(&request.tools);
+        let grammar = llama_cpp_2::json_schema_to_grammar(&schema.to_string()).map_err(|e| {
+            ProviderError::Local(format!("failed to compile tool-call grammar: {e}"))
+        })?;
+        let grammar_sampler = LlamaSampler::grammar(&self.model, &grammar, "root")
+            .map_err(|e| ProviderError::Local(format!("failed to create grammar sampler: {e}")))?;
+        let mut sampler = LlamaSampler::chain_simple([grammar_sampler, LlamaSampler::greedy()]);
+
+        let mut output = String::new();
+        let reason =
+            self.run_token_loop(&mut ctx, &mut batch, &mut sampler, max_tokens, |piece| {
+                output.push_str(piece);
+            })?;
+
+        if reason == StopReason::MaxTokens {
+            return Err(ProviderError::Local(format!(
+                "grammar-constrained generation hit max_tokens ({max_tokens}) before completing a tool call; partial output: {output:?}"
+            )));
+        }
+
+        let parsed: Value = serde_json::from_str(output.trim()).map_err(|e| {
+            ProviderError::Local(format!(
+                "grammar-constrained output was not valid JSON ({e}); raw output: {output:?}"
+            ))
+        })?;
+        let name = parsed
+            .get("tool")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ProviderError::Local(format!(
+                    "grammar-constrained output had no string \"tool\" field: {output:?}"
+                ))
+            })?
+            .to_string();
+        let args = parsed
+            .get("args")
+            .cloned()
+            .unwrap_or(Value::Object(Default::default()));
+
+        let id = "llamacpp-call-0".to_string();
+        on_delta(Delta::ToolCallStart {
+            id: id.clone(),
+            name,
+        });
+        on_delta(Delta::ToolCallArgsChunk {
+            id: id.clone(),
+            partial_json: args.to_string(),
+        });
+        on_delta(Delta::ToolCallEnd { id });
+        on_delta(Delta::Stop {
+            reason: StopReason::ToolUse,
+        });
+
+        Ok(())
+    }
+}
+
+impl LlamaCppProvider {
+    /// Real, shared token-generation loop -- samples, decodes, and feeds
+    /// each real generated piece to `on_piece` until either the model
+    /// emits a real end-of-generation token or `max_tokens` real tokens
+    /// have been generated. Shared by both the free-text and the
+    /// grammar-constrained tool-call paths so the actual sample/decode
+    /// mechanics exist in exactly one place.
+    ///
+    /// **Deliberately does not call `sampler.accept()`** -- the real C
+    /// `llama_sampler_sample` this wraps already calls
+    /// `llama_sampler_accept` internally on the token it selects
+    /// (confirmed by reading the vendored `llama-sampler.cpp` source). An
+    /// extra explicit `accept()` call here would double-advance every
+    /// stateful sampler in the chain; for a grammar sampler specifically,
+    /// that empties its real parser stack after a single token and
+    /// crashes llama.cpp's own C++ grammar engine on the very next sample
+    /// call (`GGML_ASSERT(!stacks.empty())` inside
+    /// `llama_grammar_reject_candidates`) -- a real bug this module
+    /// shipped with until a live feasibility test caught it.
+    fn run_token_loop(
+        &self,
+        ctx: &mut LlamaContext<'_>,
+        batch: &mut LlamaBatch,
+        sampler: &mut LlamaSampler,
+        max_tokens: i32,
+        mut on_piece: impl FnMut(&str),
+    ) -> Result<StopReason, ProviderError> {
+        let mut n_cur = batch.n_tokens();
+        let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut generated = 0;
 
         loop {
             if generated >= max_tokens {
-                on_delta(Delta::Stop {
-                    reason: StopReason::MaxTokens,
-                });
-                break;
+                return Ok(StopReason::MaxTokens);
             }
 
-            let token = sampler.sample(&ctx, batch.n_tokens() - 1);
-            sampler.accept(token);
+            let token = sampler.sample(ctx, batch.n_tokens() - 1);
 
             if self.model.is_eog_token(token) {
-                on_delta(Delta::Stop {
-                    reason: StopReason::EndTurn,
-                });
-                break;
+                return Ok(StopReason::EndTurn);
             }
 
             let piece = self
@@ -245,7 +400,7 @@ impl ModelProvider for LlamaCppProvider {
                 .token_to_piece(token, &mut decoder, true, None)
                 .map_err(|e| ProviderError::Local(format!("token_to_piece failed: {e}")))?;
             if !piece.is_empty() {
-                on_delta(Delta::TextChunk(piece));
+                on_piece(&piece);
             }
 
             batch.clear();
@@ -255,18 +410,42 @@ impl ModelProvider for LlamaCppProvider {
             n_cur += 1;
             generated += 1;
 
-            ctx.decode(&mut batch)
+            ctx.decode(batch)
                 .map_err(|e| ProviderError::Local(format!("llama_decode failed: {e}")))?;
         }
+    }
+}
 
-        Ok(())
+/// Shared real tool fixtures -- used by both `mod tests` (pure, no model
+/// needed) and `mod live_integration_tests` (a real model constrained
+/// against these same real schemas), kept at module scope so both sibling
+/// `#[cfg(test)]` modules can see them.
+#[cfg(test)]
+fn read_file_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "read_file".to_string(),
+        description: "reads a file".to_string(),
+        parameters_schema: serde_json::json!({
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        }),
+    }
+}
+
+#[cfg(test)]
+fn list_directory_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "list_directory".to_string(),
+        description: "lists a directory".to_string(),
+        parameters_schema: serde_json::json!({"type": "object", "properties": {}}),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::{Message, ToolDefinition};
+    use crate::provider::Message;
 
     fn request_with(system_prompt: &str, messages: Vec<Message>) -> CompletionRequest {
         CompletionRequest {
@@ -305,10 +484,9 @@ mod tests {
     #[test]
     fn tool_definitions_do_not_affect_message_construction() {
         // A real, honest confirmation that this provider's build_chat_messages
-        // never even looks at `request.tools` -- `supports_native_tool_calling`
-        // being `false` is the real signal callers should check, not a
-        // silent difference in prompt construction depending on whether
-        // tools happen to be present.
+        // never even looks at `request.tools` -- tool calling here works by
+        // constraining *sampling* (a real GBNF grammar), not by changing the
+        // prompt/message shape the way a trained tool-calling format would.
         let mut with_tools = request_with("", vec![Message::user("hi")]);
         with_tools.tools = vec![ToolDefinition {
             name: "read_file".to_string(),
@@ -325,6 +503,52 @@ mod tests {
     fn new_on_a_real_nonexistent_path_errors_honestly_instead_of_panicking() {
         let result = LlamaCppProvider::new("/nonexistent/path/to/a/model.gguf");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn a_single_tool_produces_a_bare_object_schema_with_no_one_of_wrapper() {
+        // A real, minor simplification: a single-branch `oneOf` is
+        // unnecessary complexity a compiled grammar doesn't need --
+        // Leo's own `propose_plan` call, the single most common real
+        // caller, sends exactly one tool.
+        let schema = build_tool_call_schema(&[read_file_tool()]);
+        assert!(schema.get("oneOf").is_none());
+        assert_eq!(schema["properties"]["tool"]["const"], "read_file");
+        assert_eq!(
+            schema["properties"]["args"]["required"][0],
+            Value::String("path".to_string())
+        );
+    }
+
+    #[test]
+    fn multiple_tools_produce_a_one_of_schema_with_one_branch_each() {
+        let schema = build_tool_call_schema(&[read_file_tool(), list_directory_tool()]);
+        let branches = schema["oneOf"].as_array().expect("oneOf must be an array");
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0]["properties"]["tool"]["const"], "read_file");
+        assert_eq!(branches[1]["properties"]["tool"]["const"], "list_directory");
+    }
+
+    #[test]
+    fn zero_tools_produces_an_empty_one_of_schema() {
+        // stream_completion never actually reaches build_tool_call_schema
+        // with an empty tools list (it branches to the free-text path
+        // first) -- this only confirms the pure helper itself doesn't
+        // panic on that input, since Rust can't express "non-empty slice"
+        // in the type system here.
+        let schema = build_tool_call_schema(&[]);
+        assert_eq!(schema["oneOf"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn the_generated_one_of_grammar_compiles_via_the_real_json_schema_to_grammar_compiler() {
+        // Real, but does not need a loaded model or a running sampler --
+        // `json_schema_to_grammar` is a pure, real FFI call into
+        // llama.cpp's own bundled JSON-Schema-to-GBNF compiler.
+        let schema = build_tool_call_schema(&[read_file_tool(), list_directory_tool()]);
+        let grammar = llama_cpp_2::json_schema_to_grammar(&schema.to_string())
+            .expect("a real, valid JSON Schema must compile to a real GBNF grammar");
+        assert!(grammar.contains("root ::="));
     }
 }
 
@@ -358,7 +582,7 @@ mod live_integration_tests {
                 .expect("real model file must load");
 
         assert!(provider.is_local());
-        assert!(!provider.supports_native_tool_calling());
+        assert!(provider.supports_native_tool_calling());
         assert_eq!(provider.health_check(), ProviderHealth::Healthy);
 
         let request = CompletionRequest {
@@ -389,6 +613,69 @@ mod live_integration_tests {
         assert!(
             full_text.to_lowercase().contains("paris"),
             "expected a real, correct answer mentioning Paris, got: {full_text:?}"
+        );
+    }
+
+    /// The real counterpart to §75.83's own live text-completion test, for
+    /// this pass's grammar-constrained tool calling. Same self-skipping
+    /// convention. Proves the full real pipeline: a real `oneOf` schema
+    /// compiled to a real GBNF grammar, a real model genuinely constrained
+    /// by it token-by-token (not just "the prompt asked nicely"), and a
+    /// real, correctly-shaped `ToolCallStart`/`ToolCallArgsChunk`/
+    /// `ToolCallEnd`/`Stop{ToolUse}` sequence recovered from the result.
+    #[test]
+    fn a_real_local_gguf_model_produces_a_real_grammar_constrained_tool_call() {
+        let Ok(model_path) = std::env::var("SPARTAN_TEST_GGUF_MODEL") else {
+            eprintln!(
+                "SKIP: SPARTAN_TEST_GGUF_MODEL not set, skipping real llama.cpp tool-call test"
+            );
+            return;
+        };
+        if !std::path::Path::new(&model_path).exists() {
+            eprintln!("SKIP: {model_path} does not exist, skipping real llama.cpp tool-call test");
+            return;
+        }
+
+        let provider =
+            LlamaCppProvider::with_context_size(&model_path, NonZeroU32::new(512).unwrap())
+                .expect("real model file must load");
+
+        let request = CompletionRequest {
+            messages: vec![Message::user("Please read the file called main.rs")],
+            tools: vec![read_file_tool(), list_directory_tool()],
+            system_prompt:
+                "You are a helpful assistant that calls tools. Respond only by calling a tool."
+                    .to_string(),
+            max_tokens: 120,
+            temperature: 0.0,
+        };
+
+        let mut start: Option<(String, String)> = None;
+        let mut args_json: Option<String> = None;
+        let mut end_id: Option<String> = None;
+        let mut stop_reason = None;
+        provider
+            .stream_completion(&request, &mut |delta| match delta {
+                Delta::ToolCallStart { id, name } => start = Some((id, name)),
+                Delta::ToolCallArgsChunk { partial_json, .. } => args_json = Some(partial_json),
+                Delta::ToolCallEnd { id } => end_id = Some(id),
+                Delta::Stop { reason } => stop_reason = Some(reason),
+                Delta::TextChunk(_) => {
+                    panic!("grammar-constrained output must never emit free text")
+                }
+            })
+            .expect("real grammar-constrained inference must succeed");
+
+        let (start_id, name) = start.expect("a real ToolCallStart must have been emitted");
+        assert_eq!(name, "read_file", "the model must pick the correct tool");
+        assert_eq!(end_id.as_deref(), Some(start_id.as_str()));
+        assert_eq!(stop_reason, Some(StopReason::ToolUse));
+
+        let args: Value = serde_json::from_str(&args_json.expect("args must have been emitted"))
+            .expect("args must be real, valid JSON");
+        assert!(
+            args.get("path").and_then(Value::as_str).is_some(),
+            "expected a real \"path\" argument, got: {args:?}"
         );
     }
 }

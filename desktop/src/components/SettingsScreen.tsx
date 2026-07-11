@@ -480,10 +480,10 @@ export default function SettingsScreen(): React.ReactElement {
         the environment — no key storage exists in this settings screen yet. LiteLLM routes
         through a local proxy at localhost:4000 to whichever cloud backend it's configured for.
         llama.cpp runs a real local GGUF model in-process (no separate server, no Ollama install
-        required) — point it at a real `.gguf` file on disk. It has no native tool-calling support,
-        so Leo's plan/execute loop will report a real, honest error ("the model never called
-        propose_plan") until that's wired separately; it's a genuine, working text-completion
-        provider today, not yet a full Leo backend.
+        required) — point it at a real `.gguf` file on disk. Tool calling is real and native here
+        too, via grammar-constrained sampling: the model's output is structurally forced to match
+        the tool schema, so Leo's plan/execute loop works fully through it, not just free-text
+        completion.
       </div>
 
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>

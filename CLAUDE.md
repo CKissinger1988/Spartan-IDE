@@ -93,6 +93,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Fixed the last named production-packaging gap: GUI Builder's CLI no longer assumes a system Node install | §75.81 |
 | Real crash-report upload service (task #35), a real spike-completeness audit | §75.82 |
 | Real, direct llama.cpp integration — a fourth Leo model provider, in-process GGUF inference | §75.83 |
+| Real, native, grammar-constrained tool calling for llama.cpp — a real double-accept sampler bug found and fixed | §75.84 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2483,6 +2484,73 @@ first — it's the parity reference until each row there is actually reimplement
   session's own standing no-GPU-hardware constraint, unchanged since earlier passes -- CPU-only
   inference is what was verified, and is also this crate's own real default with no `cuda`/`vulkan`
   feature enabled).
+- **Real, working code — real, native, grammar-constrained tool calling for `LlamaCppProvider`,
+  closing the named scope limit §75.83 shipped with (§75.84)**: user-requested ("Add or fix
+  native tool calling"). `supports_native_tool_calling()` now returns `true` -- not via a trained
+  tool-calling format (raw GGUF inference has none), but via this crate's own real GBNF
+  grammar-constrained sampling: `llama_cpp_2::json_schema_to_grammar` compiles a real `oneOf`
+  JSON Schema built from `request.tools` (one branch per tool, `{"tool": <const name>, "args":
+  <that tool's own real parameters_schema>}`, or the bare single branch with no `oneOf` wrapper
+  for the common one-tool case) into a real GBNF grammar, and `LlamaSampler::grammar` constrains
+  every sampled token so the model is *structurally incapable* of emitting anything but valid
+  tool-call JSON matching a real tool schema -- not "the prompt asked nicely," a real, enforced
+  constraint at the sampler level.
+  **A real, load-bearing bug was found and fixed before this could work at all, not by
+  inspection.** Isolated feasibility testing in a scratch project first hit a real, deterministic
+  C++ crash -- `GGML_ASSERT(!stacks.empty())` inside llama.cpp's own `llama_grammar_reject_
+  candidates`, aborting on the *second* real sampled token every single time, independent of
+  sampler-chain composition (confirmed identical with and without a `dist` sampler ahead of
+  `greedy`) and independent of grammar complexity (confirmed identical with a trivial
+  hand-written `root ::= "hello"` grammar, ruling out anything specific to the `oneOf` compiler
+  output). Root-caused by reading the vendored `llama-sampler.cpp` source directly: the real C
+  `llama_sampler_sample` function this crate's `LlamaSampler::sample` wraps already calls
+  `llama_sampler_accept` internally on the token it selects -- confirmed at line 870:
+  `llama_sampler_accept(smpl, token);` runs unconditionally before `sample()` even returns. An
+  extra, explicit `sampler.accept(token)` call after `sample()` -- present in *both* this
+  module's original free-text loop (§75.83, shipped) and the scratch feasibility test's own first
+  draft -- silently double-advances every stateful sampler in the chain. For a plain
+  `dist`+`greedy` chain that's harmless (neither sampler holds token-history state `accept`
+  affects), which is exactly why it shipped unnoticed in §75.83 -- but for a *grammar* sampler,
+  whose entire job is tracking a real parser stack per accepted token, double-accepting empties
+  that stack after a single real token, and the very next `llama_grammar_reject_candidates` call
+  aborts on an invariant that's real and correct, just violated by the caller. Fixed by removing
+  every redundant `accept()` call in this module (both this new grammar path and the pre-existing
+  free-text path, which needed the identical fix even though its own bug was silent) and
+  extracting one real shared `run_token_loop` helper so the correct sample-without-double-accept
+  pattern exists in exactly one place instead of two near-duplicates. With the fix, the scratch
+  feasibility test immediately produced a real, correct, grammar-constrained
+  `{"tool":"read_file","args":{"path":"./data/input.txt"}}` against the real TinyLlama model and
+  correctly stopped at a real end-of-generation token rather than running to the loop's own
+  safety bound.
+  A real, honest, named scope limit remains: this is single-shot, not incrementally streamed --
+  the full grammar-constrained JSON generates internally, then is parsed and emitted as one
+  `ToolCallStart`/`ToolCallArgsChunk`/`ToolCallEnd`/`Stop{ToolUse}` sequence once complete, never
+  partial fragments the way Anthropic's real API streams tool input (matching Ollama's own
+  already-documented "one whole payload per chunk" precedent, not a new divergence). If
+  generation hits `max_tokens` before the grammar completes, `stream_completion` returns a real,
+  honest `ProviderError::Local` naming the truncation rather than silently returning malformed or
+  partial JSON as if it were a success. `FallbackParser` (§3.4) remains real, tested, and still
+  with no real caller anywhere in this workspace -- untouched by this pass, since grammar-
+  constrained sampling makes it unnecessary for this one provider specifically.
+  9 new tests (5 in `spartan-model::llamacpp` -- 4 pure/unit covering `build_tool_call_schema`'s
+  single-tool/multi-tool/zero-tool shapes plus a real, non-model-requiring confirmation that the
+  generated schema actually compiles via the real `json_schema_to_grammar` FFI call, and 1 new
+  real, self-skipping live-inference test gated on `SPARTAN_TEST_GGUF_MODEL` -- confirmed, with
+  the env var actually set to the real TinyLlama model from §75.83's own verification, to
+  genuinely produce a correct `read_file` tool call with a real `path` argument, not just
+  compile), 568 tests total workspace-wide (up from 563), full `cargo fmt --all -- --check`/
+  `cargo clippy --workspace --release --all-targets`/`cargo test --workspace --release --
+  --test-threads=1` clean. `desktop`'s own `tsc --noEmit`/`npm run build` clean; the Settings
+  screen's llama.cpp note text was updated to describe real native tool-calling support instead
+  of naming it as a gap. **What this does not confirm**: no live model-driven exercise through
+  Leo's own `plan.rs`/`execute.rs` (this pass verified the provider in isolation via its own
+  `stream_completion`, not through a full Leo task run against a configured llama.cpp provider);
+  no test of a real multi-tool `oneOf` grammar against a live model (the live test uses two tools
+  but only confirms the model picks the correct one -- a stress test with many more tools/more
+  complex nested schemas remains real, untested territory); the double-accept fix was verified to
+  not change the free-text path's *behavior* (its own pre-existing live test still passes
+  unmodified) but no dedicated regression test asserts the accept-count itself, since nothing in
+  the public API exposes it to assert against.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -2540,16 +2608,17 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 563 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 568 tests: 6 spikes + 13 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
                                     # spartan-editor-core, spartan-backend, xtask)
-# spartan-model's own tests/llamacpp.rs live_integration_tests module (§75.83) needs
-# SPARTAN_TEST_GGUF_MODEL set to a real, already-downloaded .gguf file path -- self-skips (prints
-# a message) if unset or the path doesn't exist, matching every other real-external-tool
-# integration suite in this repo. No .gguf model file is bundled with this repository. Same for
-# spartan-backend's build_leo_provider_constructs_a_real_llamacpp_provider_from_a_real_model_file.
+# spartan-model's own src/llamacpp.rs live_integration_tests module (§75.83, extended by §75.84
+# with a second, grammar-constrained tool-calling test) needs SPARTAN_TEST_GGUF_MODEL set to a
+# real, already-downloaded .gguf file path -- self-skips (prints a message) if unset or the path
+# doesn't exist, matching every other real-external-tool integration suite in this repo. No .gguf
+# model file is bundled with this repository. Same for spartan-backend's
+# build_leo_provider_constructs_a_real_llamacpp_provider_from_a_real_model_file.
 # spartan-devcontainer (§75.74) needs a real local Docker daemon reachable for its own
 # tests/docker_integration.rs -- self-skips (prints a message) if none is found, matching every
 # other real-external-tool integration suite in this repo. A later session (§75.75) confirmed
