@@ -103,7 +103,9 @@ fn main() {
         let ws_state = Arc::clone(&state);
         thread::spawn(move || {
             let addr = format!("127.0.0.1:{port}");
-            if let Err(e) = ws_transport::run_websocket_server(ws_state, &addr, security) {
+            if let Err(e) =
+                ws_transport::run_websocket_server(ws_state, &addr, security, handle_request)
+            {
                 eprintln!("spartan-backend: WebSocket transport failed to start on {addr}: {e}");
             }
         });

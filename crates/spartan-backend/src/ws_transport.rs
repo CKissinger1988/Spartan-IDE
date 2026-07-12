@@ -60,7 +60,7 @@
 //! construction; it does not invent an unreviewed answer to that
 //! separate, larger design question.
 
-use crate::{handle_request, BackendState, Request, Response};
+use crate::{Request, Response};
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, Sender};
@@ -165,24 +165,45 @@ fn validate_handshake(
 /// Real, blocking server loop -- binds `addr` and spawns one real thread
 /// per accepted connection, sharing `state` with every connection
 /// (including, when called from `main.rs`, the existing stdio one).
-pub fn run_websocket_server(
-    state: Arc<Mutex<BackendState>>,
+///
+/// **Generic over `<S, D>`** (task-A, §75.88 follow-up): the state type and
+/// the per-request dispatch function are both caller-supplied, so this one
+/// implementation -- and, load-bearingly, its single-sourced security
+/// handshake (`validate_handshake`, `tokens_match`) -- is reused verbatim
+/// by both `spartan-backend`'s own `main.rs` (which passes `BackendState`
+/// and `handle_request`) and `spartan-devserver` (which passes its own
+/// wrapping state + dispatcher that falls through to `handle_request`).
+/// Neither the token/Origin security logic nor the accept loop is forked.
+pub fn run_websocket_server<S, D>(
+    state: Arc<Mutex<S>>,
     addr: &str,
     security: WsSecurity,
-) -> io::Result<()> {
+    dispatch: D,
+) -> io::Result<()>
+where
+    S: Send + 'static,
+    D: Fn(&Arc<Mutex<S>>, Request, Sender<String>) -> Response + Clone + Send + 'static,
+{
     let listener = TcpListener::bind(addr)?;
-    serve(state, listener, security)
+    serve(state, listener, security, dispatch)
 }
 
-/// Split out from `run_websocket_server` so tests can bind to a real
-/// ephemeral port (`127.0.0.1:0`) and read back the actual port the OS
-/// assigned via `TcpListener::local_addr()` before handing the listener
-/// off to the accept loop.
-fn serve(
-    state: Arc<Mutex<BackendState>>,
+/// Split out from `run_websocket_server` so a caller (tests, and
+/// `spartan-devserver`) can bind to a real ephemeral port (`127.0.0.1:0`)
+/// and read back the actual port the OS assigned via
+/// `TcpListener::local_addr()` before handing the listener off to the
+/// accept loop -- exactly what `spartan-devserver` needs so it can advertise
+/// the real WebSocket port to a browser client via `/__spartan/session`.
+pub fn serve<S, D>(
+    state: Arc<Mutex<S>>,
     listener: TcpListener,
     security: WsSecurity,
-) -> io::Result<()> {
+    dispatch: D,
+) -> io::Result<()>
+where
+    S: Send + 'static,
+    D: Fn(&Arc<Mutex<S>>, Request, Sender<String>) -> Response + Clone + Send + 'static,
+{
     for stream in listener.incoming() {
         let stream = match stream {
             Ok(s) => s,
@@ -190,12 +211,20 @@ fn serve(
         };
         let state = Arc::clone(&state);
         let security = security.clone();
-        thread::spawn(move || handle_connection(state, stream, security));
+        let dispatch = dispatch.clone();
+        thread::spawn(move || handle_connection(state, stream, security, dispatch));
     }
     Ok(())
 }
 
-fn handle_connection(state: Arc<Mutex<BackendState>>, stream: TcpStream, security: WsSecurity) {
+fn handle_connection<S, D>(
+    state: Arc<Mutex<S>>,
+    stream: TcpStream,
+    security: WsSecurity,
+    dispatch: D,
+) where
+    D: Fn(&Arc<Mutex<S>>, Request, Sender<String>) -> Response,
+{
     if stream.set_read_timeout(Some(POLL_INTERVAL)).is_err() {
         return;
     }
@@ -221,7 +250,7 @@ fn handle_connection(state: Arc<Mutex<BackendState>>, stream: TcpStream, securit
     loop {
         match ws.read() {
             Ok(Message::Text(text)) => {
-                if !dispatch_line(&state, &text, &out_tx, &mut ws) {
+                if !dispatch_line(&state, &text, &out_tx, &mut ws, &dispatch) {
                     break;
                 }
             }
@@ -248,19 +277,24 @@ fn handle_connection(state: Arc<Mutex<BackendState>>, stream: TcpStream, securit
 }
 
 /// Parses one real request line (the same shape `main.rs`'s stdio loop
-/// parses per newline) and writes its `Response` back immediately.
-/// Returns `false` if the connection should close (a real send failure).
-fn dispatch_line(
-    state: &Arc<Mutex<BackendState>>,
+/// parses per newline) and hands it to the caller-supplied `dispatch`
+/// function, writing its `Response` back immediately. Returns `false` if
+/// the connection should close (a real send failure).
+fn dispatch_line<S, D>(
+    state: &Arc<Mutex<S>>,
     line: &str,
     out_tx: &Sender<String>,
     ws: &mut WebSocket<TcpStream>,
-) -> bool {
+    dispatch: &D,
+) -> bool
+where
+    D: Fn(&Arc<Mutex<S>>, Request, Sender<String>) -> Response,
+{
     if line.trim().is_empty() {
         return true;
     }
     let response = match serde_json::from_str::<Request>(line) {
-        Ok(req) => handle_request(state, req, out_tx.clone()),
+        Ok(req) => dispatch(state, req, out_tx.clone()),
         Err(e) => Response {
             id: 0,
             result: None,
@@ -276,6 +310,7 @@ fn dispatch_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{handle_request, BackendState};
     use std::time::Duration;
     use tungstenite::client::{connect, ClientRequestBuilder};
     use tungstenite::http::Uri;
@@ -316,7 +351,10 @@ mod tests {
         let state = Arc::new(Mutex::new(BackendState::new()));
         let state_clone = Arc::clone(&state);
         thread::spawn(move || {
-            let _ = serve(state_clone, listener, security);
+            // The tests exercise the real `handle_request` dispatcher --
+            // exactly what `main.rs` passes -- so this genericized transport
+            // is verified against the same real backend behavior as before.
+            let _ = serve(state_clone, listener, security, handle_request);
         });
         // Real, brief settle so the accept loop is actually listening
         // before a test's own connect attempt -- `TcpListener::bind`
