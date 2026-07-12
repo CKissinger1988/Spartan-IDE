@@ -121,9 +121,76 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
+  android-package:
+    name: Android (debug-signed .apk)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: npm ci
+        working-directory: mobile
+        run: npm ci
+
+      - name: Set up JDK 17
+        # React Native's Gradle plugin toolchain requires JDK 17
+        # specifically -- confirmed by a real local build failure when only
+        # JDK 21 was present (Gradle's foojay auto-provisioner then tried
+        # downloading JDK 17 itself and hit an unrelated blocked host in
+        # that sandbox; a real GitHub Actions runner doesn't need to
+        # auto-provision anything since setup-java installs it directly).
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: expo prebuild
+        # Generates the real native android/ project (this repo's own
+        # mobile/.gitignore deliberately excludes it -- ephemeral,
+        # regenerated at build time, matching the managed-Expo-workflow
+        # convention already established here).
+        working-directory: mobile
+        run: npx expo prebuild --platform android
+
+      - name: Build debug APK
+        # Debug-signed with Expo's own auto-generated debug.keystore --
+        # a real, publicly-documented, non-secret default convention
+        # (storePassword/keyPassword "android", alias "androiddebugkey"),
+        # not a credential this pipeline needs to protect. A real
+        # production-signed release build needs a real, securely-held
+        # keystore this pipeline deliberately does not fabricate --
+        # see the release body's own honest account of this scope limit.
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug
+
+      - name: Stage package
+        shell: bash
+        run: |
+          set -e
+          VERSION=$(grep -m1 '"version"' mobile/package.json | sed -E 's/.*"version": *"(.*)".*/\1/')
+          mkdir -p dist
+          cp mobile/android/app/build/outputs/apk/debug/app-debug.apk \
+            "dist/spartan-mobile-ide-${VERSION}-debug.apk"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-package
+          path: dist/*.apk
+          if-no-files-found: error
+
   create-release:
     name: Create GitHub Release
-    needs: [linux-package, windows-package]
+    needs: [linux-package, windows-package, android-package]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -164,15 +231,23 @@ jobs:
           files: |
             artifacts/linux-package/*.tar.gz
             artifacts/windows-package/*.zip
+            artifacts/android-package/*.apk
           generate_release_notes: true
           draft: false
           body: |
             First tagged release. What's actually in it, stated plainly:
 
-            **Included**: the real, tested wgpu-native reference shell
-            (`crates/spartan-editor-core`) for Linux (`.tar.gz`, includes
-            `install.sh` for a real no-root XDG install) and Windows
-            (`.zip`, native MSVC build on a real `windows-latest` runner).
+            **Included**:
+            - The real, tested wgpu-native reference shell
+              (`crates/spartan-editor-core`) for Linux (`.tar.gz`, includes
+              `install.sh` for a real no-root XDG install) and Windows
+              (`.zip`, native MSVC build on a real `windows-latest` runner).
+            - `mobile/`'s real Expo/React Native companion app, as a
+              **debug-signed** Android `.apk` (Expo's own auto-generated
+              debug keystore -- a real, publicly-documented, non-secret
+              default, not a production signing identity). Installable
+              on a device with "install from unknown sources" allowed;
+              not distributable through the Play Store as-is.
 
             **Not included, on purpose, not an oversight**:
             - The primary Electron/React shell (`desktop/`) has no
@@ -186,9 +261,10 @@ jobs:
               from within CI.
             - No macOS build (no Apple hardware/runner used to produce
               or verify one).
-            - No Android build (`mobile/`) in this release -- release
-              signing needs a real, securely-held keystore this pipeline
-              intentionally does not fabricate or embed in plaintext.
+            - No iOS build (same reason).
+            - No production-signed Android release -- that needs a real,
+              securely-held keystore this pipeline deliberately does not
+              fabricate or embed in plaintext.
 
             See `CLAUDE.md` and `docs/architecture-spec.md` for the full,
             continuously-updated account of what's real vs. reference-only
