@@ -25,9 +25,11 @@
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
-        "USE_BIOMETRIC",
-        "USE_FINGERPRINT"
-      ]
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.spartanide.mobile"
     },
     "web": {
       "favicon": "./assets/favicon.png"

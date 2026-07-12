@@ -1,0 +1,170 @@
+name: Release
+
+# Real, tag-triggered release pipeline -- the only way to actually publish a
+# GitHub Release from this project, since no direct release-creation API
+# access exists outside of GitHub Actions itself (the session that authored
+# this workflow had read-only release/tag tools, no create/upload). Push a
+# `v*` tag to build real, honest release artifacts for every platform this
+# workspace can genuinely produce one for, and publish them as a GitHub
+# Release via the default, workflow-scoped `GITHUB_TOKEN`.
+#
+# Deliberately does NOT attempt to package the Electron shell (desktop/) as
+# an installer here -- see CLAUDE.md §75.59/§75.77/§75.81: Electron's own
+# distributable-content download is blocked by this project's development
+# sandbox's standing network policy, confirmed repeatedly and deliberately
+# not routed around. A real GitHub Actions runner has ordinary internet
+# access and is *not* subject to that sandbox-specific block, so Electron
+# packaging genuinely could be added here later -- it's simply untested
+# from within the session that wrote this workflow and therefore not
+# claimed as working. The wgpu-native reference shell
+# (`crates/spartan-editor-core`, §75.5 onward) is this project's own
+# real, tested, GPU-rendering desktop binary and is what ships here for
+# Linux and Windows.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  linux-package:
+    name: Linux (.tar.gz, xtask package)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        # Same real, environment-discovered requirements as ci.yml's own
+        # rust job -- spartan-editor-core embeds a real wry/WebView2
+        # control that needs GTK/WebKitGTK headers to link.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            cmake \
+            build-essential \
+            libclang-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo run -p xtask -- package
+        run: cargo run -p xtask --release -- package
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-package
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  windows-package:
+    name: Windows (.zip, native MSVC build)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo build --release -p spartan-editor-core
+        # Native MSVC build on a real windows-latest runner -- higher
+        # fidelity than a Linux-hosted mingw-w64 GNU-target cross-compile
+        # (this workspace's own real cross-compile history, §75.40, only
+        # ever exercised the GNU target; a real dev machine's default
+        # rustup target is MSVC, so that's what ships here).
+        run: cargo build --release -p spartan-editor-core
+
+      - name: Stage package
+        shell: bash
+        run: |
+          set -e
+          VERSION="0.1.0"
+          STAGE="spartan-ide-${VERSION}-x86_64-pc-windows-msvc"
+          mkdir -p "dist/$STAGE"
+          cp target/release/spartan-editor-core.exe "dist/$STAGE/"
+          cat > "dist/$STAGE/README.txt" <<EOF
+          Spartan IDE ${VERSION} (Windows, wgpu-native reference shell)
+          =====================
+
+          From-scratch, agent-first desktop IDE.
+
+          Run directly:
+              spartan-editor-core.exe <file-or-project-path>
+
+          This is the original wgpu-native reference shell
+          (crates/spartan-editor-core), not the newer Electron/React shell
+          (desktop/) -- see the project's own README/CLAUDE.md for why both
+          exist. No installer/code-signing is provided in this release.
+          EOF
+          cd dist
+          7z a "${STAGE}.zip" "$STAGE"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: dist/*.zip
+          if-no-files-found: error
+
+  create-release:
+    name: Create GitHub Release
+    needs: [linux-package, windows-package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/linux-package/*.tar.gz
+            artifacts/windows-package/*.zip
+          generate_release_notes: true
+          draft: false
+          body: |
+            First tagged release. What's actually in it, stated plainly:
+
+            **Included**: the real, tested wgpu-native reference shell
+            (`crates/spartan-editor-core`) for Linux (`.tar.gz`, includes
+            `install.sh` for a real no-root XDG install) and Windows
+            (`.zip`, native MSVC build on a real `windows-latest` runner).
+
+            **Not included, on purpose, not an oversight**:
+            - The primary Electron/React shell (`desktop/`) has no
+              installer here -- Electron's own distributable-content
+              download is blocked by a standing network policy in this
+              project's development sandbox (documented in `CLAUDE.md`
+              §75.59/§75.77/§75.81), deliberately not routed around. A
+              real GitHub Actions runner isn't subject to that same
+              sandbox restriction, so this is a real candidate for a
+              future release once electron-builder packaging is verified
+              from within CI.
+            - No macOS build (no Apple hardware/runner used to produce
+              or verify one).
+            - No Android build (`mobile/`) in this release -- release
+              signing needs a real, securely-held keystore this pipeline
+              intentionally does not fabricate or embed in plaintext.
+
+            See `CLAUDE.md` and `docs/architecture-spec.md` for the full,
+            continuously-updated account of what's real vs. reference-only
+            across this project.
