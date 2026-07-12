@@ -5,6 +5,9 @@ import { ensureBufferWasmInit, Document as WasmDocument } from "./buffer";
 import { isFileSystemAccessSupported, pickProjectDirectory, readFileText } from "./fsAccess";
 import { applyTheme, type ThemeName } from "./applyTheme";
 import { applyFontFamily } from "./applyFontFamily";
+import { BackendClient } from "./backendClient";
+
+type BackendStatus = "connecting" | "connected" | "client-only";
 
 // Real §75.93 theme/font persistence -- this app has no `spartan-backend`
 // settings store to round-trip through (§75.89's own named scope: no
@@ -44,6 +47,33 @@ export default function App(): React.ReactElement {
   const [fontFamily, setFontFamily] = useState<string>(
     () => localStorage.getItem(FONT_STORAGE_KEY) ?? ""
   );
+  const [backendStatus, setBackendStatus] = useState<BackendStatus>("connecting");
+
+  // Optional backend upgrade: when this page is served by a real
+  // spartan-devserver (§75.88 + the /__spartan/session handoff), connect to
+  // it. When it isn't (a Vite dev server, plain static hosting), the fetch
+  // 404s / rejects and the app stays in its existing pure-client mode --
+  // no error surfaced to the user, connectivity is genuinely optional.
+  useEffect(() => {
+    let client: BackendClient | null = null;
+    let cancelled = false;
+    BackendClient.connect()
+      .then((c) => {
+        if (cancelled) {
+          c.close();
+          return;
+        }
+        client = c;
+        setBackendStatus("connected");
+      })
+      .catch(() => {
+        if (!cancelled) setBackendStatus("client-only");
+      });
+    return () => {
+      cancelled = true;
+      client?.close();
+    };
+  }, []);
 
   // Applied on mount and every real change, matching `desktop/`'s own
   // startup-apply-then-live-apply pattern (`App.tsx`/`SettingsScreen.tsx`).
@@ -167,6 +197,18 @@ export default function App(): React.ReactElement {
         ) : (
           <span>No file open</span>
         )}
+        <span
+          className="status-backend"
+          title={
+            backendStatus === "connected"
+              ? "Connected to a local spartan-devserver (backend capabilities available)"
+              : backendStatus === "client-only"
+                ? "No backend detected -- running fully client-side"
+                : "Checking for a local spartan-devserver…"
+          }
+        >
+          backend: {backendStatus}
+        </span>
       </div>
     </div>
   );
