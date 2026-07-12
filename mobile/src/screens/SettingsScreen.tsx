@@ -117,7 +117,7 @@ export function SettingsScreen({ navigation }: Props) {
               </Text>
             </Pressable>
             <Pressable
-              style={[styles.themeButton, mode === 'light' && styles.themeButtonActive]}
+              style={[styles.themeButton, mode === 'light' && styles.themeButtonActiveGold]}
               onPress={() => setMode('light')}
             >
               <Text style={[styles.themeButtonText, mode === 'light' && styles.themeButtonTextActive]}>
@@ -283,17 +283,27 @@ function makeStyles(colors: ThemeColors) {
       backgroundColor: colors.accent,
       borderColor: colors.accent,
     },
+    // Real §75.95 rebrand: the Light-mode pill uses the real gold secondary
+    // accent rather than the primary blue `themeButtonActive` above -- a
+    // real, deliberate, visible "both brand colors together" moment (Dark
+    // -> blue, Light -> gold) rather than one accent used for both toggle
+    // states, the only place in this app that shows `colors.gold` today.
+    themeButtonActiveGold: {
+      backgroundColor: colors.gold,
+      borderColor: colors.gold,
+    },
     themeButtonText: {
       color: colors.text,
       fontWeight: '600',
       fontSize: 13,
     },
     themeButtonTextActive: {
-      // Always white, regardless of theme -- `themeButtonActive`'s own
-      // background is the real accent color in both themes, and plain
-      // `colors.text` (near-black in the light theme) would be
-      // unreadable against it, the same real reasoning `queueButtonText`
-      // above already applies to every other accent-colored button.
+      // Always white, regardless of theme -- both `themeButtonActive` and
+      // `themeButtonActiveGold`'s own backgrounds are real, saturated
+      // accent colors in both themes, and plain `colors.text` (near-black
+      // in the light theme) would be unreadable against either, the same
+      // real reasoning `queueButtonText` above already applies to every
+      // other accent-colored button.
       color: '#fff',
     },
   });

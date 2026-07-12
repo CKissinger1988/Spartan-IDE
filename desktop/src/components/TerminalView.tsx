@@ -36,7 +36,7 @@ export default function TerminalView({ cwd, command, args }: TerminalViewProps):
       theme: {
         background: "#09090b",
         foreground: "#e9e7e4",
-        cursor: "#c4432b",
+        cursor: "#2e7dff",
       },
       convertEol: true,
     });

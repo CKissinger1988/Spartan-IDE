@@ -94,7 +94,7 @@ fn lerp_color(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
 /// only as the auxiliary pane's color -- real per-mode content is out of
 /// scope for this increment (§39.4 explicitly excludes it).
 const MODE_COLORS: [(&str, (u8, u8, u8)); 3] = [
-    ("Agent", (0xC4, 0x43, 0x2B)),  // accent rust
+    ("Agent", (0x2E, 0x7D, 0xFF)),  // accent blue
     ("Editor", (0x3D, 0x9C, 0x93)), // teal
     ("Design", (0x4E, 0x9E, 0x72)), // green
 ];

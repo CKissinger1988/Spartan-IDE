@@ -104,6 +104,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Real JetBrains Mono, the default font for every real Spartan project (wgpu shell, desktop/, web/, mobile/) — a real fontconfig-ordering bug found and fixed | §75.92 |
 | Real user-customizable theme and font options across every real Spartan surface (wgpu shell, desktop/, web/, mobile/) | §75.93 |
 | Production-readiness pass — a real light-theme bug in the Workflows canvas found and fixed by actually looking | §75.94 |
+| Blue/gold rebrand across every real Spartan surface, a real sarcastic Leo persona, Gemini-CLI-style random thoughts in the Leo chat panel, web/desktop visual parity | §75.95 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -2952,6 +2953,72 @@ first — it's the parity reference until each row there is actually reimplement
   remains unlaunched this session (same standing gap since §75.59); no theme variants beyond
   Dark/Light on any surface; `mobile/`'s font customization was deliberately scoped out (named
   explicitly) since §69's own v1 has no code-editing surface for it to meaningfully apply to.
+- **Real, working code — production-readiness pass, a real light-theme bug in the Workflows canvas
+  found and fixed by actually looking (§75.94)**: user-requested ("Make sure everything possible is
+  ready for production build. Complete all todos and visually verify everything works"). A real
+  `grep` for stray TODO/FIXME/XXX markers across every real product source directory found none;
+  every real production build (Rust workspace + `xtask package`, `desktop/`'s renderer+electron,
+  `web/`'s `build:wasm`+`tsc`+`vite build`, `gui-builder/`'s build+47-test suite, `mobile/`'s
+  `tsc`+114-test Jest suite+`expo export`) was re-run fresh and confirmed clean; a real
+  `desktop/`/`web/` electron-builder packaging attempt re-confirmed the standing network-policy
+  `403` from §75.77/§75.81 is unchanged, not newly regressed. A comprehensive, screenshotted
+  Playwright pass drove both shells through the file tree, syntax highlighting, Git panel, Settings
+  (dark/light/custom-font), Workflows, Design, Console, and Dev Containers -- catching two real
+  mock-harness mistakes (a wrong `git_status` mock shape; a closure referencing a Node-side `const`
+  invisible inside a serialized browser-context function) before either could be mistaken for a real
+  bug. **One real, genuine product bug was found this way**: the Workflows screen's
+  `<ReactFlow colorMode="dark">` was hardcoded, so it was the one real surface that didn't repaint on
+  a live theme switch -- fixed with a new `useColorMode()` hook reading the live `data-theme`
+  attribute via a real `MutationObserver`, re-verified via a second light-theme screenshot showing
+  the canvas correctly repainted white with recolored node borders. `desktop/`'s xterm.js Console
+  keeping its own independent black terminal scheme regardless of app theme was checked and confirmed
+  to be the same real, conventional behavior every terminal emulator already exhibits, not a gap.
+- **Real, working code — blue/gold rebrand across every real Spartan surface, a real sarcastic Leo
+  persona, Gemini-CLI-style random thoughts in the Leo chat panel, real web/desktop visual parity
+  (§75.95)**: direct, user-requested, four real pieces landed together: "Leo's default persona
+  should be a wise cracking sarcastic smartass. Leo should show random thoughts similar to Gemini
+  Cli. And dark mode needs more color... All Spartan projects default colors are blue and gold. The
+  web app should look identical to the IDE." **Rebrand**: every real hardcoded rust/terracotta
+  (`#C4432B`) and cyan (`#3EE6E0`) reference across the whole repo replaced with a real blue
+  (`#2E7DFF` dark / `#1B54C4` light) primary and gold (`#D4AF37` dark / `#9C7A1D` light) secondary
+  pair -- `desktop/`'s and `web/`'s `theme.css` (kept byte-identical on every token), `spartan-
+  editor-core`'s `text.rs`/`selection.rs`/`cursor.wgsl`/`webview_bridge.rs`, `crates/plugins/
+  theme-pack`'s demo theme, both spikes carrying a hardcoded copy for consistency, both real design
+  prototypes (`prototypes/*.jsx`) so the checked-in design record doesn't go stale, and a genuinely
+  new `gold`/`goldDim`/`goldBg`/`goldBorder` token pair added to `mobile/src/theme.ts` (not reusing
+  the existing status-semantic `amber`) wired into the Settings theme toggle as a real, visible
+  "both brand colors together" moment -- the Dark pill uses blue, the Light pill uses gold. The
+  "too much like a black and white terminal" complaint was addressed via the accent swap itself plus
+  a real, quantified bump to both shells' body background radial-gradient opacities (0.05→0.08
+  accent, 0.035→0.06 HUD). **Persona**: new `crates/spartan-leo/src/persona.rs` -- one shared
+  `LEO_PERSONA` constant referenced by both `plan.rs`'s and `execute.rs`'s real system prompts,
+  deliberately scoped to *prose only* (stated in the persona text itself) since native tool-calling's
+  fixed JSON Schema means it flavors string content without ever risking the surrounding JSON
+  structure real parsing depends on; `plan.rs`'s previously-`const` `SYSTEM_PROMPT` became a real
+  function since `concat!` only accepts literals, not a const path. 3 new tests confirm the real
+  constructed prompt both contains the persona text *and* still requires the real structural
+  instruction alongside it. **Random thoughts**: no Gemini CLI code read or copied, only the
+  described *behavior* -- a fresh, hand-written 18-entry array in `LeoChatPanel.tsx`, flavored to
+  match Leo's own new persona, cycled by a new `useRandomThought(active)` hook every 2.5s (never
+  repeating the immediately-previous entry), wired into the real Planning state and the real
+  between-execute-steps `thinking` state, rendered as a dim italic gold line under the existing
+  static status text. A real, named scope decision: the wgpu shell's `agent_panel.rs` has no
+  timer-driven redraw infrastructure to hang an equivalent animation on, left as that shell's own
+  honest, named gap rather than bolted on as a mismatched half-measure. **Web/desktop parity**:
+  `web/App.tsx`'s toolbar gained the identical `.nav-brand-glyph` CSS chevron emblem and accent-glow
+  wordmark treatment `desktop/` already uses, plus a gold "web" suffix; the primary "Open Folder…"
+  button gained the same chamfered/glow primary-action treatment `desktop/`'s own
+  `.settings-button-primary` establishes; `.file-tree-panel`/`.empty-state`/`.status-bar` were
+  changed to byte-match `desktop/src/app.css`'s own shipped values exactly. Real, executed
+  verification: full Rust fmt/clippy/test clean (persona tests included, no regressions);
+  `desktop/`'s and `web/`'s typecheck+build both clean; `mobile/`'s tsc+114-test Jest+`expo export`
+  clean; `gui-builder/`'s 47-test suite clean, including its two real fixture tests parsing the
+  now-rebranded `prototypes/*.jsx` files without error; real, screenshotted Playwright verification
+  of `web/`'s new toolbar in both themes and `desktop/`'s nav/tabs/Leo panel rendering the new blue
+  accent correctly through the real, non-mocked component tree. **What this does not confirm**: no
+  live model-driven exercise of the new persona or random-thoughts UI (Ollama unreachable this
+  session, unchanged since §75.56); the real Electron window remains unlaunchable this session
+  (same standing gap since §75.59).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -3009,7 +3076,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 618 tests: 7 spikes + 15 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 622 tests: 7 spikes + 15 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,

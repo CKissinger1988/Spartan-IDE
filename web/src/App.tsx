@@ -112,8 +112,12 @@ export default function App(): React.ReactElement {
   return (
     <div className="app-root">
       <div className="toolbar">
-        <span className="toolbar-title mono">SPARTAN (web)</span>
-        <button className="toolbar-btn" onClick={openFolder}>
+        <span className="toolbar-brand mono">
+          <span className="toolbar-brand-glyph" />
+          SPARTAN
+          <span className="toolbar-brand-suffix">web</span>
+        </span>
+        <button className="toolbar-btn toolbar-btn-primary sf-chamfer-sm" onClick={openFolder}>
           Open Folder…
         </button>
         <span className="toolbar-note">

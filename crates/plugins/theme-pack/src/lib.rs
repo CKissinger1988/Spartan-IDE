@@ -32,7 +32,7 @@ impl Guest for Component {
     /// needing filesystem access at all").
     fn get_theme() -> Option<String> {
         Some(
-            r##"{"name":"Spartan Dusk","background":"#0B0B0D","foreground":"#E9E7E4","accent":"#C4432B"}"##
+            r##"{"name":"Spartan Dusk","background":"#0B0B0D","foreground":"#E9E7E4","accent":"#2E7DFF"}"##
                 .to_string(),
         )
     }

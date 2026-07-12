@@ -53,6 +53,65 @@ function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
 
 const VOICE_OUTPUT_STORAGE_KEY = "spartan.leo.voiceOutputEnabled";
 
+/**
+ * Real §75.95 "random thoughts," user-requested ("Leo should show random
+ * thoughts similar to Gemini Cli"): Gemini CLI shows a rotating line of
+ * playful status text while it's actively working, instead of one static
+ * "thinking..." message the whole time. This is that same real UX pattern,
+ * built fresh for this app -- a curated, hand-written array (no Gemini CLI
+ * code read or copied; only the described *behavior* was the reference),
+ * flavored to match Leo's own real §75.95 sarcastic persona (`crates/
+ * spartan-leo/src/persona.rs`) rather than Gemini's own neutral tone, so
+ * the chat panel's voice matches the model's own system-prompt voice
+ * instead of contradicting it.
+ */
+const LEO_THOUGHTS: readonly string[] = [
+  "Reticulating splines, mostly out of spite...",
+  "Silently judging your variable names...",
+  "Definitely not just guessing here...",
+  "Pretending this is harder than it is, for effect...",
+  "Consulting the ghosts of stack traces past...",
+  "Counting the semicolons you forgot...",
+  "Summoning my inner grumpy senior engineer...",
+  "Weighing the pros and cons of just winging it...",
+  "Double-checking so I don't look dumb later...",
+  "Muttering about tech debt under my breath...",
+  "Politely ignoring that TODO comment I just saw...",
+  "Crunching numbers, mostly for dramatic effect...",
+  "Deciding whether this deserves a witty remark...",
+  "Recalling every bug I've ever fixed, for inspiration...",
+  "Resisting the urge to rewrite everything...",
+  "Pretending I've never seen a bug this weird before...",
+  "Buying time so this looks like real effort...",
+  "Rolling my eyes at this codebase, lovingly...",
+];
+
+/** Cycles to a real, freshly-random `LEO_THOUGHTS` entry every ~2.5s while
+ * `active` is true, and stays `null` (rendered as nothing) otherwise --
+ * mirrors this panel's own established "no fake stub while inactive"
+ * discipline (`getSpeechRecognitionCtor()`'s own honest-`null` pattern
+ * above). Deliberately avoids repeating the immediately-previous thought
+ * back-to-back so a short-lived step doesn't visibly "not change." */
+function useRandomThought(active: boolean): string | null {
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    if (!active) return;
+    setIndex(Math.floor(Math.random() * LEO_THOUGHTS.length));
+    const interval = setInterval(() => {
+      setIndex((prev) => {
+        if (LEO_THOUGHTS.length <= 1) return prev;
+        let next = Math.floor(Math.random() * LEO_THOUGHTS.length);
+        if (next === prev) next = (next + 1) % LEO_THOUGHTS.length;
+        return next;
+      });
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [active]);
+
+  return active ? LEO_THOUGHTS[index] : null;
+}
+
 interface LeoPlan {
   goal: string;
   approach: string;
@@ -165,6 +224,14 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
   const [log, setLog] = useState<LogEntry[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
   const [memorySaved, setMemorySaved] = useState<boolean | null>(null);
+
+  // Real §75.95 random-thoughts status text -- active exactly while Leo is
+  // doing real, unattended work with nothing more specific to show yet:
+  // the initial plan-generation call, or between execute-loop steps once
+  // a step has been requested but no real proposed call has arrived (or
+  // been auto-run) to describe instead.
+  const showingRandomThought = agentState === "Planning" || (thinking && !pendingCall);
+  const randomThought = useRandomThought(showingRandomThought);
 
   // Real §75.71 voice I/O state. `voiceOutputEnabled` is a pure renderer
   // preference (not routed through `spartan_settings` -- it has no
@@ -512,6 +579,7 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         {agentState === "Planning" && (
           <div className="leo-status-message mono">
             Leo is planning...
+            {randomThought && <div className="leo-random-thought mono">{randomThought}</div>}
             <button className="leo-btn leo-btn-cancel" onClick={cancelTask}>
               Cancel
             </button>
@@ -563,7 +631,10 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
             )}
 
             {thinking && !pendingCall && (
-              <div className="leo-status-message mono">Leo is thinking about the next step...</div>
+              <div className="leo-status-message mono">
+                Leo is thinking about the next step...
+                {randomThought && <div className="leo-random-thought mono">{randomThought}</div>}
+              </div>
             )}
 
             <button className="leo-btn leo-btn-cancel" onClick={cancelTask}>

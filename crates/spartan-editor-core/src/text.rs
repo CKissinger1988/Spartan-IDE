@@ -366,7 +366,7 @@ impl TextState {
     /// `hits` gives each label's real char range; `active_range` is the
     /// one to accent.
     pub fn set_mode_toggle_text(&mut self, text: &str, active_range: std::ops::Range<usize>) {
-        const ACCENT: Color = Color::rgb(0xC4, 0x43, 0x2B);
+        const ACCENT: Color = Color::rgb(0x2E, 0x7D, 0xFF);
         let dim: Color = crate::theme::text_dim();
         let default_attrs = Attrs::new().family(Family::Monospace);
         let active_start_byte = text
@@ -415,7 +415,7 @@ impl TextState {
     /// one consistent "this is the active thing" visual language reused
     /// across every real toggle strip in this shell.
     pub fn set_activity_bar_text(&mut self, text: &str, active_range: std::ops::Range<usize>) {
-        const ACCENT: Color = Color::rgb(0xC4, 0x43, 0x2B);
+        const ACCENT: Color = Color::rgb(0x2E, 0x7D, 0xFF);
         let dim: Color = crate::theme::text_dim();
         let default_attrs = Attrs::new().family(Family::Monospace);
         let active_start_byte = text

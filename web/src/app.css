@@ -27,9 +27,40 @@
   flex-shrink: 0;
 }
 
-.toolbar-title {
-  font-weight: 600;
+/* Real §75.95 rebrand: styled to match `desktop/`'s own `.nav-brand`
+   treatment (accent glow text, a hand-drawn CSS chevron glyph, no
+   external image asset) rather than plain text -- one of this app's own
+   real chrome pieces brought closer to visual parity with the desktop
+   shell, per the direct user request ("The web app should look identical
+   to the IDE"), within this app's own already-documented, honest scope
+   (no nav sidebar/tabs/Leo panel exist here -- see App.tsx's own doc
+   comment for exactly what's real vs. not yet built). */
+.toolbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
   color: var(--accent);
+  text-shadow: var(--glow-accent);
+}
+
+.toolbar-brand-glyph {
+  position: relative;
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  background: var(--accent);
+  box-shadow: var(--glow-accent);
+  clip-path: polygon(50% 0%, 100% 38%, 82% 100%, 50% 76%, 18% 100%, 0% 38%);
+}
+
+.toolbar-brand-suffix {
+  color: var(--hud);
+  text-shadow: var(--glow-hud);
+  font-weight: 600;
+  letter-spacing: 0.08em;
 }
 
 .toolbar-btn {
@@ -40,7 +71,10 @@
   padding: 5px 12px;
   font-size: 12.5px;
   cursor: pointer;
-  transition: background var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .toolbar-btn:hover {
@@ -51,6 +85,20 @@
 .toolbar-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Real §75.95 primary-action treatment, matching `desktop/`'s own
+   `.settings-button-primary`/`.leo-btn-approve` accent-glow pattern for
+   the one real primary call-to-action this toolbar has. */
+.toolbar-btn-primary {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.toolbar-btn-primary:hover {
+  background: var(--accent-hover);
+  box-shadow: var(--glow-accent);
 }
 
 .toolbar-note {
@@ -66,7 +114,7 @@
 }
 
 .file-tree-panel {
-  width: 240px;
+  width: 220px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -193,18 +241,21 @@
   color: var(--text-dim);
   font-size: 13px;
   text-align: center;
-  padding: 24px;
+  padding: 32px;
 }
 
 .status-bar {
   display: flex;
   gap: 16px;
-  padding: 4px 12px;
+  height: 22px;
+  align-items: center;
+  padding: 0 12px;
   background: var(--surface);
   border-top: 1px solid var(--border);
-  flex-shrink: 0;
-  font-size: 11.5px;
+  box-shadow: 0 -1px 0 rgba(var(--accent-rgb), 0.25);
   color: var(--text-dim);
+  font-size: 11px;
+  flex-shrink: 0;
 }
 
 /* Real, hand-written highlight.js token theme (matching desktop/'s own
