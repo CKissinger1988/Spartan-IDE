@@ -5240,6 +5240,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "spartan-devserver"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "spartan-backend",
+ "tungstenite",
+]
+
+[[package]]
 name = "spartan-editor-core"
 version = "0.1.0"
 dependencies = [

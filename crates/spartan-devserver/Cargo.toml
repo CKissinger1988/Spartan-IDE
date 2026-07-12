@@ -1,0 +1,23 @@
+[package]
+name = "spartan-devserver"
+version = "0.1.0"
+edition = "2021"
+
+# The local AI devserver (Track A). Wraps -- never reimplements --
+# `spartan-backend`: it reuses that crate's real request dispatch
+# (`handle_request`) for every existing method and its real, single-sourced
+# WebSocket transport (`ws_transport`, generic over <S, D> as of the
+# preceding commit), adding only devserver-specific methods on top via a
+# wrapping dispatcher that falls through to `handle_request`. This Phase 0
+# skeleton establishes exactly that wrapping/fallthrough seam and proves it
+# works over the real transport; the real model-management + static-serving
+# methods land on top of this seam in later increments.
+
+[dependencies]
+spartan-backend = { path = "../spartan-backend" }
+serde_json = "1"
+
+[dev-dependencies]
+# Test-only: a real WebSocket client to drive the real transport
+# end-to-end, matching spartan-backend's own pinned tungstenite version.
+tungstenite = "0.30"

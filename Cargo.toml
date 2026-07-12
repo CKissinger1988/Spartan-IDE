@@ -23,6 +23,7 @@ members = [
     "crates/spartan-android",
     "crates/spartan-editor-core",
     "crates/spartan-backend",
+    "crates/spartan-devserver",
     "xtask",
 ]
 
