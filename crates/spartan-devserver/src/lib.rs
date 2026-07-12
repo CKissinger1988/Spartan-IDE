@@ -23,12 +23,16 @@
 //! client) land on top of this same seam in later increments -- they are
 //! deliberately not present yet, not stubbed with fake behavior.
 
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Instant;
 
 use spartan_backend::ws_transport::{self, WsSecurity};
 use spartan_backend::{handle_request, BackendState, Request, Response};
+
+pub mod static_serve;
 
 /// The devserver-specific liveness/identity method. A real, useful check
 /// (it reports the running service, its version, and a real uptime) that is
@@ -110,6 +114,64 @@ pub fn run_websocket_server(
 ) -> std::io::Result<()> {
     let dispatch = make_dispatcher(devserver);
     ws_transport::run_websocket_server(backend, addr, security, dispatch)
+}
+
+/// Real, blocking entry point for the **full** local devserver: serves the
+/// `web/` client's static files and the same-origin `/__spartan/session`
+/// token handoff on `<host>:<static_port>`, while running the WebSocket
+/// transport on a separate ephemeral port whose live token is advertised
+/// only to same-origin pages.
+///
+/// The wiring order is load-bearing: both real ports are learned *before*
+/// the WebSocket `allowed_origins` is set to the static server's own origin,
+/// so a browser tab loaded from the served app -- and only such a tab, by
+/// SOP + the Origin allowlist together -- can open the WebSocket. The token
+/// is freshly generated per run (never a persisted default), matching
+/// `ws_transport`'s own security posture exactly.
+pub fn run(web_root: PathBuf, host: &str, static_port: u16) -> std::io::Result<()> {
+    // Bind the static server (its port is user-facing) and the WS listener
+    // (ephemeral) up front so both real ports are known before wiring.
+    let static_server = static_serve::bind(&format!("{host}:{static_port}"))?;
+    let actual_static_port = static_server
+        .server_addr()
+        .to_ip()
+        .ok_or_else(|| std::io::Error::other("static server bound to a non-IP address"))?
+        .port();
+    let (ws_listener, ws_port) = static_serve::bind_ws_listener(host)?;
+
+    let ws_token = ws_transport::generate_token();
+    // Only the served app's own origin(s) may open the WebSocket. Both the
+    // `127.0.0.1` and `localhost` spellings of the static port are included
+    // because a browser presents whichever the user actually navigated to.
+    let allowed_origins = vec![
+        format!("http://{host}:{actual_static_port}"),
+        format!("http://localhost:{actual_static_port}"),
+        format!("http://127.0.0.1:{actual_static_port}"),
+    ];
+    let security = WsSecurity {
+        allowed_origins,
+        token: ws_token.clone(),
+    };
+
+    let backend = Arc::new(Mutex::new(BackendState::new()));
+    let dispatch = make_dispatcher(Arc::new(DevServerState::new()));
+    thread::spawn(move || {
+        let _ = ws_transport::serve(backend, ws_listener, security, dispatch);
+    });
+
+    eprintln!(
+        "spartan-devserver: serving {web_root:?} on http://{host}:{actual_static_port} \
+         (WebSocket on 127.0.0.1:{ws_port}, token handed off via {})",
+        static_serve::SESSION_PATH
+    );
+    static_serve::serve(
+        static_server,
+        static_serve::StaticServeConfig {
+            web_root,
+            ws_port,
+            ws_token,
+        },
+    )
 }
 
 #[cfg(test)]

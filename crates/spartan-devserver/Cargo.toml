@@ -16,6 +16,10 @@ edition = "2021"
 [dependencies]
 spartan-backend = { path = "../spartan-backend" }
 serde_json = "1"
+# Sync, tokio-free minimal HTTP server for serving the web/ client and the
+# same-origin /__spartan/session token handoff -- matches this crate's
+# sync-I/O convention (no async runtime pulled in for one static server).
+tiny_http = "0.12"
 
 [dev-dependencies]
 # Test-only: a real WebSocket client to drive the real transport
