@@ -133,9 +133,34 @@ jobs:
         with:
           path: artifacts
 
+      - name: Determine tag name
+        # A real tag push (`refs/tags/v*`) already carries the tag in
+        # `github.ref_name` -- used as-is. A manual `workflow_dispatch` run
+        # (this repo's own real fallback trigger, needed because pushing a
+        # tag was blocked by a 403 the session that wrote this workflow
+        # never diagnosed -- likely a scoped-credential limitation, not a
+        # network error) has no tag context at all, so `action-gh-release`
+        # needs one supplied explicitly or it errors outright. Derived from
+        # the workspace's own single real version source
+        # (`Cargo.toml`'s `[workspace.package]`, matching `xtask::package`'s
+        # own hardcoded "0.1.0"), not independently re-typed.
+        id: tag
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            # The root Cargo.toml is a bare [workspace] manifest with no
+            # version of its own -- crates/spartan-editor-core's own
+            # Cargo.toml (the real binary this release actually packages)
+            # is the real source of truth instead.
+            VERSION=$(grep -m1 '^version' crates/spartan-editor-core/Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+            echo "name=v${VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag.outputs.name }}
           files: |
             artifacts/linux-package/*.tar.gz
             artifacts/windows-package/*.zip
