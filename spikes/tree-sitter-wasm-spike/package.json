@@ -1,0 +1,18 @@
+{
+  "name": "@spartan-ide/tree-sitter-wasm-spike",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Real Tier 0 spike (task #78, docs/architecture-spec.md §75.86): does tree-sitter parsing/querying work in a real JS engine via web-tree-sitter, for the planned client-side half of the vscode.dev-inspired web app's hybrid architecture (§75.85)? See README.md for the full, honest account including a real grammar/query version-mismatch finding.",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test src/**/*.test.js"
+  },
+  "dependencies": {
+    "tree-sitter-wasms": "0.1.13",
+    "web-tree-sitter": "0.20.8"
+  }
+}

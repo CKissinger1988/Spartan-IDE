@@ -7,22 +7,29 @@ import { InboxScreen } from '../screens/InboxScreen';
 import { NewTaskScreen } from '../screens/NewTaskScreen';
 import { SessionDetailScreen } from '../screens/SessionDetailScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
-import { C, navigationTheme } from '../theme';
+import { useTheme } from '../ThemeContext';
+import { navigationTheme } from '../theme';
 import { navigationRef } from './navigationRef';
 import { RootStackParamList } from './types';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export function RootNavigator() {
+  // Real §75.93 live theme -- `navigationTheme(mode)` and every inline
+  // color below now come from the real, reactive `useTheme()` hook
+  // instead of the fixed dark-only `C`/`navigationTheme` constants this
+  // file used before.
+  const { mode, colors } = useTheme();
+
   return (
-    <NavigationContainer ref={navigationRef} theme={navigationTheme}>
+    <NavigationContainer ref={navigationRef} theme={navigationTheme(mode)}>
       <Stack.Navigator
         initialRouteName="Inbox"
         screenOptions={{
-          headerStyle: { backgroundColor: C.s1 },
-          headerTintColor: C.text,
-          headerTitleStyle: { color: C.text },
-          contentStyle: { backgroundColor: C.bg },
+          headerStyle: { backgroundColor: colors.s1 },
+          headerTintColor: colors.text,
+          headerTitleStyle: { color: colors.text },
+          contentStyle: { backgroundColor: colors.bg },
         }}
       >
         <Stack.Screen
@@ -33,10 +40,10 @@ export function RootNavigator() {
             headerRight: () => (
               <View style={{ flexDirection: 'row', gap: 16 }}>
                 <Pressable onPress={() => navigation.navigate('NewTask')} hitSlop={8}>
-                  <Text style={{ fontSize: 15, color: C.accent }}>Dictate</Text>
+                  <Text style={{ fontSize: 15, color: colors.accent }}>Dictate</Text>
                 </Pressable>
                 <Pressable onPress={() => navigation.navigate('Settings')} hitSlop={8}>
-                  <Text style={{ fontSize: 15, color: C.accent }}>Settings</Text>
+                  <Text style={{ fontSize: 15, color: colors.accent }}>Settings</Text>
                 </Pressable>
               </View>
             ),

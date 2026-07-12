@@ -24,9 +24,9 @@ const C = {
   text: "#E9E7E4",
   textMid: "#A6A5A2",
   textDim: "#6E6D73",
-  accent: "#C4432B",
-  accentBg: "rgba(196,67,43,0.13)",
-  accentBorder: "rgba(196,67,43,0.4)",
+  accent: "#2E7DFF", // §75.95 rebrand: blue, was rust/terracotta #C4432B
+  accentBg: "rgba(46,125,255,0.14)",
+  accentBorder: "rgba(46,125,255,0.4)",
   green: "#4E9E72",
   greenBg: "rgba(78,158,114,0.13)",
   amber: "#C99A3D",

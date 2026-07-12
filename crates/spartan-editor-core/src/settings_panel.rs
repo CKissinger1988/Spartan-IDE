@@ -5,7 +5,7 @@
 //! "no GPU dependency in this module" split -- keyboard wiring and the
 //! real save-to-disk call live in `main.rs`.
 //!
-//! Deliberately small and honest: one settings screen, three rows,
+//! Deliberately small and honest: one settings screen, five rows,
 //! keyboard-only (no mouse hit-testing yet, matching the unsaved-changes/
 //! commit modals' own existing v1 scope), no live-reload of an in-flight
 //! Leo request (a change only takes effect on the *next* plan request,
@@ -18,21 +18,43 @@
 //! this module only owns the resulting *display* state, matching
 //! `agent_panel.rs`'s own "pure display logic, real I/O lives in main.rs"
 //! split.
+//!
+//! The `Theme`/`FontFamily` rows (§75.93, user-requested "Add user
+//! customizable theme and font options to all Spartan interfaces") are a
+//! real, deliberately narrower increment than the Electron shell's own
+//! live version: this renderer has no display/GPU available in the
+//! environment this pass was built in to verify a *live* palette swap or
+//! font reload, and every real color token this crate uses
+//! (`theme::bg_linear()` and friends) is read once, at process startup,
+//! from `theme::init_theme()` -- so a change here is real and persisted
+//! but only takes visible effect the *next time the IDE is launched*,
+//! matching this exact panel's own already-established "GPU offload/Leo
+//! settings apply next request, not live" precedent rather than
+//! inventing a new, inconsistent live-reload story for this one setting.
+//! `FontFamily` accepts real typed text (`main.rs` routes character keys
+//! to it while selected, the same real free-text pattern the commit-
+//! message modal already established) rather than a fixed enum, matching
+//! `spartan_settings::EditorSettings.font_family`'s own free-form-string
+//! shape.
 
-use spartan_settings::Settings;
+use spartan_settings::{Settings, ThemeName};
 use spartan_updater::UpdateCheckResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsRow {
     GpuOffloadEnabled,
     GpuOffloadLayers,
+    Theme,
+    FontFamily,
     CheckForUpdates,
 }
 
 impl SettingsRow {
-    const ALL: [SettingsRow; 3] = [
+    const ALL: [SettingsRow; 5] = [
         SettingsRow::GpuOffloadEnabled,
         SettingsRow::GpuOffloadLayers,
+        SettingsRow::Theme,
+        SettingsRow::FontFamily,
         SettingsRow::CheckForUpdates,
     ];
 
@@ -89,10 +111,18 @@ impl SettingsPanelState {
         self.selected = self.selected.prev();
     }
 
-    /// Real toggle -- only meaningful on the `GpuOffloadEnabled` row.
+    /// Real toggle -- `GpuOffloadEnabled` flips its bool; `Theme` cycles
+    /// the same as Left/Right (§75.93) so Space/Enter works as an
+    /// intuitive "change it" action here too, matching this row's own
+    /// binary choice (unlike `GpuOffloadLayers`, which has no sensible
+    /// single "toggle" and stays Left/Right-only).
     pub fn toggle_selected(&mut self) {
-        if self.selected == SettingsRow::GpuOffloadEnabled {
-            self.settings.gpu_offload.enabled = !self.settings.gpu_offload.enabled;
+        match self.selected {
+            SettingsRow::GpuOffloadEnabled => {
+                self.settings.gpu_offload.enabled = !self.settings.gpu_offload.enabled;
+            }
+            SettingsRow::Theme => self.cycle_theme(),
+            _ => {}
         }
     }
 
@@ -116,6 +146,54 @@ impl SettingsPanelState {
         } else {
             None
         };
+    }
+
+    /// Real §75.93 theme toggle (`Theme` row only) -- only two real
+    /// variants exist (`spartan_settings::ThemeName`), so Left/Right/
+    /// Space/Enter all just flip between them; no "Auto" concept the way
+    /// GPU layers has one.
+    pub fn cycle_theme(&mut self) {
+        if self.selected != SettingsRow::Theme {
+            return;
+        }
+        self.settings.appearance.theme = match self.settings.appearance.theme {
+            ThemeName::SpartanDark => ThemeName::SpartanLight,
+            ThemeName::SpartanLight => ThemeName::SpartanDark,
+        };
+    }
+
+    /// Real §75.93 font-family typed input (`FontFamily` row only) --
+    /// appends real, non-control text, the same free-text pattern the
+    /// commit-message modal already established in `main.rs`. `None`
+    /// (blank -- use the real bundled default) becomes `Some(String::
+    /// new())` on the first keystroke, exactly like the commit modal's
+    /// own `Option<String>` -> populated-`String` transition.
+    pub fn push_font_family_text(&mut self, text: &str) {
+        if self.selected != SettingsRow::FontFamily {
+            return;
+        }
+        self.settings
+            .editor
+            .font_family
+            .get_or_insert_with(String::new)
+            .push_str(text);
+    }
+
+    /// Real §75.93 font-family backspace (`FontFamily` row only) --
+    /// reverts to `None` once the field is emptied, rather than leaving
+    /// a real, meaningless `Some("")` around (`EditorSettings.font_family
+    /// == Some(String::new())` would otherwise be a distinct, pointless
+    /// third state alongside `None` and a real name).
+    pub fn backspace_font_family(&mut self) {
+        if self.selected != SettingsRow::FontFamily {
+            return;
+        }
+        if let Some(font_family) = self.settings.editor.font_family.as_mut() {
+            font_family.pop();
+            if font_family.is_empty() {
+                self.settings.editor.font_family = None;
+            }
+        }
     }
 }
 
@@ -167,6 +245,13 @@ fn short_commit(commit: &str) -> &str {
     &commit[..commit.len().min(7)]
 }
 
+fn theme_text(theme: ThemeName) -> &'static str {
+    match theme {
+        ThemeName::SpartanDark => "Spartan Dark",
+        ThemeName::SpartanLight => "Spartan Light",
+    }
+}
+
 /// The real, live display text for the settings panel -- rebuilt every
 /// frame from live state, matching every other real panel in this crate.
 pub fn build_panel_text(state: &SettingsPanelState) -> String {
@@ -179,15 +264,28 @@ pub fn build_panel_text(state: &SettingsPanelState) -> String {
         None => "Auto".to_string(),
         Some(n) => n.to_string(),
     };
+    let font_family_text = state
+        .settings
+        .editor
+        .font_family
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("(bundled JetBrains Mono)");
     format!(
         "Settings (§42, user-requested)\n\n\
          {} {enabled_box} GPU offloading enabled (Space/Enter to toggle)\n\
          {}     GPU layers to offload: {layers_text} (Left/Right to adjust)\n\
+         {}     Theme: {} (Space/Enter/Left/Right to change -- applies next launch)\n\
+         {}     Font family: {font_family_text} (type to edit, Backspace to delete -- applies \
+         next launch)\n\
          {} {}\n\n\
          Renderer: {}\n\n\
          Up/Down to move -- Escape to save and close.",
         row_marker(state, SettingsRow::GpuOffloadEnabled),
         row_marker(state, SettingsRow::GpuOffloadLayers),
+        row_marker(state, SettingsRow::Theme),
+        theme_text(state.settings.appearance.theme),
+        row_marker(state, SettingsRow::FontFamily),
         row_marker(state, SettingsRow::CheckForUpdates),
         update_check_line(&state.update_check),
         state.renderer_info,
@@ -220,6 +318,10 @@ mod tests {
             SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
         state.move_selection_down();
         assert_eq!(state.selected, SettingsRow::GpuOffloadLayers);
+        state.move_selection_down();
+        assert_eq!(state.selected, SettingsRow::Theme);
+        state.move_selection_down();
+        assert_eq!(state.selected, SettingsRow::FontFamily);
         state.move_selection_down();
         assert_eq!(state.selected, SettingsRow::CheckForUpdates);
         state.move_selection_down();
@@ -305,6 +407,129 @@ mod tests {
         state.move_selection_down();
         state.adjust_layers(1);
         assert_eq!(state.settings.gpu_offload.layers, None);
+    }
+
+    #[test]
+    fn cycle_theme_only_affects_the_theme_row_and_toggles_both_ways() {
+        let mut state =
+            SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
+        assert_eq!(state.settings.appearance.theme, ThemeName::SpartanDark);
+        state.cycle_theme();
+        assert_eq!(
+            state.settings.appearance.theme,
+            ThemeName::SpartanDark,
+            "cycling while the enabled row is selected must not touch theme"
+        );
+
+        state.move_selection_down();
+        state.move_selection_down();
+        assert_eq!(state.selected, SettingsRow::Theme);
+        state.cycle_theme();
+        assert_eq!(state.settings.appearance.theme, ThemeName::SpartanLight);
+        state.cycle_theme();
+        assert_eq!(state.settings.appearance.theme, ThemeName::SpartanDark);
+    }
+
+    #[test]
+    fn toggle_selected_on_the_theme_row_also_cycles_it() {
+        let mut state =
+            SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
+        state.move_selection_down();
+        state.move_selection_down();
+        assert_eq!(state.selected, SettingsRow::Theme);
+        state.toggle_selected();
+        assert_eq!(state.settings.appearance.theme, ThemeName::SpartanLight);
+    }
+
+    #[test]
+    fn font_family_text_only_applies_to_the_font_family_row() {
+        let mut state =
+            SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
+        state.push_font_family_text("Fira Code");
+        assert_eq!(
+            state.settings.editor.font_family, None,
+            "typing while the enabled row is selected must not touch font_family"
+        );
+
+        state.move_selection_down();
+        state.move_selection_down();
+        state.move_selection_down();
+        assert_eq!(state.selected, SettingsRow::FontFamily);
+        state.push_font_family_text("Fira");
+        state.push_font_family_text(" Code");
+        assert_eq!(
+            state.settings.editor.font_family,
+            Some("Fira Code".to_string())
+        );
+    }
+
+    #[test]
+    fn backspace_font_family_pops_a_char_and_reverts_to_none_when_emptied() {
+        let mut state =
+            SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
+        state.move_selection_down();
+        state.move_selection_down();
+        state.move_selection_down();
+        assert_eq!(state.selected, SettingsRow::FontFamily);
+        state.push_font_family_text("Go");
+        state.backspace_font_family();
+        assert_eq!(state.settings.editor.font_family, Some("G".to_string()));
+        state.backspace_font_family();
+        assert_eq!(
+            state.settings.editor.font_family, None,
+            "emptying the field should revert to None, not a real, meaningless Some(\"\")"
+        );
+        // A no-op backspace on an already-`None` field must not panic or
+        // produce `Some("")`.
+        state.backspace_font_family();
+        assert_eq!(state.settings.editor.font_family, None);
+    }
+
+    #[test]
+    fn backspace_font_family_only_applies_to_the_font_family_row() {
+        let mut state = SettingsPanelState::opened_with(
+            Settings {
+                editor: spartan_settings::EditorSettings {
+                    font_family: Some("Menlo".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            "test-renderer".to_string(),
+        );
+        state.backspace_font_family();
+        assert_eq!(
+            state.settings.editor.font_family,
+            Some("Menlo".to_string()),
+            "backspacing while the enabled row is selected must not touch font_family"
+        );
+    }
+
+    #[test]
+    fn panel_text_shows_the_real_theme_and_font_family() {
+        let mut state = SettingsPanelState::opened_with(
+            Settings {
+                appearance: spartan_settings::AppearanceSettings {
+                    theme: ThemeName::SpartanLight,
+                    reduce_motion: false,
+                },
+                editor: spartan_settings::EditorSettings {
+                    font_family: Some("Fira Code".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            "test-renderer".to_string(),
+        );
+        let text = build_panel_text(&state);
+        assert!(text.contains("Spartan Light"));
+        assert!(text.contains("Fira Code"));
+
+        state.settings.appearance.theme = ThemeName::SpartanDark;
+        state.settings.editor.font_family = None;
+        let text = build_panel_text(&state);
+        assert!(text.contains("Spartan Dark"));
+        assert!(text.contains("(bundled JetBrains Mono)"));
     }
 
     #[test]

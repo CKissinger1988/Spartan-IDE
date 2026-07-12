@@ -55,10 +55,14 @@ import {
 /* ---------- design tokens ---------- */
 // §50.3: bg/surface/border tightened to match Antigravity 2.0's researched
 // high-contrast token values (#09090B / #18181B / #27272A) almost exactly —
-// the accent hue stays Spartan's own (§50.3 names this one deliberate
-// divergence rather than leaving it an unexplained mismatch). textDim's
-// luminance is raised from the previous pass for the same "high contrast,
-// not just dark" goal, since it's the color most often used for body text.
+// the accent hue stays Spartan's own. textDim's luminance is raised from
+// the previous pass for the same "high contrast, not just dark" goal,
+// since it's the color most often used for body text.
+//
+// §75.95: real, user-requested rebrand ("All Spartan projects default
+// colors are blue and gold") -- replaces the original rust/terracotta
+// accent with the same blue now shipped everywhere else (desktop/web
+// theme.css, spartan-editor-core, mobile/src/theme.ts).
 const C = {
   bg: "#09090B",
   s1: "#141416",
@@ -69,10 +73,10 @@ const C = {
   text: "#E9E7E4",
   textMid: "#A6A5A2",
   textDim: "#84838A",
-  accent: "#C4432B",
-  accentDim: "#8F3323",
-  accentBg: "rgba(196,67,43,0.13)",
-  accentBorder: "rgba(196,67,43,0.4)",
+  accent: "#2E7DFF",
+  accentDim: "#1E5FCC",
+  accentBg: "rgba(46,125,255,0.14)",
+  accentBorder: "rgba(46,125,255,0.4)",
   green: "#4E9E72",
   greenBg: "rgba(78,158,114,0.13)",
   amber: "#C99A3D",

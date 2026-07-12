@@ -176,11 +176,12 @@ fn system_prompt(plan: &ImplementationPlan) -> String {
          before editing it, edit_file to write a real change, or run_terminal to run a real \
          command. Prefer search_files/list_directory over guessing a path. After you have \
          finished, call task_complete exactly once with a real summary of what you did. \
-         Never call more than one tool in a single turn.",
+         Never call more than one tool in a single turn.\n\n{}",
         plan.goal,
         plan.approach,
         plan.files.join(", "),
         plan.risk_notes,
+        crate::persona::LEO_PERSONA,
     )
 }
 
@@ -530,5 +531,17 @@ mod tests {
         assert_eq!(history[1].role as u8, Role::Tool as u8);
         assert_eq!(history[1].content, "file contents here");
         assert_eq!(history[1].tool_call_id, Some("call_1".to_string()));
+    }
+
+    /// Real §75.95 check: the sarcastic-persona instruction is genuinely
+    /// present in the real execute-step system prompt, alongside the
+    /// real plan details it's built from -- not just co-located in
+    /// `persona.rs` and never actually wired in.
+    #[test]
+    fn the_real_system_prompt_carries_the_real_leo_persona_and_the_real_plan() {
+        let prompt = system_prompt(&sample_plan());
+        assert!(prompt.contains(crate::persona::LEO_PERSONA));
+        assert!(prompt.contains("test goal"));
+        assert!(prompt.contains("task_complete"));
     }
 }

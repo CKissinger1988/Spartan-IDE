@@ -1,0 +1,5 @@
+node_modules/
+dist/
+# Real, generated (not committed) WASM bindings -- `npm run build:wasm`
+# regenerates this from crates/spartan-buffer-wasm every time.
+src/wasm-gen/

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Pressable } from 'react-native';
@@ -8,7 +8,8 @@ import { recordDecision } from '../lib/decisionActions';
 import { DiffLineType, parseDiff } from '../lib/diffHighlight';
 import { localModelClient } from '../lib/localModel';
 import { RootStackParamList } from '../navigation/types';
-import { C } from '../theme';
+import { useTheme } from '../ThemeContext';
+import { MONO_FONT_FAMILY, ThemeColors } from '../theme';
 import { Artifact, ArtifactComment } from '../types/domain';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ArtifactReview'>;
@@ -19,6 +20,17 @@ type Props = NativeStackScreenProps<RootStackParamList, 'ArtifactReview'>;
 // belongs in the real sync client this screen will eventually call, not
 // invented here as a fake success path.
 export function ArtifactReviewScreen({ route }: Props) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const patchLineStyles: Record<DiffLineType, object> = useMemo(
+    () => ({
+      add: styles.patchAdd,
+      remove: styles.patchRemove,
+      hunk: styles.patchHunk,
+      context: styles.patchContext,
+    }),
+    [styles]
+  );
   const { artifactId } = route.params;
   const [artifact, setArtifact] = useState<Artifact | null | undefined>(undefined);
   const [fromCache, setFromCache] = useState(false);
@@ -212,7 +224,7 @@ export function ArtifactReviewScreen({ route }: Props) {
           <TextInput
             style={styles.commentInput}
             placeholder="Leave a comment on this artifact"
-            placeholderTextColor={C.textDim}
+            placeholderTextColor={colors.textDim}
             value={draftComment}
             onChangeText={setDraftComment}
             multiline
@@ -237,203 +249,198 @@ export function ArtifactReviewScreen({ route }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: C.bg,
-    padding: 16,
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: C.text,
-  },
-  summary: {
-    marginTop: 6,
-    color: C.textMid,
-  },
-  fileBlock: {
-    marginTop: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: C.border,
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  filePath: {
-    fontFamily: 'Courier',
-    fontWeight: '600',
-    paddingHorizontal: 10,
-    paddingTop: 8,
-    color: C.text,
-  },
-  fileStats: {
-    fontFamily: 'Courier',
-    color: C.textMid,
-    paddingHorizontal: 10,
-    paddingBottom: 6,
-  },
-  patchScroll: {
-    backgroundColor: C.s1,
-  },
-  patchLines: {
-    paddingVertical: 10,
-  },
-  patchLine: {
-    fontFamily: 'Courier',
-    fontSize: 12,
-    color: C.text,
-    paddingHorizontal: 10,
-  },
-  patchAdd: {
-    color: C.green,
-  },
-  patchRemove: {
-    color: C.red,
-  },
-  patchHunk: {
-    color: C.textDim,
-  },
-  patchContext: {
-    color: C.text,
-  },
-  commentOnFile: {
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-  },
-  commentOnFileText: {
-    color: C.accent,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  commentTargetRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: C.accentBg,
-    borderRadius: 8,
-    padding: 8,
-    marginTop: 12,
-  },
-  commentTargetText: {
-    color: C.accent,
-    fontSize: 12,
-    fontFamily: 'Courier',
-    flexShrink: 1,
-  },
-  commentTargetCancel: {
-    color: C.accent,
-    fontSize: 12,
-    fontWeight: '700',
-    marginLeft: 8,
-  },
-  actions: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 24,
-  },
-  button: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  rejectButton: {
-    backgroundColor: C.red,
-  },
-  approveButton: {
-    backgroundColor: C.green,
-  },
-  buttonText: {
-    color: '#fff',
-    fontWeight: '700',
-  },
-  decisionNote: {
-    marginTop: 12,
-    color: C.textMid,
-    fontSize: 12,
-    textAlign: 'center',
-  },
-  cacheBanner: {
-    backgroundColor: C.accentBg,
-    color: C.accent,
-    fontSize: 12,
-    padding: 10,
-    borderRadius: 8,
-    marginBottom: 12,
-  },
-  commentsSection: {
-    marginTop: 28,
-    marginBottom: 24,
-  },
-  commentsHeader: {
-    fontSize: 15,
-    fontWeight: '700',
-    marginBottom: 8,
-    color: C.text,
-  },
-  commentRow: {
-    paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.border,
-  },
-  commentAuthor: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: C.textMid,
-  },
-  commentText: {
-    marginTop: 2,
-    color: C.text,
-  },
-  commentInputRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 12,
-    alignItems: 'flex-end',
-  },
-  commentInput: {
-    flex: 1,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: C.borderLt,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    minHeight: 40,
-    maxHeight: 100,
-    color: C.text,
-    backgroundColor: C.s1,
-  },
-  commentSubmit: {
-    backgroundColor: C.accent,
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  commentSubmitText: {
-    color: '#fff',
-    fontWeight: '700',
-  },
-  commentsNote: {
-    marginTop: 8,
-    color: C.textDim,
-    fontSize: 12,
-  },
-  localModelButton: {
-    marginBottom: 4,
-    backgroundColor: C.teal,
-    borderRadius: 8,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  localModelButtonText: {
-    color: '#fff',
-    fontWeight: '700',
-  },
-});
-
-const patchLineStyles: Record<DiffLineType, object> = {
-  add: styles.patchAdd,
-  remove: styles.patchRemove,
-  hunk: styles.patchHunk,
-  context: styles.patchContext,
-};
+function makeStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.bg,
+      padding: 16,
+    },
+    title: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    summary: {
+      marginTop: 6,
+      color: colors.textMid,
+    },
+    fileBlock: {
+      marginTop: 16,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 8,
+      overflow: 'hidden',
+    },
+    filePath: {
+      fontFamily: MONO_FONT_FAMILY,
+      fontWeight: '600',
+      paddingHorizontal: 10,
+      paddingTop: 8,
+      color: colors.text,
+    },
+    fileStats: {
+      fontFamily: MONO_FONT_FAMILY,
+      color: colors.textMid,
+      paddingHorizontal: 10,
+      paddingBottom: 6,
+    },
+    patchScroll: {
+      backgroundColor: colors.s1,
+    },
+    patchLines: {
+      paddingVertical: 10,
+    },
+    patchLine: {
+      fontFamily: MONO_FONT_FAMILY,
+      fontSize: 12,
+      color: colors.text,
+      paddingHorizontal: 10,
+    },
+    patchAdd: {
+      color: colors.green,
+    },
+    patchRemove: {
+      color: colors.red,
+    },
+    patchHunk: {
+      color: colors.textDim,
+    },
+    patchContext: {
+      color: colors.text,
+    },
+    commentOnFile: {
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+    },
+    commentOnFileText: {
+      color: colors.accent,
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    commentTargetRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      backgroundColor: colors.accentBg,
+      borderRadius: 8,
+      padding: 8,
+      marginTop: 12,
+    },
+    commentTargetText: {
+      color: colors.accent,
+      fontSize: 12,
+      fontFamily: MONO_FONT_FAMILY,
+      flexShrink: 1,
+    },
+    commentTargetCancel: {
+      color: colors.accent,
+      fontSize: 12,
+      fontWeight: '700',
+      marginLeft: 8,
+    },
+    actions: {
+      flexDirection: 'row',
+      gap: 12,
+      marginTop: 24,
+    },
+    button: {
+      flex: 1,
+      paddingVertical: 12,
+      borderRadius: 8,
+      alignItems: 'center',
+    },
+    rejectButton: {
+      backgroundColor: colors.red,
+    },
+    approveButton: {
+      backgroundColor: colors.green,
+    },
+    buttonText: {
+      color: '#fff',
+      fontWeight: '700',
+    },
+    decisionNote: {
+      marginTop: 12,
+      color: colors.textMid,
+      fontSize: 12,
+      textAlign: 'center',
+    },
+    cacheBanner: {
+      backgroundColor: colors.accentBg,
+      color: colors.accent,
+      fontSize: 12,
+      padding: 10,
+      borderRadius: 8,
+      marginBottom: 12,
+    },
+    commentsSection: {
+      marginTop: 28,
+      marginBottom: 24,
+    },
+    commentsHeader: {
+      fontSize: 15,
+      fontWeight: '700',
+      marginBottom: 8,
+      color: colors.text,
+    },
+    commentRow: {
+      paddingVertical: 8,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    commentAuthor: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.textMid,
+    },
+    commentText: {
+      marginTop: 2,
+      color: colors.text,
+    },
+    commentInputRow: {
+      flexDirection: 'row',
+      gap: 8,
+      marginTop: 12,
+      alignItems: 'flex-end',
+    },
+    commentInput: {
+      flex: 1,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.borderLt,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      minHeight: 40,
+      maxHeight: 100,
+      color: colors.text,
+      backgroundColor: colors.s1,
+    },
+    commentSubmit: {
+      backgroundColor: colors.accent,
+      borderRadius: 8,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+    },
+    commentSubmitText: {
+      color: '#fff',
+      fontWeight: '700',
+    },
+    commentsNote: {
+      marginTop: 8,
+      color: colors.textDim,
+      fontSize: 12,
+    },
+    localModelButton: {
+      marginBottom: 4,
+      backgroundColor: colors.teal,
+      borderRadius: 8,
+      paddingVertical: 12,
+      alignItems: 'center',
+    },
+    localModelButtonText: {
+      color: '#fff',
+      fontWeight: '700',
+    },
+  });
+}

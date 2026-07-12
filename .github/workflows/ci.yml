@@ -140,3 +140,80 @@ jobs:
       - name: Test
         working-directory: mobile
         run: npm test -- --ci
+
+  web:
+    name: web/ (vscode.dev-inspired browser IDE, §75.89)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-bindgen-cli
+        # Must exactly match the `wasm-bindgen` crate version pinned in
+        # Cargo.lock (0.2.126) -- a version mismatch between the CLI and
+        # the crate is a real, documented wasm-bindgen failure mode.
+        run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: npm ci
+        working-directory: web
+        run: npm ci
+
+      - name: Build (compiles spartan-buffer-wasm, typechecks, bundles)
+        working-directory: web
+        run: npm run build
+
+  tree-sitter-wasm-spike:
+    name: spikes/tree-sitter-wasm-spike (web app prep, §75.86)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: spikes/tree-sitter-wasm-spike/package-lock.json
+
+      - name: npm ci
+        working-directory: spikes/tree-sitter-wasm-spike
+        run: npm ci
+
+      - name: Test
+        working-directory: spikes/tree-sitter-wasm-spike
+        run: npm test
+
+  git-browser-spike:
+    name: spikes/git-browser-spike (web app prep, §75.87)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: spikes/git-browser-spike/package-lock.json
+
+      - name: npm ci
+        working-directory: spikes/git-browser-spike
+        run: npm ci
+
+      - name: Test
+        working-directory: spikes/git-browser-spike
+        run: npm test

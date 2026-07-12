@@ -10,6 +10,7 @@ pub mod approval;
 pub mod checkpoint;
 pub mod execute;
 pub mod memory;
+pub mod persona;
 pub mod plan;
 pub mod state;
 pub mod tool;

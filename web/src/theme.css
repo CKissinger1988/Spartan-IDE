@@ -1,0 +1,227 @@
+/*
+ * Real color tokens ported verbatim from crates/spartan-editor-core/src/
+ * theme.rs (§75.54's own already-researched Antigravity 2.0 palette),
+ * not re-derived -- so the new Electron shell and the original wgpu
+ * shell share one real source of truth for base color, the same
+ * discipline theme.rs itself established for the wgpu renderer.
+ *
+ * §75.76 layers a real "Spartan Coding" Sci-Fi/futuristic treatment on
+ * top of that base palette -- a second accent for focus/targeting/status
+ * affordances alongside the primary brand accent, real glow tokens,
+ * chamfered-corner panel styling, and a very faint animated scan/grid
+ * texture. The base bg/surface/border/text tokens are untouched on
+ * purpose -- this is a real design layer added on top of the already-
+ * verified palette, not a replacement of it.
+ *
+ * §75.95, direct user-requested rebrand: "All Spartan projects default
+ * colors are blue and gold." Replaces the original rust/terracotta
+ * primary accent and cyan "HUD" secondary accent with a real blue/gold
+ * pair, applied identically across every real Spartan surface (this
+ * file, `desktop/`'s own copy (which also serves as `web/`'s own source
+ * of the same tokens), `crates/spartan-editor-core`'s
+ * `theme.rs`/`text.rs`/`selection.rs`/`cursor.wgsl`, and `mobile/src/
+ * theme.ts`) -- one shared real brand palette, not four independently
+ * re-picked ones. `--accent` (blue) is the primary/brand/action color;
+ * `--hud` (gold) is the secondary accent for focus rings, targeting/
+ * status affordances, and highlight accents -- the same two-role split
+ * this file already had, just with new real hues.
+ */
+
+:root {
+  --bg: #09090b;
+  --surface: #18181b;
+  --surface-raised: #1f1f23;
+  --border: #27272a;
+  --border-bright: #3a3a40;
+  --text: #e9e7e4;
+  --text-dim: #84838a;
+  --accent: #2e7dff;
+  --accent-dim: rgba(46, 125, 255, 0.16);
+  --accent-hover: rgba(46, 125, 255, 0.08);
+  --accent-rgb: 46, 125, 255;
+
+  /* Gold "HUD" accent -- targeting/focus/informational, distinct from
+     the primary blue accent used for brand/action color. */
+  --hud: #d4af37;
+  --hud-dim: rgba(212, 175, 55, 0.16);
+  --hud-rgb: 212, 175, 55;
+
+  --glow-accent: 0 0 1px rgba(var(--accent-rgb), 0.9), 0 0 10px rgba(var(--accent-rgb), 0.45);
+  --glow-accent-lg: 0 0 2px rgba(var(--accent-rgb), 0.9), 0 0 22px rgba(var(--accent-rgb), 0.4);
+  --glow-hud: 0 0 1px rgba(var(--hud-rgb), 0.9), 0 0 10px rgba(var(--hud-rgb), 0.45);
+
+  --chamfer: 8px;
+  --transition-fast: 120ms ease;
+  --transition-med: 220ms cubic-bezier(0.2, 0.7, 0.3, 1);
+
+  /* Real §75.93 user font-family override, applied app-wide (every
+     `.mono` element) via one shared CSS custom property rather than
+     per-component plumbing. `applyFontFamily.ts` is the only real
+     writer -- it either sets this to a real, user-typed font name
+     prepended onto the same real fallback chain, or removes the inline
+     override entirely, letting this default (real, bundled JetBrains
+     Mono) take back over. */
+  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
+}
+
+/*
+ * Real §75.93 Light theme, user-requested ("Add user customizable theme
+ * and font options to all Spartan interfaces"). Applied via a real
+ * `data-theme="light"` attribute on <html> (`applyTheme.ts`) -- kept in
+ * sync with `desktop/src/theme.css`'s own identical block (one shared
+ * source of truth for color tokens, matching this file's own existing
+ * "copied verbatim from desktop/" convention). SpartanDark (the `:root`
+ * block above) stays the real, unconditional default.
+ *
+ * Not a mechanical inversion -- the blue and gold accents are both real,
+ * deliberately re-picked, deeper/more saturated shades of their dark-
+ * theme counterparts (§75.95, rather than the exact same hex values) so
+ * text/icons drawn in accent color keep real, legible contrast against a
+ * light background instead of washing out.
+ */
+:root[data-theme="light"] {
+  --bg: #f4f3f1;
+  --surface: #ffffff;
+  --surface-raised: #ececea;
+  --border: #dcdad5;
+  --border-bright: #c5c2bc;
+  --text: #1b1a19;
+  --text-dim: #6b6862;
+  --accent: #1b54c4;
+  --accent-dim: rgba(27, 84, 196, 0.12);
+  --accent-hover: rgba(27, 84, 196, 0.08);
+  --accent-rgb: 27, 84, 196;
+
+  --hud: #9c7a1d;
+  --hud-dim: rgba(156, 122, 29, 0.14);
+  --hud-rgb: 156, 122, 29;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background:
+    radial-gradient(ellipse 900px 500px at 15% -10%, rgba(var(--accent-rgb), 0.08), transparent 60%),
+    radial-gradient(ellipse 700px 500px at 100% 110%, rgba(var(--hud-rgb), 0.06), transparent 60%),
+    repeating-linear-gradient(
+      0deg,
+      rgba(255, 255, 255, 0.012) 0px,
+      rgba(255, 255, 255, 0.012) 1px,
+      transparent 1px,
+      transparent 3px
+    ),
+    var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", "Inter", sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  user-select: none;
+}
+
+.mono {
+  /* JetBrains Mono is the real default font across every Spartan
+     project, self-hosted (not a system-font fallback bet) via
+     @fontsource/jetbrains-mono -- see main.tsx's own import. Reads the
+     real `--font-mono` custom property (§75.93) rather than a hardcoded
+     value, so a user-chosen font override applies to every real `.mono`
+     surface in the app at once, live, with no per-component wiring. */
+  font-family: var(--font-mono);
+}
+
+/* Real, deliberate "targeting reticle" keyboard-focus style -- the
+   secondary gold HUD accent rather than the primary blue brand accent,
+   so a focus ring is always visually distinct from an active/selected
+   state. Kept to :focus-visible only, so it never fires on a plain
+   mouse click. */
+:focus-visible {
+  outline: 1.5px solid var(--hud);
+  outline-offset: 1px;
+  box-shadow: var(--glow-hud);
+}
+
+/* Reusable Sci-Fi utility classes, applied selectively across app.css
+   rather than duplicated ad hoc. */
+.sf-chamfer {
+  clip-path: polygon(
+    var(--chamfer) 0,
+    100% 0,
+    100% calc(100% - var(--chamfer)),
+    calc(100% - var(--chamfer)) 100%,
+    0 100%,
+    0 var(--chamfer)
+  );
+}
+
+.sf-chamfer-sm {
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+}
+
+.sf-glow-accent {
+  box-shadow: var(--glow-accent);
+}
+
+.sf-glow-hud {
+  box-shadow: var(--glow-hud);
+}
+
+@keyframes sf-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes sf-scan {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.sf-scanline {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Real §75.76 "reduce motion" appearance setting -- toggled by adding
+   `.reduce-motion` to the document root (see `reduceMotion.ts`). A
+   blanket catch-all rather than hand-listing every animated selector,
+   matching the standard prefers-reduced-motion pattern. */
+.reduce-motion,
+.reduce-motion * {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+.sf-scanline::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 40%,
+    rgba(var(--accent-rgb), 0.16) 48%,
+    rgba(var(--accent-rgb), 0.28) 50%,
+    rgba(var(--accent-rgb), 0.16) 52%,
+    transparent 60%
+  );
+  background-size: 300% 100%;
+  animation: sf-scan 6s linear infinite;
+  pointer-events: none;
+}

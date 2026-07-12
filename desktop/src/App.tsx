@@ -16,6 +16,8 @@ import LeoChatPanel from "./components/LeoChatPanel";
 import NewProjectWizard from "./components/NewProjectWizard";
 import OnboardingScreen from "./components/OnboardingScreen";
 import { applyReduceMotion } from "./reduceMotion";
+import { applyTheme, type ThemeName } from "./applyTheme";
+import { applyFontFamily } from "./applyFontFamily";
 import { NAV, type ScreenId } from "./nav";
 import "./app.css";
 
@@ -63,11 +65,18 @@ export default function App(): React.ReactElement {
       .call("settings_get", {})
       .then((result) => {
         const s = result as {
-          appearance?: { reduce_motion?: boolean };
+          appearance?: { reduce_motion?: boolean; theme?: ThemeName };
           onboarding_completed?: boolean;
-          editor?: { font_size?: number; tab_size?: number; word_wrap?: boolean };
+          editor?: {
+            font_size?: number;
+            tab_size?: number;
+            word_wrap?: boolean;
+            font_family?: string | null;
+          };
         };
         applyReduceMotion(Boolean(s.appearance?.reduce_motion));
+        applyTheme(s.appearance?.theme ?? "SpartanDark");
+        applyFontFamily(s.editor?.font_family);
         setOnboardingState(s.onboarding_completed ? "done" : "show");
         if (s.editor) {
           setEditorPrefs({

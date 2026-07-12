@@ -123,9 +123,15 @@ fn plan_tool_definition() -> ToolDefinition {
     }
 }
 
-const SYSTEM_PROMPT: &str = "You are Leo, a coding agent embedded in the Spartan IDE. \
-Before taking any action, you must call the propose_plan tool exactly once with a real, \
-concrete plan for the user's request. Do not call any other tool until the plan is approved.";
+fn system_prompt() -> String {
+    format!(
+        "You are Leo, a coding agent embedded in the Spartan IDE. \
+         Before taking any action, you must call the propose_plan tool exactly once with a \
+         real, concrete plan for the user's request. Do not call any other tool until the \
+         plan is approved.\n\n{}",
+        crate::persona::LEO_PERSONA,
+    )
+}
 
 /// Real, live-found need (§75.46): a real `llama3.1:8b` call occasionally
 /// returns a `files` value serde can't parse even after
@@ -168,7 +174,7 @@ fn generate_plan_once(
     let request = CompletionRequest {
         messages: vec![Message::user(task)],
         tools: vec![plan_tool_definition()],
-        system_prompt: SYSTEM_PROMPT.to_string(),
+        system_prompt: system_prompt(),
         max_tokens: 1024,
         temperature: 0.2,
     };
@@ -455,5 +461,21 @@ mod tests {
         ]);
         let result = generate_plan(&provider, "task");
         assert!(matches!(result, Err(PlanError::MalformedPlan { .. })));
+    }
+
+    /// Real §75.95 check: the sarcastic-persona instruction is genuinely
+    /// present in the real system prompt sent with every plan request, not
+    /// just written in `persona.rs` and never actually wired in.
+    #[test]
+    fn the_real_system_prompt_carries_the_real_leo_persona() {
+        assert!(system_prompt().contains(crate::persona::LEO_PERSONA));
+    }
+
+    /// The structural instruction (call propose_plan exactly once) must
+    /// still be present alongside the persona -- the persona is layered
+    /// on top of the real functional contract, never replacing it.
+    #[test]
+    fn the_real_system_prompt_still_requires_calling_propose_plan() {
+        assert!(system_prompt().contains("propose_plan"));
     }
 }

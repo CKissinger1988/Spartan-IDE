@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { StatusPill } from '../components/StatusPill';
@@ -6,7 +6,8 @@ import { mockSessionThreads } from '../data/mockData';
 import { getLocalTasks, subscribeLocalTasks } from '../data/localTaskStore';
 import { cacheSessionThreads, getCachedSessionThreads } from '../lib/edgeCache';
 import { RootStackParamList } from '../navigation/types';
-import { C, STATUS_COLOR } from '../theme';
+import { useTheme } from '../ThemeContext';
+import { STATUS_COLOR, ThemeColors } from '../theme';
 import { SessionStatus, SessionThread } from '../types/domain';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Inbox'>;
@@ -43,6 +44,8 @@ const ALL_WORKSPACES = 'All Workspaces';
 // the real re-fetch path for free once a live session-store client
 // replaces `mockSessionThreads`.
 export function InboxScreen({ navigation }: Props) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [threads, setThreads] = useState<SessionThread[]>(mockSessionThreads);
   const [fromCache, setFromCache] = useState(false);
   const [query, setQuery] = useState('');
@@ -104,14 +107,14 @@ export function InboxScreen({ navigation }: Props) {
         value={query}
         onChangeText={setQuery}
         placeholder="Search threads"
-        placeholderTextColor={C.textDim}
+        placeholderTextColor={colors.textDim}
         autoCapitalize="none"
         autoCorrect={false}
       />
       <View style={styles.filterRow}>
         {STATUS_FILTERS.map(({ key, label }) => {
           const active = statusFilter === key;
-          const activeColor = key === 'all' ? C.accent : STATUS_COLOR[key];
+          const activeColor = key === 'all' ? colors.accent : STATUS_COLOR[key];
           return (
             <Pressable
               key={key}
@@ -137,7 +140,7 @@ export function InboxScreen({ navigation }: Props) {
                 key={name}
                 style={[
                   styles.filterPill,
-                  active && { backgroundColor: C.accent, borderColor: C.accent },
+                  active && { backgroundColor: colors.accent, borderColor: colors.accent },
                 ]}
                 onPress={() => setWorkspaceFilter(name)}
               >
@@ -181,91 +184,93 @@ export function InboxScreen({ navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  list: {
-    flex: 1,
-    backgroundColor: C.bg,
-  },
-  cacheBanner: {
-    backgroundColor: C.accentBg,
-    color: C.accent,
-    fontSize: 12,
-    padding: 10,
-  },
-  searchInput: {
-    marginHorizontal: 16,
-    marginTop: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: C.border,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 14,
-    color: C.text,
-    backgroundColor: C.s1,
-  },
-  filterRow: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  filterPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: C.border,
-  },
-  filterPillText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: C.textMid,
-  },
-  filterPillTextActive: {
-    color: C.text,
-  },
-  row: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.border,
-  },
-  rowHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 8,
-  },
-  title: {
-    fontSize: 16,
-    fontWeight: '600',
-    flexShrink: 1,
-    color: C.text,
-  },
-  subtitle: {
-    marginTop: 4,
-    fontSize: 13,
-    color: C.textMid,
-  },
-  rowHeaderRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    flexShrink: 0,
-  },
-  unreadBadge: {
-    backgroundColor: C.red,
-    borderRadius: 999,
-    minWidth: 18,
-    height: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-  },
-  unreadText: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-});
+function makeStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    list: {
+      flex: 1,
+      backgroundColor: colors.bg,
+    },
+    cacheBanner: {
+      backgroundColor: colors.accentBg,
+      color: colors.accent,
+      fontSize: 12,
+      padding: 10,
+    },
+    searchInput: {
+      marginHorizontal: 16,
+      marginTop: 16,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      fontSize: 14,
+      color: colors.text,
+      backgroundColor: colors.s1,
+    },
+    filterRow: {
+      flexDirection: 'row',
+      gap: 8,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+    },
+    filterPill: {
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 999,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    filterPillText: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: colors.textMid,
+    },
+    filterPillTextActive: {
+      color: colors.text,
+    },
+    row: {
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    rowHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      gap: 8,
+    },
+    title: {
+      fontSize: 16,
+      fontWeight: '600',
+      flexShrink: 1,
+      color: colors.text,
+    },
+    subtitle: {
+      marginTop: 4,
+      fontSize: 13,
+      color: colors.textMid,
+    },
+    rowHeaderRight: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      flexShrink: 0,
+    },
+    unreadBadge: {
+      backgroundColor: colors.red,
+      borderRadius: 999,
+      minWidth: 18,
+      height: 18,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 4,
+    },
+    unreadText: {
+      color: '#fff',
+      fontSize: 11,
+      fontWeight: '700',
+    },
+  });
+}

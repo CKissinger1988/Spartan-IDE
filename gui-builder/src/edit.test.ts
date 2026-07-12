@@ -57,6 +57,199 @@ test("PropChange creates a new prop when none existed", () => {
   assert.match(result, /placeholder="Name"/);
 });
 
+test("Reparent moves an element from one parent to another, appended at the end by default", () => {
+  const source = `const X = () => (<div><section id="a"><span id="s" /></section><section id="b" /></div>);`;
+  const roots = parseComponent(source);
+  const outer = roots[0];
+  const sectionA = outer.children[0];
+  const span = sectionA.children[0];
+  const sectionB = outer.children[1];
+  assert.equal(span.tagName, "span");
+  assert.equal(sectionB.tagName, "section");
+
+  const result = applyCanvasEdit(source, { kind: "Reparent", nodeId: span.id, newParentId: sectionB.id });
+  const rootsAfter = parseComponent(result);
+  const outerAfter = rootsAfter[0];
+  assert.equal(outerAfter.children[0].children.length, 0, "span should be gone from section a");
+  assert.equal(outerAfter.children[1].children.length, 1, "span should now be inside section b");
+  assert.equal(outerAfter.children[1].children[0].tagName, "span");
+});
+
+test("Reparent honors an explicit index to insert at a specific position among siblings", () => {
+  const source = `const X = () => (<div><section id="target"><i id="1" /><i id="3" /></section><b id="moved" /></div>);`;
+  const roots = parseComponent(source);
+  const outer = roots[0];
+  const target = outer.children[0];
+  const moved = outer.children[1];
+
+  const result = applyCanvasEdit(source, { kind: "Reparent", nodeId: moved.id, newParentId: target.id, index: 1 });
+  const rootsAfter = parseComponent(result);
+  const targetAfter = rootsAfter[0].children[0];
+  assert.equal(targetAfter.children.length, 3);
+  assert.equal(targetAfter.children[0].tagName, "i");
+  assert.equal(targetAfter.children[1].tagName, "b");
+  assert.equal(targetAfter.children[2].tagName, "i");
+});
+
+test("Reparent can reorder within the same parent", () => {
+  const source = `const X = () => (<div><i id="1" /><i id="2" /><i id="3" /></div>);`;
+  const roots = parseComponent(source);
+  const outer = roots[0];
+  const first = outer.children[0];
+
+  const result = applyCanvasEdit(source, { kind: "Reparent", nodeId: first.id, newParentId: outer.id, index: 2 });
+  const rootsAfter = parseComponent(result);
+  assert.equal(rootsAfter[0].children.length, 3);
+  // The first <i> moved to the end (splice-out shifts the remaining two
+  // left before the splice-in happens, so index 2 in the now-2-long array
+  // means "append").
+  assert.deepEqual(
+    rootsAfter[0].children.map((c) => c.props.id?.kind === "string" && c.props.id.value),
+    ["2", "3", "1"],
+  );
+});
+
+test("Reparent refuses to move a top-level root (it has no parent JSXElement)", () => {
+  // Two real, independent, unrelated roots -- distinct from the cycle
+  // case below (moving a root into its *own* descendant is correctly a
+  // cycle error instead, since that's a real, separate, also-true
+  // problem; this fixture isolates the "no parent to detach from" case
+  // on its own by using a target that isn't reachable from the moved
+  // root at all).
+  const source = `function A() { return <div id="a" />; } function B() { return <section id="b" />; }`;
+  const roots = parseComponent(source);
+  const rootA = roots[0];
+  const rootB = roots[1];
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "Reparent", nodeId: rootA.id, newParentId: rootB.id }),
+    /top-level component root/,
+  );
+});
+
+test("Reparent refuses to move an element into itself", () => {
+  const source = `const X = () => (<div><span id="a" /></div>);`;
+  const roots = parseComponent(source);
+  const span = roots[0].children[0];
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "Reparent", nodeId: span.id, newParentId: span.id }),
+    /own child/,
+  );
+});
+
+test("Reparent refuses to move an element into one of its own descendants (a real cycle)", () => {
+  const source = `const X = () => (<div><section id="a"><span id="b" /></section></div>);`;
+  const roots = parseComponent(source);
+  const outer = roots[0];
+  const section = outer.children[0];
+  const span = section.children[0];
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "Reparent", nodeId: section.id, newParentId: span.id }),
+    /own descendants/,
+  );
+});
+
+test("ComponentInsert creates a new self-closing element as a child of the target, appended by default", () => {
+  const source = `const X = () => <div><span /></div>;`;
+  const result = applyCanvasEdit(source, { kind: "ComponentInsert", parentId: "n0", tagName: "Button" });
+  assert.match(result, /<div>\s*<span \/>\s*<Button \/>\s*<\/div>/);
+});
+
+test("ComponentInsert applies real string-literal props to the new element", () => {
+  const source = `const X = () => <div />;`;
+  const result = applyCanvasEdit(source, {
+    kind: "ComponentInsert",
+    parentId: "n0",
+    tagName: "Button",
+    props: { label: "Click me", variant: "primary" },
+  });
+  assert.match(result, /<Button label="Click me" variant="primary"\s*\/>/);
+});
+
+test("ComponentInsert honors an explicit index among existing children", () => {
+  const source = `const X = () => (<div><i id="1" /><i id="2" /></div>);`;
+  const result = applyCanvasEdit(source, { kind: "ComponentInsert", parentId: "n0", tagName: "Mid", index: 1 });
+  const roots = parseComponent(result);
+  assert.equal(roots[0].children.length, 3);
+  assert.equal(roots[0].children[1].tagName, "Mid");
+});
+
+test("ComponentInsert refuses a member-expression tag name in this v1", () => {
+  const source = `const X = () => <div />;`;
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "ComponentInsert", parentId: "n0", tagName: "Foo.Bar" }),
+    /not a supported JSX tag name/,
+  );
+});
+
+test("ComponentInsert throws a real, descriptive error for an unknown parent id", () => {
+  const source = `const X = () => <div />;`;
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "ComponentInsert", parentId: "n99", tagName: "Button" }),
+    /No element with id "n99"/,
+  );
+});
+
+test("real fixture: a Reparent + a ComponentInsert against signature-features.jsx both round-trip to valid, re-parseable source", () => {
+  const source = readFileSync(path.join(prototypesDir, "signature-features.jsx"), "utf8");
+  const roots = parseComponent(source);
+
+  type Node = (typeof roots)[number];
+  function firstWithChildren(node: Node): Node | undefined {
+    if (node.children.length > 0) return node;
+    for (const child of node.children) {
+      const found = firstWithChildren(child);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  let container: Node | undefined;
+  for (const root of roots) {
+    container = firstWithChildren(root);
+    if (container) break;
+  }
+  assert.ok(container, "expected at least one element with children in this real fixture");
+
+  const afterInsert = applyCanvasEdit(source, {
+    kind: "ComponentInsert",
+    parentId: container!.id,
+    tagName: "TestInsertedMarker",
+  });
+  assert.match(afterInsert, /<TestInsertedMarker\s*\/>/);
+  const rootsAfterInsert = parseComponent(afterInsert);
+  assert.equal(rootsAfterInsert.length, roots.length);
+
+  // A real Reparent against the *post-insert* source: move the newly
+  // inserted marker into the first of its own siblings that itself has
+  // children, proving Reparent works correctly chained after a prior
+  // structural edit re-parsed the file fresh, not just against a pristine
+  // parse.
+  const containerAfter = rootsAfterInsert.find((r) => findById(r, container!.id));
+  const containerNode = containerAfter ? findById(containerAfter, container!.id) : undefined;
+  assert.ok(containerNode, "container should still be findable by a fresh id after the insert");
+  const markerNode = containerNode!.children.find((c) => c.tagName === "TestInsertedMarker");
+  assert.ok(markerNode, "the inserted marker should be a direct child of the container");
+  const sibling = containerNode!.children.find((c) => c.id !== markerNode!.id && c.children.length >= 0);
+  assert.ok(sibling, "expected at least one sibling to reparent the marker into");
+
+  const afterReparent = applyCanvasEdit(afterInsert, {
+    kind: "Reparent",
+    nodeId: markerNode!.id,
+    newParentId: sibling!.id,
+  });
+  const rootsAfterReparent = parseComponent(afterReparent);
+  assert.equal(rootsAfterReparent.length, roots.length);
+  assert.match(afterReparent, /<TestInsertedMarker\s*\/>/);
+
+  function findById(node: Node, id: string): Node | undefined {
+    if (node.id === id) return node;
+    for (const child of node.children) {
+      const found = findById(child, id);
+      if (found) return found;
+    }
+    return undefined;
+  }
+});
+
 test("an unknown node id throws a real, descriptive error instead of silently no-op'ing", () => {
   const source = `const X = () => <div />;`;
   assert.throws(

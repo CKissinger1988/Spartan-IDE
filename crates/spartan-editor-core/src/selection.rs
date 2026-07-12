@@ -8,16 +8,18 @@ struct SelectionVertex {
     color: [f32; 4],
 }
 
-/// The exact rust/terracotta accent color (linear-space pre-converted, same
+/// The exact blue brand accent color (linear-space pre-converted, same
 /// reasoning as `cursor.wgsl`'s solid caret color) text selection and the
 /// active-tab highlight both use -- kept as a shared constant now that a
 /// third, differently-colored real caller (the unsaved-changes modal's dim
 /// overlay, §75.23) exists, rather than leaving the color hardcoded
-/// per-vertex at every call site.
-pub const ACCENT_HIGHLIGHT: [f32; 4] = [0.5524, 0.0563, 0.0242, 0.35];
+/// per-vertex at every call site. Real §75.95 user-requested rebrand
+/// ("All Spartan projects default colors are blue and gold") -- replaces
+/// the original rust/terracotta value with `#2E7DFF`'s linear equivalent.
+pub const ACCENT_HIGHLIGHT: [f32; 4] = [0.0273, 0.2051, 1.0000, 0.35];
 
-/// The same rust/terracotta accent at full opacity (no `0.35` translucency)
-/// -- the "Spartan Coding futuristic" half of §75.54's user-requested visual
+/// The same blue brand accent at full opacity (no `0.35` translucency) --
+/// the "Spartan Coding futuristic" half of §75.54's user-requested visual
 /// pass, real and buildable within this renderer's actual capability today
 /// (solid-color quads only, no gradient/glow shader). A plain flat
 /// Antigravity-style highlight alone reads as pure minimalism; a thin,
@@ -25,7 +27,7 @@ pub const ACCENT_HIGHLIGHT: [f32; 4] = [0.5524, 0.0563, 0.0242, 0.35];
 /// real, honest version of a "signature glow" -- sharp and deliberate
 /// rather than soft-diffused, which would need real shader work this pass
 /// doesn't attempt.
-pub const ACCENT_SOLID: [f32; 4] = [0.5524, 0.0563, 0.0242, 1.0];
+pub const ACCENT_SOLID: [f32; 4] = [0.0273, 0.2051, 1.0000, 1.0];
 
 /// Real pixel thickness of the active-tab accent underline strip below --
 /// thin enough to read as a deliberate accent line, not a thick bar,

@@ -53,6 +53,15 @@
           "microphonePermission": "Dictate a new task into the Inbox using on-device speech recognition.",
           "speechRecognitionPermission": "Transcribe dictated tasks on-device before submitting them to the Inbox."
         }
+      ],
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/fonts/JetBrainsMono-Regular.ttf",
+            "./assets/fonts/JetBrainsMono-Bold.ttf"
+          ]
+        }
       ]
     ]
   }

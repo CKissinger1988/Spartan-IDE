@@ -366,8 +366,8 @@ impl TextState {
     /// `hits` gives each label's real char range; `active_range` is the
     /// one to accent.
     pub fn set_mode_toggle_text(&mut self, text: &str, active_range: std::ops::Range<usize>) {
-        const ACCENT: Color = Color::rgb(0xC4, 0x43, 0x2B);
-        const DIM: Color = crate::theme::TEXT_DIM;
+        const ACCENT: Color = Color::rgb(0x2E, 0x7D, 0xFF);
+        let dim: Color = crate::theme::text_dim();
         let default_attrs = Attrs::new().family(Family::Monospace);
         let active_start_byte = text
             .char_indices()
@@ -381,14 +381,14 @@ impl TextState {
             .unwrap_or(text.len());
         let mut rich_spans: Vec<(&str, Attrs)> = Vec::new();
         if active_start_byte > 0 {
-            rich_spans.push((&text[..active_start_byte], default_attrs.color(DIM)));
+            rich_spans.push((&text[..active_start_byte], default_attrs.color(dim)));
         }
         rich_spans.push((
             &text[active_start_byte..active_end_byte],
             default_attrs.color(ACCENT),
         ));
         if active_end_byte < text.len() {
-            rich_spans.push((&text[active_end_byte..], default_attrs.color(DIM)));
+            rich_spans.push((&text[active_end_byte..], default_attrs.color(dim)));
         }
         self.mode_toggle_buffer
             .set_rich_text(&mut self.font_system, rich_spans, Shaping::Advanced);
@@ -415,8 +415,8 @@ impl TextState {
     /// one consistent "this is the active thing" visual language reused
     /// across every real toggle strip in this shell.
     pub fn set_activity_bar_text(&mut self, text: &str, active_range: std::ops::Range<usize>) {
-        const ACCENT: Color = Color::rgb(0xC4, 0x43, 0x2B);
-        const DIM: Color = crate::theme::TEXT_DIM;
+        const ACCENT: Color = Color::rgb(0x2E, 0x7D, 0xFF);
+        let dim: Color = crate::theme::text_dim();
         let default_attrs = Attrs::new().family(Family::Monospace);
         let active_start_byte = text
             .char_indices()
@@ -430,14 +430,14 @@ impl TextState {
             .unwrap_or(text.len());
         let mut rich_spans: Vec<(&str, Attrs)> = Vec::new();
         if active_start_byte > 0 {
-            rich_spans.push((&text[..active_start_byte], default_attrs.color(DIM)));
+            rich_spans.push((&text[..active_start_byte], default_attrs.color(dim)));
         }
         rich_spans.push((
             &text[active_start_byte..active_end_byte],
             default_attrs.color(ACCENT),
         ));
         if active_end_byte < text.len() {
-            rich_spans.push((&text[active_end_byte..], default_attrs.color(DIM)));
+            rich_spans.push((&text[active_end_byte..], default_attrs.color(dim)));
         }
         self.activity_bar_buffer.set_rich_text(
             &mut self.font_system,
@@ -485,17 +485,17 @@ impl TextState {
     }
 
     /// Replaces the status bar's entire content (§75.57) -- plain single
-    /// color (`theme::TEXT_DIM`, matching this crate's existing convention
-    /// for secondary/chrome text elsewhere), no per-segment highlighting:
-    /// unlike the tab bar or mode toggle, nothing in the status bar is a
-    /// clickable "this one is active" toggle.
+    /// color (`theme::text_dim()`, matching this crate's existing
+    /// convention for secondary/chrome text elsewhere), no per-segment
+    /// highlighting: unlike the tab bar or mode toggle, nothing in the
+    /// status bar is a clickable "this one is active" toggle.
     pub fn set_status_bar_text(&mut self, text: &str) {
         self.status_bar_buffer.set_text(
             &mut self.font_system,
             text,
             Attrs::new()
                 .family(Family::Monospace)
-                .color(crate::theme::TEXT_DIM),
+                .color(crate::theme::text_dim()),
             Shaping::Advanced,
         );
         self.status_bar_buffer
@@ -691,7 +691,7 @@ impl TextState {
                     top: TEXT_ORIGIN_Y,
                     scale: 1.0,
                     bounds: editor_bounds,
-                    default_color: crate::theme::TEXT,
+                    default_color: crate::theme::text(),
                 },
                 TextArea {
                     buffer: &self.tab_bar_buffer,
@@ -715,7 +715,7 @@ impl TextState {
                         right: (width as i32 - MODE_TOGGLE_WIDTH as i32).max(SIDEBAR_WIDTH as i32),
                         bottom: TAB_BAR_HEIGHT as i32,
                     },
-                    default_color: crate::theme::TEXT,
+                    default_color: crate::theme::text(),
                 },
                 // Real Agent/Editor/Design mode toggle (§8, §16.1, task
                 // #3) -- a fixed-width strip anchored to the tab bar row's
@@ -732,7 +732,7 @@ impl TextState {
                         right: width as i32,
                         bottom: TAB_BAR_HEIGHT as i32,
                     },
-                    default_color: crate::theme::TEXT,
+                    default_color: crate::theme::text(),
                 },
                 // Real unsaved-changes modal text (§75.23) -- roughly
                 // vertically centered in the real current window height
@@ -754,7 +754,7 @@ impl TextState {
                         right: width as i32,
                         bottom: height as i32,
                     },
-                    default_color: crate::theme::TEXT,
+                    default_color: crate::theme::text(),
                 },
                 // Real file tree sidebar text (§75.26) -- its own
                 // coordinate space starting at the window's left edge (not
@@ -775,7 +775,7 @@ impl TextState {
                         right: SIDEBAR_WIDTH as i32,
                         bottom: height as i32,
                     },
-                    default_color: crate::theme::TEXT,
+                    default_color: crate::theme::text(),
                 },
                 // Real activity bar text (§75.56) -- a horizontal icon row
                 // reserved at the top of the sidebar column, above the file
@@ -792,7 +792,7 @@ impl TextState {
                         right: SIDEBAR_WIDTH as i32,
                         bottom: ACTIVITY_ROW_HEIGHT as i32,
                     },
-                    default_color: crate::theme::TEXT,
+                    default_color: crate::theme::text(),
                 },
                 // Real status bar text (§75.57) -- one real line pinned to
                 // the bottom edge of the window, full width.
@@ -807,7 +807,7 @@ impl TextState {
                         right: width as i32,
                         bottom: height as i32,
                     },
-                    default_color: crate::theme::TEXT_DIM,
+                    default_color: crate::theme::text_dim(),
                 },
                 // Real integrated terminal text (§75.56) -- same region
                 // the main editor `buffer` occupies, shown instead of it
@@ -826,7 +826,7 @@ impl TextState {
                         right: width as i32,
                         bottom: (height as f32 - STATUS_BAR_HEIGHT) as i32,
                     },
-                    default_color: crate::theme::TEXT,
+                    default_color: crate::theme::text(),
                 },
                 // Real workflow canvas node labels (§75.57) -- the top
                 // `WORKFLOW_CANVAS_HEIGHT_PX` of the content area.
@@ -841,7 +841,7 @@ impl TextState {
                         right: width as i32,
                         bottom: (TAB_BAR_HEIGHT + WORKFLOW_CANVAS_HEIGHT_PX) as i32,
                     },
-                    default_color: crate::theme::TEXT,
+                    default_color: crate::theme::text(),
                 },
                 // Real workflow session-detail text (§75.57) -- below the
                 // canvas, down to the status bar.
@@ -856,7 +856,7 @@ impl TextState {
                         right: width as i32,
                         bottom: (height as f32 - STATUS_BAR_HEIGHT) as i32,
                     },
-                    default_color: crate::theme::TEXT,
+                    default_color: crate::theme::text(),
                 },
             ],
             &mut self.swash_cache,

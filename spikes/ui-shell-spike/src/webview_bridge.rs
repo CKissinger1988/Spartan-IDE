@@ -14,7 +14,7 @@ const HTML: &str = r#"<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
 <body style="background:#141416;color:#E9E7E4;font-family:monospace;padding:2em;margin:0;">
-  <h2 style="color:#C4432B;">Center Stage &mdash; real embedded WebView</h2>
+  <h2 style="color:#2E7DFF;">Center Stage &mdash; real embedded WebView</h2>
   <p>Counter (synced Rust &#8596; JS): <span id="counter" style="font-size:1.4em;">0</span></p>
   <button id="incBtn" style="font-family:monospace;font-size:1.1em;padding:0.5em 1em;
     background:#202024;color:#E9E7E4;border:1px solid #35353A;cursor:pointer;">

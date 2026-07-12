@@ -43,8 +43,14 @@ use spartan_model::{
 };
 
 mod pty;
+pub mod ws_transport;
 
-#[derive(Debug, Clone, Deserialize)]
+// Both `Serialize` and `Deserialize`: the server only ever deserializes a
+// `Request` and serializes a `Response` in production, but `ws_transport`'s
+// own tests act as a real client (over an actual WebSocket connection),
+// which legitimately needs the opposite direction of both -- the same
+// shape a real `web/` client will eventually need too.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
     pub id: u64,
     pub method: String,
@@ -52,7 +58,7 @@ pub struct Request {
     pub params: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Response {
     pub id: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1171,6 +1177,32 @@ fn devcontainer_detect(project_root: &str) -> Result<serde_json::Value, String> 
     }
 }
 
+/// Real §21 Android support (task #11), first increment -- a real, fast,
+/// synchronous detect wrapping `spartan_android`'s own real toolchain and
+/// project-type detection. Deliberately narrow: no SDK install, no
+/// emulator/device management, no build/run -- see `spartan-android`'s
+/// own crate-level doc comment for the full, honest account of what this
+/// does and does not cover yet.
+fn android_detect(project_root: &str) -> Result<serde_json::Value, String> {
+    let toolchain = spartan_android::detect_toolchain();
+    let gradle_version = toolchain
+        .gradle_path
+        .as_deref()
+        .and_then(spartan_android::detect_gradle_version);
+    let is_android_project =
+        spartan_android::is_android_project(std::path::Path::new(project_root));
+    Ok(serde_json::json!({
+        "sdkRoot": toolchain.sdk_root,
+        "adbPath": toolchain.adb_path,
+        "emulatorPath": toolchain.emulator_path,
+        "sdkmanagerPath": toolchain.sdkmanager_path,
+        "avdmanagerPath": toolchain.avdmanager_path,
+        "gradlePath": toolchain.gradle_path,
+        "gradleVersion": gradle_version,
+        "isAndroidProject": is_android_project,
+    }))
+}
+
 /// Real Docker container-name-safe sanitization (Docker's own real
 /// charset is `[a-zA-Z0-9][a-zA-Z0-9_.-]+`) -- deterministic per project
 /// path, so re-running "up" against the same project reuses the same
@@ -1959,6 +1991,9 @@ pub fn handle_request(
             get_str_param(&req.params, "container_id").and_then(|id| devcontainer_status(&id))
         }
         "devcontainer_list" => devcontainer_list(),
+        "android_detect" => {
+            get_str_param(&req.params, "project_root").and_then(|r| android_detect(&r))
+        }
         "devcontainer_exec_spawn" => (|| {
             let container_id = get_str_param(&req.params, "container_id")?;
             let cols = get_u64_param(&req.params, "cols")? as u16;
@@ -2500,6 +2535,90 @@ mod tests {
         assert_eq!(result["config"]["name"], "Test Project");
         assert_eq!(result["config"]["forwardPorts"][0], 3000);
         assert_eq!(result["config"]["hasPostCreateCommand"], true);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn android_detect_correctly_reports_a_plain_non_android_project() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-android-detect-none-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "android_detect",
+            serde_json::json!({ "project_root": dir.to_string_lossy() }),
+        );
+        assert!(resp.error.is_none());
+        let result = resp.result.unwrap();
+        assert_eq!(result["isAndroidProject"], false);
+        // Real, internally-consistent shape check rather than asserting a
+        // specific present/absent value for any one field -- this
+        // environment's own real toolchain state (Gradle present, no
+        // real Android SDK) shouldn't be hardcoded into a test that must
+        // also pass in a real developer's environment where the opposite
+        // could be true.
+        assert!(result.get("sdkRoot").is_some());
+        assert!(result.get("gradlePath").is_some());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn android_detect_recognizes_a_real_android_manifest_project() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-android-detect-found-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let manifest_dir = dir.join("app").join("src").join("main");
+        std::fs::create_dir_all(&manifest_dir).unwrap();
+        std::fs::write(manifest_dir.join("AndroidManifest.xml"), "<manifest />").unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "android_detect",
+            serde_json::json!({ "project_root": dir.to_string_lossy() }),
+        );
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["isAndroidProject"], true);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Real, live confirmation that this crate's own dispatch correctly
+    /// reaches a *real* installed Gradle and parses its real version --
+    /// self-skips (matching this workspace's own established convention)
+    /// if no real `gradle` is found on `$PATH` in whatever environment
+    /// runs this test.
+    #[test]
+    fn android_detect_reports_a_real_gradle_version_when_gradle_is_actually_installed() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-android-detect-gradle-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "android_detect",
+            serde_json::json!({ "project_root": dir.to_string_lossy() }),
+        );
+        let result = resp.result.unwrap();
+        if result["gradlePath"].is_null() {
+            eprintln!("SKIP: no real `gradle` on $PATH in this environment");
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        }
+        assert!(
+            !result["gradleVersion"].is_null(),
+            "expected a real parsed Gradle version"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

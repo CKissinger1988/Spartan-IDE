@@ -19,6 +19,13 @@ export interface BuiltTree {
    * `roots` uses -- `applyCanvasEdit` mutates these directly rather than
    * re-parsing or string-templating. */
   nodesById: Map<string, AnyNode>;
+  /** The real parent `JSXElement` AST node for each id, or `null` for a
+   * top-level root (its "parent" is a function body/module scope, not
+   * another `JSXElement`'s own `.children` array). `Reparent` uses this
+   * to splice a node's real AST node out of its current parent's real
+   * `.children` array -- the exact array `recast.print` will re-emit
+   * from, not a separately reconstructed one. */
+  parentOf: Map<string, AnyNode | null>;
 }
 
 function isJsxElement(node: AnyNode): boolean {
@@ -116,19 +123,33 @@ function textContentOf(node: AnyNode): string | null {
   return parts.length > 0 ? parts.join(" ") : null;
 }
 
-function walk(node: AnyNode, ctx: { source: string; counter: { next: number }; nodesById: Map<string, AnyNode> }, seen: WeakSet<object>): ComponentNode[] {
+function walk(
+  node: AnyNode,
+  ctx: { source: string; counter: { next: number }; nodesById: Map<string, AnyNode>; parentOf: Map<string, AnyNode | null> },
+  seen: WeakSet<object>,
+  parent: AnyNode | null,
+): ComponentNode[] {
   if (!node || typeof node !== "object") return [];
   if (seen.has(node)) return [];
   seen.add(node);
 
   if (Array.isArray(node)) {
-    return node.flatMap((child) => walk(child, ctx, seen));
+    return node.flatMap((child) => walk(child, ctx, seen, parent));
   }
 
   if (isJsxElement(node)) {
     const id = `n${ctx.counter.next++}`;
     ctx.nodesById.set(id, node);
-    const children = (node.children ?? []).flatMap((child: AnyNode) => walk(child, ctx, seen));
+    ctx.parentOf.set(id, parent);
+    // Real parent propagation: only a JSXElement's own `.children` array
+    // establishes a new "parent" for Reparent/ComponentInsert purposes --
+    // an element nested inside an *expression* (`{cond && <div/>}`) still
+    // gets `node` as its real parent here, since that's the actual
+    // `JSXElement` whose own `.children` array will contain the
+    // expression container this element lives inside of. Reparenting out
+    // of an expression-wrapped position isn't attempted by this v1 (see
+    // edit.ts), but the parent tracking itself stays correct regardless.
+    const children = (node.children ?? []).flatMap((child: AnyNode) => walk(child, ctx, seen, node));
     return [
       {
         id,
@@ -149,7 +170,7 @@ function walk(node: AnyNode, ctx: { source: string; counter: { next: number }; n
   const found: ComponentNode[] = [];
   for (const key of Object.keys(node)) {
     if (key === "loc" || key === "start" || key === "end" || key === "range") continue;
-    found.push(...walk(node[key], ctx, seen));
+    found.push(...walk(node[key], ctx, seen, parent));
   }
   return found;
 }
@@ -162,6 +183,7 @@ function walk(node: AnyNode, ctx: { source: string; counter: { next: number }; n
  * file" shape this workspace's own `prototypes/*.jsx` fixtures have). */
 export function buildComponentTree(ast: AnyNode, source: string): BuiltTree {
   const nodesById = new Map<string, AnyNode>();
-  const roots = walk(ast, { source, counter: { next: 0 }, nodesById }, new WeakSet());
-  return { roots, nodesById };
+  const parentOf = new Map<string, AnyNode | null>();
+  const roots = walk(ast, { source, counter: { next: 0 }, nodesById, parentOf }, new WeakSet(), null);
+  return { roots, nodesById, parentOf };
 }

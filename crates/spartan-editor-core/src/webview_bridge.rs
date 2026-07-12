@@ -54,7 +54,7 @@ const HTML: &str = r#"<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
 <body style="background:#0B0B0D;color:#E9E7E4;font-family:monospace;padding:2em;margin:0;">
-  <h2 style="color:#C4432B;margin-top:0;">Design Mode &mdash; GUI Builder Canvas</h2>
+  <h2 style="color:#2E7DFF;margin-top:0;">Design Mode &mdash; GUI Builder Canvas</h2>
   <p id="fileInfo" style="color:#A6A5A2;">Loading active file info&hellip;</p>
   <p style="color:#84838A;max-width:640px;line-height:1.5;">
     This is a real embedded WebView (not a mock), proven live and bidirectional
