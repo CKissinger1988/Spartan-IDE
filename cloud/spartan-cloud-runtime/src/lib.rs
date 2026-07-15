@@ -33,8 +33,10 @@ use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
     StartContainerOptions, StopContainerOptions,
 };
+use bollard::image::CreateImageOptions;
 use bollard::models::{ContainerStateStatusEnum, HostConfig};
 use bollard::Docker;
+use futures_util::StreamExt;
 
 use spartan_cloud_protocol::{AllocationId, AllocationStatus, UserId};
 use spartan_cloud_tenant::PlanLimits;
@@ -44,6 +46,20 @@ use spartan_cloud_tenant::PlanLimits;
 pub const MANAGED_LABEL: &str = "com.spartan.cloud.managed";
 /// Docker label recording the owning user id (tenant scoping + quota counts).
 pub const OWNER_LABEL: &str = "com.spartan.cloud.owner";
+/// Docker label recording the allocation's hard-kill deadline as a Unix
+/// timestamp (seconds). The reaper stops any managed container whose deadline
+/// has passed -- the concrete enforcement of `PlanLimits::max_lifetime_secs`
+/// and §36.4.7's "uncapped consumption" failure mode. Stored as an absolute
+/// instant (not a duration) so it survives the reaper running on any schedule.
+pub const DEADLINE_LABEL: &str = "com.spartan.cloud.deadline";
+
+/// Seconds since the Unix epoch, saturating (clock-before-1970 -> 0).
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 #[derive(Debug)]
 pub enum RuntimeError {
@@ -94,6 +110,13 @@ pub trait ContainerRuntime: Send + Sync {
     /// How many of `owner`'s allocations are running right now (feeds quota
     /// admission -- the real `current_active` the API's `can_allocate` needs).
     async fn count_active(&self, owner: &UserId) -> Result<u32, RuntimeError>;
+    /// Stop + remove every managed allocation (across ALL tenants) whose
+    /// deadline is at or before `now_unix`, returning the reaped ids. This is
+    /// the hard enforcement of `PlanLimits::max_lifetime_secs`: a container
+    /// that outlives its plan's lifetime is killed regardless of tenant
+    /// activity. `now_unix` is a parameter (not read from the clock inside)
+    /// purely so it's testable without waiting out a real lifetime.
+    async fn reap_expired(&self, now_unix: u64) -> Result<Vec<AllocationId>, RuntimeError>;
     /// Whether this runtime's isolation is verified in the current deployment.
     /// `false` is an ops signal: do NOT run untrusted tenant code yet.
     fn isolation_verified(&self) -> bool;
@@ -139,6 +162,32 @@ impl DockerRuntime {
         }
     }
 
+    /// Ensure `image` is present locally, pulling it if absent. A real
+    /// allocation can't start a container from an image the daemon doesn't
+    /// have -- a fresh host (or CI runner) has nothing pre-pulled. Inspect
+    /// first so the common already-present case is a single cheap call and no
+    /// network hit; only pull on a real 404.
+    async fn ensure_image(&self, image: &str) -> Result<(), RuntimeError> {
+        match self.docker.inspect_image(image).await {
+            Ok(_) => return Ok(()), // already present
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => {} // fall through to pull
+            Err(e) => return Err(e.into()),
+        }
+        let options = CreateImageOptions {
+            from_image: image.to_string(),
+            ..Default::default()
+        };
+        // create_image yields a progress stream that must be drained to
+        // completion; a mid-stream error means the pull failed.
+        let mut stream = self.docker.create_image(Some(options), None, None);
+        while let Some(item) = stream.next().await {
+            item?;
+        }
+        Ok(())
+    }
+
     fn host_config(&self, limits: &PlanLimits) -> HostConfig {
         HostConfig {
             // memory_mb -> bytes.
@@ -173,9 +222,15 @@ fn map_status(status: Option<ContainerStateStatusEnum>) -> AllocationStatus {
 #[async_trait]
 impl ContainerRuntime for DockerRuntime {
     async fn create(&self, spec: &AllocationSpec) -> Result<AllocationId, RuntimeError> {
+        // A container can't start from an image the daemon doesn't have.
+        self.ensure_image(&spec.image).await?;
+
         let mut labels = HashMap::new();
         labels.insert(MANAGED_LABEL.to_string(), "1".to_string());
         labels.insert(OWNER_LABEL.to_string(), spec.owner.0.clone());
+        // Absolute hard-kill deadline = creation time + the plan's lifetime.
+        let deadline = now_unix().saturating_add(spec.limits.max_lifetime_secs);
+        labels.insert(DEADLINE_LABEL.to_string(), deadline.to_string());
 
         let config = Config {
             image: Some(spec.image.clone()),
@@ -275,6 +330,40 @@ impl ContainerRuntime for DockerRuntime {
         };
         let summaries = self.docker.list_containers(Some(options)).await?;
         Ok(summaries.len() as u32)
+    }
+
+    async fn reap_expired(&self, now_unix: u64) -> Result<Vec<AllocationId>, RuntimeError> {
+        // Every managed container (any tenant, any state), so an expired
+        // container gets reaped whether it's still running or wedged.
+        let mut filters = HashMap::new();
+        filters.insert("label".to_string(), vec![format!("{MANAGED_LABEL}=1")]);
+        let options = ListContainersOptions {
+            all: true,
+            filters,
+            ..Default::default()
+        };
+        let summaries = self.docker.list_containers(Some(options)).await?;
+
+        let mut reaped = Vec::new();
+        for summary in summaries {
+            let Some(id) = summary.id else { continue };
+            // A managed container with no/unparseable deadline is treated as
+            // already expired -- fail safe (kill it) rather than let an
+            // unlabelled container run forever and defeat the whole cap.
+            let expired = summary
+                .labels
+                .as_ref()
+                .and_then(|l| l.get(DEADLINE_LABEL))
+                .and_then(|d| d.parse::<u64>().ok())
+                .map(|deadline| now_unix >= deadline)
+                .unwrap_or(true);
+            if expired {
+                let alloc = AllocationId(id);
+                self.stop(&alloc).await?;
+                reaped.push(alloc);
+            }
+        }
+        Ok(reaped)
     }
 
     fn isolation_verified(&self) -> bool {
@@ -400,5 +489,47 @@ mod tests {
 
         // Stopping again is a harmless no-op (idempotent).
         assert!(runtime.stop(&id).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn reaper_kills_a_container_past_its_deadline_but_spares_a_fresh_one() {
+        let Some(docker) = docker_or_skip().await else {
+            return;
+        };
+        let runtime = DockerRuntime::with_docker(docker, "runc", true);
+        let owner = UserId(format!("reap-owner-{}", std::process::id()));
+        let spec = AllocationSpec {
+            owner: owner.clone(),
+            image: "alpine:latest".to_string(),
+            // Free tier: 30-minute lifetime, so the deadline label lands well
+            // in the future at creation time.
+            limits: PlanLimits::for_tier(PlanTier::Free),
+        };
+
+        let id = runtime.create(&spec).await.expect("create a container");
+        assert_eq!(runtime.count_active(&owner).await.unwrap(), 1);
+
+        // Reaping "now" spares it -- its deadline is ~30 minutes out.
+        let reaped_now = runtime.reap_expired(now_unix()).await.expect("reap now");
+        assert!(
+            !reaped_now.contains(&id),
+            "a fresh container is not past its deadline"
+        );
+        assert_eq!(
+            runtime.status(&id).await.unwrap(),
+            AllocationStatus::Running,
+            "spared container is still running"
+        );
+
+        // Reaping far in the future kills it (deadline has passed) and it's
+        // gone -- the hard enforcement of max_lifetime_secs.
+        let far_future = now_unix().saturating_add(365 * 24 * 60 * 60);
+        let reaped = runtime.reap_expired(far_future).await.expect("reap future");
+        assert!(reaped.contains(&id), "an expired container is reaped");
+        assert!(matches!(
+            runtime.status(&id).await,
+            Err(RuntimeError::NotFound)
+        ));
+        assert_eq!(runtime.count_active(&owner).await.unwrap(), 0);
     }
 }

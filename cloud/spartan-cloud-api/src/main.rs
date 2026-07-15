@@ -64,7 +64,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 runtime.oci_runtime(),
                 runtime.isolation_verified()
             );
-            state = state.with_runtime(std::sync::Arc::new(runtime));
+            let runtime: std::sync::Arc<dyn ContainerRuntime> = std::sync::Arc::new(runtime);
+
+            // Independent reaper task: enforces every allocation's hard
+            // wall-clock lifetime (PlanLimits::max_lifetime_secs, §36.4.7's
+            // "uncapped consumption" defense) regardless of tenant activity.
+            // Runs on its own interval so a wedged or forgotten container is
+            // still killed at its deadline.
+            let reaper = std::sync::Arc::clone(&runtime);
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+                loop {
+                    ticker.tick().await;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    match reaper.reap_expired(now).await {
+                        Ok(ids) if !ids.is_empty() => {
+                            eprintln!(
+                                "spartan-cloud-api: reaper stopped {} expired allocation(s)",
+                                ids.len()
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => eprintln!("spartan-cloud-api: reaper error: {e}"),
+                    }
+                }
+            });
+
+            state = state.with_runtime(runtime);
         }
         Err(e) => {
             eprintln!(

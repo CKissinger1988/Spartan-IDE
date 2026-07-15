@@ -67,15 +67,25 @@ live daemon:
   Every method is tenant-scoped and resource-capped: `host_config` maps each
   `PlanLimits` to real Docker caps (`memory`, `nano_cpus`, `pids_limit`), pins
   the OCI `runtime`, and uses `network_mode: none` — no host bind-mounts, only
-  a fresh per-allocation scratch. Managed containers carry `MANAGED_LABEL` +
-  `OWNER_LABEL` so `count_active` (which feeds quota admission) and teardown
-  are owner-scoped. An honest `isolation_verified` flag rides along on the
-  runtime: it is `false` unless the operator explicitly asserts it for the
-  deployment (`SPARTAN_CLOUD_ISOLATION_VERIFIED=1`), and the API refuses to
-  allocate against an unverified runtime. 3 tests, including a **real
-  create → status → count → stop lifecycle** against a live daemon
-  (self-skips if none is reachable, mirroring `spartan-devcontainer`'s
-  `docker_integration.rs`).
+  a fresh per-allocation scratch. `create` **ensures the image is present**
+  (inspect-then-pull, so a fresh host/CI runner with nothing cached still
+  allocates). Managed containers carry `MANAGED_LABEL` + `OWNER_LABEL` so
+  `count_active` (which feeds quota admission) and teardown are owner-scoped.
+  An honest `isolation_verified` flag rides along on the runtime: it is
+  `false` unless the operator explicitly asserts it for the deployment
+  (`SPARTAN_CLOUD_ISOLATION_VERIFIED=1`), and the API refuses to allocate
+  against an unverified runtime.
+  - **A real reaper** enforces each allocation's hard wall-clock lifetime:
+    `create` stamps an absolute deadline label (`now + max_lifetime_secs`),
+    and `reap_expired(now)` stops+removes every managed container (any tenant,
+    any state) past its deadline — the concrete answer to §36.4.7's "uncapped
+    consumption". A managed container with a missing/unparseable deadline is
+    reaped fail-safe. `main.rs` runs it on a 60-second background interval when
+    a runtime is connected.
+  - 4 tests, including a **real create → status → count → stop lifecycle** and
+    a **real reaper test** (fresh container spared, past-deadline container
+    killed) against a live daemon (self-skips if none is reachable, mirroring
+    `spartan-devcontainer`'s `docker_integration.rs`).
 
 ### gVisor go/no-go — result: **no-go in this nested sandbox; `runc` is the verified baseline here**
 
@@ -111,8 +121,6 @@ same trait — no API or domain-layer change needed.
    from `SpartanAI_Security_Core`, rebuilt safely), a per-tenant abuse/
    resource-monitoring dashboard, and the per-container WS session endpoint
    (reusing `spartan-backend`'s envelope shape).
-3. **An independent reaper task** enforcing each allocation's hard wall-clock
-   lifetime (the `PlanLimits` field exists; the background reaper does not yet).
 
 ## Standing safety posture
 

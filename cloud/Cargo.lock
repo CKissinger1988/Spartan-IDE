@@ -1153,6 +1153,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bollard",
+ "futures-util",
  "spartan-cloud-protocol",
  "spartan-cloud-tenant",
  "tokio",
