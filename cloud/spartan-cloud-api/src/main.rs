@@ -19,6 +19,22 @@ fn parse_flag<'a>(args: &'a [String], prefix: &str) -> Option<&'a str> {
     args.iter().find_map(|a| a.strip_prefix(prefix))
 }
 
+/// Parse a 64-hex-char vault master key into 32 raw bytes. Returns `None` for
+/// any wrong length or non-hex input (a clear, early failure at startup rather
+/// than a silently truncated/derived key).
+fn parse_vault_key(hex: &str) -> Option<[u8; 32]> {
+    let hex = hex.trim();
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
+        let s = std::str::from_utf8(chunk).ok()?;
+        key[i] = u8::from_str_radix(s, 16).ok()?;
+    }
+    Some(key)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -27,7 +43,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .to_string();
     let db_path = parse_flag(&args, "--db:").unwrap_or("spartan-cloud.db");
 
-    let store = Store::open(db_path)?;
+    // The at-rest secrets-vault master key is env-provided (64 hex chars = 32
+    // bytes), never persisted alongside the ciphertext and never hardcoded. If
+    // absent, the store opens without a key and vault operations are refused
+    // (a locked vault) rather than silently storing plaintext.
+    let store = match std::env::var("SPARTAN_CLOUD_VAULT_KEY").ok() {
+        Some(hex) => {
+            let key = parse_vault_key(&hex)
+                .ok_or("SPARTAN_CLOUD_VAULT_KEY must be exactly 64 hex chars (32 bytes)")?;
+            eprintln!("spartan-cloud-api: secrets vault unlocked (master key from environment)");
+            Store::open_with_key(db_path, &key)?
+        }
+        None => {
+            eprintln!("spartan-cloud-api: no SPARTAN_CLOUD_VAULT_KEY set; secrets vault is locked");
+            Store::open(db_path)?
+        }
+    };
 
     // Optional, env-driven admin bootstrap -- created once if absent.
     if let (Ok(email), Ok(password)) = (
@@ -108,4 +139,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("spartan-cloud-api: listening on http://{bind}");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_vault_key;
+
+    #[test]
+    fn parse_vault_key_accepts_exactly_64_hex_chars() {
+        let hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+        let key = parse_vault_key(hex).expect("valid 64-hex key");
+        assert_eq!(key[0], 0x00);
+        assert_eq!(key[1], 0x11);
+        assert_eq!(key[31], 0xff);
+    }
+
+    #[test]
+    fn parse_vault_key_rejects_wrong_length_and_non_hex() {
+        assert!(parse_vault_key("").is_none());
+        assert!(parse_vault_key("abcd").is_none(), "too short");
+        assert!(
+            parse_vault_key(&"a".repeat(63)).is_none(),
+            "63 chars is not 32 bytes"
+        );
+        assert!(
+            parse_vault_key(&"zz".repeat(32)).is_none(),
+            "non-hex characters are rejected"
+        );
+    }
 }

@@ -47,8 +47,18 @@ live daemon:
   `verify_login` returns `Ok(None)` for both wrong-password and unknown-email
   (no account enumeration). Also an **append-only audit log** (`record_audit`/
   `recent_audit`, no update/delete method exists — tamper-evident against this
-  crate's own API) — a defensive concept adapted from `SpartanAI_Security_Core`,
-  rebuilt safely. 7 unit tests.
+  crate's own API) and an **encrypted-at-rest secrets vault** (`put_secret`/
+  `get_secret`/`list_secret_names`/`delete_secret`) using authenticated
+  **AES-256-GCM** with a fresh random 96-bit nonce per record — deliberately
+  *correcting* the `SpartanAI_Security_Core` concept, whose reference used
+  unauthenticated AES-256-CBC despite claiming GCM. The master key comes from
+  the operator's environment (`SPARTAN_CLOUD_VAULT_KEY`, 64 hex chars), is
+  never persisted with the ciphertext, and when absent the vault is *locked*
+  (operations refused, never a silent plaintext fallback). Owner-scoped so one
+  tenant can never read/delete another's; a tampered ciphertext or wrong key is
+  a real authentication failure, not a silent wrong result. Both are defensive
+  concepts adapted from `SpartanAI_Security_Core`, rebuilt safely (no code
+  ported). 11 unit tests (incl. GCM tamper-detection + tenant isolation).
 - **`spartan-cloud-api`** — the axum control-plane server, **real and
   testable**: `POST /api/signup`, `POST /api/login`, `GET /api/me`,
   `POST /api/admin/grant_pro` (admin-only), `GET /api/admin/audit` (admin-only,
@@ -127,9 +137,10 @@ same trait — no API or domain-layer change needed.
    `SpartanAI_Security_Core`, rebuilt safely), a per-tenant abuse/
    resource-monitoring dashboard (the `GET /api/admin/audit` feed + live
    `docker stats`-style telemetry, surfaced with Track C's status-reactive
-   aesthetic), an encrypted-at-rest secrets vault (AES-256-GCM), and the
-   per-container WS session endpoint (reusing `spartan-backend`'s envelope
-   shape).
+   aesthetic), and the per-container WS session endpoint (reusing
+   `spartan-backend`'s envelope shape). The encrypted-at-rest secrets vault
+   (AES-256-GCM) is now real in `spartan-cloud-data`; still to do is a REST
+   surface for tenants to manage their own secrets.
 
 ## Standing safety posture
 

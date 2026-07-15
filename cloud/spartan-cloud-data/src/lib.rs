@@ -11,6 +11,8 @@
 //! (a sensible, widely-used baseline); tuning them for a specific deployment
 //! is a real, named ops decision, not hardcoded cleverness.
 
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -27,6 +29,15 @@ pub enum DataError {
     /// The email is already registered. Surfaced distinctly so the API can
     /// return a clean 409 rather than a raw constraint-violation string.
     EmailTaken,
+    /// A vault operation was attempted but no master key is configured (the
+    /// store was opened without one). The secret is *not* silently stored in
+    /// plaintext -- the operation is refused.
+    VaultLocked,
+    /// AES-GCM encryption/decryption failed. On decrypt this specifically also
+    /// covers a failed authentication tag -- i.e. tampered or wrong-key
+    /// ciphertext -- which is exactly what GCM (unlike the reference's CBC)
+    /// detects. Never carries the underlying detail (no oracle).
+    Crypto,
 }
 
 impl std::fmt::Display for DataError {
@@ -35,6 +46,10 @@ impl std::fmt::Display for DataError {
             DataError::Sqlite(e) => write!(f, "database error: {e}"),
             DataError::Hash(e) => write!(f, "password hashing error: {e}"),
             DataError::EmailTaken => write!(f, "email is already registered"),
+            DataError::VaultLocked => {
+                write!(f, "the secrets vault is locked (no master key configured)")
+            }
+            DataError::Crypto => write!(f, "secret encryption/decryption failed"),
         }
     }
 }
@@ -56,25 +71,54 @@ fn new_user_id() -> UserId {
 
 /// The persistence handle. Owns one SQLite connection; the (later) API layer
 /// wraps it in whatever sharing it needs (e.g. a connection pool or a mutex).
+///
+/// `cipher` is the at-rest secrets-vault key, set only when a master key was
+/// provided at open time. When `None`, vault operations are refused
+/// (`DataError::VaultLocked`) rather than silently storing plaintext.
 pub struct Store {
     conn: Connection,
+    cipher: Option<Aes256Gcm>,
 }
 
 impl Store {
     /// An in-memory database -- used by tests and ephemeral runs. Schema is
-    /// created immediately.
+    /// created immediately. No vault key (vault operations are refused).
     pub fn open_in_memory() -> Result<Self, DataError> {
         let conn = Connection::open_in_memory()?;
-        let store = Store { conn };
+        let store = Store { conn, cipher: None };
+        store.init_schema()?;
+        Ok(store)
+    }
+
+    /// An in-memory database with a vault master key (tests, ephemeral runs).
+    pub fn open_in_memory_with_key(master_key: &[u8; 32]) -> Result<Self, DataError> {
+        let conn = Connection::open_in_memory()?;
+        let store = Store {
+            conn,
+            cipher: Some(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(master_key))),
+        };
         store.init_schema()?;
         Ok(store)
     }
 
     /// A real on-disk database at `path`, creating it (and the schema) if
-    /// absent.
+    /// absent. No vault key.
     pub fn open(path: &str) -> Result<Self, DataError> {
         let conn = Connection::open(path)?;
-        let store = Store { conn };
+        let store = Store { conn, cipher: None };
+        store.init_schema()?;
+        Ok(store)
+    }
+
+    /// A real on-disk database with a vault master key. The key comes from the
+    /// operator's environment and is never written to the database -- only the
+    /// per-record nonce + ciphertext are persisted.
+    pub fn open_with_key(path: &str, master_key: &[u8; 32]) -> Result<Self, DataError> {
+        let conn = Connection::open(path)?;
+        let store = Store {
+            conn,
+            cipher: Some(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(master_key))),
+        };
         store.init_schema()?;
         Ok(store)
     }
@@ -102,7 +146,14 @@ impl Store {
                 target       TEXT,
                 detail       TEXT
              );
-             CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_id);",
+             CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_id);
+             CREATE TABLE IF NOT EXISTS secrets (
+                owner_id   TEXT NOT NULL,
+                name       TEXT NOT NULL,
+                nonce      BLOB NOT NULL,
+                ciphertext BLOB NOT NULL,
+                PRIMARY KEY (owner_id, name)
+             );",
         )?;
         Ok(())
     }
@@ -291,6 +342,82 @@ impl Store {
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(DataError::from)
     }
+
+    /// Store an encrypted per-tenant secret (SSH deploy keys, registry
+    /// credentials, per-allocation capability tokens). Encrypted with
+    /// **AES-256-GCM** under a fresh random 96-bit nonce; only the nonce +
+    /// ciphertext (which includes GCM's authentication tag) are persisted --
+    /// never the plaintext, never the key. Overwrites an existing secret of
+    /// the same `(owner, name)`. Refused with `VaultLocked` if no master key.
+    pub fn put_secret(
+        &self,
+        owner: &UserId,
+        name: &str,
+        plaintext: &[u8],
+    ) -> Result<(), DataError> {
+        let cipher = self.cipher.as_ref().ok_or(DataError::VaultLocked)?;
+        // Fresh random 96-bit nonce per record (GCM's hard requirement: never
+        // reuse a nonce under the same key). From the `rand` crate we already
+        // depend on, same discipline as the argon2 salt.
+        let nonce_bytes: [u8; 12] = rand::random();
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext)
+            .map_err(|_| DataError::Crypto)?;
+        self.conn.execute(
+            "INSERT INTO secrets (owner_id, name, nonce, ciphertext) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(owner_id, name) DO UPDATE SET nonce = ?3, ciphertext = ?4",
+            params![owner.0, name, nonce_bytes.to_vec(), ciphertext],
+        )?;
+        Ok(())
+    }
+
+    /// Decrypt and return a tenant's secret, or `None` if it doesn't exist.
+    /// A decryption/authentication failure (tampered ciphertext, wrong key) is
+    /// a real `DataError::Crypto`, never a silent empty result.
+    pub fn get_secret(&self, owner: &UserId, name: &str) -> Result<Option<Vec<u8>>, DataError> {
+        let cipher = self.cipher.as_ref().ok_or(DataError::VaultLocked)?;
+        let row: Option<(Vec<u8>, Vec<u8>)> = self
+            .conn
+            .query_row(
+                "SELECT nonce, ciphertext FROM secrets WHERE owner_id = ?1 AND name = ?2",
+                params![owner.0, name],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((nonce_bytes, ciphertext)) = row else {
+            return Ok(None);
+        };
+        if nonce_bytes.len() != 12 {
+            return Err(DataError::Crypto);
+        }
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext.as_ref())
+            .map_err(|_| DataError::Crypto)?;
+        Ok(Some(plaintext))
+    }
+
+    /// The names of a tenant's stored secrets (never the values). Owner-scoped
+    /// -- the enforced per-tenant isolation invariant: a query only ever sees
+    /// its own owner's rows.
+    pub fn list_secret_names(&self, owner: &UserId) -> Result<Vec<String>, DataError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name FROM secrets WHERE owner_id = ?1 ORDER BY name")?;
+        let rows = stmt.query_map(params![owner.0], |r| r.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DataError::from)
+    }
+
+    /// Delete a tenant's secret. Idempotent -- deleting an absent secret is a
+    /// harmless no-op. Owner-scoped, so one tenant can never delete another's.
+    pub fn delete_secret(&self, owner: &UserId, name: &str) -> Result<(), DataError> {
+        self.conn.execute(
+            "DELETE FROM secrets WHERE owner_id = ?1 AND name = ?2",
+            params![owner.0, name],
+        )?;
+        Ok(())
+    }
 }
 
 /// One row of the append-only audit log.
@@ -442,5 +569,121 @@ mod tests {
         let one = store.recent_audit(1).unwrap();
         assert_eq!(one.len(), 1);
         assert_eq!(one[0].action, "grant_pro");
+    }
+
+    #[test]
+    fn vault_round_trips_a_secret_and_never_stores_plaintext() {
+        let key = [7u8; 32];
+        let store = Store::open_in_memory_with_key(&key).unwrap();
+        let owner = UserId("tenant-a".into());
+
+        store
+            .put_secret(&owner, "registry_token", b"s3cr3t-ghp_value")
+            .unwrap();
+
+        // Round-trips exactly.
+        let got = store.get_secret(&owner, "registry_token").unwrap();
+        assert_eq!(got.as_deref(), Some(&b"s3cr3t-ghp_value"[..]));
+
+        // The plaintext is never in the stored ciphertext.
+        let raw: Vec<u8> = store
+            .conn
+            .query_row(
+                "SELECT ciphertext FROM secrets WHERE owner_id = 'tenant-a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            !raw.windows(6).any(|w| w == b"s3cr3t"),
+            "the plaintext must never appear in the at-rest ciphertext"
+        );
+
+        // Names list without exposing values; delete is idempotent.
+        assert_eq!(
+            store.list_secret_names(&owner).unwrap(),
+            vec!["registry_token".to_string()]
+        );
+        store.delete_secret(&owner, "registry_token").unwrap();
+        assert_eq!(store.get_secret(&owner, "registry_token").unwrap(), None);
+        assert!(store.delete_secret(&owner, "registry_token").is_ok());
+    }
+
+    #[test]
+    fn vault_detects_tampering_via_gcm_authentication() {
+        let key = [9u8; 32];
+        let store = Store::open_in_memory_with_key(&key).unwrap();
+        let owner = UserId("tenant-b".into());
+        store
+            .put_secret(&owner, "k", b"authenticated data")
+            .unwrap();
+
+        // Flip a byte of the stored ciphertext -- GCM's auth tag must reject it
+        // on decrypt (this is exactly what the reference's unauthenticated CBC
+        // could NOT detect). Read, flip the last byte (part of the auth tag),
+        // write back -- a guaranteed, deterministic mutation.
+        let mut ct: Vec<u8> = store
+            .conn
+            .query_row(
+                "SELECT ciphertext FROM secrets WHERE owner_id = 'tenant-b'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let last = ct.len() - 1;
+        ct[last] ^= 0xFF;
+        store
+            .conn
+            .execute(
+                "UPDATE secrets SET ciphertext = ?1 WHERE owner_id = 'tenant-b'",
+                params![ct],
+            )
+            .unwrap();
+        assert!(
+            matches!(store.get_secret(&owner, "k"), Err(DataError::Crypto)),
+            "tampered ciphertext must fail authentication, not decrypt silently"
+        );
+    }
+
+    #[test]
+    fn vault_is_owner_scoped_and_wrong_key_cannot_read() {
+        let store = Store::open_in_memory_with_key(&[1u8; 32]).unwrap();
+        let a = UserId("owner-a".into());
+        let b = UserId("owner-b".into());
+        store.put_secret(&a, "shared_name", b"a-value").unwrap();
+
+        // Another tenant with the same secret name sees nothing of tenant a's.
+        assert_eq!(store.get_secret(&b, "shared_name").unwrap(), None);
+        assert!(store.list_secret_names(&b).unwrap().is_empty());
+
+        // A store opened with a DIFFERENT master key cannot decrypt a's secret
+        // (GCM authentication fails) -- the key genuinely gates access.
+        let path = format!(
+            "{}/vault-key-test-{}.db",
+            std::env::temp_dir().display(),
+            std::process::id()
+        );
+        let _ = std::fs::remove_file(&path);
+        {
+            let s1 = Store::open_with_key(&path, &[2u8; 32]).unwrap();
+            s1.put_secret(&a, "k", b"secret").unwrap();
+        }
+        let s2 = Store::open_with_key(&path, &[3u8; 32]).unwrap(); // wrong key
+        assert!(matches!(s2.get_secret(&a, "k"), Err(DataError::Crypto)));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn vault_operations_are_refused_without_a_master_key() {
+        let store = Store::open_in_memory().unwrap(); // no key
+        let owner = UserId("x".into());
+        assert!(matches!(
+            store.put_secret(&owner, "k", b"v"),
+            Err(DataError::VaultLocked)
+        ));
+        assert!(matches!(
+            store.get_secret(&owner, "k"),
+            Err(DataError::VaultLocked)
+        ));
     }
 }

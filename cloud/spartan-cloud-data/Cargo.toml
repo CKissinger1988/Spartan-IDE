@@ -18,3 +18,9 @@ spartan-cloud-tenant = { path = "../spartan-cloud-tenant" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 argon2 = "0.5"
 rand = "0.10"
+# Authenticated encryption for the at-rest secrets vault. AES-256-**GCM**
+# (authenticated) -- deliberately corrects the SpartanAI_Security_Core concept,
+# whose reference implementation used unauthenticated AES-256-CBC despite its
+# README claiming GCM. Master key comes from the environment, never persisted
+# alongside the ciphertext.
+aes-gcm = "0.10"
