@@ -41,22 +41,38 @@ live daemon:
   - **`Session`** — opaque 256-bit token generation + expiry math;
     persistence and early revocation live in the (later) data layer.
 
-## What's deliberately NOT here yet (later increments, in order)
+- **`spartan-cloud-data`** — persistence: SQLite (embedded via `rusqlite`'s
+  `bundled` feature, zero infra) with real **argon2** password hashing and
+  the session store where opaque-token **revocation** lives (a row delete).
+  `verify_login` returns `Ok(None)` for both wrong-password and unknown-email
+  (no account enumeration). 6 unit tests.
+- **`spartan-cloud-api`** — the axum control-plane server, **real and
+  testable**: `POST /api/signup`, `POST /api/login`, `GET /api/me`,
+  `POST /api/admin/grant_pro` (admin-only), and `POST /api/allocate` (runs the
+  real entitlement → plan-limits → quota admission). Opaque bearer-token auth
+  via a `FromRequestParts` extractor that looks up + expiry-checks the session
+  per request. Env-driven admin bootstrap (`SPARTAN_CLOUD_ADMIN_EMAIL`/
+  `_PASSWORD`), never a hardcoded credential. 6 tests (tower `oneshot`), plus
+  a live over-the-socket smoke test.
 
-1. **`spartan-cloud-data`** — persistence (SQLite for the MVP, Postgres
-   later behind `sqlx`), including argon2 password hashing and session
-   storage/revocation.
-2. **`spartan-cloud-runtime`** — the `ContainerRuntime` trait + a real
+  **Deliberately honest, not faked:** `/api/allocate`, once admission passes,
+  returns `503 runtime_unavailable` because the container runtime isn't wired
+  yet — this crate never pretends to start a container it can't.
+
+## What's NOT here yet (next increments)
+
+1. **`spartan-cloud-runtime`** — the `ContainerRuntime` trait + a real
    `DockerGvisorRuntime` driver (bollard). **Gated behind its own real
    go/no-go spike**: start a live Docker daemon, install `runsc` (gVisor),
    confirm isolation + resource-cap enforcement. gVisor is the MVP choice
    because it's the only strong-isolation option testable in a KVM-less
    environment (Firecracker/Kata need `/dev/kvm`, absent here per §75.74);
-   Firecracker stays a documented future upgrade behind the same trait.
-3. **`spartan-cloud-api`** — the axum control-plane server (signup/login,
-   entitlement check + admin toggle, allocate/list/stop, per-container WS),
-   plus WebAuthn admin auth and an audit log (defensive concepts adapted
-   from `SpartanAI_Security_Core`, rebuilt safely).
+   Firecracker stays a documented future upgrade behind the same trait. Once
+   it lands, `/api/allocate` allocates for real and the current-active count
+   feeding quota admission comes from it.
+2. **WebAuthn admin auth + audit log** on the API (defensive concepts adapted
+   from `SpartanAI_Security_Core`, rebuilt safely) and the per-container WS
+   session endpoint (reusing `spartan-backend`'s envelope shape).
 
 ## Standing safety posture
 

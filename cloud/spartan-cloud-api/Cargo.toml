@@ -1,0 +1,32 @@
+[package]
+name = "spartan-cloud-api"
+version = "0.1.0"
+edition = "2021"
+
+# The Spartan Cloud control-plane HTTP server (axum). Ties the protocol,
+# tenant (domain), and data (persistence) crates into a real REST API:
+# signup/login, an authenticated `/me`, an admin-only entitlement toggle,
+# and an allocation-admission endpoint that runs the real entitlement +
+# quota checks. Container allocation itself returns an honest
+# "runtime not yet connected" until `spartan-cloud-runtime` lands (gated on
+# the gVisor spike) -- this crate does NOT fake container lifecycle.
+#
+# axum/tokio (async) is natural for an HTTP server and is fully contained in
+# this cloud/ workspace -- it never touches the main workspace's sync
+# convention.
+
+[[bin]]
+name = "spartan-cloud-api"
+path = "src/main.rs"
+
+[dependencies]
+spartan-cloud-protocol = { path = "../spartan-cloud-protocol" }
+spartan-cloud-tenant = { path = "../spartan-cloud-tenant" }
+spartan-cloud-data = { path = "../spartan-cloud-data" }
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
