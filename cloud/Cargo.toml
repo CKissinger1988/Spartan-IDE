@@ -1,0 +1,22 @@
+# Spartan Cloud (Track B) -- a genuinely separate, optional, multi-tenant
+# backend that allocates isolated containers per user for building/testing
+# projects, positioned ALONGSIDE the local-first product, not replacing it.
+#
+# This is its OWN workspace, deliberately NOT a member of the repo-root
+# Cargo.toml. The root lists its members explicitly (not a glob), so this
+# sibling directory is simply invisible to `cargo build --workspace` at the
+# repo root -- the same isolation `crates/plugins` already uses for a
+# different reason. Build/test it from inside `cloud/` instead:
+#   cd cloud && cargo test
+#
+# First increment scope: the pure, infra-free domain crates only
+# (protocol DTOs + tenant/entitlement/session/quota logic). These commit to
+# NOTHING about the container-isolation driver (gVisor vs Firecracker vs
+# runc) -- that's a swappable `ContainerRuntime` trait + driver in a later
+# increment, gated behind its own real gVisor go/no-go spike (which needs a
+# live Docker daemon + runsc). Data (SQLite), runtime (Docker+gVisor), and
+# api (axum) crates land on top of this domain core.
+
+[workspace]
+resolver = "2"
+members = ["spartan-cloud-protocol", "spartan-cloud-tenant"]

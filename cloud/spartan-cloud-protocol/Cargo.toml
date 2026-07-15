@@ -1,0 +1,12 @@
+[package]
+name = "spartan-cloud-protocol"
+version = "0.1.0"
+edition = "2021"
+
+# Shared, serializable DTOs for Spartan Cloud's control plane -- the wire
+# vocabulary the (future) axum API and any client speak. Pure data + serde,
+# no logic, no HTTP/DB/Docker dependencies, so both the server and a client
+# can depend on it without pulling in either side's implementation.
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

@@ -217,3 +217,33 @@ jobs:
       - name: Test
         working-directory: spikes/git-browser-spike
         run: npm test
+
+  cloud:
+    name: cloud/ (Spartan Cloud domain crates)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          # cloud/ is its own separate Cargo workspace (not a root member),
+          # so it has its own target dir -- key the cache to it.
+          workspaces: cloud
+
+      - name: cargo fmt --check
+        working-directory: cloud
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        working-directory: cloud
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        working-directory: cloud
+        run: cargo test
