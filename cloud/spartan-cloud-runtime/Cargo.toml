@@ -1,0 +1,23 @@
+[package]
+name = "spartan-cloud-runtime"
+version = "0.1.0"
+edition = "2021"
+
+# The container-isolation layer: a `ContainerRuntime` trait + a real Docker
+# driver (bollard) that applies per-tenant resource caps and selects the OCI
+# runtime (runc / runsc-gVisor). The trait is the swappable seam a
+# Firecracker/Fly-Machines driver slots into later (mirroring ModelProvider).
+#
+# Isolation posture is a first-class, honest field: `isolation_verified` must
+# be set true ONLY when the operator has confirmed the chosen runtime actually
+# isolates + enforces caps in THIS deployment. See this repo's gVisor go/no-go
+# spike result in the README -- gVisor installs/registers here but its sandbox
+# hangs inside this nested container, so runc is the verified baseline and
+# gVisor is selectable-but-unverified until confirmed on real target hardware.
+
+[dependencies]
+spartan-cloud-protocol = { path = "../spartan-cloud-protocol" }
+spartan-cloud-tenant = { path = "../spartan-cloud-tenant" }
+bollard = "0.18"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+async-trait = "0.1"

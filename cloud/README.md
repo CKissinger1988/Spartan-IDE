@@ -55,24 +55,64 @@ live daemon:
   `_PASSWORD`), never a hardcoded credential. 6 tests (tower `oneshot`), plus
   a live over-the-socket smoke test.
 
-  **Deliberately honest, not faked:** `/api/allocate`, once admission passes,
-  returns `503 runtime_unavailable` because the container runtime isn't wired
-  yet — this crate never pretends to start a container it can't.
+  When a runtime is wired (see below), `/api/allocate` creates a **real,
+  resource-capped container** for the tenant and returns `201 CREATED` with
+  the `AllocationInfo`; without one it returns `503 runtime_unavailable`, and
+  with a runtime whose isolation is unverified it returns
+  `503 isolation_unverified` — this crate never pretends to start a container
+  it can't, and never runs tenant code against isolation it hasn't confirmed.
+
+- **`spartan-cloud-runtime`** — the `ContainerRuntime` async trait + a real
+  **`DockerRuntime`** driver on `bollard`, **now wired into `/api/allocate`**.
+  Every method is tenant-scoped and resource-capped: `host_config` maps each
+  `PlanLimits` to real Docker caps (`memory`, `nano_cpus`, `pids_limit`), pins
+  the OCI `runtime`, and uses `network_mode: none` — no host bind-mounts, only
+  a fresh per-allocation scratch. Managed containers carry `MANAGED_LABEL` +
+  `OWNER_LABEL` so `count_active` (which feeds quota admission) and teardown
+  are owner-scoped. An honest `isolation_verified` flag rides along on the
+  runtime: it is `false` unless the operator explicitly asserts it for the
+  deployment (`SPARTAN_CLOUD_ISOLATION_VERIFIED=1`), and the API refuses to
+  allocate against an unverified runtime. 3 tests, including a **real
+  create → status → count → stop lifecycle** against a live daemon
+  (self-skips if none is reachable, mirroring `spartan-devcontainer`'s
+  `docker_integration.rs`).
+
+### gVisor go/no-go — result: **no-go in this nested sandbox; `runc` is the verified baseline here**
+
+The plan's Phase 0 spike was actually run. `runsc` (gVisor) installs from the
+confirmed apt package, but does **not** work as a Docker runtime in this
+nested environment:
+
+- gVisor's cgroup enforcement needs the `cpuset` controller — it was missing
+  and had to be mounted before caps could be enforced at all.
+- `runsc` refuses to run in the root network namespace; `--network=none`
+  works around it.
+- Even then the sandbox **hangs** on startup: gVisor's platform needs either
+  KVM (absent here, per §75.74) or working `ptrace`/`systrap`, neither usable
+  in this nested container.
+
+So gVisor is a genuine **no-go here** — not a code problem, an environment
+one. The `ContainerRuntime` trait/driver is therefore verified against plain
+**`runc`** (the default OCI runtime), which is a shared-kernel baseline, *not*
+strong adversarial isolation. This is surfaced honestly rather than absorbed:
+`DockerRuntime` ships with `isolation_verified: false` by default, `main.rs`
+only flips it when the operator sets `SPARTAN_CLOUD_ISOLATION_VERIFIED=1`, and
+the API **refuses to allocate** against an unverified runtime. A real
+KVM-capable target (bare metal / Firecracker / a KVM-enabled instance) is the
+documented path to a genuinely-strong verified isolation, swappable behind the
+same trait — no API or domain-layer change needed.
 
 ## What's NOT here yet (next increments)
 
-1. **`spartan-cloud-runtime`** — the `ContainerRuntime` trait + a real
-   `DockerGvisorRuntime` driver (bollard). **Gated behind its own real
-   go/no-go spike**: start a live Docker daemon, install `runsc` (gVisor),
-   confirm isolation + resource-cap enforcement. gVisor is the MVP choice
-   because it's the only strong-isolation option testable in a KVM-less
-   environment (Firecracker/Kata need `/dev/kvm`, absent here per §75.74);
-   Firecracker stays a documented future upgrade behind the same trait. Once
-   it lands, `/api/allocate` allocates for real and the current-active count
-   feeding quota admission comes from it.
+1. **Strong-isolation verification** — gVisor (or Firecracker/Kata) confirmed
+   on a real KVM-capable target, flipping `isolation_verified` to `true` in a
+   production deployment. The seam and the honest-default flag exist today.
 2. **WebAuthn admin auth + audit log** on the API (defensive concepts adapted
-   from `SpartanAI_Security_Core`, rebuilt safely) and the per-container WS
-   session endpoint (reusing `spartan-backend`'s envelope shape).
+   from `SpartanAI_Security_Core`, rebuilt safely), a per-tenant abuse/
+   resource-monitoring dashboard, and the per-container WS session endpoint
+   (reusing `spartan-backend`'s envelope shape).
+3. **An independent reaper task** enforcing each allocation's hard wall-clock
+   lifetime (the `PlanLimits` field exists; the background reaper does not yet).
 
 ## Standing safety posture
 

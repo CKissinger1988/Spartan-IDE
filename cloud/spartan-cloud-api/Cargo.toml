@@ -23,6 +23,7 @@ path = "src/main.rs"
 spartan-cloud-protocol = { path = "../spartan-cloud-protocol" }
 spartan-cloud-tenant = { path = "../spartan-cloud-tenant" }
 spartan-cloud-data = { path = "../spartan-cloud-data" }
+spartan-cloud-runtime = { path = "../spartan-cloud-runtime" }
 axum = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 serde = { version = "1", features = ["derive"] }
@@ -30,3 +31,6 @@ serde_json = "1"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+# Test-only: the real-allocate integration test pings the local Docker daemon
+# directly to self-skip when absent (same convention as spartan-cloud-runtime).
+bollard = "0.18"

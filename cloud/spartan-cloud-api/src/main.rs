@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use spartan_cloud_api::{router, AppState};
 use spartan_cloud_data::Store;
+use spartan_cloud_runtime::ContainerRuntime;
 use spartan_cloud_tenant::StubEntitlementProvider;
 
 fn parse_flag<'a>(args: &'a [String], prefix: &str) -> Option<&'a str> {
@@ -42,11 +43,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let state = AppState::new(
+    let mut state = AppState::new(
         store,
         Arc::new(StubEntitlementProvider::new()),
         24 * 60 * 60,
     );
+
+    // Optionally connect a container runtime. The OCI runtime is env-selected
+    // (default `runc`); isolation is treated as UNVERIFIED unless the operator
+    // explicitly asserts it for this deployment via
+    // SPARTAN_CLOUD_ISOLATION_VERIFIED=1 -- a deliberate safe default, since
+    // /api/allocate refuses to run tenant code against unverified isolation.
+    match spartan_cloud_runtime::DockerRuntime::connect(
+        std::env::var("SPARTAN_CLOUD_OCI_RUNTIME").unwrap_or_else(|_| "runc".to_string()),
+        std::env::var("SPARTAN_CLOUD_ISOLATION_VERIFIED").as_deref() == Ok("1"),
+    ) {
+        Ok(runtime) => {
+            eprintln!(
+                "spartan-cloud-api: container runtime connected (oci={}, isolation_verified={})",
+                runtime.oci_runtime(),
+                runtime.isolation_verified()
+            );
+            state = state.with_runtime(std::sync::Arc::new(runtime));
+        }
+        Err(e) => {
+            eprintln!(
+                "spartan-cloud-api: no container runtime ({e}); /api/allocate reports unavailable"
+            );
+        }
+    }
+
     let app = router(state);
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;

@@ -25,11 +25,17 @@ use serde::{Deserialize, Serialize};
 
 use spartan_cloud_data::{DataError, Store};
 use spartan_cloud_protocol::{
-    ApiError, AuthResponse, LoginRequest, PlanTier, SessionToken, SignupRequest, UserId,
+    AllocationInfo, AllocationStatus, ApiError, AuthResponse, LoginRequest, PlanTier, SessionToken,
+    SignupRequest, UserId,
 };
+use spartan_cloud_runtime::{AllocationSpec, ContainerRuntime};
 use spartan_cloud_tenant::{
     can_allocate, EntitlementProvider, PlanLimits, Session, StubEntitlementProvider,
 };
+
+/// The default base image for a bare allocation. A real product ships a
+/// curated workspace image; this is an honest placeholder base.
+const DEFAULT_IMAGE: &str = "alpine:latest";
 
 /// Shared server state. The SQLite `Store` isn't `Sync`, so it's behind a
 /// `Mutex`; handlers lock it only for the brief synchronous DB op and never
@@ -39,6 +45,9 @@ pub struct AppState {
     store: Arc<Mutex<Store>>,
     entitlements: Arc<StubEntitlementProvider>,
     session_ttl_secs: u64,
+    /// The container runtime, if one is connected. When `None`, `/api/allocate`
+    /// honestly reports the runtime is unavailable rather than faking anything.
+    runtime: Option<Arc<dyn ContainerRuntime>>,
 }
 
 impl AppState {
@@ -51,10 +60,18 @@ impl AppState {
             store: Arc::new(Mutex::new(store)),
             entitlements,
             session_ttl_secs,
+            runtime: None,
         }
     }
 
-    /// A ready-to-serve in-memory state (tests, ephemeral runs).
+    /// Attach a container runtime (builder-style). Without one, allocation is
+    /// honestly unavailable.
+    pub fn with_runtime(mut self, runtime: Arc<dyn ContainerRuntime>) -> Self {
+        self.runtime = Some(runtime);
+        self
+    }
+
+    /// A ready-to-serve in-memory state (tests, ephemeral runs). No runtime.
     pub fn in_memory() -> Self {
         Self::new(
             Store::open_in_memory().expect("in-memory store must open"),
@@ -279,13 +296,34 @@ async fn grant_pro(
 }
 
 async fn allocate(State(state): State<AppState>, user: AuthUser) -> Response {
-    // Real admission: entitlement -> effective tier -> plan limits -> quota.
     let ent = state.entitlements.check(&user.user_id);
     let limits = PlanLimits::for_tier(ent.effective_tier());
 
-    // No runtime yet, so the current active-container count is 0. Once
-    // `spartan-cloud-runtime` lands, this count comes from the real runtime.
-    let current_active = 0;
+    // Honest: with no runtime connected, allocation is unavailable.
+    let Some(runtime) = &state.runtime else {
+        return api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "runtime_unavailable",
+            "the container runtime is not connected",
+        );
+    };
+
+    // Safety gate: NEVER run tenant code against isolation the operator hasn't
+    // verified for this deployment (e.g. gVisor unverified in a nested sandbox,
+    // or plain runc under an untrusted-tenant threat model).
+    if !runtime.isolation_verified() {
+        return api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "isolation_unverified",
+            "container isolation is not verified for this deployment; allocation is refused",
+        );
+    }
+
+    // Real quota admission against the live running count.
+    let current_active = match runtime.count_active(&user.user_id).await {
+        Ok(c) => c,
+        Err(e) => return internal_error(e),
+    };
     if let Err(quota_err) = can_allocate(&limits, current_active) {
         return api_error(
             StatusCode::TOO_MANY_REQUESTS,
@@ -294,13 +332,23 @@ async fn allocate(State(state): State<AppState>, user: AuthUser) -> Response {
         );
     }
 
-    // Admission passed -- but honestly report that the container runtime
-    // isn't connected yet rather than faking an allocation.
-    api_error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "runtime_unavailable",
-        "admission passed, but the container runtime is not connected yet",
-    )
+    // Really allocate a capped container.
+    let spec = AllocationSpec {
+        owner: user.user_id.clone(),
+        image: DEFAULT_IMAGE.to_string(),
+        limits,
+    };
+    match runtime.create(&spec).await {
+        Ok(id) => {
+            let info = AllocationInfo {
+                id,
+                status: AllocationStatus::Running,
+                expires_at_unix: now_unix().saturating_add(limits.max_lifetime_secs),
+            };
+            (StatusCode::CREATED, Json(info)).into_response()
+        }
+        Err(e) => internal_error(e),
+    }
 }
 
 #[cfg(test)]
@@ -487,6 +535,60 @@ mod tests {
         )
         .await;
         assert_eq!(me["tier"], "Pro", "granting Pro is reflected in /me");
+    }
+
+    #[tokio::test]
+    async fn allocate_really_creates_a_capped_container_when_a_runtime_is_wired() {
+        use spartan_cloud_runtime::{ContainerRuntime, DockerRuntime};
+        // Self-skip if no Docker daemon -- same convention as the runtime
+        // crate's own integration test.
+        let docker = match bollard::Docker::connect_with_local_defaults() {
+            Ok(d) if d.ping().await.is_ok() => d,
+            _ => {
+                println!("SKIP: no Docker daemon; allocate-with-runtime test skipped");
+                return;
+            }
+        };
+        // runc, isolation asserted for this test (the verified baseline here).
+        let runtime = std::sync::Arc::new(DockerRuntime::with_docker(docker, "runc", true));
+        let app = router(AppState::in_memory().with_runtime(runtime.clone()));
+
+        let (_, body) = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/signup",
+                    serde_json::json!({"email": "realalloc@b.com", "password": "pw123456"}),
+                    None,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let token = body["token"].as_str().unwrap().to_string();
+
+        let (status, alloc) = body_json(
+            app.oneshot(post_json(
+                "/api/allocate",
+                serde_json::json!({}),
+                Some(&token),
+            ))
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "a real allocation is created: {alloc}"
+        );
+        let id = spartan_cloud_protocol::AllocationId(alloc["id"].as_str().unwrap().to_string());
+
+        // Confirm it's really running, then clean it up.
+        assert_eq!(
+            runtime.status(&id).await.unwrap(),
+            spartan_cloud_protocol::AllocationStatus::Running
+        );
+        runtime.stop(&id).await.expect("cleanup the test container");
     }
 
     #[tokio::test]

@@ -23,5 +23,6 @@ members = [
     "spartan-cloud-protocol",
     "spartan-cloud-tenant",
     "spartan-cloud-data",
+    "spartan-cloud-runtime",
     "spartan-cloud-api",
 ]
