@@ -42,6 +42,17 @@ pub enum PlanTier {
     Pro,
 }
 
+impl PlanTier {
+    /// A stable, lowercase-free display name (matches the serde variant name),
+    /// handy for logs/audit records without pulling in a serde round trip.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PlanTier::Free => "Free",
+            PlanTier::Pro => "Pro",
+        }
+    }
+}
+
 /// Lifecycle state of an allocated container, as reported to a client.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AllocationStatus {

@@ -93,7 +93,16 @@ impl Store {
                 created_at_unix INTEGER NOT NULL,
                 expires_at_unix INTEGER NOT NULL,
                 FOREIGN KEY(user_id) REFERENCES users(id)
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS audit_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                at_unix      INTEGER NOT NULL,
+                actor_id     TEXT,
+                action       TEXT NOT NULL,
+                target       TEXT,
+                detail       TEXT
+             );
+             CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_id);",
         )?;
         Ok(())
     }
@@ -232,6 +241,68 @@ impl Store {
             .execute("DELETE FROM sessions WHERE token = ?1", params![token.0])?;
         Ok(())
     }
+
+    /// Append a security-relevant event to the audit log. **Append-only** by
+    /// design -- there is deliberately no update or delete method, so the log
+    /// is tamper-evident against this crate's own API (a real deployment would
+    /// additionally protect the DB file). `actor` is `None` for pre-auth
+    /// events (e.g. a failed login where no user is established). A record
+    /// failure never aborts the action it describes -- callers log-and-continue
+    /// (an audit gap is bad, but silently dropping the actual operation is
+    /// worse), so this returns a `Result` the caller may choose to soft-handle.
+    pub fn record_audit(
+        &self,
+        at_unix: u64,
+        actor: Option<&UserId>,
+        action: &str,
+        target: Option<&str>,
+        detail: Option<&str>,
+    ) -> Result<(), DataError> {
+        self.conn.execute(
+            "INSERT INTO audit_log (at_unix, actor_id, action, target, detail)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                at_unix as i64,
+                actor.map(|u| u.0.as_str()),
+                action,
+                target,
+                detail,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The most recent `limit` audit events, newest first. Feeds the (later)
+    /// admin abuse/monitoring dashboard.
+    pub fn recent_audit(&self, limit: u32) -> Result<Vec<AuditEvent>, DataError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, at_unix, actor_id, action, target, detail
+             FROM audit_log ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |r| {
+            Ok(AuditEvent {
+                id: r.get(0)?,
+                at_unix: r.get::<_, i64>(1)? as u64,
+                actor_id: r.get::<_, Option<String>>(2)?.map(UserId),
+                action: r.get(3)?,
+                target: r.get(4)?,
+                detail: r.get(5)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DataError::from)
+    }
+}
+
+/// One row of the append-only audit log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditEvent {
+    pub id: i64,
+    pub at_unix: u64,
+    /// The acting user, or `None` for pre-auth events.
+    pub actor_id: Option<UserId>,
+    pub action: String,
+    pub target: Option<String>,
+    pub detail: Option<String>,
 }
 
 #[cfg(test)]
@@ -337,5 +408,39 @@ mod tests {
             .lookup_session(&SessionToken("deadbeef".into()), 1)
             .unwrap();
         assert_eq!(none, None);
+    }
+
+    #[test]
+    fn audit_log_is_append_only_and_newest_first() {
+        let store = Store::open_in_memory().unwrap();
+        let actor = store.create_user("ops@example.com", "pw", true).unwrap();
+
+        // A pre-auth event (no actor) and two attributed events.
+        store
+            .record_audit(100, None, "login_failed", None, Some("bad@example.com"))
+            .unwrap();
+        store
+            .record_audit(200, Some(&actor), "allocate", Some("alloc-1"), None)
+            .unwrap();
+        store
+            .record_audit(300, Some(&actor), "grant_pro", Some("user-9"), None)
+            .unwrap();
+
+        let events = store.recent_audit(10).unwrap();
+        assert_eq!(events.len(), 3);
+        // Newest first.
+        assert_eq!(events[0].action, "grant_pro");
+        assert_eq!(events[0].actor_id.as_ref(), Some(&actor));
+        assert_eq!(events[0].target.as_deref(), Some("user-9"));
+        assert_eq!(events[1].action, "allocate");
+        // The pre-auth event carries no actor.
+        assert_eq!(events[2].action, "login_failed");
+        assert_eq!(events[2].actor_id, None);
+        assert_eq!(events[2].detail.as_deref(), Some("bad@example.com"));
+
+        // The limit is respected.
+        let one = store.recent_audit(1).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].action, "grant_pro");
     }
 }

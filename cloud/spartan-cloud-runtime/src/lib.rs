@@ -283,9 +283,14 @@ impl ContainerRuntime for DockerRuntime {
             .await
         {
             Ok(()) => Ok(()),
-            // Already gone is a success for an idempotent stop.
+            // Already gone (404) is success for an idempotent stop. A 409
+            // "removal already in progress" is also success: something else
+            // (e.g. the background reaper racing an explicit user stop, or a
+            // concurrent test) is already tearing down this exact container --
+            // the desired end state (gone) is reached either way.
             Err(bollard::errors::Error::DockerResponseServerError {
-                status_code: 404, ..
+                status_code: 404 | 409,
+                ..
             }) => Ok(()),
             Err(e) => Err(e.into()),
         }

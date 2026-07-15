@@ -105,6 +105,23 @@ fn api_error(status: StatusCode, code: &str, message: &str) -> Response {
         .into_response()
 }
 
+/// Append an audit event, soft-failing: an audit-write error is logged but
+/// never aborts the operation it describes (a missing audit row is bad; losing
+/// the actual signup/allocate/grant it was recording is worse). Locks the store
+/// only for the brief synchronous insert -- never held across an `.await`.
+fn audit(
+    state: &AppState,
+    actor: Option<&UserId>,
+    action: &str,
+    target: Option<&str>,
+    detail: Option<&str>,
+) {
+    let store = state.store.lock().expect("store mutex poisoned");
+    if let Err(e) = store.record_audit(now_unix(), actor, action, target, detail) {
+        eprintln!("spartan-cloud-api: audit write failed ({action}): {e}");
+    }
+}
+
 fn internal_error(e: impl std::fmt::Display) -> Response {
     // Never leak internal detail (SQL text, paths) to the client; log-worthy
     // detail would go to the server's own logs, not the response body.
@@ -172,6 +189,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/login", post(login))
         .route("/api/me", get(me))
         .route("/api/admin/grant_pro", post(grant_pro))
+        .route("/api/admin/audit", get(audit_log))
         .route("/api/allocate", post(allocate))
         .with_state(state)
 }
@@ -205,10 +223,13 @@ async fn signup(State(state): State<AppState>, Json(req): Json<SignupRequest>) -
         store.create_user(&req.email, &req.password, false)
     };
     match created {
-        Ok(user_id) => match issue_and_store_session(&state, user_id) {
-            Ok(auth) => (StatusCode::OK, Json(auth)).into_response(),
-            Err(e) => internal_error(e),
-        },
+        Ok(user_id) => {
+            audit(&state, Some(&user_id), "signup", None, None);
+            match issue_and_store_session(&state, user_id) {
+                Ok(auth) => (StatusCode::OK, Json(auth)).into_response(),
+                Err(e) => internal_error(e),
+            }
+        }
         Err(DataError::EmailTaken) => api_error(
             StatusCode::CONFLICT,
             "email_taken",
@@ -224,16 +245,24 @@ async fn login(State(state): State<AppState>, Json(req): Json<LoginRequest>) -> 
         store.verify_login(&req.email, &req.password)
     };
     match verified {
-        Ok(Some(user_id)) => match issue_and_store_session(&state, user_id) {
-            Ok(auth) => (StatusCode::OK, Json(auth)).into_response(),
-            Err(e) => internal_error(e),
-        },
+        Ok(Some(user_id)) => {
+            audit(&state, Some(&user_id), "login", None, None);
+            match issue_and_store_session(&state, user_id) {
+                Ok(auth) => (StatusCode::OK, Json(auth)).into_response(),
+                Err(e) => internal_error(e),
+            }
+        }
         // Wrong password AND unknown email both land here -- no enumeration.
-        Ok(None) => api_error(
-            StatusCode::UNAUTHORIZED,
-            "invalid_credentials",
-            "incorrect email or password",
-        ),
+        // The failed attempt is audited (no actor established) so brute-force
+        // patterns are visible to the monitoring dashboard.
+        Ok(None) => {
+            audit(&state, None, "login_failed", None, Some(&req.email));
+            api_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid_credentials",
+                "incorrect email or password",
+            )
+        }
         Err(e) => internal_error(e),
     }
 }
@@ -291,8 +320,63 @@ async fn grant_pro(
             "admin privileges are required",
         );
     }
+    audit(
+        &state,
+        Some(&admin.user_id),
+        "grant_pro",
+        Some(&req.user_id),
+        None,
+    );
     state.entitlements.grant_pro(UserId(req.user_id));
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+}
+
+#[derive(Serialize)]
+struct AuditEventJson {
+    id: i64,
+    at_unix: u64,
+    actor_id: Option<String>,
+    action: String,
+    target: Option<String>,
+    detail: Option<String>,
+}
+
+/// Admin-only: the most recent audit events (newest first). The defensive
+/// counterpart to the reaper + caps -- the human-visible surface for spotting
+/// tenant abuse (brute-force logins, allocation storms) that the excluded
+/// SpartanAI malware repos themselves performed.
+async fn audit_log(State(state): State<AppState>, admin: AuthUser) -> Response {
+    let events = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        match store.is_admin(&admin.user_id) {
+            Ok(true) => {}
+            Ok(false) => {
+                return api_error(
+                    StatusCode::FORBIDDEN,
+                    "forbidden",
+                    "admin privileges are required",
+                )
+            }
+            Err(e) => return internal_error(e),
+        }
+        // Cap the page size (newest 200) so the log can't be dumped unbounded.
+        match store.recent_audit(200) {
+            Ok(e) => e,
+            Err(e) => return internal_error(e),
+        }
+    };
+    let json: Vec<AuditEventJson> = events
+        .into_iter()
+        .map(|e| AuditEventJson {
+            id: e.id,
+            at_unix: e.at_unix,
+            actor_id: e.actor_id.map(|u| u.0),
+            action: e.action,
+            target: e.target,
+            detail: e.detail,
+        })
+        .collect();
+    (StatusCode::OK, Json(json)).into_response()
 }
 
 async fn allocate(State(state): State<AppState>, user: AuthUser) -> Response {
@@ -340,6 +424,13 @@ async fn allocate(State(state): State<AppState>, user: AuthUser) -> Response {
     };
     match runtime.create(&spec).await {
         Ok(id) => {
+            audit(
+                &state,
+                Some(&user.user_id),
+                "allocate",
+                Some(&id.0),
+                Some(ent.effective_tier().as_str()),
+            );
             let info = AllocationInfo {
                 id,
                 status: AllocationStatus::Running,
@@ -589,6 +680,98 @@ mod tests {
             spartan_cloud_protocol::AllocationStatus::Running
         );
         runtime.stop(&id).await.expect("cleanup the test container");
+    }
+
+    #[tokio::test]
+    async fn admin_can_read_the_audit_log_and_a_non_admin_cannot() {
+        let state = AppState::in_memory();
+        let _admin_id = {
+            let store = state.store.lock().unwrap();
+            store.create_user("aud@b.com", "adminpw12", true).unwrap()
+        };
+        let app = router(state.clone());
+
+        // A normal signup + a failed login both generate real audit events.
+        let (_, signup) = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/signup",
+                    serde_json::json!({"email": "member@b.com", "password": "pw123456"}),
+                    None,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let member_token = signup["token"].as_str().unwrap().to_string();
+        let _ = app
+            .clone()
+            .oneshot(post_json(
+                "/api/login",
+                serde_json::json!({"email": "member@b.com", "password": "WRONG"}),
+                None,
+            ))
+            .await
+            .unwrap();
+
+        // The member (non-admin) is refused the audit log.
+        let (status, _) = body_json(
+            app.clone()
+                .oneshot(get("/api/admin/audit", Some(&member_token)))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "a non-admin can't read audit"
+        );
+
+        // The admin logs in and reads the log; the signup + failed login show.
+        let (_, login) = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/login",
+                    serde_json::json!({"email": "aud@b.com", "password": "adminpw12"}),
+                    None,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let admin_token = login["token"].as_str().unwrap().to_string();
+
+        let (status, events) = body_json(
+            app.oneshot(get("/api/admin/audit", Some(&admin_token)))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let actions: Vec<&str> = events
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["action"].as_str().unwrap())
+            .collect();
+        assert!(
+            actions.contains(&"signup"),
+            "signup was audited: {actions:?}"
+        );
+        assert!(
+            actions.contains(&"login_failed"),
+            "the failed login was audited: {actions:?}"
+        );
+        // The failed-login event carries the attempted email as detail, no actor.
+        let failed = events
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["action"] == "login_failed")
+            .unwrap();
+        assert_eq!(failed["detail"], "member@b.com");
+        assert!(failed["actor_id"].is_null());
     }
 
     #[tokio::test]

@@ -45,14 +45,20 @@ live daemon:
   `bundled` feature, zero infra) with real **argon2** password hashing and
   the session store where opaque-token **revocation** lives (a row delete).
   `verify_login` returns `Ok(None)` for both wrong-password and unknown-email
-  (no account enumeration). 6 unit tests.
+  (no account enumeration). Also an **append-only audit log** (`record_audit`/
+  `recent_audit`, no update/delete method exists — tamper-evident against this
+  crate's own API) — a defensive concept adapted from `SpartanAI_Security_Core`,
+  rebuilt safely. 7 unit tests.
 - **`spartan-cloud-api`** — the axum control-plane server, **real and
   testable**: `POST /api/signup`, `POST /api/login`, `GET /api/me`,
-  `POST /api/admin/grant_pro` (admin-only), and `POST /api/allocate` (runs the
-  real entitlement → plan-limits → quota admission). Opaque bearer-token auth
-  via a `FromRequestParts` extractor that looks up + expiry-checks the session
-  per request. Env-driven admin bootstrap (`SPARTAN_CLOUD_ADMIN_EMAIL`/
-  `_PASSWORD`), never a hardcoded credential. 6 tests (tower `oneshot`), plus
+  `POST /api/admin/grant_pro` (admin-only), `GET /api/admin/audit` (admin-only,
+  the newest 200 audit events), and `POST /api/allocate` (runs the real
+  entitlement → plan-limits → quota admission). Opaque bearer-token auth via a
+  `FromRequestParts` extractor that looks up + expiry-checks the session per
+  request. Env-driven admin bootstrap (`SPARTAN_CLOUD_ADMIN_EMAIL`/`_PASSWORD`),
+  never a hardcoded credential. Security-relevant actions (signup, login,
+  **failed** login, grant_pro, allocate) are audited (writes soft-fail so an
+  audit error never aborts the real operation). 8 tests (tower `oneshot`), plus
   a live over-the-socket smoke test.
 
   When a runtime is wired (see below), `/api/allocate` creates a **real,
@@ -117,10 +123,13 @@ same trait — no API or domain-layer change needed.
 1. **Strong-isolation verification** — gVisor (or Firecracker/Kata) confirmed
    on a real KVM-capable target, flipping `isolation_verified` to `true` in a
    production deployment. The seam and the honest-default flag exist today.
-2. **WebAuthn admin auth + audit log** on the API (defensive concepts adapted
-   from `SpartanAI_Security_Core`, rebuilt safely), a per-tenant abuse/
-   resource-monitoring dashboard, and the per-container WS session endpoint
-   (reusing `spartan-backend`'s envelope shape).
+2. **WebAuthn admin auth** on the API (a defensive concept adapted from
+   `SpartanAI_Security_Core`, rebuilt safely), a per-tenant abuse/
+   resource-monitoring dashboard (the `GET /api/admin/audit` feed + live
+   `docker stats`-style telemetry, surfaced with Track C's status-reactive
+   aesthetic), an encrypted-at-rest secrets vault (AES-256-GCM), and the
+   per-container WS session endpoint (reusing `spartan-backend`'s envelope
+   shape).
 
 ## Standing safety posture
 
