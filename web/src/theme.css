@@ -225,3 +225,104 @@ body {
   animation: sf-scan 6s linear infinite;
   pointer-events: none;
 }
+
+ * Track C -- Holographic status-reactive layer.
+ *
+ * Concept adapted (safely, rebuilt fresh, NO code ported) from the
+ * threat-level-reactive dashboard in the user's own SpartanAI_Security_
+ * Core / Dashboard_Apex -- the offensive/autonomous parts of those repos
+ * were excluded entirely; only this defensive visual language was taken.
+ *
+ * Two deliberate design decisions, matching this project's own precedent:
+ *  1. The brand accent stays blue/gold (§75.95). These "status" hues
+ *     (idle/active/warning/critical) are a *semantic status* axis,
+ *     orthogonal to brand -- exactly the distinction §75.93 already drew
+ *     for mobile's theme-invariant StatusPill. Blue = idle/normal,
+ *     gold = active/working, amber = attention, red = critical, green = ok.
+ *  2. Pulse *speed* scales with severity (the dashboard's own signature
+ *     behavior): calmer for normal, faster/more urgent for critical.
+ * =================================================================== */
+
+:root {
+  --status-idle-rgb: var(--accent-rgb); /* blue */
+  --status-active-rgb: var(--hud-rgb); /* gold */
+  --status-warning-rgb: 245, 158, 11; /* amber */
+  --status-critical-rgb: 239, 68, 68; /* red */
+  --status-ok-rgb: 74, 222, 128; /* green */
+}
+
+/* Glassmorphic "hologram" panel -- a translucent surface with a real
+   backdrop blur (the genuinely-new piece: this project already had glow +
+   chamfer + scanlines, but no backdrop-filter glassmorphism). The
+   translucent background is required for the blur behind it to show. */
+.glass-hologram {
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  backdrop-filter: blur(10px) saturate(1.1);
+  -webkit-backdrop-filter: blur(10px) saturate(1.1);
+  box-shadow: inset 0 0 12px rgba(255, 255, 255, 0.02);
+}
+
+/* Status-reactive pulsing edge-glow. A caller sets --status-glow-rgb and
+   --pulse-speed (via a status modifier or inline); this animates a soft
+   border glow between calm and bright at that cadence. */
+@keyframes hud-status-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 4px rgba(var(--status-glow-rgb, var(--accent-rgb)), 0.35);
+  }
+  50% {
+    box-shadow: 0 0 15px rgba(var(--status-glow-rgb, var(--accent-rgb)), 0.62);
+  }
+}
+
+.hud-pulse-edge {
+  animation: hud-status-pulse var(--pulse-speed, 2.4s) ease-in-out infinite;
+}
+
+/* Convenience status modifiers -- set the glow color + a severity-scaled
+   pulse speed. Applied to any element also carrying .hud-pulse-edge. */
+.hud-status-idle {
+  --status-glow-rgb: var(--status-idle-rgb);
+  --pulse-speed: 3s;
+}
+.hud-status-active {
+  --status-glow-rgb: var(--status-active-rgb);
+  --pulse-speed: 1.8s;
+}
+.hud-status-warning {
+  --status-glow-rgb: var(--status-warning-rgb);
+  --pulse-speed: 1.3s;
+}
+.hud-status-critical {
+  --status-glow-rgb: var(--status-critical-rgb);
+  --pulse-speed: 0.9s;
+}
+
+/* Circular status gauge -- a real conic-gradient meter driven by a
+   --gauge-pct (0-100) custom property, in the current status color. A
+   lightweight, dependency-free take on the dashboard's SVG stroke-dasharray
+   gauges, reusable for Spartan Cloud's tenant-monitoring view (Track B). */
+.hud-gauge {
+  --gauge-pct: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: conic-gradient(
+    rgba(var(--status-glow-rgb, var(--accent-rgb)), 0.9) calc(var(--gauge-pct) * 1%),
+    rgba(255, 255, 255, 0.06) 0
+  );
+  display: grid;
+  place-items: center;
+  position: relative;
+}
+.hud-gauge::after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: var(--surface);
+}
+.hud-gauge > * {
+  position: relative;
+  z-index: 1;
+}

@@ -589,8 +589,14 @@
  * user objection to Leo being missing from the new Electron shell. */
 .leo-panel {
   width: 300px;
-  background: var(--surface);
+  /* Track C: glassmorphic "hologram" treatment -- a translucent surface
+     with a real backdrop blur over the app's body gradient, replacing the
+     flat opaque fill. The blue left-edge glow reads as a live HUD panel. */
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  backdrop-filter: blur(10px) saturate(1.1);
+  -webkit-backdrop-filter: blur(10px) saturate(1.1);
   border-left: 1px solid var(--border);
+  box-shadow: -1px 0 0 rgba(var(--accent-rgb), 0.2);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -647,6 +653,12 @@
   color: #f87171;
   background: rgba(248, 113, 113, 0.12);
   border-color: rgba(248, 113, 113, 0.35);
+  /* Track C: severity-reactive glow -- a failure is critical, so it gets
+     the fastest, red status pulse (previously it alone had no glow at all
+     while the calmer states did -- a real inconsistency, fixed here). */
+  --status-glow-rgb: var(--status-critical-rgb);
+  --pulse-speed: 0.9s;
+  animation: hud-status-pulse 0.9s ease-in-out infinite;
 }
 
 .leo-state-executing,

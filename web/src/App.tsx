@@ -199,6 +199,7 @@ export default function App(): React.ReactElement {
         )}
         <span
           className="status-backend"
+          data-status={backendStatus}
           title={
             backendStatus === "connected"
               ? "Connected to a local spartan-devserver (backend capabilities available)"

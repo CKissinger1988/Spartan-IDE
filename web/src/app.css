@@ -118,8 +118,44 @@
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
+  /* Track C: glassmorphic "hologram" treatment, matching desktop/'s Leo
+     panel -- a translucent surface with a real backdrop blur over the
+     app's body gradient, replacing the flat opaque fill. */
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  backdrop-filter: blur(10px) saturate(1.1);
+  -webkit-backdrop-filter: blur(10px) saturate(1.1);
   border-right: 1px solid var(--border);
+  box-shadow: 1px 0 0 rgba(var(--accent-rgb), 0.18);
+}
+
+/* Track C: status-reactive backend-connection indicator (ties into
+   backendClient.ts). A small glowing dot + label whose color reflects the
+   real connection state -- green when connected to a devserver, dim when
+   client-only. Semantic status hues, not the brand accent. */
+.status-backend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.status-backend::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+.status-backend[data-status="connected"] {
+  color: rgb(var(--status-ok-rgb));
+}
+.status-backend[data-status="connected"]::before {
+  background: rgb(var(--status-ok-rgb));
+  box-shadow: 0 0 6px rgba(var(--status-ok-rgb), 0.7);
+}
+.status-backend[data-status="connecting"]::before {
+  background: rgb(var(--status-active-rgb));
+  animation: hud-status-pulse 1.4s ease-in-out infinite;
+  --status-glow-rgb: var(--status-active-rgb);
 }
 
 .file-tree {
