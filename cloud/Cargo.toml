@@ -19,4 +19,4 @@
 
 [workspace]
 resolver = "2"
-members = ["spartan-cloud-protocol", "spartan-cloud-tenant"]
+members = ["spartan-cloud-protocol", "spartan-cloud-tenant", "spartan-cloud-data"]

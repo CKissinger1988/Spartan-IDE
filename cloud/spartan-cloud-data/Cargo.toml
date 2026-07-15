@@ -1,0 +1,20 @@
+[package]
+name = "spartan-cloud-data"
+version = "0.1.0"
+edition = "2021"
+
+# The persistence layer for Spartan Cloud's control plane. SQLite for the
+# MVP (embedded, zero infra to stand up or test -- `rusqlite` with the
+# `bundled` feature compiles SQLite straight in, no system library),
+# swappable to Postgres later. Sync (rusqlite is blocking), matching this
+# project's established sync-I/O convention. Owns real argon2 password
+# hashing and the session store -- which is where opaque-token *revocation*
+# actually lives (deleting a row), the concrete reason sessions are opaque
+# DB handles rather than JWTs.
+
+[dependencies]
+spartan-cloud-protocol = { path = "../spartan-cloud-protocol" }
+spartan-cloud-tenant = { path = "../spartan-cloud-tenant" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+argon2 = "0.5"
+rand = "0.10"
