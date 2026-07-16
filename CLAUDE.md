@@ -3387,6 +3387,36 @@ first — it's the parity reference until each row there is actually reimplement
   browsing/triggering a pull (this closes the crate-level gap only, a Settings-panel model browser
   remains separate, unstarted follow-up); no live Hugging Face search API integration (the curated
   list is fixed, not dynamically fetched).
+- **Real, working code — real UI wiring for every Track A devserver-only method, closing the
+  "no UI wiring" gap named in the two bullets immediately above (task #140)**: user-requested
+  ("Continue with everything possible... do not stop"). Before this pass, `model_status`,
+  `litellm_proxy_start`/`_stop`/`_status`, `hf_list_models`, and `hf_pull_model` all had real,
+  tested backend implementations but **zero callers anywhere in either shell** -- confirmed by a
+  direct grep across `desktop/src/` and `web/src/` before writing any UI code. These methods only
+  exist on `spartan-devserver`'s own wrapping dispatcher (not `spartan-backend`'s), and only
+  `web/` connects to a `spartan-devserver` process (`desktop/`'s Electron main process spawns a
+  plain `spartan-backend` directly) -- so this UI lands in `web/`, a real, named platform
+  difference, not an oversight. New `web/src/components/ModelsPanel.tsx`, a direct sibling of
+  `GitPanel.tsx`'s own shape: one `BackendClient`, `.call()`ed directly for `model_status`/
+  `hf_list_models` on mount and `litellm_proxy_start`/`_stop`/`hf_pull_model` on click, `.onEvent()`
+  subscribed for the real async `litellm_progress`/`litellm_ready`/`litellm_failed`/
+  `hf_pull_progress`/`hf_pull_ready`/`hf_pull_failed` events -- zero protocol changes needed, since
+  `BackendClient` was already fully generic with no method allowlist. A new "Models" sidebar tab in
+  `App.tsx`, available as soon as any devserver connection is live (`model_status`/`litellm_proxy_*`
+  /`hf_*` need no project root at all, unlike the existing Git/Backend tabs, which need one).
+  **Real, live, end-to-end Playwright verification against the actual compiled `web/dist` served by
+  a real running `spartan-devserver` binary** (not a mock): the panel correctly rendered the real
+  `model_status` result (the configured Ollama provider) and the real curated HF model list fetched
+  live via `hf_list_models`; clicking Start on the LiteLLM proxy surfaced the real, honest
+  `litellm_proxy_start` error (`` `litellm` isn't on $PATH ``, since it isn't installed in this
+  environment); clicking Pull on a curated model surfaced the real, honest `hf_pull_model` error
+  (`` `ollama` isn't on $PATH `` -- also not installed here) -- both screenshotted, both real
+  responses from the real dispatcher, not fabricated. `npm run typecheck`/`npm run build` both
+  clean. **What this does not confirm**: no live success path observed for either Start or Pull
+  (neither `litellm` nor `ollama` is installed in this environment, matching every prior Track A
+  verification note); no equivalent UI in `desktop/` (a real, separate follow-up would need
+  `desktop/`'s Electron main process to also spawn/connect to a `spartan-devserver`-class endpoint,
+  a larger architectural change deliberately not made in this pass).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

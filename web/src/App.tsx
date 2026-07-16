@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import FileTree from "./components/FileTree";
 import GitPanel from "./components/GitPanel";
+import ModelsPanel from "./components/ModelsPanel";
 import BackendFileTree from "./components/BackendFileTree";
 import Editor, { type OpenFile } from "./components/Editor";
 import BackendEditor, { type BackendOpenFile, type LspDiagnostic } from "./components/BackendEditor";
@@ -16,7 +17,7 @@ type ActiveContent =
   | { kind: "backend"; file: BackendOpenFile }
   | null;
 
-type SidebarView = "files" | "git" | "backend";
+type SidebarView = "files" | "git" | "backend" | "models";
 
 type BackendStatus = "connecting" | "connected" | "client-only";
 
@@ -181,9 +182,14 @@ export default function App(): React.ReactElement {
   // launch directory instead (see `GitPanel`'s/`BackendFileTree`'s and
   // `backendClient.ts`'s own doc comments).
   const backendReady = backendStatus === "connected" && !!backendClient?.projectRoot;
+  // model_status/litellm_proxy_*/hf_* are real devserver methods that need
+  // no project root at all (unlike git/backend-mode editing above), so this
+  // tab is available as soon as any devserver connection is live.
+  const backendConnected = backendStatus === "connected" && !!backendClient;
   const availableSidebarViews: SidebarView[] = [
     ...(root ? (["files"] as const) : []),
     ...(backendReady ? (["git", "backend"] as const) : []),
+    ...(backendConnected ? (["models"] as const) : []),
   ];
   const activeSidebarView: SidebarView = availableSidebarViews.includes(sidebarView)
     ? sidebarView
@@ -409,6 +415,14 @@ export default function App(): React.ReactElement {
                     Backend
                   </button>
                 )}
+                {availableSidebarViews.includes("models") && (
+                  <button
+                    className={`sidebar-toggle-btn ${activeSidebarView === "models" ? "sidebar-toggle-active" : ""}`}
+                    onClick={() => setSidebarView("models")}
+                  >
+                    Models
+                  </button>
+                )}
               </div>
             )}
             {activeSidebarView === "files" && root ? (
@@ -421,6 +435,8 @@ export default function App(): React.ReactElement {
                 root={backendClient.projectRoot}
                 onOpenFile={openBackendFile}
               />
+            ) : activeSidebarView === "models" && backendConnected && backendClient ? (
+              <ModelsPanel client={backendClient} />
             ) : null}
           </div>
         )}
