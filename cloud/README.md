@@ -103,6 +103,23 @@ live daemon:
   write-only over the API (never read back — a deliberate exposure-reducing
   choice; the server uses them when provisioning).
 
+  **`GET /admin`** serves a real, self-contained monitoring-dashboard page —
+  vanilla HTML/CSS/JS embedded at compile time via `include_str!` (no external
+  assets, no runtime file I/O, so no path-traversal surface). It does a real
+  `POST /api/login` (the bearer token lives only in a JS variable, never
+  browser storage — a real, deliberate choice for an elevated-privilege admin
+  tool) and polls the real `GET /api/admin/audit`/`GET /api/admin/telemetry`
+  feeds every 5s. Color tokens and the `.glass-hologram`/`.hud-gauge`/
+  status-reactive-glow classes are copied verbatim from `desktop/src/
+  theme.css`'s own Track C layer — the exact reuse target that file's own
+  comment already names for this dashboard. **Live-verified with a real
+  Chromium browser (Playwright)** against a real running server with a real
+  allocated container: login, a real telemetry gauge reflecting the real
+  1 MiB/1024 MiB usage of a real alpine container, all four real audit rows
+  in order, logout, a wrong-password rejection, and a non-admin account
+  correctly blocked by the real 403s — not simulated, an actual end-to-end
+  browser session against the actual binary.
+
   16 tests (tower `oneshot` for the REST surface; a real bound-socket
   end-to-end test drives the actual WebSocket upgrade and a real interactive
   shell command, then confirms a replayed capability token is refused), plus
@@ -177,11 +194,9 @@ same trait — no API or domain-layer change needed.
 2. **WebAuthn admin auth** on the API (a defensive concept adapted from
    `SpartanAI_Security_Core`, rebuilt safely) — deliberately not attempted:
    this repo's own rule is never to claim something works without running it,
-   and there's no FIDO2 hardware in this environment to test against.
-3. **A monitoring-dashboard *UI*** over the already-real feeds
-   (`GET /api/admin/audit` + `GET /api/admin/telemetry`), surfaced with
-   Track C's status-reactive aesthetic — the data is real and live; there's no
-   front-end consuming it yet.
+   and there's no FIDO2 hardware in this environment to test against. The
+   admin dashboard's bearer-token login is real and tested; WebAuthn would be
+   an additional, stronger auth factor layered on top of it.
 
 Everything named in the plan's own "Explicitly deferred" list — real Stripe
 billing, multi-node routing, cross-region deployment, an egress-allowlist

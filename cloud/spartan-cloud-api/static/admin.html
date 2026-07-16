@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Spartan Cloud — Admin</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+/* Color tokens copied verbatim from desktop/src/theme.css's own real
+   `:root` block (§75.95 blue/gold brand) and its Track C holographic layer
+   (§75's own comment there names this exact monitoring view as the reuse
+   target) -- one shared source of truth, not re-derived for this page. */
+:root {
+  --bg: #09090b;
+  --surface: #18181b;
+  --surface-raised: #1f1f23;
+  --border: #27272a;
+  --border-bright: #3a3a40;
+  --text: #e9e7e4;
+  --text-dim: #84838a;
+  --accent: #2e7dff;
+  --accent-dim: rgba(46, 125, 255, 0.16);
+  --accent-rgb: 46, 125, 255;
+  --hud: #d4af37;
+  --hud-rgb: 212, 175, 55;
+  --status-idle-rgb: var(--accent-rgb);
+  --status-active-rgb: var(--hud-rgb);
+  --status-warning-rgb: 245, 158, 11;
+  --status-critical-rgb: 239, 68, 68;
+  --status-ok-rgb: 74, 222, 128;
+  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background:
+    radial-gradient(ellipse 900px 500px at 15% -10%, rgba(var(--accent-rgb), 0.08), transparent 60%),
+    radial-gradient(ellipse 700px 500px at 100% 110%, rgba(var(--hud-rgb), 0.06), transparent 60%),
+    var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", "Inter", sans-serif;
+  font-size: 13px;
+}
+.mono { font-family: var(--font-mono); }
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px; border-bottom: 1px solid var(--border);
+}
+header h1 { font-size: 15px; margin: 0; letter-spacing: 0.02em; }
+header h1 .brand-accent { color: var(--accent); }
+header h1 .brand-hud { color: var(--hud); }
+main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+.glass-hologram {
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  backdrop-filter: blur(10px) saturate(1.1);
+  -webkit-backdrop-filter: blur(10px) saturate(1.1);
+  box-shadow: inset 0 0 12px rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+@keyframes hud-status-pulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(var(--status-glow-rgb, var(--accent-rgb)), 0.35); }
+  50% { box-shadow: 0 0 15px rgba(var(--status-glow-rgb, var(--accent-rgb)), 0.62); }
+}
+.hud-pulse-edge { animation: hud-status-pulse var(--pulse-speed, 2.4s) ease-in-out infinite; }
+.hud-status-idle { --status-glow-rgb: var(--status-idle-rgb); --pulse-speed: 3s; }
+.hud-status-warning { --status-glow-rgb: var(--status-warning-rgb); --pulse-speed: 1.3s; }
+.hud-status-critical { --status-glow-rgb: var(--status-critical-rgb); --pulse-speed: 0.9s; }
+.hud-gauge {
+  --gauge-pct: 0;
+  width: 44px; height: 44px; border-radius: 50%;
+  background: conic-gradient(
+    rgba(var(--status-glow-rgb, var(--accent-rgb)), 0.9) calc(var(--gauge-pct) * 1%),
+    rgba(255, 255, 255, 0.06) 0
+  );
+  display: grid; place-items: center; position: relative; flex-shrink: 0;
+}
+.hud-gauge::after { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: var(--surface); }
+.hud-gauge > * { position: relative; z-index: 1; font-size: 10px; }
+
+#login-screen { max-width: 340px; margin: 80px auto; padding: 24px; }
+#login-screen h2 { margin-top: 0; font-size: 14px; }
+#login-screen label { display: block; font-size: 12px; color: var(--text-dim); margin: 10px 0 4px; }
+#login-screen input {
+  width: 100%; padding: 8px 10px; background: var(--surface-raised);
+  border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px;
+}
+button {
+  background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(var(--accent-rgb), 0.4);
+  border-radius: 6px; padding: 8px 14px; font-size: 12px; cursor: pointer; font-weight: 600;
+}
+button:hover { background: rgba(var(--accent-rgb), 0.24); }
+button:disabled { opacity: 0.5; cursor: default; }
+#login-error, #dash-error {
+  color: rgb(var(--status-critical-rgb)); font-size: 12px; margin-top: 10px; min-height: 1em;
+}
+
+.panel { padding: 16px; margin-bottom: 16px; }
+.panel h2 {
+  margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-dim); display: flex; align-items: center; justify-content: space-between;
+}
+.panel h2 .refresh-note { font-size: 10px; text-transform: none; letter-spacing: 0; color: var(--text-dim); }
+
+.telemetry-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.telemetry-card {
+  padding: 12px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface-raised); display: flex; gap: 12px; align-items: center;
+}
+.telemetry-card .meta { min-width: 0; flex: 1; }
+.telemetry-card .id { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.telemetry-card .owner { font-size: 12px; margin-top: 2px; }
+.telemetry-card .stats { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+.empty-note { color: var(--text-dim); font-size: 12px; padding: 8px 0; }
+
+.audit-list { max-height: 340px; overflow-y: auto; }
+.audit-row {
+  display: grid; grid-template-columns: 130px 1fr auto; gap: 10px; align-items: baseline;
+  padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.audit-row:last-child { border-bottom: none; }
+.audit-row .actor { color: var(--text-dim); }
+.audit-row .action { color: var(--accent); font-weight: 600; }
+.audit-row .detail { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div id="login-screen" class="glass-hologram">
+  <h2>Spartan Cloud <span class="brand-accent" style="color: var(--accent)">Admin</span></h2>
+  <form id="login-form">
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" required />
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" required />
+    <div style="margin-top: 16px;">
+      <button type="submit" id="login-button">Sign in</button>
+    </div>
+    <div id="login-error"></div>
+  </form>
+</div>
+
+<div id="dashboard" class="hidden">
+  <header>
+    <h1>SPARTAN <span class="brand-accent" style="color: var(--accent)">CLOUD</span> <span class="brand-hud" style="color: var(--hud)">ADMIN</span></h1>
+    <div>
+      <span id="dash-error" style="display:inline; margin-right: 12px;"></span>
+      <button id="logout-button">Sign out</button>
+    </div>
+  </header>
+  <main>
+    <section class="panel glass-hologram">
+      <h2>Container Telemetry <span class="refresh-note" id="telemetry-updated">not yet refreshed</span></h2>
+      <div id="telemetry-grid" class="telemetry-grid"></div>
+      <div id="telemetry-empty" class="empty-note hidden">No managed containers are currently running.</div>
+    </section>
+    <section class="panel glass-hologram">
+      <h2>Audit Log <span class="refresh-note" id="audit-updated">not yet refreshed</span></h2>
+      <div id="audit-list" class="audit-list"></div>
+    </section>
+  </main>
+</div>
+
+<script>
+// Real, minimal vanilla-JS admin dashboard -- no framework, no external
+// scripts/fonts (self-contained, matching this project's own "no CDN
+// dependency for a simple internal page" discipline). The bearer token is
+// held only in a module-scope JS variable, deliberately NOT persisted to
+// localStorage/sessionStorage -- a real, small security choice for an admin
+// tool with elevated privileges: a page reload requires re-login, a real,
+// named UX cost of not leaving a long-lived admin token sitting in browser
+// storage.
+let authToken = null;
+let telemetryTimer = null;
+
+const $ = (id) => document.getElementById(id);
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+async function apiCall(path, opts = {}) {
+  const headers = Object.assign({}, opts.headers || {});
+  if (authToken) headers["Authorization"] = "Bearer " + authToken;
+  const resp = await fetch(path, Object.assign({}, opts, { headers }));
+  let body = null;
+  try { body = await resp.json(); } catch (_) { /* no body */ }
+  return { status: resp.status, body };
+}
+
+$("login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("login-error").textContent = "";
+  $("login-button").disabled = true;
+  try {
+    const { status, body } = await apiCall("/api/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: $("email").value, password: $("password").value }),
+    });
+    if (status !== 200 || !body || !body.token) {
+      $("login-error").textContent = (body && body.message) || "Login failed.";
+      return;
+    }
+    authToken = body.token;
+    $("login-screen").classList.add("hidden");
+    $("dashboard").classList.remove("hidden");
+    await refreshAll();
+    telemetryTimer = setInterval(refreshAll, 5000);
+  } catch (err) {
+    $("login-error").textContent = "Network error: " + err;
+  } finally {
+    $("login-button").disabled = false;
+  }
+});
+
+$("logout-button").addEventListener("click", () => {
+  authToken = null;
+  if (telemetryTimer) clearInterval(telemetryTimer);
+  $("dashboard").classList.add("hidden");
+  $("login-screen").classList.remove("hidden");
+  $("email").value = "";
+  $("password").value = "";
+});
+
+function severityFor(pct) {
+  if (pct >= 90) return "hud-status-critical";
+  if (pct >= 75) return "hud-status-warning";
+  return "hud-status-idle";
+}
+
+function renderTelemetry(usages) {
+  const grid = $("telemetry-grid");
+  grid.innerHTML = "";
+  $("telemetry-empty").classList.toggle("hidden", usages.length > 0);
+  for (const u of usages) {
+    const pct = (u.memory_bytes != null && u.memory_limit_bytes)
+      ? Math.round((u.memory_bytes / u.memory_limit_bytes) * 100)
+      : 0;
+    const sev = severityFor(pct);
+    const card = document.createElement("div");
+    card.className = "telemetry-card";
+    const mb = u.memory_bytes != null ? (u.memory_bytes / 1048576).toFixed(0) : "?";
+    const lb = u.memory_limit_bytes != null ? (u.memory_limit_bytes / 1048576).toFixed(0) : "?";
+    card.innerHTML =
+      '<div class="hud-gauge hud-pulse-edge ' + sev + '" style="--gauge-pct:' + pct + '"><span>' + pct + "%</span></div>" +
+      '<div class="meta">' +
+        '<div class="owner mono">' + escapeHtml(u.owner_id) + "</div>" +
+        '<div class="id mono">' + escapeHtml(u.id) + "</div>" +
+        '<div class="stats">' + mb + " / " + lb + " MiB &middot; " + (u.pids != null ? u.pids : "?") + " pids</div>" +
+      "</div>";
+    grid.appendChild(card);
+  }
+}
+
+function renderAudit(events) {
+  const list = $("audit-list");
+  list.innerHTML = "";
+  if (events.length === 0) {
+    list.innerHTML = '<div class="empty-note">No audit events yet.</div>';
+    return;
+  }
+  for (const e of events) {
+    const row = document.createElement("div");
+    row.className = "audit-row";
+    const when = new Date(e.at_unix * 1000).toLocaleString();
+    row.innerHTML =
+      '<span class="mono">' + escapeHtml(when) + "</span>" +
+      '<span><span class="action">' + escapeHtml(e.action) + "</span>" +
+        (e.target ? ' &rarr; <span class="mono">' + escapeHtml(e.target) + "</span>" : "") +
+        (e.detail ? ' <span class="detail">(' + escapeHtml(e.detail) + ")</span>" : "") +
+      "</span>" +
+      '<span class="actor mono">' + escapeHtml(e.actor_id || "system") + "</span>";
+    list.appendChild(row);
+  }
+}
+
+async function refreshAll() {
+  $("dash-error").textContent = "";
+  const [tel, audit] = await Promise.all([
+    apiCall("/api/admin/telemetry"),
+    apiCall("/api/admin/audit"),
+  ]);
+  if (tel.status === 200) {
+    renderTelemetry(tel.body);
+    $("telemetry-updated").textContent = "updated " + new Date().toLocaleTimeString();
+  } else if (tel.status === 503) {
+    renderTelemetry([]);
+    $("telemetry-updated").textContent = "runtime not connected";
+  } else if (tel.status === 403) {
+    $("dash-error").textContent = "Admin privileges are required for this account.";
+  } else {
+    $("dash-error").textContent = "Telemetry error: " + (tel.body && tel.body.message);
+  }
+  if (audit.status === 200) {
+    renderAudit(audit.body);
+    $("audit-updated").textContent = "updated " + new Date().toLocaleTimeString();
+  } else if (audit.status === 403) {
+    $("dash-error").textContent = "Admin privileges are required for this account.";
+  } else {
+    $("dash-error").textContent = "Audit error: " + (audit.body && audit.body.message);
+  }
+}
+</script>
+</body>
+</html>

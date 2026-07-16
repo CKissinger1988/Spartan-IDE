@@ -231,7 +231,23 @@ pub fn router(state: AppState) -> Router {
             put(put_secret_handler).delete(delete_secret_handler),
         )
         .route("/api/secrets", get(list_secrets_handler))
+        .route("/admin", get(admin_dashboard))
         .with_state(state)
+}
+
+/// Serve the real, self-contained admin dashboard -- Track C's holographic
+/// aesthetic (`.glass-hologram`/`.hud-gauge`/status-reactive glow, real color
+/// tokens copied verbatim from `desktop/src/theme.css`, the exact reuse target
+/// that file's own comment already names) driving the already-real
+/// `GET /api/admin/audit`/`GET /api/admin/telemetry` feeds. Embedded at
+/// compile time via `include_str!` -- a single self-contained HTML file, no
+/// external assets, no runtime file I/O, so there's no path-traversal surface
+/// to this route at all. Authentication is real too: the page itself does a
+/// real `POST /api/login` and holds the bearer token in memory (not
+/// persisted to browser storage -- a real, deliberate choice for an
+/// elevated-privilege admin tool), then uses it for both real feeds.
+async fn admin_dashboard() -> axum::response::Html<&'static str> {
+    axum::response::Html(include_str!("../static/admin.html"))
 }
 
 // Returns the small `DataError` (not a large `Response`) on failure, so
@@ -962,6 +978,32 @@ mod tests {
         )
         .await;
         body["token"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn admin_dashboard_serves_real_self_contained_html() {
+        let app = router(AppState::in_memory());
+        let resp = app.oneshot(get("/admin", None)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            content_type.starts_with("text/html"),
+            "admin dashboard must be served as HTML: {content_type}"
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(bytes.to_vec()).unwrap();
+        // Real, load-bearing content checks -- the embedded page actually
+        // drives the real admin endpoints, not a placeholder.
+        assert!(html.contains("/api/admin/telemetry"));
+        assert!(html.contains("/api/admin/audit"));
+        assert!(html.contains("/api/login"));
     }
 
     #[tokio::test]
