@@ -5203,6 +5203,7 @@ dependencies = [
  "spartan-android",
  "spartan-buffer",
  "spartan-crash",
+ "spartan-dap",
  "spartan-devcontainer",
  "spartan-git",
  "spartan-languages",

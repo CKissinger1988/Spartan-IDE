@@ -14,6 +14,7 @@ spartan-devcontainer = { path = "../spartan-devcontainer" }
 spartan-android = { path = "../spartan-android" }
 spartan-crash = { path = "../spartan-crash" }
 spartan-lsp = { path = "../spartan-lsp" }
+spartan-dap = { path = "../spartan-dap" }
 spartan-languages = { path = "../spartan-languages" }
 git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
 serde = { version = "1", features = ["derive"] }

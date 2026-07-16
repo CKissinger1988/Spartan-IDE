@@ -43,6 +43,7 @@ use spartan_model::{
     ModelProvider, OllamaProvider,
 };
 
+mod dap_integration;
 mod lsp_integration;
 mod pty;
 pub mod ws_transport;
@@ -175,6 +176,15 @@ pub struct BackendState {
     /// real local process.
     devcontainer_exec_sessions: HashMap<u64, spartan_devcontainer::docker::ExecHandle>,
     next_devcontainer_exec_id: u64,
+    /// Real, live DAP sessions (§132) -- keyed independently of
+    /// `open_docs`, not stored on `OpenDoc` directly, since a debug
+    /// session can outlive the exact doc-id lifecycle question (a
+    /// relaunch after the program exits is a *new* session, not a
+    /// mutation of the old one) and a UI may reasonably want to keep a
+    /// finished session's own last-known state addressable by its own id
+    /// a moment longer than the launch call that created it.
+    dap_sessions: HashMap<u64, Arc<spartan_dap::DapSession>>,
+    next_dap_id: u64,
 }
 
 impl BackendState {
@@ -1239,6 +1249,66 @@ fn pty_close(
     Ok(serde_json::json!({ "ok": true }))
 }
 
+/// Real DAP launch (§132) -- looks up the already-open document's real
+/// on-disk path (a debug session targets a real file, not raw text a
+/// client might be mid-editing unsaved), then hands off to
+/// `dap_integration::dap_launch` for the actual language/adapter
+/// resolution. The lock is released before that call runs (mirroring
+/// `leo_start_task`'s own precedent) since `dap_launch` itself spawns a
+/// real background thread and briefly blocks on the adapter's own
+/// initialize/launch/breakpoint handshake before returning.
+fn dap_launch(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+    break_lines: &[i64],
+) -> Result<serde_json::Value, String> {
+    let path = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        doc.path.clone()
+    };
+    let session = dap_integration::dap_launch(doc_id, &path, break_lines, out_tx)?;
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    let session_id = guard.next_dap_id;
+    guard.next_dap_id += 1;
+    guard.dap_sessions.insert(session_id, session);
+    Ok(serde_json::json!({ "session_id": session_id }))
+}
+
+fn dap_command(
+    state: &Arc<Mutex<BackendState>>,
+    session_id: u64,
+    command: spartan_dap::DapCommand,
+) -> Result<serde_json::Value, String> {
+    let guard = state.lock().map_err(|_| "backend state poisoned")?;
+    let session = guard
+        .dap_sessions
+        .get(&session_id)
+        .ok_or_else(|| format!("no dap session with id {session_id}"))?;
+    session.send_command(command);
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// Real, explicit `Disconnect` (not a drop-triggered shutdown -- see
+/// `spartan-dap::session`'s own doc comment for why this crate's shared
+/// `Arc<DapSession>` needs an explicit command instead) plus removal
+/// from `dap_sessions` -- an already-gone id is a real, harmless no-op,
+/// matching `pty_close`'s own established precedent.
+fn dap_disconnect(
+    state: &Arc<Mutex<BackendState>>,
+    session_id: u64,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    if let Some(session) = guard.dap_sessions.remove(&session_id) {
+        session.send_command(spartan_dap::DapCommand::Disconnect);
+    }
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 /// Real §75.74 dev containers -- OCI/Docker-based, following the open
 /// containers.dev `devcontainer.json` spec (the same one VS Code Dev
 /// Containers, GitHub Codespaces, and JetBrains Gateway implement),
@@ -2085,6 +2155,25 @@ pub fn handle_request(
             pty_resize(state, session_id, cols, rows)
         })(),
         "pty_close" => get_u64_param(&req.params, "session_id").and_then(|id| pty_close(state, id)),
+        "dap_launch" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            let break_lines: Vec<i64> = req
+                .params
+                .get("break_lines")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+                .unwrap_or_default();
+            dap_launch(state, out_tx.clone(), doc_id, &break_lines)
+        })(),
+        "dap_continue" => get_u64_param(&req.params, "session_id")
+            .and_then(|id| dap_command(state, id, spartan_dap::DapCommand::Continue)),
+        "dap_step_over" => get_u64_param(&req.params, "session_id")
+            .and_then(|id| dap_command(state, id, spartan_dap::DapCommand::StepOver)),
+        "dap_step_into" => get_u64_param(&req.params, "session_id")
+            .and_then(|id| dap_command(state, id, spartan_dap::DapCommand::StepInto)),
+        "dap_disconnect" => {
+            get_u64_param(&req.params, "session_id").and_then(|id| dap_disconnect(state, id))
+        }
         "devcontainer_detect" => {
             get_str_param(&req.params, "project_root").and_then(|r| devcontainer_detect(&r))
         }
