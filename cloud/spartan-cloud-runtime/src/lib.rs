@@ -30,14 +30,15 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use bollard::container::{
-    Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
+    Config, CreateContainerOptions, ListContainersOptions, LogOutput, RemoveContainerOptions,
     StartContainerOptions, StatsOptions, StopContainerOptions,
 };
-use bollard::exec::{CreateExecOptions, StartExecResults};
+use bollard::exec::{CreateExecOptions, ResizeExecOptions, StartExecOptions, StartExecResults};
 use bollard::image::CreateImageOptions;
 use bollard::models::{ContainerStateStatusEnum, HostConfig};
 use bollard::Docker;
 use futures_util::StreamExt;
+use tokio::io::AsyncWriteExt;
 
 use spartan_cloud_protocol::{AllocationId, AllocationStatus, UserId};
 use spartan_cloud_tenant::PlanLimits;
@@ -103,6 +104,41 @@ pub struct ExecResult {
     pub exit_code: Option<i64>,
 }
 
+/// Real commands a live interactive exec session accepts, sent over a plain
+/// `tokio::sync::mpsc::UnboundedSender` -- the same real shape
+/// `spartan-devcontainer::docker::ExecCommand` already established for its
+/// own local dev-container exec sessions (not shared code -- that crate is
+/// sync/thread-based and lives in the main workspace; `cloud/` is a
+/// deliberately separate workspace, see this crate's own module doc -- but
+/// the same real, proven design).
+pub enum ExecSessionCommand {
+    Input(Vec<u8>),
+    Resize(u16, u16),
+}
+
+/// A handle to a live interactive exec session (`spawn_interactive_exec`).
+/// `write`/`resize` are plain, non-async functions -- a caller (e.g. an axum
+/// WebSocket handler pumping frames) can call them from any context without
+/// needing to hold an async lock on the session itself.
+#[derive(Debug)]
+pub struct ExecSessionHandle {
+    tx: tokio::sync::mpsc::UnboundedSender<ExecSessionCommand>,
+}
+
+impl ExecSessionHandle {
+    pub fn write(&self, data: Vec<u8>) -> Result<(), RuntimeError> {
+        self.tx
+            .send(ExecSessionCommand::Input(data))
+            .map_err(|_| RuntimeError::Docker("exec session already closed".to_string()))
+    }
+
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), RuntimeError> {
+        self.tx
+            .send(ExecSessionCommand::Resize(cols, rows))
+            .map_err(|_| RuntimeError::Docker("exec session already closed".to_string()))
+    }
+}
+
 /// A live resource-usage snapshot for one managed container -- the defensive
 /// telemetry the admin monitoring dashboard surfaces (the counterpart to the
 /// reaper + caps: spotting abuse, not just capping it). Values are best-effort
@@ -155,6 +191,25 @@ pub trait ContainerRuntime: Send + Sync {
         id: &AllocationId,
         command: &[String],
     ) -> Result<ExecResult, RuntimeError>;
+    /// Spawn a real, interactive `docker exec -it`-equivalent session inside
+    /// `owner`'s allocation `id` -- the streaming counterpart to `exec_once`,
+    /// for the per-container WebSocket exec session. **Owner-scoped**
+    /// identically to `exec_once`: a foreign or unknown allocation is refused
+    /// with `NotFound` before anything is spawned. `on_output` is called with
+    /// each real output chunk as it arrives; `on_exit` is called exactly once
+    /// when the session ends for any reason (the shell exited, the container
+    /// stopped, a real Docker error). Boxed closures, not generics -- this
+    /// trait is used as `dyn ContainerRuntime`, and a generic method would not
+    /// be object-safe.
+    async fn spawn_interactive_exec(
+        &self,
+        owner: &UserId,
+        id: &AllocationId,
+        cols: u16,
+        rows: u16,
+        on_output: Box<dyn FnMut(Vec<u8>) + Send>,
+        on_exit: Box<dyn FnOnce() + Send>,
+    ) -> Result<ExecSessionHandle, RuntimeError>;
     /// Whether this runtime's isolation is verified in the current deployment.
     /// `false` is an ops signal: do NOT run untrusted tenant code yet.
     fn isolation_verified(&self) -> bool;
@@ -224,6 +279,37 @@ impl DockerRuntime {
             item?;
         }
         Ok(())
+    }
+
+    /// Verify `id` is a real, currently-managed container owned by `owner`.
+    /// Shared by `exec_once` and `spawn_interactive_exec` -- the identical
+    /// owner-scoping check both need before running anything inside a
+    /// container. A container that doesn't exist, isn't managed, or belongs
+    /// to a different tenant is `NotFound` -- deliberately the same error a
+    /// wholly unknown allocation gets, so this check itself can never be used
+    /// to probe whether a given id belongs to someone else.
+    async fn verify_owned(&self, owner: &UserId, id: &AllocationId) -> Result<(), RuntimeError> {
+        let inspect = match self.docker.inspect_container(&id.0, None).await {
+            Ok(c) => c,
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => return Err(RuntimeError::NotFound),
+            Err(e) => return Err(e.into()),
+        };
+        let owned = inspect
+            .config
+            .as_ref()
+            .and_then(|c| c.labels.as_ref())
+            .map(|l| {
+                l.get(MANAGED_LABEL).map(String::as_str) == Some("1")
+                    && l.get(OWNER_LABEL).map(String::as_str) == Some(owner.0.as_str())
+            })
+            .unwrap_or(false);
+        if owned {
+            Ok(())
+        } else {
+            Err(RuntimeError::NotFound)
+        }
     }
 
     fn host_config(&self, limits: &PlanLimits) -> HostConfig {
@@ -468,28 +554,9 @@ impl ContainerRuntime for DockerRuntime {
         command: &[String],
     ) -> Result<ExecResult, RuntimeError> {
         // Owner-scoping is load-bearing: verify this allocation is managed AND
-        // owned by `owner` before running anything. A container that doesn't
-        // exist, isn't ours, or belongs to a different tenant is NotFound --
-        // one tenant can never exec into another's container.
-        let inspect = match self.docker.inspect_container(&id.0, None).await {
-            Ok(c) => c,
-            Err(bollard::errors::Error::DockerResponseServerError {
-                status_code: 404, ..
-            }) => return Err(RuntimeError::NotFound),
-            Err(e) => return Err(e.into()),
-        };
-        let owned = inspect
-            .config
-            .as_ref()
-            .and_then(|c| c.labels.as_ref())
-            .map(|l| {
-                l.get(MANAGED_LABEL).map(String::as_str) == Some("1")
-                    && l.get(OWNER_LABEL).map(String::as_str) == Some(owner.0.as_str())
-            })
-            .unwrap_or(false);
-        if !owned {
-            return Err(RuntimeError::NotFound);
-        }
+        // owned by `owner` before running anything -- one tenant can never
+        // exec into another's container.
+        self.verify_owned(owner, id).await?;
 
         let exec = self
             .docker
@@ -519,6 +586,115 @@ impl ContainerRuntime for DockerRuntime {
 
         let exit_code = self.docker.inspect_exec(&exec.id).await?.exit_code;
         Ok(ExecResult { output, exit_code })
+    }
+
+    async fn spawn_interactive_exec(
+        &self,
+        owner: &UserId,
+        id: &AllocationId,
+        cols: u16,
+        rows: u16,
+        mut on_output: Box<dyn FnMut(Vec<u8>) + Send>,
+        on_exit: Box<dyn FnOnce() + Send>,
+    ) -> Result<ExecSessionHandle, RuntimeError> {
+        // Owner-scoping first, exactly like exec_once -- before any real exec
+        // is even created, let alone started.
+        self.verify_owned(owner, id).await?;
+
+        let exec = self
+            .docker
+            .create_exec(
+                &id.0,
+                CreateExecOptions {
+                    cmd: Some(vec!["/bin/sh".to_string()]),
+                    attach_stdin: Some(true),
+                    attach_stdout: Some(true),
+                    attach_stderr: Some(true),
+                    tty: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let start_result = self
+            .docker
+            .start_exec(
+                &exec.id,
+                Some(StartExecOptions {
+                    tty: true,
+                    ..Default::default()
+                }),
+            )
+            .await?;
+        let (mut output, mut input) = match start_result {
+            StartExecResults::Attached { output, input } => (output, input),
+            StartExecResults::Detached => {
+                return Err(RuntimeError::Docker(
+                    "exec started detached unexpectedly (tty was requested)".to_string(),
+                ))
+            }
+        };
+
+        // Real terminal size, set once up front; `ExecSessionHandle::resize`
+        // lets a caller (the WS handler, on a real client resize) update it.
+        let _ = self
+            .docker
+            .resize_exec(
+                &exec.id,
+                ResizeExecOptions {
+                    height: rows,
+                    width: cols,
+                },
+            )
+            .await;
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ExecSessionCommand>();
+        let docker = self.docker.clone(); // bollard::Docker is a cheap, Clone handle.
+        let exec_id = exec.id.clone();
+
+        // The pump loop owns the real exec streams and runs for the life of
+        // the session; the handle returned to the caller only ever talks to
+        // it over the channel, never touching the streams directly.
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    item = output.next() => {
+                        match item {
+                            Some(Ok(
+                                LogOutput::StdOut { message }
+                                | LogOutput::StdErr { message }
+                                | LogOutput::Console { message },
+                            )) => {
+                                on_output(message.to_vec());
+                            }
+                            Some(Ok(LogOutput::StdIn { .. })) => {}
+                            Some(Err(_)) | None => break,
+                        }
+                    }
+                    cmd = rx.recv() => {
+                        match cmd {
+                            Some(ExecSessionCommand::Input(bytes)) => {
+                                if input.write_all(&bytes).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Some(ExecSessionCommand::Resize(cols, rows)) => {
+                                let _ = docker
+                                    .resize_exec(
+                                        &exec_id,
+                                        ResizeExecOptions { height: rows, width: cols },
+                                    )
+                                    .await;
+                            }
+                            None => break,
+                        }
+                    }
+                }
+            }
+            on_exit();
+        });
+
+        Ok(ExecSessionHandle { tx })
     }
 
     fn isolation_verified(&self) -> bool {
@@ -771,6 +947,94 @@ mod tests {
             )
             .await;
         assert!(matches!(unknown, Err(RuntimeError::NotFound)));
+
+        runtime.stop(&id).await.expect("cleanup the container");
+    }
+
+    #[tokio::test]
+    async fn spawn_interactive_exec_runs_a_real_shell_and_is_owner_scoped() {
+        let Some(docker) = docker_or_skip().await else {
+            return;
+        };
+        let runtime = DockerRuntime::with_docker(docker, "runc", true);
+        let owner = UserId(format!("interactive-owner-{}", std::process::id()));
+        let other = UserId(format!("interactive-other-{}", std::process::id()));
+        let spec = AllocationSpec {
+            owner: owner.clone(),
+            image: "alpine:latest".to_string(),
+            limits: PlanLimits::for_tier(PlanTier::Free),
+        };
+        let id = runtime.create(&spec).await.expect("create a container");
+
+        let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let (exit_tx, exit_rx) = tokio::sync::oneshot::channel::<()>();
+        let on_output: Box<dyn FnMut(Vec<u8>) + Send> = Box::new(move |bytes| {
+            let _ = out_tx.send(bytes);
+        });
+        let on_exit: Box<dyn FnOnce() + Send> = Box::new(move || {
+            let _ = exit_tx.send(());
+        });
+
+        let handle = runtime
+            .spawn_interactive_exec(&owner, &id, 80, 24, on_output, on_exit)
+            .await
+            .expect("a real interactive session starts");
+
+        handle
+            .write(b"echo hello-interactive\n".to_vec())
+            .expect("write real stdin");
+
+        // Real echoed output must arrive (poll with a bounded timeout so a
+        // real failure fails the test instead of hanging forever).
+        let mut collected = Vec::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), out_rx.recv()).await {
+                Ok(Some(chunk)) => {
+                    collected.extend_from_slice(&chunk);
+                    if String::from_utf8_lossy(&collected).contains("hello-interactive") {
+                        break;
+                    }
+                }
+                _ => continue,
+            }
+        }
+        assert!(
+            String::from_utf8_lossy(&collected).contains("hello-interactive"),
+            "real echoed shell output over the interactive session: {:?}",
+            String::from_utf8_lossy(&collected)
+        );
+
+        // Real resize doesn't error (best-effort, but the call must succeed
+        // against a real live session).
+        handle.resize(120, 40).expect("resize a live session");
+
+        // Closing stdin (exiting the shell) makes the real session end.
+        handle.write(b"exit\n".to_vec()).expect("write exit");
+        tokio::time::timeout(std::time::Duration::from_secs(10), exit_rx)
+            .await
+            .expect("on_exit fires when the real shell exits")
+            .expect("exit channel wasn't dropped without firing");
+
+        // OWNER-SCOPING: a different tenant cannot open an interactive
+        // session in this container either.
+        let (o_tx, _o_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let denied = runtime
+            .spawn_interactive_exec(
+                &other,
+                &id,
+                80,
+                24,
+                Box::new(move |b| {
+                    let _ = o_tx.send(b);
+                }),
+                Box::new(|| {}),
+            )
+            .await;
+        assert!(
+            matches!(denied, Err(RuntimeError::NotFound)),
+            "a foreign owner must be denied (NotFound), got {denied:?}"
+        );
 
         runtime.stop(&id).await.expect("cleanup the container");
     }

@@ -7,10 +7,12 @@
 //! (SQLite), the container runtime (Docker+gVisor), and the API (axum) all
 //! build *on top of* this core in later increments.
 
+pub mod capability;
 pub mod entitlement;
 pub mod quota;
 pub mod session;
 
+pub use capability::{new_capability_token, ExecCapability};
 pub use entitlement::{Entitlement, EntitlementProvider, StubEntitlementProvider};
 pub use quota::{can_allocate, PlanLimits, QuotaError};
 pub use session::{new_opaque_token, Session};

@@ -12,10 +12,12 @@
 //! (`spartan-cloud-runtime`, gated on the gVisor spike) isn't wired yet.
 //! This crate never pretends to start a container it can't.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::extract::{FromRequestParts, Path, State};
+use axum::extract::ws::{Message as WsMessage, WebSocket, WebSocketUpgrade};
+use axum::extract::{FromRequestParts, Path, Query, State};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -25,13 +27,21 @@ use serde::{Deserialize, Serialize};
 
 use spartan_cloud_data::{DataError, Store};
 use spartan_cloud_protocol::{
-    AllocationInfo, AllocationStatus, ApiError, AuthResponse, LoginRequest, PlanTier,
-    PutSecretRequest, SecretNamesResponse, SessionToken, SignupRequest, UserId,
+    AllocationId, AllocationInfo, AllocationStatus, ApiError, AuthResponse,
+    ExecSessionClientMessage, ExecSessionServerEvent, LoginRequest, PlanTier, PutSecretRequest,
+    SecretNamesResponse, SessionToken, SignupRequest, UserId,
 };
 use spartan_cloud_runtime::{AllocationSpec, ContainerRuntime};
 use spartan_cloud_tenant::{
-    can_allocate, EntitlementProvider, PlanLimits, Session, StubEntitlementProvider,
+    can_allocate, EntitlementProvider, ExecCapability, PlanLimits, Session, StubEntitlementProvider,
 };
+
+/// How long an exec-session capability token stays valid after being issued.
+/// Real, deliberately short: it only needs to survive the moment between the
+/// client requesting it and immediately opening the WebSocket, so a leaked
+/// token is only dangerous for a narrow window even before it's consumed
+/// (single-use consumption at WS-upgrade time closes the window entirely).
+const EXEC_CAPABILITY_TTL_SECS: u64 = 60;
 
 /// The default base image for a bare allocation. A real product ships a
 /// curated workspace image; this is an honest placeholder base.
@@ -48,6 +58,14 @@ pub struct AppState {
     /// The container runtime, if one is connected. When `None`, `/api/allocate`
     /// honestly reports the runtime is unavailable rather than faking anything.
     runtime: Option<Arc<dyn ContainerRuntime>>,
+    /// Issued, not-yet-consumed exec-session capability tokens, keyed by the
+    /// token string. Deliberately **in-memory only** (never persisted): these
+    /// are short-lived (`EXEC_CAPABILITY_TTL_SECS`) and single-use by design
+    /// (removed from the map the moment a WS upgrade consumes one), so
+    /// surviving a server restart was never a real requirement -- the same
+    /// reasoning `spartan-backend::ws_transport`'s own per-process token
+    /// already established for this codebase.
+    exec_capabilities: Arc<Mutex<HashMap<String, ExecCapability>>>,
 }
 
 impl AppState {
@@ -61,6 +79,7 @@ impl AppState {
             entitlements,
             session_ttl_secs,
             runtime: None,
+            exec_capabilities: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -202,6 +221,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/admin/telemetry", get(telemetry))
         .route("/api/allocate", post(allocate))
         .route("/api/allocations/:id/exec", post(exec_in_allocation))
+        .route(
+            "/api/allocations/:id/session_token",
+            post(issue_exec_capability),
+        )
+        .route("/api/allocations/:id/session", get(exec_session_ws))
         .route(
             "/api/secrets/:name",
             put(put_secret_handler).delete(delete_secret_handler),
@@ -507,6 +531,222 @@ async fn exec_in_allocation(
             "no such allocation for this user",
         ),
         Err(e) => internal_error(e),
+    }
+}
+
+/// Issue a short-lived, single-use capability token scoping the caller to
+/// exactly one allocation's interactive exec session. Ownership is checked
+/// **once, here**, via the runtime's own owner-scoped `list_owned` (already
+/// real and tested) -- a foreign or unknown allocation is refused before any
+/// token is minted at all.
+async fn issue_exec_capability(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(runtime) = &state.runtime else {
+        return api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "runtime_unavailable",
+            "the container runtime is not connected",
+        );
+    };
+    let alloc = AllocationId(id.clone());
+    let owned = match runtime.list_owned(&user.user_id).await {
+        Ok(ids) => ids.contains(&alloc),
+        Err(e) => return internal_error(e),
+    };
+    if !owned {
+        return api_error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no such allocation for this user",
+        );
+    }
+
+    let cap = ExecCapability::issue(
+        user.user_id.clone(),
+        alloc,
+        now_unix(),
+        EXEC_CAPABILITY_TTL_SECS,
+    );
+    let token = cap.token.0.clone();
+    {
+        let mut caps = state
+            .exec_capabilities
+            .lock()
+            .expect("exec_capabilities mutex poisoned");
+        caps.insert(token.clone(), cap);
+    }
+    audit(
+        &state,
+        Some(&user.user_id),
+        "exec_session_token_issued",
+        Some(&id),
+        None,
+    );
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "token": token,
+            "expires_in_secs": EXEC_CAPABILITY_TTL_SECS,
+        })),
+    )
+        .into_response()
+}
+
+/// Upgrade to a real interactive exec WebSocket session for one allocation.
+/// Auth here is deliberately **not** the general `Authorization: Bearer`
+/// header (a browser's native WebSocket API cannot set custom headers on the
+/// upgrade request) -- it's the short-lived capability token from
+/// `issue_exec_capability`, passed as `?token=...` and **consumed on use**
+/// (removed from the map the moment it's validated), so a leaked/replayed URL
+/// is dead after its first successful connection, matching
+/// `spartan-backend::ws_transport`'s own `?token=` precedent for the same
+/// real reason.
+async fn exec_session_ws(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let Some(token) = params.get("token").cloned() else {
+        return api_error(
+            StatusCode::UNAUTHORIZED,
+            "missing_token",
+            "a capability token is required",
+        );
+    };
+    let Some(runtime) = state.runtime.clone() else {
+        return api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "runtime_unavailable",
+            "the container runtime is not connected",
+        );
+    };
+
+    // Validate + CONSUME the capability token before ever upgrading --
+    // single-use by construction, not just by convention.
+    let cap = {
+        let mut caps = state
+            .exec_capabilities
+            .lock()
+            .expect("exec_capabilities mutex poisoned");
+        caps.remove(&token)
+    };
+    let Some(cap) = cap else {
+        return api_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_token",
+            "unknown, expired, or already-used capability token",
+        );
+    };
+    if !cap.is_valid_at(now_unix()) {
+        return api_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_token",
+            "capability token has expired",
+        );
+    }
+    if cap.allocation_id.0 != id {
+        // A capability minted for a DIFFERENT allocation cannot be replayed
+        // here -- the token proves access to exactly the one allocation it
+        // names, not to this user's allocations in general.
+        return api_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_token",
+            "capability token is not valid for this allocation",
+        );
+    }
+
+    let owner = cap.owner_id;
+    let alloc = cap.allocation_id;
+    ws.on_upgrade(move |socket| handle_exec_socket(socket, runtime, owner, alloc))
+}
+
+/// Pump a real interactive exec session over an already-upgraded WebSocket.
+/// Runs for the life of the connection; returns (dropping the socket) when
+/// either side closes or the real exec session ends.
+async fn handle_exec_socket(
+    mut socket: WebSocket,
+    runtime: Arc<dyn ContainerRuntime>,
+    owner: UserId,
+    alloc: AllocationId,
+) {
+    // Real output/exit events flow from the exec session's own background
+    // task (spawned inside `spawn_interactive_exec`) to this task over a
+    // channel -- the `WebSocket` itself isn't handed across that boundary,
+    // this task alone owns sending frames.
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<ExecSessionServerEvent>();
+
+    let out_tx_output = out_tx.clone();
+    let on_output: Box<dyn FnMut(Vec<u8>) + Send> = Box::new(move |bytes: Vec<u8>| {
+        let chunk = String::from_utf8_lossy(&bytes).into_owned();
+        let _ = out_tx_output.send(ExecSessionServerEvent::Output { chunk });
+    });
+    let on_exit: Box<dyn FnOnce() + Send> = Box::new(move || {
+        let _ = out_tx.send(ExecSessionServerEvent::Exit);
+    });
+
+    let handle = match runtime
+        .spawn_interactive_exec(&owner, &alloc, 80, 24, on_output, on_exit)
+        .await
+    {
+        Ok(h) => h,
+        Err(e) => {
+            let event = ExecSessionServerEvent::Error {
+                message: e.to_string(),
+            };
+            if let Ok(line) = serde_json::to_string(&event) {
+                let _ = socket.send(WsMessage::Text(line)).await;
+            }
+            return;
+        }
+    };
+
+    loop {
+        tokio::select! {
+            maybe_event = out_rx.recv() => {
+                match maybe_event {
+                    Some(event) => {
+                        let is_exit = matches!(event, ExecSessionServerEvent::Exit);
+                        if let Ok(line) = serde_json::to_string(&event) {
+                            if socket.send(WsMessage::Text(line)).await.is_err() {
+                                break;
+                            }
+                        }
+                        if is_exit {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
+            maybe_msg = socket.recv() => {
+                match maybe_msg {
+                    Some(Ok(WsMessage::Text(text))) => {
+                        if let Ok(msg) = serde_json::from_str::<ExecSessionClientMessage>(&text) {
+                            match msg {
+                                ExecSessionClientMessage::Input { data } => {
+                                    let _ = handle.write(data.into_bytes());
+                                }
+                                ExecSessionClientMessage::Resize { cols, rows } => {
+                                    let _ = handle.resize(cols, rows);
+                                }
+                            }
+                        }
+                        // A real, malformed client message is silently
+                        // ignored rather than closing the whole session --
+                        // matches this codebase's own general leniency on a
+                        // single bad frame over a long-lived stream (e.g.
+                        // `spartan-backend::ws_transport`'s own dispatch loop).
+                    }
+                    Some(Ok(WsMessage::Close(_))) | None => break,
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) => break,
+                }
+            }
+        }
     }
 }
 
@@ -1256,6 +1496,201 @@ mod tests {
         assert_eq!(exec["exit_code"], 0);
 
         // Clean up the real container.
+        runtime
+            .stop(&spartan_cloud_protocol::AllocationId(id))
+            .await
+            .expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn session_token_requires_real_ownership_and_reports_no_runtime_honestly() {
+        let app = router(AppState::in_memory());
+        let token = signup_token(&app, "capnorun@b.com").await;
+
+        // No runtime wired -> honest 503, before any ownership check.
+        let (status, body) = body_json(
+            app.oneshot(req_json(
+                "POST",
+                "/api/allocations/whatever/session_token",
+                serde_json::json!({}),
+                &token,
+            ))
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["code"], "runtime_unavailable");
+    }
+
+    #[tokio::test]
+    async fn session_token_is_refused_for_an_allocation_the_caller_does_not_own() {
+        use spartan_cloud_runtime::DockerRuntime;
+        let docker = match bollard::Docker::connect_with_local_defaults() {
+            Ok(d) if d.ping().await.is_ok() => d,
+            _ => {
+                println!("SKIP: no Docker daemon; session_token ownership test skipped");
+                return;
+            }
+        };
+        let runtime = std::sync::Arc::new(DockerRuntime::with_docker(docker, "runc", true));
+        let app = router(AppState::in_memory().with_runtime(runtime.clone()));
+
+        // Alice allocates a real container.
+        let alice = signup_token(&app, "alice-cap@b.com").await;
+        let (_, alloc) = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/allocate",
+                    serde_json::json!({}),
+                    Some(&alice),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let id = alloc["id"].as_str().unwrap().to_string();
+
+        // Bob (a different tenant) is refused a session token for it.
+        let bob = signup_token(&app, "bob-cap@b.com").await;
+        let (status, body) = body_json(
+            app.clone()
+                .oneshot(req_json(
+                    "POST",
+                    &format!("/api/allocations/{id}/session_token"),
+                    serde_json::json!({}),
+                    &bob,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "cross-tenant token is denied"
+        );
+        assert_eq!(body["code"], "not_found");
+
+        // Alice herself is granted one for her own real allocation.
+        let (status, body) = body_json(
+            app.oneshot(req_json(
+                "POST",
+                &format!("/api/allocations/{id}/session_token"),
+                serde_json::json!({}),
+                &alice,
+            ))
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body["token"].as_str().unwrap().is_empty());
+
+        runtime
+            .stop(&spartan_cloud_protocol::AllocationId(id))
+            .await
+            .expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn exec_session_ws_runs_a_real_interactive_command_end_to_end() {
+        use futures_util::{SinkExt, StreamExt};
+        use spartan_cloud_protocol::{ExecSessionClientMessage, ExecSessionServerEvent};
+        use spartan_cloud_runtime::DockerRuntime;
+        use tokio_tungstenite::tungstenite::Message as TtMessage;
+
+        let docker = match bollard::Docker::connect_with_local_defaults() {
+            Ok(d) if d.ping().await.is_ok() => d,
+            _ => {
+                println!("SKIP: no Docker daemon; exec session WS test skipped");
+                return;
+            }
+        };
+        let runtime = std::sync::Arc::new(DockerRuntime::with_docker(docker, "runc", true));
+        let app = router(AppState::in_memory().with_runtime(runtime.clone()));
+
+        // Real REST setup: signup, allocate, mint a real capability token --
+        // all via `oneshot`, exactly like this file's other REST tests.
+        let token = signup_token(&app, "wsexec@b.com").await;
+        let (_, alloc) = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/allocate",
+                    serde_json::json!({}),
+                    Some(&token),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let id = alloc["id"].as_str().unwrap().to_string();
+
+        let (_, cap) = body_json(
+            app.clone()
+                .oneshot(req_json(
+                    "POST",
+                    &format!("/api/allocations/{id}/session_token"),
+                    serde_json::json!({}),
+                    &token,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let cap_token = cap["token"].as_str().unwrap().to_string();
+
+        // A WS upgrade needs a real HTTP/1.1 connection, unlike the REST
+        // tests' in-memory `oneshot` -- bind a real listener and serve.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("real bind");
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let ws_url = format!("ws://{addr}/api/allocations/{id}/session?token={cap_token}");
+        let (mut ws, _resp) = tokio_tungstenite::connect_async(&ws_url)
+            .await
+            .expect("a correctly-tokened WS upgrade must succeed");
+
+        // Send a real command; the container's real shell should echo it.
+        let msg = serde_json::to_string(&ExecSessionClientMessage::Input {
+            data: "echo hello-ws-exec\n".to_string(),
+        })
+        .unwrap();
+        ws.send(TtMessage::Text(msg)).await.unwrap();
+
+        let mut saw_it = false;
+        for _ in 0..30 {
+            let Ok(Some(Ok(TtMessage::Text(text)))) =
+                tokio::time::timeout(std::time::Duration::from_secs(3), ws.next()).await
+            else {
+                break;
+            };
+            if let Ok(ExecSessionServerEvent::Output { chunk }) = serde_json::from_str(&text) {
+                if chunk.contains("hello-ws-exec") {
+                    saw_it = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            saw_it,
+            "the real shell's echoed output must arrive over the WS session"
+        );
+        drop(ws);
+
+        // The SAME (now-consumed) capability token must be refused on replay
+        // -- single-use, not just short-lived.
+        let retry = tokio_tungstenite::connect_async(&ws_url).await;
+        assert!(
+            retry.is_err(),
+            "a capability token is single-use; replay must be rejected"
+        );
+
         runtime
             .stop(&spartan_cloud_protocol::AllocationId(id))
             .await

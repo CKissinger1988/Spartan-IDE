@@ -62,14 +62,15 @@ live daemon:
 - **`spartan-cloud-api`** — the axum control-plane server, **real and
   testable**: `POST /api/signup`, `POST /api/login`, `GET /api/me`,
   `POST /api/admin/grant_pro` (admin-only), `GET /api/admin/audit` (admin-only,
-  the newest 200 audit events), and `POST /api/allocate` (runs the real
+  the newest 200 audit events), `GET /api/admin/telemetry` (admin-only, a live
+  per-container `docker stats`-style memory/pids snapshot via bollard, 503
+  when no runtime is wired), and `POST /api/allocate` (runs the real
   entitlement → plan-limits → quota admission). Opaque bearer-token auth via a
   `FromRequestParts` extractor that looks up + expiry-checks the session per
   request. Env-driven admin bootstrap (`SPARTAN_CLOUD_ADMIN_EMAIL`/`_PASSWORD`),
   never a hardcoded credential. Security-relevant actions (signup, login,
-  **failed** login, grant_pro, allocate) are audited (writes soft-fail so an
-  audit error never aborts the real operation). 8 tests (tower `oneshot`), plus
-  a live over-the-socket smoke test.
+  **failed** login, grant_pro, allocate, exec, secret writes) are audited
+  (writes soft-fail so an audit error never aborts the real operation).
 
   When a runtime is wired (see below), `/api/allocate` creates a **real,
   resource-capped container** for the tenant and returns `201 CREATED` with
@@ -77,6 +78,35 @@ live daemon:
   with a runtime whose isolation is unverified it returns
   `503 isolation_unverified` — this crate never pretends to start a container
   it can't, and never runs tenant code against isolation it hasn't confirmed.
+
+  **Making an allocation usable.** `POST /api/allocations/:id/exec` runs a
+  one-shot argv command (never a shell string — no shell-injection surface)
+  in the caller's own allocation, owner-scoped in the runtime, returning
+  combined output + exit code. On top of that, a **real, streaming**
+  interactive session: `POST /api/allocations/:id/session_token` mints a
+  short-lived (60s), single-allocation-scoped `CapabilityToken` — ownership
+  is checked once, here, via the runtime's own `list_owned` — and
+  `GET /api/allocations/:id/session?token=...` upgrades to a real WebSocket
+  driving a real `docker exec -it`-equivalent shell. The capability token
+  (not the general bearer token, since a browser's native WebSocket API can't
+  set custom headers on the upgrade request) is **consumed on first use** —
+  removed from the in-memory map the moment it's validated — so a
+  leaked/replayed session URL is dead after its first successful connection.
+  The wire protocol (`ExecSessionClientMessage`/`ExecSessionServerEvent`,
+  in `spartan-cloud-protocol`) reuses `spartan-backend`'s own real idea of a
+  server sending unprompted named events (its `pty_output`/`pty_exit`) —
+  not its literal wire strings or any type import, `cloud/` still has zero
+  dependency on `spartan-backend` — expressed as fully-typed, tagged enums.
+  The **encrypted-at-rest secrets vault** (AES-256-GCM) is also real end to
+  end here: an owner-scoped REST surface — `PUT /api/secrets/:name`,
+  `GET /api/secrets` (names only), `DELETE /api/secrets/:name`. Values are
+  write-only over the API (never read back — a deliberate exposure-reducing
+  choice; the server uses them when provisioning).
+
+  16 tests (tower `oneshot` for the REST surface; a real bound-socket
+  end-to-end test drives the actual WebSocket upgrade and a real interactive
+  shell command, then confirms a replayed capability token is refused), plus
+  a live over-the-socket smoke test.
 
 - **`spartan-cloud-runtime`** — the `ContainerRuntime` async trait + a real
   **`DockerRuntime`** driver on `bollard`, **now wired into `/api/allocate`**.
@@ -98,10 +128,21 @@ live daemon:
     consumption". A managed container with a missing/unparseable deadline is
     reaped fail-safe. `main.rs` runs it on a 60-second background interval when
     a runtime is connected.
-  - 4 tests, including a **real create → status → count → stop lifecycle** and
-    a **real reaper test** (fresh container spared, past-deadline container
-    killed) against a live daemon (self-skips if none is reachable, mirroring
-    `spartan-devcontainer`'s `docker_integration.rs`).
+  - **Real exec, both shapes.** `exec_once` runs a one-shot command;
+    `spawn_interactive_exec` spawns a real, long-lived `docker exec -it`
+    session (a real pty, real stdin/stdout streaming, real resize) — the
+    streaming counterpart backing the API's own WS session endpoint. Both
+    share one `verify_owned` check: a container that doesn't exist, isn't
+    managed, or belongs to a different tenant is `RuntimeError::NotFound`,
+    deliberately indistinguishable from "doesn't exist" so this check can
+    never be used to probe another tenant's allocations.
+  - 7 tests, including a **real create → status → count → stop lifecycle**, a
+    **real reaper test** (fresh container spared, past-deadline container
+    killed), and a **real interactive session test** (a real shell echoes a
+    real command, a real resize succeeds, `on_exit` fires on real shell exit,
+    and a different tenant is denied) — all against a live daemon (self-skips
+    if none is reachable, mirroring `spartan-devcontainer`'s own
+    `docker_integration.rs`).
 
 ### gVisor go/no-go — result: **no-go in this nested sandbox; `runc` is the verified baseline here**
 
@@ -134,21 +175,18 @@ same trait — no API or domain-layer change needed.
    on a real KVM-capable target, flipping `isolation_verified` to `true` in a
    production deployment. The seam and the honest-default flag exist today.
 2. **WebAuthn admin auth** on the API (a defensive concept adapted from
-   `SpartanAI_Security_Core`, rebuilt safely), a monitoring-dashboard *UI* over
-   the already-real feeds (`GET /api/admin/audit` + `GET /api/admin/telemetry`,
-   the latter a live per-container `docker stats`-style memory/pids snapshot via
-   bollard, admin-only, 503 when no runtime is wired), surfaced with Track C's
-   status-reactive aesthetic, and a **streaming** per-container WS session
-   endpoint (the interactive counterpart to the one-shot exec that's now real:
-   `POST /api/allocations/:id/exec` runs an argv command in the caller's own
-   allocation, owner-scoped in the runtime so a tenant can only reach its own
-   container, and returns combined output + exit code). The encrypted-at-rest
-   secrets vault
-   (AES-256-GCM) is real end to end: `spartan-cloud-data` stores it and the API
-   exposes an owner-scoped REST surface — `PUT /api/secrets/:name`,
-   `GET /api/secrets` (names only), `DELETE /api/secrets/:name`. Values are
-   write-only over the API (never read back — a deliberate exposure-reducing
-   choice; the server uses them when provisioning).
+   `SpartanAI_Security_Core`, rebuilt safely) — deliberately not attempted:
+   this repo's own rule is never to claim something works without running it,
+   and there's no FIDO2 hardware in this environment to test against.
+3. **A monitoring-dashboard *UI*** over the already-real feeds
+   (`GET /api/admin/audit` + `GET /api/admin/telemetry`), surfaced with
+   Track C's status-reactive aesthetic — the data is real and live; there's no
+   front-end consuming it yet.
+
+Everything named in the plan's own "Explicitly deferred" list — real Stripe
+billing, multi-node routing, cross-region deployment, an egress-allowlist
+proxy, image/registry caching, org/team features — remains exactly that:
+deferred by explicit decision, not forgotten.
 
 ## Standing safety posture
 

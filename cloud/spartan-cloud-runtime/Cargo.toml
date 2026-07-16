@@ -19,7 +19,10 @@ edition = "2021"
 spartan-cloud-protocol = { path = "../spartan-cloud-protocol" }
 spartan-cloud-tenant = { path = "../spartan-cloud-tenant" }
 bollard = "0.18"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# sync: mpsc/oneshot channels backing ExecSessionHandle and the interactive
+# exec pump loop. io-util: AsyncWriteExt::write_all on the real exec stdin.
+# time: real bounded polling in the interactive-exec test.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "time"] }
 async-trait = "0.1"
 # Draining bollard's image-pull progress stream (create_image yields a stream
 # of progress events that must be consumed to completion for the pull to finish).
