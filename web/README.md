@@ -111,11 +111,21 @@ forked/vendored either) — see the root `CLAUDE.md`.
   starting `spartan-devserver --project-root:<a real temp git repo>` and
   driving the served app with Playwright staged a real modified file,
   committed it, and the resulting commit was independently confirmed via
-  `git log`/`git show` run directly against the repo on disk. **LSP, DAP,
-  and Leo remain unwired** — no analogous "which project root" gap exists
-  for them (they'd reuse the same `projectRoot`), but no UI or IPC wiring
-  for any of the three has been built here yet; this is real, separate,
-  unstarted follow-up work, the natural next increment.
+  `git log`/`git show` run directly against the repo on disk. **LSP is now
+  real in `spartan-backend` itself** (`open_file`/`edit`/`undo`/`redo`
+  spawn/drive a real language-server session and stream `lsp_diagnostics`/
+  `lsp_error` events, closing a gap that had existed in *both*
+  Electron-based shells since the pivot away from the wgpu reference
+  shell) — and `desktop/`'s own Editor now renders it live, since that
+  shell's file-open/edit path already goes through the backend's IPC
+  methods unconditionally. **This app does not yet benefit**, because its
+  own editing path is still File System Access + WASM, not the backend's
+  `open_file`/`edit` methods this new LSP wiring hangs off of — wiring
+  diagnostics in here means first giving this app a real "backend-mode"
+  editing path (routing file open/edit/save through `BackendClient` when
+  connected, the way `desktop/` already does unconditionally), a real,
+  separate, larger increment, not attempted in this pass. DAP and Leo
+  remain unwired in every shell.
 - **Git operates on the devserver's own project root, not necessarily the
   File System Access folder.** A real, named consequence of the above: the
   folder opened via "Open Folder…" (File System Access) and the directory
