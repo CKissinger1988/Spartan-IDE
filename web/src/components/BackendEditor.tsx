@@ -37,6 +37,53 @@ function worstSeverity(diags: LspDiagnostic[]): string {
   );
 }
 
+/** Real hover-request debounce, ported verbatim from
+ * `desktop/src/components/Editor.tsx` (task #134's own follow-up, task
+ * #135) -- matches how every real editor's own hover UX settles before
+ * firing a request, not on every raw mousemove pixel. */
+const HOVER_DELAY_MS = 400;
+
+/** Extracts real, displayable text from a real LSP `Hover` result's
+ * `contents` field, which the spec allows in three real shapes:
+ * `MarkupContent` (`{kind, value}`), a bare `MarkedString` (a plain
+ * string, or `{language, value}`), or an array of `MarkedString`. Returns
+ * `null` for a real, honest "no hover info here" (not every position has
+ * one -- whitespace, punctuation, an unresolvable symbol). Duplicated
+ * from `desktop/`'s own copy rather than imported -- two separate npm
+ * projects with no shared package between them, matching this file's
+ * own existing precedent for `LspDiagnostic`/`worstSeverity` above. */
+function extractHoverText(result: unknown): string | null {
+  if (!result || typeof result !== "object") return null;
+  const contents = (result as { contents?: unknown }).contents;
+  if (contents === null || contents === undefined) return null;
+  if (typeof contents === "string") return contents || null;
+  if (Array.isArray(contents)) {
+    const parts = contents
+      .map((c) => (typeof c === "string" ? c : ((c as { value?: string })?.value ?? "")))
+      .filter(Boolean);
+    return parts.length > 0 ? parts.join("\n\n") : null;
+  }
+  if (typeof contents === "object" && "value" in (contents as Record<string, unknown>)) {
+    const value = (contents as { value?: string }).value;
+    return value || null;
+  }
+  return null;
+}
+
+interface HoverState {
+  /** Viewport-relative coordinates (from the real triggering mouse
+   * event) -- paired with `position: fixed` CSS so this renders next to
+   * the cursor regardless of scroll position or DOM nesting. */
+  x: number;
+  y: number;
+  line: number;
+  character: number;
+  /** `null` while the real request is still in flight -- the tooltip
+   * itself only renders once real text has arrived, avoiding a flash of
+   * an empty box for the common "no hover info at this position" case. */
+  text: string | null;
+}
+
 interface BackendEditorProps {
   client: BackendClient;
   file: BackendOpenFile;
@@ -107,6 +154,84 @@ export default function BackendEditor({
   }, [diagnostics]);
 
   const breakpointSet = useMemo(() => new Set(breakpoints), [breakpoints]);
+
+  const [hoverState, setHoverState] = useState<HoverState | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Real, live LSP hover (task #135, the web/ half of task #134's own
+  // desktop-then-web follow-up) -- listens for this exact file's own
+  // `lsp_hover_result` events over the real `client.onEvent` subscription
+  // (the WebSocket-transport counterpart of `desktop/`'s
+  // `window.spartan.onEvent`). Self-contained to this component, matching
+  // `desktop/`'s own reasoning: a hover tooltip is purely ephemeral,
+  // position-driven UI feedback with no other real consumer.
+  useEffect(() => {
+    const unsubscribe = client.onEvent((e) => {
+      if (e.event !== "lsp_hover_result") return;
+      const d = e.data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      setHoverState((prev) => {
+        // A stale reply for a position the mouse has since moved away
+        // from (or a reply for a different file's own request that
+        // arrived late) -- ignored, not shown.
+        if (!prev || prev.line !== d.line || prev.character !== d.character) return prev;
+        const text = extractHoverText(d.result);
+        return text ? { ...prev, text } : null;
+      });
+    });
+    return unsubscribe;
+  }, [client, file.docId]);
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    };
+  }, []);
+
+  // Real monospace glyph width, measured once via a real canvas
+  // `measureText` call -- the only way to convert a raw pixel mouse
+  // position into an LSP-spec line/character position for a plain
+  // `<textarea>`, matching `desktop/`'s own identical technique (this
+  // file uses a fixed 13px font, unlike `desktop/`'s own configurable
+  // `prefs.fontSize`, since this component has no equivalent settings
+  // wiring yet -- `textStyle` below is likewise hardcoded).
+  const charWidth = useMemo(() => {
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return 13 * 0.6;
+    ctx.font = `13px "JetBrains Mono", monospace`;
+    return ctx.measureText("M").width || 13 * 0.6;
+  }, []);
+
+  const lineHeightPx = 20;
+
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLTextAreaElement>) => {
+      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+      setHoverState(null);
+      const el = textareaRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const x = e.clientX - rect.left + el.scrollLeft;
+      const y = e.clientY - rect.top + el.scrollTop;
+      const line = Math.max(0, Math.floor(y / lineHeightPx));
+      const character = Math.max(0, Math.round(x / charWidth));
+      const clientX = e.clientX;
+      const clientY = e.clientY;
+      hoverTimerRef.current = setTimeout(() => {
+        setHoverState({ x: clientX, y: clientY, line, character, text: null });
+        client
+          .call("lsp_hover", { doc_id: file.docId, line, character })
+          .catch((err: Error) => console.error("lsp_hover failed:", err));
+      }, HOVER_DELAY_MS);
+    },
+    [client, charWidth, file.docId]
+  );
+
+  const handleMouseLeave = useCallback(() => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    setHoverState(null);
+  }, []);
 
   const syncScroll = useCallback(() => {
     const el = textareaRef.current;
@@ -221,9 +346,19 @@ export default function BackendEditor({
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           onScroll={syncScroll}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
           style={textStyle}
         />
       </div>
+      {hoverState?.text && (
+        <div
+          className="editor-hover-tooltip mono"
+          style={{ left: hoverState.x + 12, top: hoverState.y + 16 }}
+        >
+          {hoverState.text}
+        </div>
+      )}
     </div>
   );
 }

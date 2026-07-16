@@ -3214,6 +3214,43 @@ first — it's the parity reference until each row there is actually reimplement
   this specific live verification (the underlying `request_hover`/`lsp_hover` code path is
   language-agnostic, but only pyright was exercised live here); the real Electron window remains
   unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — real LSP hover UI in `web/`'s `BackendEditor.tsx`, closing the
+  desktop-then-web follow-up the immediately preceding pass named (task #135)**: user-requested
+  ("Continue the road map"). Zero backend or protocol changes needed -- `spartan-devserver` already
+  falls every unrecognized method (including `lsp_hover`) through to `spartan_backend::
+  handle_request` unchanged, and `web/`'s `BackendClient` is already a fully generic
+  `call(method, params)`/`onEvent` client with no method allowlist -- so this closed as a pure
+  `web/`-side UI port, the same shape the immediately preceding DAP-for-`web/` pass (task #133)
+  already established. `BackendEditor.tsx` gained the identical `HOVER_DELAY_MS`/
+  `extractHoverText`/`HoverState` logic and `handleMouseMove`/`handleMouseLeave` handlers
+  `desktop/`'s `Editor.tsx` already has, reached over `BackendClient.onEvent`'s real single-object
+  `{event, data}` callback shape instead of Electron's `window.spartan.onEvent(event, data)`
+  two-argument one -- a real, mechanical signature difference caught immediately by `tsc`, not by
+  live testing, and fixed by matching `BackendClient`'s own existing `EventListener` type rather
+  than introducing a second shape. `web/src/app.css` gained the identical `.editor-hover-tooltip`
+  rule and `.editor-root`'s `position: relative`, both byte-identical to `desktop/`'s own copy. A
+  real, honest, named simplification versus `desktop/`'s version: this component has no
+  configurable-font-size settings wiring yet, so `charWidth`/`lineHeightPx` use a fixed 13px/20px
+  instead of reading `prefs.fontSize`, matching `textStyle`'s own pre-existing hardcoded values a
+  few lines below. **Real, live, end-to-end verification, not a mock** -- and a step up in fidelity
+  from `desktop/`'s own verification, which needed a `window.spartan` shim standing in for
+  Electron's unlaunchable `contextBridge`: `web/`'s own `App.tsx` genuinely auto-connects to a real
+  reachable `spartan-devserver` via `BackendClient.connect()`, so this pass's Playwright script
+  drove the actual, unmodified production code path with no shim of any kind. A real `spartan-
+  devserver` binary served `web/`'s actual production build (`web/dist`) against a real project-root
+  fixture; real Playwright/Chromium confirmed the toolbar's own "Connected to a local devserver"
+  message, opened a real `main.py` fixture through the real file tree, hovered over the real `int`
+  annotation, and after the real ~90s indexing wait plus the query's own round trip, a real tooltip
+  rendered pyright's exact live response, `"(class) int"`, screenshotted -- byte-identical to
+  `desktop/`'s own result for the same fixture, confirming the ported logic behaves identically
+  under the real WebSocket transport. Moving the mouse away correctly cleared it. `web/`'s own
+  `npm run typecheck` and `vite build` both clean; no Rust changes in this pass (the full 668-test
+  workspace suite from the immediately preceding pass is unaffected). **What this does not
+  confirm**: no completion/autocomplete UI in either shell (matches the still-unclosed gap named in
+  the immediately preceding pass); no hover for any language beyond Python in this specific live
+  verification, same as `desktop/`'s own; the real Electron window remains unlaunchable in this
+  session (unrelated to this pass -- `web/` itself needed no Electron at all, verified directly in
+  a real browser against a real devserver).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

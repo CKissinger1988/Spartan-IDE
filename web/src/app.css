@@ -356,6 +356,28 @@
 .editor-root {
   display: flex;
   height: 100%;
+  position: relative;
+}
+
+/* Real LSP hover tooltip (task #135, the web/ half of task #134's own
+ * desktop-then-web follow-up), byte-identical to desktop/'s own copy. */
+.editor-hover-tooltip {
+  position: fixed;
+  z-index: 50;
+  max-width: 480px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  pointer-events: none;
 }
 
 .editor-gutter {
