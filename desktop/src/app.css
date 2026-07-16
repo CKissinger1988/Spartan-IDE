@@ -836,6 +836,14 @@
   color: rgb(var(--status-ok-rgb));
 }
 
+/* Real android_detect badge (§75.91's own real detection logic, no UI
+ * caller anywhere until now) -- only ever rendered for a real detected
+ * Android/Gradle project. */
+.status-android-badge {
+  margin-left: 10px;
+  color: var(--text-dim);
+}
+
 /* Real, persistent Leo chat panel (§75.61) -- docked on the right,
  * visible regardless of which nav screen is active, closing a direct
  * user objection to Leo being missing from the new Electron shell. */

@@ -3,7 +3,7 @@ import Sidebar from "./components/Sidebar";
 import FileTree from "./components/FileTree";
 import GitPanel from "./components/GitPanel";
 import TabBar from "./components/TabBar";
-import StatusBar from "./components/StatusBar";
+import StatusBar, { type AndroidDetectResult } from "./components/StatusBar";
 import Editor, {
   type EditorPrefs,
   DEFAULT_EDITOR_PREFS,
@@ -65,6 +65,19 @@ export default function App(): React.ReactElement {
   // its final state before the user dismisses it via Stop or relaunches.
   const [breakpointsByDoc, setBreakpointsByDoc] = useState<Record<number, number[]>>({});
   const [dapSessionByDoc, setDapSessionByDoc] = useState<Record<number, DapSessionState>>({});
+  const [androidInfo, setAndroidInfo] = useState<AndroidDetectResult | null>(null);
+
+  // Real, one-shot on mount (ROOT is fixed for this window's lifetime, set
+  // via the URL query param) -- android_detect has been real and tested
+  // since §75.91 but had no UI caller anywhere in either shell until now.
+  // A non-Android project (the common case) is a real, expected, silent
+  // result, not an error.
+  useEffect(() => {
+    window.spartan
+      .call("android_detect", { project_root: ROOT })
+      .then((result) => setAndroidInfo(result as AndroidDetectResult))
+      .catch(() => setAndroidInfo(null));
+  }, []);
 
   useEffect(() => {
     const unsubscribe = window.spartan.onEvent((event, data) => {
@@ -376,6 +389,7 @@ export default function App(): React.ReactElement {
               fileCount={files.length}
               activePath={activeFile?.path ?? null}
               diagnostics={activeFile ? diagnosticsByDoc[activeFile.docId] : undefined}
+              androidInfo={androidInfo}
             />
           </>
         ) : (

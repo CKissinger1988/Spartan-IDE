@@ -1,6 +1,21 @@
 import React from "react";
 import type { LspDiagnostic } from "./Editor";
 
+/** Real shape of `spartan-backend`'s `android_detect` method (§75.91) --
+ * whether the open project root looks like an Android/Gradle project, plus
+ * whatever real Android SDK/Gradle toolchain paths were found on `$PATH`/
+ * `$ANDROID_HOME`, independent of that project check. */
+export interface AndroidDetectResult {
+  isAndroidProject: boolean;
+  sdkRoot: string | null;
+  adbPath: string | null;
+  emulatorPath: string | null;
+  sdkmanagerPath: string | null;
+  avdmanagerPath: string | null;
+  gradlePath: string | null;
+  gradleVersion: string | null;
+}
+
 interface StatusBarProps {
   fileCount: number;
   activePath: string | null;
@@ -9,12 +24,18 @@ interface StatusBarProps {
    * (no server configured, no project root found), rendered differently
    * from a real, genuinely clean file (an empty array). */
   diagnostics?: LspDiagnostic[];
+  /** Real, one-shot `android_detect` result for the open project root, or
+   * `null` before it resolves / on a real non-Android project. Only ever
+   * renders a badge when `isAndroidProject` is true -- a non-Android
+   * project (the common case) shows nothing extra. */
+  androidInfo?: AndroidDetectResult | null;
 }
 
 export default function StatusBar({
   fileCount,
   activePath,
   diagnostics,
+  androidInfo,
 }: StatusBarProps): React.ReactElement {
   const ext = activePath?.split(".").pop() ?? "";
   const errorCount = diagnostics?.filter((d) => d.severity === "error").length ?? 0;
@@ -37,6 +58,18 @@ export default function StatusBar({
           {errorCount > 0 && <span className="status-lsp-errors">⛔ {errorCount}</span>}
           {warningCount > 0 && <span className="status-lsp-warnings">⚠ {warningCount}</span>}
           {errorCount === 0 && warningCount === 0 && <span className="status-lsp-clean">✓ LSP</span>}
+        </span>
+      )}
+      {androidInfo?.isAndroidProject && (
+        <span
+          className="status-android-badge"
+          title={`Gradle: ${androidInfo.gradlePath ?? "not found"}${
+            androidInfo.gradleVersion ? ` (${androidInfo.gradleVersion})` : ""
+          } | SDK: ${androidInfo.sdkRoot ?? "not found"} | adb: ${
+            androidInfo.adbPath ?? "not found"
+          }`}
+        >
+          🤖 Android
         </span>
       )}
     </div>

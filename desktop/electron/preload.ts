@@ -47,6 +47,7 @@ const ALLOWED_METHODS = new Set([
   "settings_set",
   "check_for_updates",
   "model_status",
+  "android_detect",
   "crash_reports_list",
   "crash_report_upload",
   "create_project",

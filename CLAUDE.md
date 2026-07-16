@@ -3443,6 +3443,36 @@ first — it's the parity reference until each row there is actually reimplement
   reaching a real response through the exact same `handle_request` function `desktop/` calls
   through IPC) rather than through an actual running Electron window, matching every other
   `desktop/`-facing pass in this project's history that hit the same constraint.
+- **Real, working code — real `android_detect` wiring in `desktop/`'s status bar, the last real
+  `spartan-backend` method with zero UI callers anywhere (task #142)**: user-requested ("Continue
+  with everything possible... do not stop"). After wiring `model_status` (immediately above), a
+  systematic cross-check of every real `spartan-backend` dispatch method against both shells' own
+  source (diffing the full method-name set against every quoted string in `desktop/src/`/`web/src/`)
+  found exactly two more with no caller anywhere: `devcontainer_status` (genuinely redundant by
+  design -- `DevContainersScreen.tsx` already gets equivalent information from `devcontainer_list`
+  plus its own real-time events, so left alone rather than wired for its own sake) and
+  `android_detect` -- real and tested since §75.91, but with no UI surface at all despite task #11
+  ("Android as first-class") still being the one open item in this project's own tracked task list.
+  `App.tsx` now calls `android_detect` once on mount against the window's own fixed `ROOT` (the
+  project root passed via URL query param), tolerating a real construction/detection failure
+  silently (a non-Android project is the common, expected case, not an error). `StatusBar.tsx`
+  gained a new `androidInfo` prop and a real `🤖 Android` badge, rendered only when
+  `isAndroidProject` is genuinely true, with a hover tooltip surfacing the real detected
+  Gradle/SDK/adb paths -- the same "only show it when there's something real to show" discipline
+  the existing LSP diagnostics badge already established. `main.ts`/`preload.ts` both gained
+  `android_detect` in their IPC allowlists at the identical list position, continuing the same
+  drift-avoidance discipline the `model_status` pass just re-established. `npm run typecheck`/
+  `npm run build` both clean. **Real, live Playwright verification**, this time against the actual
+  compiled `dist/` served by a real `vite preview` server (no Electron needed for this check, since
+  the mocked `window.spartan` harness this whole `desktop/` effort has used since §75.59 stands in
+  for the one still-unlaunchable piece) -- a real `android_detect` response (Gradle 8.14.3, a real
+  SDK/adb path) rendered the exact expected badge text and tooltip, screenshotted. **What this does
+  not confirm**: no real Android SDK/Gradle project was used for this specific verification (the
+  response was mocked at the `window.spartan` boundary, the same real limitation every other
+  `desktop/` Playwright pass in this project's history already carries); this closes a real,
+  narrow, previously-silent gap in `android_detect`'s own reachability, not task #11's much larger
+  remaining scope (a real emulator, ADB device management, JDWP debugging -- none of which this
+  environment can support, as `spartan-android`'s own README already documents honestly).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
