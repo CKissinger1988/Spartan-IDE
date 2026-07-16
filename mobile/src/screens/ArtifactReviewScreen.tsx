@@ -9,7 +9,7 @@ import { DiffLineType, parseDiff } from '../lib/diffHighlight';
 import { localModelClient } from '../lib/localModel';
 import { RootStackParamList } from '../navigation/types';
 import { useTheme } from '../ThemeContext';
-import { MONO_FONT_FAMILY, ThemeColors } from '../theme';
+import { hologramSurface, MONO_FONT_FAMILY, ThemeColors } from '../theme';
 import { Artifact, ArtifactComment } from '../types/domain';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ArtifactReview'>;
@@ -267,9 +267,10 @@ function makeStyles(colors: ThemeColors) {
     },
     fileBlock: {
       marginTop: 16,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
-      borderRadius: 8,
+      // Track C holographic glass-card treatment (accent edge + soft glow);
+      // the diff content clips to the rounded corners while the glow renders
+      // outside the bounds.
+      ...hologramSurface(colors),
       overflow: 'hidden',
     },
     filePath: {

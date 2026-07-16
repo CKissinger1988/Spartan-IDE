@@ -91,6 +91,29 @@ export const C_LIGHT = {
 export type ThemeColors = Record<keyof typeof C_DARK, string>;
 export type ThemeMode = 'dark' | 'light';
 
+/** Track C holographic "glass card" treatment for mobile, as a reusable style
+ * fragment screens spread into their own card/panel surfaces (the RN
+ * counterpart of desktop/web's `.glass-hologram` utility). Brand-colored: a
+ * translucent-over-surface fill with an accent (blue) hairline edge and a soft
+ * accent glow. **Honest limitation, matching the wgpu shell's own**: React
+ * Native has no `backdrop-filter`, so this is a translucent surface + accent
+ * edge + glow, NOT a true backdrop blur (that would need a native `expo-blur`
+ * BlurView and a custom dev build). `shadowColor` works on iOS and Android 9+;
+ * `elevation` is the Android fallback. */
+export function hologramSurface(colors: ThemeColors) {
+  return {
+    backgroundColor: colors.s2,
+    borderWidth: 1,
+    borderColor: colors.accentBorder,
+    borderRadius: 10,
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 0 },
+    shadowRadius: 10,
+    shadowOpacity: 0.25,
+    elevation: 4,
+  } as const;
+}
+
 /** Real, non-negotiable default -- `SpartanDark` is this app's own
  * already-shipped, only-ever-tested palette (`userInterfaceStyle: "dark"`
  * in `app.json`), so every existing install looks unchanged until a user
