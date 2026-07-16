@@ -55,12 +55,20 @@ function normalizeHfRepoInput(input: string): string {
 /**
  * Real Model Management panel -- the first UI surface for the real Track A
  * devserver-only methods (`model_status`, `litellm_proxy_start`/`_stop`/
- * `_status`, `hf_list_models`/`hf_pull_model`) that have had zero callers
- * anywhere in either shell since they landed (tasks #128, #138, #139). A
- * direct sibling of `GitPanel.tsx`'s own shape -- one `BackendClient`,
- * `.call()`ed directly, `.onEvent()` subscribed for the async litellm/HF
+ * `_status`, `hf_list_models`/`hf_pull_model`, `lmstudio_list_models`/
+ * `lmstudio_pull_model`) that have had zero callers anywhere in either
+ * shell since they landed (tasks #128, #138, #139, #144). A direct sibling
+ * of `GitPanel.tsx`'s own shape -- one `BackendClient`, `.call()`ed
+ * directly, `.onEvent()` subscribed for the async litellm/HF/LM Studio
  * progress events, no new protocol needed since `spartan-devserver`'s
  * dispatcher already answers every one of these methods for real.
+ *
+ * The Ollama (HF) and LM Studio sections share the exact same real,
+ * individually-verified curated model list (`hf_list_models`/
+ * `lmstudio_list_models` both ultimately read `hf_downloader::
+ * CURATED_MODELS`) -- one real source of truth for "top-rated coding
+ * models," driven through two different local backends, rather than two
+ * lists a user has to reconcile themselves.
  *
  * These methods only exist on `spartan-devserver`'s own wrapping
  * dispatcher (not `spartan-backend`'s), so this panel is real and reachable
@@ -85,6 +93,20 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
   const [customRepo, setCustomRepo] = useState("");
   const [customTag, setCustomTag] = useState("Q4_K_M");
   const [customFormError, setCustomFormError] = useState<string | null>(null);
+
+  // LM Studio's own pull states are kept in a *separate* map from Ollama's
+  // above -- both backends' event_id shape is deliberately identical
+  // (`<repo>:<tag>` for a custom pull, the curated `model.id` otherwise),
+  // so sharing one map would let an Ollama pull and an LM Studio pull of
+  // the exact same curated model silently clobber each other's status.
+  const [lmModels, setLmModels] = useState<HfModel[]>([]);
+  const [lmError, setLmError] = useState<string | null>(null);
+  const [lmAvailable, setLmAvailable] = useState<boolean | null>(null);
+  const [lmPullStates, setLmPullStates] = useState<Record<string, PullState>>({});
+
+  const [customLmRepo, setCustomLmRepo] = useState("");
+  const [customLmTag, setCustomLmTag] = useState("Q4_K_M");
+  const [customLmFormError, setCustomLmFormError] = useState<string | null>(null);
 
   const refreshModelStatus = useCallback(() => {
     client
@@ -113,11 +135,24 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
       .catch((e: Error) => setHfError(e.message));
   }, [client]);
 
+  const refreshLmStudioModels = useCallback(() => {
+    client
+      .call("lmstudio_list_models")
+      .then((result) => {
+        const r = result as { models: HfModel[]; lms_available: boolean };
+        setLmModels(r.models);
+        setLmAvailable(r.lms_available);
+        setLmError(null);
+      })
+      .catch((e: Error) => setLmError(e.message));
+  }, [client]);
+
   useEffect(() => {
     refreshModelStatus();
     refreshLitellmStatus();
     refreshHfModels();
-  }, [refreshModelStatus, refreshLitellmStatus, refreshHfModels]);
+    refreshLmStudioModels();
+  }, [refreshModelStatus, refreshLitellmStatus, refreshHfModels, refreshLmStudioModels]);
 
   useEffect(() => {
     return client.onEvent((e) => {
@@ -146,6 +181,19 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
       } else if (e.event === "hf_pull_failed") {
         const { model_id, error } = e.data as { model_id: string; error: string };
         setPullStates((prev) => ({ ...prev, [model_id]: { phase: "failed", error } }));
+      } else if (e.event === "lmstudio_pull_progress") {
+        const { model_id, line } = e.data as { model_id: string; line: string };
+        setLmPullStates((prev) => {
+          const existing = prev[model_id];
+          const lines = existing?.phase === "pulling" ? existing.lines : [];
+          return { ...prev, [model_id]: { phase: "pulling", lines: [...lines.slice(-49), line] } };
+        });
+      } else if (e.event === "lmstudio_pull_ready") {
+        const { model_id } = e.data as { model_id: string };
+        setLmPullStates((prev) => ({ ...prev, [model_id]: { phase: "ready" } }));
+      } else if (e.event === "lmstudio_pull_failed") {
+        const { model_id, error } = e.data as { model_id: string; error: string };
+        setLmPullStates((prev) => ({ ...prev, [model_id]: { phase: "failed", error } }));
       }
     });
   }, [client, refreshLitellmStatus]);
@@ -212,6 +260,41 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
       setPullStates((prev) => ({ ...prev, [key]: { phase: "failed", error: e.message } }));
     });
   }, [client, customRepo, customTag]);
+
+  /**
+   * LM Studio's own curated-pull path -- the direct sibling of `pullModel`,
+   * calling `lmstudio_pull_model` (driving `lms get`) instead of
+   * `hf_pull_model` (driving `ollama pull`), writing into the separate
+   * `lmPullStates` map so it can never collide with an Ollama pull of the
+   * same curated model.
+   */
+  const pullLmModel = useCallback(
+    (modelId: string) => {
+      setLmPullStates((prev) => ({ ...prev, [modelId]: { phase: "pulling", lines: [] } }));
+      client.call("lmstudio_pull_model", { model_id: modelId }).catch((e: Error) => {
+        setLmPullStates((prev) => ({ ...prev, [modelId]: { phase: "failed", error: e.message } }));
+      });
+    },
+    [client]
+  );
+
+  /** The LM Studio sibling of `pullCustomModel` -- same real "user defined
+   * model download links" mechanism, driving `lmstudio_pull_model` instead
+   * of `hf_pull_model`. */
+  const pullCustomLmModel = useCallback(() => {
+    const repo = customLmRepo.trim();
+    const tag = customLmTag.trim();
+    if (!repo || !tag) {
+      setCustomLmFormError("enter both a repo (org/name or a pasted HF link) and a quant tag");
+      return;
+    }
+    const key = `${normalizeHfRepoInput(repo)}:${tag}`;
+    setCustomLmFormError(null);
+    setLmPullStates((prev) => ({ ...prev, [key]: { phase: "pulling", lines: [] } }));
+    client.call("lmstudio_pull_model", { hf_repo: repo, tag }).catch((e: Error) => {
+      setLmPullStates((prev) => ({ ...prev, [key]: { phase: "failed", error: e.message } }));
+    });
+  }, [client, customLmRepo, customLmTag]);
 
   return (
     <div className="git-panel">
@@ -361,6 +444,149 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
           {(() => {
             const key = `${normalizeHfRepoInput(customRepo)}:${customTag.trim()}`;
             const state = pullStates[key];
+            if (!state || state.phase === "idle") return null;
+            return (
+              <div style={{ marginTop: 4 }}>
+                {state.phase === "ready" && (
+                  <span className="mono" style={{ fontSize: 10.5, color: "var(--accent)" }}>
+                    ✓ ready
+                  </span>
+                )}
+                {state.phase === "failed" && (
+                  <span className="mono" style={{ fontSize: 10.5, color: "#e05a4a" }}>
+                    {state.error}
+                  </span>
+                )}
+                {state.phase === "pulling" && state.lines.length > 0 && (
+                  <pre
+                    className="mono"
+                    style={{ fontSize: 10, maxHeight: 80, overflowY: "auto", margin: "3px 0 0" }}
+                  >
+                    {state.lines.join("\n")}
+                  </pre>
+                )}
+              </div>
+            );
+          })()}
+        </div>
+      </div>
+
+      <div className="git-section-label mono">LM Studio Models</div>
+      <div className="git-section">
+        {lmError && <div className="git-panel-empty mono">{lmError}</div>}
+        {lmAvailable !== null && (
+          <div
+            className="mono"
+            style={{
+              fontSize: 10.5,
+              padding: "4px 4px",
+              color: lmAvailable ? "var(--accent)" : "var(--text-dim)",
+            }}
+          >
+            {lmAvailable
+              ? "✓ LM Studio detected — pulls run through its bundled lms CLI, no setup needed."
+              : "LM Studio not detected. Install it from lmstudio.ai and open it once — lms " +
+                "ships bundled, no PATH setup required, then Pull below will work."}
+          </div>
+        )}
+        {lmModels.map((model) => {
+          const state = lmPullStates[model.id] ?? { phase: "idle" as const };
+          return (
+            <div
+              key={model.id}
+              style={{ padding: "4px 4px", borderBottom: "1px solid var(--border)" }}
+            >
+              <div className="mono" style={{ fontSize: 12 }}>
+                {model.display_name}
+              </div>
+              <div className="mono" style={{ fontSize: 10.5, color: "var(--text-dim)" }}>
+                {model.description}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
+                <button
+                  className="git-commit-button"
+                  disabled={state.phase === "pulling"}
+                  onClick={() => pullLmModel(model.id)}
+                >
+                  {state.phase === "pulling"
+                    ? "Pulling…"
+                    : state.phase === "ready"
+                      ? "Pull again"
+                      : "Pull"}
+                </button>
+                {state.phase === "ready" && (
+                  <span className="mono" style={{ fontSize: 10.5, color: "var(--accent)" }}>
+                    ✓ ready
+                  </span>
+                )}
+                {state.phase === "failed" && (
+                  <span className="mono" style={{ fontSize: 10.5, color: "#e05a4a" }}>
+                    {state.error}
+                  </span>
+                )}
+              </div>
+              {state.phase === "pulling" && state.lines.length > 0 && (
+                <pre
+                  className="mono"
+                  style={{ fontSize: 10, maxHeight: 80, overflowY: "auto", margin: "3px 0 0" }}
+                >
+                  {state.lines.join("\n")}
+                </pre>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="git-section-label mono">
+        Custom LM Studio Model Link (any public HF GGUF repo)
+      </div>
+      <div className="git-section">
+        <div style={{ padding: "4px 4px" }}>
+          <div
+            className="mono"
+            style={{ fontSize: 10.5, color: "var(--text-dim)", marginBottom: 4 }}
+          >
+            Same repo/tag format as above -- pulled through LM Studio's own <code>lms</code>{" "}
+            CLI instead of Ollama.
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <input
+              className="git-commit-input mono"
+              style={{ minHeight: 0, flex: 2, minWidth: 180, resize: "none" }}
+              value={customLmRepo}
+              onChange={(e) => setCustomLmRepo(e.target.value)}
+              placeholder="org/name-GGUF or https://huggingface.co/org/name-GGUF"
+            />
+            <input
+              className="git-commit-input mono"
+              style={{ minHeight: 0, flex: 1, minWidth: 80, resize: "none" }}
+              value={customLmTag}
+              onChange={(e) => setCustomLmTag(e.target.value)}
+              placeholder="Q4_K_M"
+            />
+            <button
+              className="git-commit-button"
+              disabled={
+                lmPullStates[`${normalizeHfRepoInput(customLmRepo)}:${customLmTag.trim()}`]
+                  ?.phase === "pulling"
+              }
+              onClick={pullCustomLmModel}
+            >
+              {lmPullStates[`${normalizeHfRepoInput(customLmRepo)}:${customLmTag.trim()}`]
+                ?.phase === "pulling"
+                ? "Pulling…"
+                : "Pull"}
+            </button>
+          </div>
+          {customLmFormError && (
+            <div className="git-panel-empty mono" style={{ marginTop: 4 }}>
+              {customLmFormError}
+            </div>
+          )}
+          {(() => {
+            const key = `${normalizeHfRepoInput(customLmRepo)}:${customLmTag.trim()}`;
+            const state = lmPullStates[key];
             if (!state || state.phase === "idle") return null;
             return (
               <div style={{ marginTop: 4 }}>

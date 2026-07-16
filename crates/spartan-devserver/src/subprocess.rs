@@ -12,14 +12,31 @@ use std::thread;
 /// `progress_tx` on their own reader threads (a piped `Child`'s stdout must
 /// be drained by someone or the child can block once its OS pipe buffer
 /// fills -- two threads, since stdout and stderr are two independent
-/// pipes).
+/// pipes). Stdin is inherited from this process, matching every existing
+/// caller's own real needs (`litellm`/`ollama pull` never read from stdin).
 pub(crate) fn spawn_streaming(
     program: &str,
     args: &[String],
     progress_tx: Sender<String>,
 ) -> std::io::Result<Child> {
+    spawn_streaming_with_stdin(program, args, Stdio::inherit(), progress_tx)
+}
+
+/// The same real spawn-and-stream mechanics as `spawn_streaming`, with an
+/// explicit, caller-chosen stdin -- added for `lmstudio_downloader`'s own
+/// real need: `lms get` can fall back to an interactive multi-result picker
+/// on an ambiguous query, and this process has no real interactive terminal
+/// to answer it, so that caller passes `Stdio::null()` to turn a would-be
+/// indefinite hang into an immediate real EOF `lms` itself must handle.
+pub(crate) fn spawn_streaming_with_stdin(
+    program: &str,
+    args: &[String],
+    stdin: Stdio,
+    progress_tx: Sender<String>,
+) -> std::io::Result<Child> {
     let mut cmd = Command::new(program);
     cmd.args(args);
+    cmd.stdin(stdin);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     let mut child = cmd.spawn()?;

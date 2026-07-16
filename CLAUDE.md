@@ -3545,6 +3545,68 @@ first — it's the parity reference until each row there is actually reimplement
   search API integration (the list is still curated/fixed, now much broader, not dynamically
   fetched); no equivalent custom-link UI in `desktop/` (matches task #140's own already-documented
   platform-scope limit -- `desktop/` has no `spartan-devserver` connection at all).
+- **Real, working code — a real Hugging Face -> LM Studio model downloader, driving LM Studio's
+  own bundled `lms` CLI, closing the user's follow-up request (task #144)**: user-requested
+  directly ("Create the LM Studio downloader and make everything as simple to set up and use as
+  possible"), immediately after the same user asked whether HF models could be pulled into LM
+  Studio and LiteLLM. **Real syntax research came first, not assumption**: LM Studio's own real
+  CLI docs (`lmstudio.ai/docs/cli/get`) and a real web search of `huggingface.co/blog/yagilb/
+  lms-hf` confirmed `lms get <owner>/<repo>[@<quant>]` -- a full HF repo id plus an `@`-qualified
+  quant tag -- is LM Studio's own real, documented, non-interactive download mechanism (an exact
+  match auto-downloads with no prompt; only an ambiguous query falls back to an interactive
+  picker), and that `lms` itself ships bundled with LM Studio at a real, documented default path
+  (`~/.lmstudio/bin/lms` on Linux/macOS) independent of `$PATH`. New `crates/spartan-devserver/
+  src/lmstudio_downloader.rs` **deliberately reuses `hf_downloader::CURATED_MODELS` verbatim**
+  rather than maintaining a second curated list -- the identical, already-individually-HF-API-
+  verified repo/tag data, just handed to a different local CLI (`lms get <repo>@<tag>` instead of
+  `ollama pull hf.co/<repo>:<tag>`), directly serving "as simple to set up and use as possible":
+  one real source of truth, not two lists to reconcile. `locate_lms_binary()` checks `$PATH` first,
+  then the real well-known bundled-install path, so a user who has installed and opened LM Studio
+  once needs zero manual configuration -- matching the same request literally. `custom_pull_query`
+  reuses `hf_downloader`'s own already-tested `normalize_hf_repo_input`/`validate_custom_repo_and_
+  tag` rather than a parallel validation implementation. **A real, deliberate defensive design
+  choice, not incidental**: `spawn_pull_query` pipes stdin as `Stdio::null()` (a new `subprocess::
+  spawn_streaming_with_stdin`, with the existing `spawn_streaming` becoming a thin wrapper passing
+  `Stdio::inherit()` -- byte-identical behavior for `litellm_proxy`'s/`hf_downloader`'s own
+  existing callers, re-confirmed by their own unmodified tests still passing) -- a defense against
+  `lms`'s own documented interactive-picker fallback on an ambiguous query, which this headless
+  caller could never answer; turns a would-be indefinite hang into an immediate real EOF `lms`
+  itself must handle. `spartan-devserver` gained `lmstudio_list_models` (the same curated list plus
+  a real `lms_available` flag, so the UI can show a correct "detected"/"not detected" state before
+  a click) and `lmstudio_pull_model` (`model_id` or `hf_repo`+`tag`, identical async ack-then-event
+  shape to `hf_pull_model` -- `lmstudio_pull_progress`/`_ready`/`_failed`), via a new
+  `resolve_lmstudio_pull_query` mirroring `resolve_hf_pull_target` exactly. 15 new Rust tests (9 in
+  `lmstudio_downloader`, 6 dispatch-level in `lib.rs`), 61 tests total in this crate (up from 46),
+  full workspace `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/
+  `cargo test --workspace --release` clean. `web/`'s `ModelsPanel.tsx` gained a real "LM Studio
+  Models" section (the shared curated list, a live "✓ LM Studio detected" / "not detected --
+  install it from lmstudio.ai and open it once, no extra setup needed" status line) plus its own
+  "Custom LM Studio Model Link" form -- **a real, deliberately separate `lmPullStates` map**, not
+  reusing the Ollama section's `pullStates`: since both backends' real event-id shape is
+  intentionally identical (`<repo>:<tag>`/curated id) for UI-key-matching consistency, sharing one
+  map would let an Ollama pull and an LM Studio pull of the same curated model silently clobber
+  each other's displayed status. `web/`'s own `npm run typecheck`/`npm run build` both clean. **A
+  real, honest, unavoidable environment limitation, stated in the module's own doc comment, not
+  glossed over**: unlike `ollama`/`litellm`/`docker`, LM Studio is a GUI-only desktop application
+  with no headless mode, so this sandboxed environment can never install and run a real `lms`
+  binary to verify against -- confirmed directly (`which lms` finds nothing, no npm/pip package
+  provides it). **Real, live, end-to-end Playwright verification against the actual compiled
+  `web/dist` served by a real running `spartan-devserver` binary** (not a mock): the LM Studio
+  section rendered with the identical curated list already shown in the Ollama section (spot-
+  checked models found in both); the real, honest "LM Studio not detected" status rendered
+  correctly; clicking Pull on a curated model reached the real backend and surfaced the exact real
+  `` `lms` wasn't found... `` error (never a params error); the empty custom-link form showed the
+  real client-side validation error; a real repo+tag submitted through the custom form (Yi Coder
+  9B, deliberately exercised via the custom path rather than its own curated Pull button) reached
+  the real backend without hitting a curated-only error path -- all screenshotted. **What this does
+  not confirm**: no real `lms get` invocation was ever exercised against an actual LM Studio
+  install (the environment limitation above); no equivalent UI in `desktop/` (matches the same
+  platform-scope limit `hf_downloader`'s own UI already carries -- `desktop/` has no
+  `spartan-devserver` connection at all); no LiteLLM -> Hugging Face routing was built this pass
+  (LiteLLM doesn't download/pull models at all -- it's a routing proxy; using it with an HF model
+  means either HF's own hosted Inference API/Endpoints or routing to a local server like Ollama/LM
+  Studio that already has the model, a real, different mechanism from "downloading," out of this
+  pass's own scope).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
