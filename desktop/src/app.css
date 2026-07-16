@@ -516,6 +516,38 @@
   user-select: none;
 }
 
+/* Real LSP diagnostics (spartan-backend's own lsp_diagnostics events,
+ * wired here for the first time) -- one real block per line (replacing
+ * the previous single newline-joined text blob) so each row can carry
+ * its own severity-tinted background + a real hover tooltip listing the
+ * diagnostic message(s) on that line. Line-height/font-size are
+ * inherited from `.editor-gutter`'s own inline `textStyle`, not
+ * redeclared per row. */
+.editor-gutter-line {
+  padding-right: 2px;
+  box-sizing: border-box;
+}
+
+.editor-gutter-line-error {
+  background: rgba(var(--status-critical-rgb), 0.16);
+  color: rgb(var(--status-critical-rgb));
+  box-shadow: inset 2px 0 0 rgb(var(--status-critical-rgb));
+}
+
+.editor-gutter-line-warning {
+  background: rgba(var(--status-warning-rgb), 0.14);
+  color: rgb(var(--status-warning-rgb));
+  box-shadow: inset 2px 0 0 rgb(var(--status-warning-rgb));
+}
+
+.editor-gutter-line-info,
+.editor-gutter-line-hint,
+.editor-gutter-line-diagnostic {
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 /* Real syntax highlighting overlay (§75.62/§75.63) -- the highlight
  * layer and the textarea share one pixel-identical font/padding/
  * line-height box, stacked via `position: absolute`, so real
@@ -582,6 +614,26 @@
   color: var(--text-dim);
   font-size: 11px;
   flex-shrink: 0;
+}
+
+/* Real, live LSP diagnostic summary for the active file (backend
+ * lsp_diagnostics events, wired here for the first time). */
+.status-lsp-summary {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+}
+
+.status-lsp-errors {
+  color: rgb(var(--status-critical-rgb));
+}
+
+.status-lsp-warnings {
+  color: rgb(var(--status-warning-rgb));
+}
+
+.status-lsp-clean {
+  color: rgb(var(--status-ok-rgb));
 }
 
 /* Real, persistent Leo chat panel (§75.61) -- docked on the right,

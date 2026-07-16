@@ -8,6 +8,34 @@ export interface OpenFile {
   dirty: boolean;
 }
 
+/** Mirrors `spartan_lsp::LspDiagnostic`'s real, unmodified serde field
+ * names (no `rename_all` on the Rust side, so these are exactly what
+ * arrives over the wire in a real `lsp_diagnostics` event). `line`/
+ * `character` are real LSP-spec 0-indexed positions. */
+export interface LspDiagnostic {
+  severity: "error" | "warning" | "info" | "hint" | "diagnostic";
+  line: number;
+  character: number;
+  end_line: number;
+  end_character: number;
+  message: string;
+}
+
+const SEVERITY_RANK: Record<string, number> = {
+  error: 0,
+  warning: 1,
+  info: 2,
+  hint: 3,
+  diagnostic: 4,
+};
+
+function worstSeverity(diags: LspDiagnostic[]): string {
+  return diags.reduce(
+    (worst, d) => (SEVERITY_RANK[d.severity] < SEVERITY_RANK[worst] ? d.severity : worst),
+    diags[0].severity
+  );
+}
+
 export interface EditorPrefs {
   fontSize: number;
   tabSize: number;
@@ -29,6 +57,11 @@ interface EditorProps {
    * doesn't need a parent to supply it.
    */
   prefs?: EditorPrefs;
+  /** Real, live LSP diagnostics for this exact open file (already
+   * filtered by `doc_id` upstream in `App.tsx`) -- absent/empty is a
+   * completely normal state (no LSP configured for this language, no
+   * project root found, or a genuinely clean file), never an error. */
+  diagnostics?: LspDiagnostic[];
 }
 
 /**
@@ -66,6 +99,7 @@ export default function Editor({
   file,
   onContentChange,
   prefs = DEFAULT_EDITOR_PREFS,
+  diagnostics = [],
 }: EditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
@@ -82,6 +116,16 @@ export default function Editor({
     () => highlightSource(file.content, file.path),
     [file.content, file.path]
   );
+
+  const diagnosticsByLine = useMemo(() => {
+    const map = new Map<number, LspDiagnostic[]>();
+    for (const d of diagnostics) {
+      const list = map.get(d.line) ?? [];
+      list.push(d);
+      map.set(d.line, list);
+    }
+    return map;
+  }, [diagnostics]);
 
   const syncScroll = useCallback(() => {
     const el = textareaRef.current;
@@ -161,7 +205,7 @@ export default function Editor({
     [file.docId, file.path, onContentChange, prefs.tabSize]
   );
 
-  const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1).join("\n");
+  const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1);
 
   // Real §75.76 editor preferences applied as inline overrides -- the
   // highlight layer and textarea must stay pixel-identical to each other
@@ -178,7 +222,22 @@ export default function Editor({
   return (
     <div className="editor-root">
       <div className="editor-gutter mono" ref={gutterRef} style={textStyle}>
-        {lineNumbers}
+        {lineNumbers.map((n) => {
+          // Real LSP positions are 0-indexed; `n` (the displayed line
+          // number) is 1-indexed, matching every other real line-number
+          // convention in this codebase.
+          const lineDiags = diagnosticsByLine.get(n - 1);
+          const severity = lineDiags ? worstSeverity(lineDiags) : null;
+          return (
+            <div
+              key={n}
+              className={`editor-gutter-line${severity ? ` editor-gutter-line-${severity}` : ""}`}
+              title={lineDiags?.map((d) => `${d.severity}: ${d.message}`).join("\n")}
+            >
+              {n}
+            </div>
+          );
+        })}
       </div>
       <div className="editor-text-wrap">
         <pre

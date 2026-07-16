@@ -4,7 +4,12 @@ import FileTree from "./components/FileTree";
 import GitPanel from "./components/GitPanel";
 import TabBar from "./components/TabBar";
 import StatusBar from "./components/StatusBar";
-import Editor, { type EditorPrefs, DEFAULT_EDITOR_PREFS, type OpenFile } from "./components/Editor";
+import Editor, {
+  type EditorPrefs,
+  DEFAULT_EDITOR_PREFS,
+  type OpenFile,
+  type LspDiagnostic,
+} from "./components/Editor";
 import Placeholder from "./components/Placeholder";
 import WorkflowsScreen from "./components/WorkflowsScreen";
 import DesignScreen from "./components/DesignScreen";
@@ -43,6 +48,29 @@ export default function App(): React.ReactElement {
   // real default if this hasn't resolved yet (e.g. a file opened via a
   // deep link before the very first paint).
   const [editorPrefs, setEditorPrefs] = useState<EditorPrefs>(DEFAULT_EDITOR_PREFS);
+  // Real, live LSP diagnostics (§75.6-class backend wiring, closing the
+  // desktop/+web/ gap that shell has carried since the Electron pivot),
+  // keyed by `doc_id` so switching tabs doesn't lose another open file's
+  // diagnostics -- each `lsp_diagnostics` event fully replaces the prior
+  // set for that doc_id (the backend always sends the complete current
+  // list, never a delta).
+  const [diagnosticsByDoc, setDiagnosticsByDoc] = useState<Record<number, LspDiagnostic[]>>({});
+
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event === "lsp_diagnostics") {
+        const { doc_id, diagnostics } = data as { doc_id: number; diagnostics: LspDiagnostic[] };
+        setDiagnosticsByDoc((prev) => ({ ...prev, [doc_id]: diagnostics }));
+      } else if (event === "lsp_error") {
+        // A real, honest server-side condition (handshake never completed,
+        // or no diagnostics update arrived in time) -- not a UI-breaking
+        // error. Logged for now; a dedicated status surface is real,
+        // separate follow-up work.
+        console.warn("lsp_error:", data);
+      }
+    });
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -121,6 +149,11 @@ export default function App(): React.ReactElement {
       window.spartan.call("close_file", { doc_id: file.docId }).catch(() => {});
       setFiles((prev) => prev.filter((_, i) => i !== index));
       setActiveIndex((prev) => Math.max(0, Math.min(prev, files.length - 2)));
+      setDiagnosticsByDoc((prev) => {
+        const next = { ...prev };
+        delete next[file.docId];
+        return next;
+      });
     },
     [files]
   );
@@ -186,13 +219,22 @@ export default function App(): React.ReactElement {
               </div>
               <div className="content-area">
                 {activeFile ? (
-                  <Editor file={activeFile} onContentChange={handleContentChange} prefs={editorPrefs} />
+                  <Editor
+                    file={activeFile}
+                    onContentChange={handleContentChange}
+                    prefs={editorPrefs}
+                    diagnostics={diagnosticsByDoc[activeFile.docId]}
+                  />
                 ) : (
                   <div className="empty-state mono">Open a file from the sidebar to start editing.</div>
                 )}
               </div>
             </div>
-            <StatusBar fileCount={files.length} activePath={activeFile?.path ?? null} />
+            <StatusBar
+              fileCount={files.length}
+              activePath={activeFile?.path ?? null}
+              diagnostics={activeFile ? diagnosticsByDoc[activeFile.docId] : undefined}
+            />
           </>
         ) : (
           <>
