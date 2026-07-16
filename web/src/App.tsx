@@ -4,6 +4,7 @@ import GitPanel from "./components/GitPanel";
 import BackendFileTree from "./components/BackendFileTree";
 import Editor, { type OpenFile } from "./components/Editor";
 import BackendEditor, { type BackendOpenFile, type LspDiagnostic } from "./components/BackendEditor";
+import DebugPanel, { type DapSessionState } from "./components/DebugPanel";
 import { ensureBufferWasmInit, Document as WasmDocument } from "./buffer";
 import { isFileSystemAccessSupported, pickProjectDirectory, readFileText } from "./fsAccess";
 import { applyTheme, type ThemeName } from "./applyTheme";
@@ -35,29 +36,35 @@ const FONT_STORAGE_KEY = "spartan.fontFamily";
  * to WASM, real save-to-disk, real (single-step) undo.
  *
  * **Real, deliberately out-of-scope in this first increment, named
- * honestly rather than silently missing**: DAP and Leo are still not
- * wired to anything here. `spartan-backend`'s real WebSocket transport
- * (§75.88) exists and is real, tested, production code; a later increment
- * answered the token-delivery design question that transport's own doc
- * comment explicitly left open (how a browser tab legitimately learns the
- * per-process token and the correct origin -- the `/__spartan/session`
- * same-origin handoff), a further increment used that same handoff to
- * advertise the devserver's own real project root so **git is real and
- * wired** (`GitPanel`), and a further increment gave this app a real
- * **backend-mode editing path** (`BackendFileTree`/`BackendEditor`,
- * routing file open/edit/undo/redo/save through `BackendClient` instead
- * of File System Access + WASM) purely so `spartan-backend`'s own real
- * LSP diagnostics wiring -- which needs a real `doc_id` the WASM path has
- * no equivalent for -- has something to attach to here, the same way it
- * already does in `desktop/`. The two editing paths are independent and
- * both real: File System Access + WASM (`FileTree`/`Editor`) works with
- * no backend at all; `BackendFileTree`/`BackendEditor` only appear once a
- * devserver is connected with a known project root, and operate on that
- * root, not necessarily the File System Access folder. Multi-file tabs
- * are also not built yet -- only one file open at a time (whichever kind
- * was opened most recently), the same real, narrow first-increment
- * scoping this project's own history already applies elsewhere (e.g.
- * `gui-builder`'s own real v1 cuts, §75.38).
+ * honestly rather than silently missing**: Leo is still not wired to
+ * anything here (DAP now is -- see below). `spartan-backend`'s real
+ * WebSocket transport (§75.88) exists and is real, tested, production
+ * code; a later increment answered the token-delivery design question
+ * that transport's own doc comment explicitly left open (how a browser
+ * tab legitimately learns the per-process token and the correct origin --
+ * the `/__spartan/session` same-origin handoff), a further increment used
+ * that same handoff to advertise the devserver's own real project root so
+ * **git is real and wired** (`GitPanel`), a further increment gave this
+ * app a real **backend-mode editing path** (`BackendFileTree`/
+ * `BackendEditor`, routing file open/edit/undo/redo/save through
+ * `BackendClient` instead of File System Access + WASM) purely so
+ * `spartan-backend`'s own real LSP diagnostics wiring -- which needs a
+ * real `doc_id` the WASM path has no equivalent for -- has something to
+ * attach to here, the same way it already does in `desktop/`, and a
+ * further increment (task #133) extended that same backend-mode path with
+ * **real DAP debugging** (`DebugPanel`, click-to-toggle breakpoints in
+ * `BackendEditor`'s own gutter) -- `spartan-devserver` already falls every
+ * `dap_*` method through to `spartan_backend::handle_request` unchanged,
+ * so this needed zero backend/protocol changes, purely a UI addition. The
+ * two editing paths are independent and both real: File System Access +
+ * WASM (`FileTree`/`Editor`) works with no backend at all;
+ * `BackendFileTree`/`BackendEditor` only appear once a devserver is
+ * connected with a known project root, and operate on that root, not
+ * necessarily the File System Access folder. Multi-file tabs are also not
+ * built yet -- only one file open at a time (whichever kind was opened
+ * most recently), the same real, narrow first-increment scoping this
+ * project's own history already applies elsewhere (e.g. `gui-builder`'s
+ * own real v1 cuts, §75.38).
  */
 export default function App(): React.ReactElement {
   const [root, setRoot] = useState<FileSystemDirectoryHandle | null>(null);
@@ -78,6 +85,16 @@ export default function App(): React.ReactElement {
   // off of). Kept across a sidebar-view switch so re-opening the same
   // backend file doesn't lose its already-known diagnostics.
   const [diagnosticsByDoc, setDiagnosticsByDoc] = useState<Record<number, LspDiagnostic[]>>({});
+  // Real DAP state (task #133, extending task #132's desktop/ wiring to
+  // this app), both keyed by `doc_id` the same way `diagnosticsByDoc`
+  // already is -- breakpoints are 1-indexed line numbers matching the
+  // gutter's own display and the real `dap_launch` `break_lines` param
+  // directly; a session entry exists only while a debug session for that
+  // file is live or has just finished (exited/errored), so the toolbar
+  // can show its final state before the user dismisses it via Stop or
+  // relaunches.
+  const [breakpointsByDoc, setBreakpointsByDoc] = useState<Record<number, number[]>>({});
+  const [dapSessionByDoc, setDapSessionByDoc] = useState<Record<number, DapSessionState>>({});
 
   // Optional backend upgrade: when this page is served by a real
   // spartan-devserver (§75.88 + the /__spartan/session handoff), connect to
@@ -119,6 +136,40 @@ export default function App(): React.ReactElement {
         setDiagnosticsByDoc((prev) => ({ ...prev, [doc_id]: diagnostics }));
       } else if (e.event === "lsp_error") {
         console.warn("lsp_error:", e.data);
+      } else if (e.event === "dap_stopped") {
+        const { doc_id, stopped } = e.data as {
+          doc_id: number;
+          stopped: DapSessionState["stopped"];
+        };
+        setDapSessionByDoc((prev) => {
+          const existing = prev[doc_id];
+          if (!existing) return prev;
+          return { ...prev, [doc_id]: { ...existing, status: "stopped", stopped } };
+        });
+      } else if (e.event === "dap_exited") {
+        const { doc_id } = e.data as { doc_id: number };
+        setDapSessionByDoc((prev) => {
+          const existing = prev[doc_id];
+          if (!existing) return prev;
+          return { ...prev, [doc_id]: { ...existing, status: "exited" } };
+        });
+      } else if (e.event === "dap_error") {
+        const { doc_id, message } = e.data as { doc_id: number; message: string };
+        setDapSessionByDoc((prev) => {
+          const existing = prev[doc_id];
+          if (!existing) return prev;
+          return { ...prev, [doc_id]: { ...existing, status: "error", message } };
+        });
+      } else if (e.event === "dap_build_failed") {
+        const { doc_id, diagnostics } = e.data as { doc_id: number; diagnostics: string[] };
+        setDapSessionByDoc((prev) => {
+          const existing = prev[doc_id];
+          if (!existing) return prev;
+          return {
+            ...prev,
+            [doc_id]: { ...existing, status: "build_failed", message: diagnostics.join("\n") },
+          };
+        });
       }
     });
   }, [backendClient]);
@@ -203,6 +254,78 @@ export default function App(): React.ReactElement {
     [backendClient]
   );
 
+  const activeBackendDocId =
+    activeContent?.kind === "backend" ? activeContent.file.docId : null;
+
+  const toggleBreakpoint = useCallback(
+    (line: number) => {
+      if (activeBackendDocId === null) return;
+      const docId = activeBackendDocId;
+      setBreakpointsByDoc((prev) => {
+        const existing = prev[docId] ?? [];
+        const next = existing.includes(line)
+          ? existing.filter((l) => l !== line)
+          : [...existing, line].sort((a, b) => a - b);
+        return { ...prev, [docId]: next };
+      });
+    },
+    [activeBackendDocId]
+  );
+
+  // Real launch (task #133) -- always starts a fresh session for the
+  // active file's own current breakpoint set, matching `desktop/`'s own
+  // F5-style "a finished session is treated as gone" convention.
+  const dapLaunch = useCallback(() => {
+    if (activeBackendDocId === null || !backendClient) return;
+    const docId = activeBackendDocId;
+    const breakLines = breakpointsByDoc[docId] ?? [];
+    setDapSessionByDoc((prev) => ({
+      ...prev,
+      [docId]: { sessionId: -1, status: "launching" },
+    }));
+    backendClient
+      .call("dap_launch", { doc_id: docId, break_lines: breakLines })
+      .then((result) => {
+        const { session_id } = result as { session_id: number };
+        setDapSessionByDoc((prev) => ({
+          ...prev,
+          [docId]: { ...prev[docId], sessionId: session_id },
+        }));
+      })
+      .catch((err: Error) => {
+        setDapSessionByDoc((prev) => ({
+          ...prev,
+          [docId]: { sessionId: -1, status: "error", message: err.message },
+        }));
+      });
+  }, [activeBackendDocId, backendClient, breakpointsByDoc]);
+
+  const dapSendCommand = useCallback(
+    (method: string) => {
+      if (activeBackendDocId === null || !backendClient) return;
+      const session = dapSessionByDoc[activeBackendDocId];
+      if (!session || session.sessionId < 0) return;
+      backendClient
+        .call(method, { session_id: session.sessionId })
+        .catch((err: Error) => console.error(`${method} failed:`, err));
+    },
+    [activeBackendDocId, backendClient, dapSessionByDoc]
+  );
+
+  const dapStop = useCallback(() => {
+    if (activeBackendDocId === null) return;
+    const docId = activeBackendDocId;
+    const session = dapSessionByDoc[docId];
+    if (session && session.sessionId >= 0 && backendClient) {
+      backendClient.call("dap_disconnect", { session_id: session.sessionId }).catch(() => {});
+    }
+    setDapSessionByDoc((prev) => {
+      const next = { ...prev };
+      delete next[docId];
+      return next;
+    });
+  }, [activeBackendDocId, backendClient, dapSessionByDoc]);
+
   const handleContentChange = useCallback((path: string, content: string, saved?: boolean) => {
     setActiveContent((prev) => {
       if (!prev || prev.file.path !== path) return prev;
@@ -235,7 +358,7 @@ export default function App(): React.ReactElement {
         </button>
         <span className="toolbar-note">
           {backendReady
-            ? "Connected to a local devserver -- git and backend-mode editing (with live LSP diagnostics) are live, no DAP/Leo yet"
+            ? "Connected to a local devserver -- git and backend-mode editing (with live LSP diagnostics and DAP debugging) are live, no Leo yet"
             : "Client-side only in this increment -- no LSP/DAP/Leo/git yet, see README.md"}
         </span>
         <select
@@ -301,26 +424,46 @@ export default function App(): React.ReactElement {
             ) : null}
           </div>
         )}
-        <div className="content-area">
-          {error && <div className="tree-error">{error}</div>}
-          {!error && activeContent?.kind === "local" && (
-            <Editor file={activeContent.file} onContentChange={handleContentChange} />
-          )}
-          {!error && activeContent?.kind === "backend" && backendClient && (
-            <BackendEditor
-              client={backendClient}
-              file={activeContent.file}
-              onContentChange={handleContentChange}
-              diagnostics={diagnosticsByDoc[activeContent.file.docId]}
+        <div className="editor-and-debug">
+          {activeContent?.kind === "backend" && (
+            <DebugPanel
+              hasFile
+              session={activeBackendDocId !== null ? (dapSessionByDoc[activeBackendDocId] ?? null) : null}
+              onLaunch={dapLaunch}
+              onContinue={() => dapSendCommand("dap_continue")}
+              onStepOver={() => dapSendCommand("dap_step_over")}
+              onStepInto={() => dapSendCommand("dap_step_into")}
+              onStop={dapStop}
             />
           )}
-          {!error && !activeContent && (
-            <div className="empty-state">
-              {root || backendReady
-                ? "Select a file to open it."
-                : "Open a folder to get started."}
-            </div>
-          )}
+          <div className="content-area">
+            {error && <div className="tree-error">{error}</div>}
+            {!error && activeContent?.kind === "local" && (
+              <Editor file={activeContent.file} onContentChange={handleContentChange} />
+            )}
+            {!error && activeContent?.kind === "backend" && backendClient && (
+              <BackendEditor
+                client={backendClient}
+                file={activeContent.file}
+                onContentChange={handleContentChange}
+                diagnostics={diagnosticsByDoc[activeContent.file.docId]}
+                breakpoints={breakpointsByDoc[activeContent.file.docId] ?? []}
+                onToggleBreakpoint={toggleBreakpoint}
+                stoppedLine={
+                  dapSessionByDoc[activeContent.file.docId]?.status === "stopped"
+                    ? (dapSessionByDoc[activeContent.file.docId]?.stopped?.frame?.line ?? null)
+                    : null
+                }
+              />
+            )}
+            {!error && !activeContent && (
+              <div className="empty-state">
+                {root || backendReady
+                  ? "Select a file to open it."
+                  : "Open a folder to get started."}
+              </div>
+            )}
+          </div>
         </div>
       </div>
       <div className="status-bar mono">

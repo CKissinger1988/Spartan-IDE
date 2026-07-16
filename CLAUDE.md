@@ -3106,6 +3106,42 @@ first — it's the parity reference until each row there is actually reimplement
   either shell; no rope-anchored breakpoints (line numbers only, matching the reference shell's own
   already-named v1 scope, §75.8); no `web/` debugging UI yet (this pass closed `desktop/` only,
   following the same LSP-then-DAP, desktop-then-web sequencing the immediately preceding pass used).
+- **Real, working code — real DAP debugging UI for `web/`, closing the desktop-then-web gap the
+  immediately preceding pass named (task #133)**: user-requested ("Continue with the roadmap").
+  `spartan-devserver`'s own dispatch (§75.88/Track A) already falls every unrecognized method --
+  including every real `dap_*` one -- through to `spartan_backend::handle_request` unchanged, and
+  `web/`'s `BackendClient` (`backendClient.ts`) is already a fully generic `call(method, params)`/
+  `onEvent` client with no method allowlist (unlike Electron's `preload.ts`, which needs an explicit
+  per-method registration) -- so this closed with **zero backend or protocol changes**, purely a
+  `web/`-side UI port. `BackendEditor.tsx` gained the identical `breakpoints`/`onToggleBreakpoint`/
+  `stoppedLine` props `desktop/`'s `Editor.tsx` already has; a new `DebugPanel.tsx` is a direct port
+  of `desktop/`'s own (Debug/Continue/Step Over/Step Into/Stop toolbar + inline stack/variable
+  display); `App.tsx` gained the same `breakpointsByDoc`/`dapSessionByDoc` state and
+  `dap_stopped`/`dap_exited`/`dap_error`/`dap_build_failed` event handling `desktop/`'s own `App.tsx`
+  already has, reached over `BackendClient.onEvent` instead of `window.spartan.onEvent`. The stale
+  "no DAP/Leo yet" toolbar copy and this file's own top-of-`App.tsx` doc comment were both updated to
+  reflect reality. **Real, live, end-to-end verification against the actual full stack, not a
+  mock** (a step up from `desktop/`'s own mocked-`window.spartan` harness, since `web/`'s real
+  `spartan-devserver` binary could actually be built and run here): a real `spartan-devserver`
+  release binary was built and launched against a real temp git-repo fixture (a `pyproject.toml` +
+  `target.py`, the identical fixture `spartan-dap`'s own tests use) serving the real, freshly-built
+  `web/dist`; real Playwright drove the actual page over a real WebSocket connection through the
+  real `/__spartan/session` token handoff -- clicking a gutter line set a real breakpoint, clicking
+  Debug called the real `dap_launch` which spawned a real `debugpy.adapter` session, a real
+  `dap_stopped` event arrived and rendered the correct stopped line/variable (`x = 21`) and gold
+  gutter highlight, Continue produced a real `dap_exited` event, and relaunch-then-Stop tore the
+  session down cleanly. **A real test-timing mistake was caught and fixed while building this
+  verification, not a product bug**: the first version of the Playwright script only waited 1500ms
+  after clicking Continue before reading the status text, catching it mid-flight (still "Stopped");
+  the real crate-level `spartan-dap`/`spartan-backend` tests had already proven Continue-to-exit
+  works reliably for this exact fixture, so the script was fixed to wait for the real "Program
+  exited" text instead of a fixed delay, confirmed correct on the very next run. `web/`'s own
+  `npm run typecheck` and `vite build` both clean; no Rust changes in this pass (the full 665-test
+  workspace suite from the immediately preceding pass is unaffected). **What this does not confirm**:
+  no DAP support for any language beyond Python in this specific verification (Rust would need a
+  real `cargo build` step this pass didn't separately re-exercise here, though the underlying
+  `dap_launch` code path is identical to `desktop/`'s own already-Rust-verified one); the real
+  Electron/browser production launch gaps named in every prior `desktop/`/`web/` pass are unchanged.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

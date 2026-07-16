@@ -42,6 +42,16 @@ interface BackendEditorProps {
   file: BackendOpenFile;
   onContentChange: (path: string, content: string, saved?: boolean) => void;
   diagnostics?: LspDiagnostic[];
+  /** Real, 1-indexed breakpoint line numbers for this file -- matches
+   * `desktop/src/components/Editor.tsx`'s own convention exactly (the
+   * gutter's own displayed line numbers, and the real DAP `break_lines`
+   * param `App.tsx` sends to `dap_launch` directly, no translation). */
+  breakpoints?: number[];
+  /** Real click-to-toggle -- `App.tsx` owns the actual breakpoint set. */
+  onToggleBreakpoint?: (line: number) => void;
+  /** Real, 1-indexed line the active DAP session is currently stopped
+   * at for this file, or `null`/`undefined` when nothing is stopped. */
+  stoppedLine?: number | null;
 }
 
 /**
@@ -66,6 +76,9 @@ export default function BackendEditor({
   file,
   onContentChange,
   diagnostics = [],
+  breakpoints = [],
+  onToggleBreakpoint,
+  stoppedLine = null,
 }: BackendEditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
@@ -92,6 +105,8 @@ export default function BackendEditor({
     }
     return map;
   }, [diagnostics]);
+
+  const breakpointSet = useMemo(() => new Set(breakpoints), [breakpoints]);
 
   const syncScroll = useCallback(() => {
     const el = textareaRef.current;
@@ -172,12 +187,20 @@ export default function BackendEditor({
         {lineNumbers.map((n) => {
           const lineDiags = diagnosticsByLine.get(n - 1);
           const severity = lineDiags ? worstSeverity(lineDiags) : null;
+          const hasBreakpoint = breakpointSet.has(n);
+          const isStopped = stoppedLine === n;
           return (
             <div
               key={n}
-              className={`editor-gutter-line${severity ? ` editor-gutter-line-${severity}` : ""}`}
+              className={`editor-gutter-line${severity ? ` editor-gutter-line-${severity}` : ""}${isStopped ? " editor-gutter-line-stopped" : ""}`}
               title={lineDiags?.map((d) => `${d.severity}: ${d.message}`).join("\n")}
+              onClick={() => onToggleBreakpoint?.(n)}
             >
+              {onToggleBreakpoint && (
+                <span
+                  className={`editor-gutter-breakpoint-dot${hasBreakpoint ? " editor-gutter-breakpoint-dot-active" : ""}`}
+                />
+              )}
               {n}
             </div>
           );
