@@ -121,6 +121,22 @@ pub struct SecretNamesResponse {
     pub names: Vec<String>,
 }
 
+/// Run a one-shot command inside one of the caller's own allocations. The
+/// command is an explicit argv (`["npm", "test"]`), never a shell string, so
+/// there's no shell-injection surface at this layer.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ExecRequest {
+    pub command: Vec<String>,
+}
+
+/// The result of an `ExecRequest`: combined stdout+stderr and the real exit
+/// code (`null` if the daemon didn't report one).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ExecResponse {
+    pub output: String,
+    pub exit_code: Option<i64>,
+}
+
 /// A uniform error envelope for control-plane responses.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ApiError {

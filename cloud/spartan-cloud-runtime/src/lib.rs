@@ -33,6 +33,7 @@ use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
     StartContainerOptions, StatsOptions, StopContainerOptions,
 };
+use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::image::CreateImageOptions;
 use bollard::models::{ContainerStateStatusEnum, HostConfig};
 use bollard::Docker;
@@ -94,6 +95,14 @@ pub struct AllocationSpec {
     pub limits: PlanLimits,
 }
 
+/// The result of a one-shot `exec_once`: the command's combined output and its
+/// real exit code (`None` if the daemon didn't report one).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecResult {
+    pub output: String,
+    pub exit_code: Option<i64>,
+}
+
 /// A live resource-usage snapshot for one managed container -- the defensive
 /// telemetry the admin monitoring dashboard surfaces (the counterpart to the
 /// reaper + caps: spotting abuse, not just capping it). Values are best-effort
@@ -134,6 +143,18 @@ pub trait ContainerRuntime: Send + Sync {
     /// A live per-container resource snapshot for every managed running
     /// container (all tenants), for the admin monitoring dashboard.
     async fn usage(&self) -> Result<Vec<ContainerUsage>, RuntimeError>;
+    /// Run a one-shot command inside `owner`'s allocation `id`, returning its
+    /// combined stdout+stderr and exit code. **Owner-scoped**: the allocation
+    /// is verified to actually belong to `owner` (via its label) before any
+    /// command runs, so one tenant can never exec into another's container --
+    /// the same per-tenant isolation invariant every other method enforces.
+    /// A missing/foreign allocation is `RuntimeError::NotFound`.
+    async fn exec_once(
+        &self,
+        owner: &UserId,
+        id: &AllocationId,
+        command: &[String],
+    ) -> Result<ExecResult, RuntimeError>;
     /// Whether this runtime's isolation is verified in the current deployment.
     /// `false` is an ops signal: do NOT run untrusted tenant code yet.
     fn isolation_verified(&self) -> bool;
@@ -440,6 +461,66 @@ impl ContainerRuntime for DockerRuntime {
         Ok(out)
     }
 
+    async fn exec_once(
+        &self,
+        owner: &UserId,
+        id: &AllocationId,
+        command: &[String],
+    ) -> Result<ExecResult, RuntimeError> {
+        // Owner-scoping is load-bearing: verify this allocation is managed AND
+        // owned by `owner` before running anything. A container that doesn't
+        // exist, isn't ours, or belongs to a different tenant is NotFound --
+        // one tenant can never exec into another's container.
+        let inspect = match self.docker.inspect_container(&id.0, None).await {
+            Ok(c) => c,
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => return Err(RuntimeError::NotFound),
+            Err(e) => return Err(e.into()),
+        };
+        let owned = inspect
+            .config
+            .as_ref()
+            .and_then(|c| c.labels.as_ref())
+            .map(|l| {
+                l.get(MANAGED_LABEL).map(String::as_str) == Some("1")
+                    && l.get(OWNER_LABEL).map(String::as_str) == Some(owner.0.as_str())
+            })
+            .unwrap_or(false);
+        if !owned {
+            return Err(RuntimeError::NotFound);
+        }
+
+        let exec = self
+            .docker
+            .create_exec(
+                &id.0,
+                CreateExecOptions {
+                    cmd: Some(command.to_vec()),
+                    attach_stdout: Some(true),
+                    attach_stderr: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let mut output = String::new();
+        if let StartExecResults::Attached {
+            output: mut stream, ..
+        } = self.docker.start_exec(&exec.id, None).await?
+        {
+            while let Some(item) = stream.next().await {
+                // Each frame is stdout or stderr bytes; append both (combined),
+                // lossy-decoded so a chunk boundary can't error the whole run.
+                let bytes = item?.into_bytes();
+                output.push_str(&String::from_utf8_lossy(&bytes));
+            }
+        }
+
+        let exit_code = self.docker.inspect_exec(&exec.id).await?.exit_code;
+        Ok(ExecResult { output, exit_code })
+    }
+
     fn isolation_verified(&self) -> bool {
         self.isolation_verified
     }
@@ -630,6 +711,66 @@ mod tests {
         // Memory limit should reflect the Free-tier cap (1 GiB) the container
         // was actually created with.
         assert_eq!(mine.memory_limit_bytes, Some(1024 * 1024 * 1024));
+
+        runtime.stop(&id).await.expect("cleanup the container");
+    }
+
+    #[tokio::test]
+    async fn exec_once_runs_a_command_and_is_owner_scoped() {
+        let Some(docker) = docker_or_skip().await else {
+            return;
+        };
+        let runtime = DockerRuntime::with_docker(docker, "runc", true);
+        let owner = UserId(format!("exec-owner-{}", std::process::id()));
+        let other = UserId(format!("other-owner-{}", std::process::id()));
+        let spec = AllocationSpec {
+            owner: owner.clone(),
+            image: "alpine:latest".to_string(),
+            limits: PlanLimits::for_tier(PlanTier::Free),
+        };
+        let id = runtime.create(&spec).await.expect("create a container");
+
+        // A real command runs and its output + exit code come back.
+        let res = runtime
+            .exec_once(
+                &owner,
+                &id,
+                &["echo".to_string(), "hello-from-exec".to_string()],
+            )
+            .await
+            .expect("exec runs");
+        assert!(
+            res.output.contains("hello-from-exec"),
+            "real command output: {:?}",
+            res.output
+        );
+        assert_eq!(res.exit_code, Some(0));
+
+        // A non-zero exit is reported honestly.
+        let res = runtime
+            .exec_once(&owner, &id, &["false".to_string()])
+            .await
+            .expect("exec runs");
+        assert_eq!(res.exit_code, Some(1));
+
+        // OWNER-SCOPING: a different tenant cannot exec into this container.
+        let denied = runtime
+            .exec_once(&other, &id, &["echo".to_string(), "nope".to_string()])
+            .await;
+        assert!(
+            matches!(denied, Err(RuntimeError::NotFound)),
+            "a foreign owner must be denied (NotFound), got {denied:?}"
+        );
+
+        // A wholly unknown allocation is NotFound too.
+        let unknown = runtime
+            .exec_once(
+                &owner,
+                &AllocationId("nope".to_string()),
+                &["true".to_string()],
+            )
+            .await;
+        assert!(matches!(unknown, Err(RuntimeError::NotFound)));
 
         runtime.stop(&id).await.expect("cleanup the container");
     }

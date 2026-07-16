@@ -201,6 +201,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/admin/audit", get(audit_log))
         .route("/api/admin/telemetry", get(telemetry))
         .route("/api/allocate", post(allocate))
+        .route("/api/allocations/:id/exec", post(exec_in_allocation))
         .route(
             "/api/secrets/:name",
             put(put_secret_handler).delete(delete_secret_handler),
@@ -453,6 +454,58 @@ async fn allocate(State(state): State<AppState>, user: AuthUser) -> Response {
             };
             (StatusCode::CREATED, Json(info)).into_response()
         }
+        Err(e) => internal_error(e),
+    }
+}
+
+/// Run a one-shot command inside one of the **caller's own** allocations. The
+/// runtime enforces owner-scoping (a foreign/unknown allocation is 404), so a
+/// tenant can only ever exec into its own container. The command is an explicit
+/// argv, audited (the fact + the argv's first token, never full output).
+async fn exec_in_allocation(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(req): Json<spartan_cloud_protocol::ExecRequest>,
+) -> Response {
+    if req.command.is_empty() {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_command",
+            "command must be a non-empty argv array",
+        );
+    }
+    let Some(runtime) = &state.runtime else {
+        return api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "runtime_unavailable",
+            "the container runtime is not connected",
+        );
+    };
+    let alloc = spartan_cloud_protocol::AllocationId(id);
+    match runtime.exec_once(&user.user_id, &alloc, &req.command).await {
+        Ok(res) => {
+            audit(
+                &state,
+                Some(&user.user_id),
+                "exec",
+                Some(&alloc.0),
+                Some(&req.command[0]),
+            );
+            (
+                StatusCode::OK,
+                Json(spartan_cloud_protocol::ExecResponse {
+                    output: res.output,
+                    exit_code: res.exit_code,
+                }),
+            )
+                .into_response()
+        }
+        Err(spartan_cloud_runtime::RuntimeError::NotFound) => api_error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no such allocation for this user",
+        ),
         Err(e) => internal_error(e),
     }
 }
@@ -1115,6 +1168,98 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body["code"], "vault_locked");
+    }
+
+    #[tokio::test]
+    async fn exec_rejects_empty_command_and_reports_no_runtime_honestly() {
+        let app = router(AppState::in_memory());
+        let token = signup_token(&app, "execnorun@b.com").await;
+
+        // Empty argv -> 400 (before any runtime lookup).
+        let (status, body) = body_json(
+            app.clone()
+                .oneshot(req_json(
+                    "POST",
+                    "/api/allocations/whatever/exec",
+                    serde_json::json!({"command": []}),
+                    &token,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["code"], "invalid_command");
+
+        // A real command with no runtime wired -> honest 503.
+        let (status, body) = body_json(
+            app.oneshot(req_json(
+                "POST",
+                "/api/allocations/whatever/exec",
+                serde_json::json!({"command": ["echo", "hi"]}),
+                &token,
+            ))
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["code"], "runtime_unavailable");
+    }
+
+    #[tokio::test]
+    async fn exec_really_runs_a_command_in_the_callers_own_allocation() {
+        use spartan_cloud_runtime::{ContainerRuntime, DockerRuntime};
+        let docker = match bollard::Docker::connect_with_local_defaults() {
+            Ok(d) if d.ping().await.is_ok() => d,
+            _ => {
+                println!("SKIP: no Docker daemon; exec end-to-end test skipped");
+                return;
+            }
+        };
+        let runtime = std::sync::Arc::new(DockerRuntime::with_docker(docker, "runc", true));
+        let app = router(AppState::in_memory().with_runtime(runtime.clone()));
+
+        let token = signup_token(&app, "execreal@b.com").await;
+        // Allocate a real container for this user.
+        let (status, alloc) = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/allocate",
+                    serde_json::json!({}),
+                    Some(&token),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "allocate: {alloc}");
+        let id = alloc["id"].as_str().unwrap().to_string();
+
+        // Exec a real command in it via the API.
+        let (status, exec) = body_json(
+            app.oneshot(req_json(
+                "POST",
+                &format!("/api/allocations/{id}/exec"),
+                serde_json::json!({"command": ["echo", "hello-via-api"]}),
+                &token,
+            ))
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "exec: {exec}");
+        assert!(
+            exec["output"].as_str().unwrap().contains("hello-via-api"),
+            "real output over the API: {exec}"
+        );
+        assert_eq!(exec["exit_code"], 0);
+
+        // Clean up the real container.
+        runtime
+            .stop(&spartan_cloud_protocol::AllocationId(id))
+            .await
+            .expect("cleanup");
     }
 
     #[tokio::test]

@@ -138,8 +138,12 @@ same trait — no API or domain-layer change needed.
    the already-real feeds (`GET /api/admin/audit` + `GET /api/admin/telemetry`,
    the latter a live per-container `docker stats`-style memory/pids snapshot via
    bollard, admin-only, 503 when no runtime is wired), surfaced with Track C's
-   status-reactive aesthetic, and the per-container WS session endpoint (reusing
-   `spartan-backend`'s envelope shape). The encrypted-at-rest secrets vault
+   status-reactive aesthetic, and a **streaming** per-container WS session
+   endpoint (the interactive counterpart to the one-shot exec that's now real:
+   `POST /api/allocations/:id/exec` runs an argv command in the caller's own
+   allocation, owner-scoped in the runtime so a tenant can only reach its own
+   container, and returns combined output + exit code). The encrypted-at-rest
+   secrets vault
    (AES-256-GCM) is real end to end: `spartan-cloud-data` stores it and the API
    exposes an owner-scoped REST surface — `PUT /api/secrets/:name`,
    `GET /api/secrets` (names only), `DELETE /api/secrets/:name`. Values are
