@@ -15,13 +15,15 @@
 //! security-critical, single-sourced handshake (per-process random token +
 //! Origin allowlist) verbatim instead of forking it.
 //!
-//! **This module is the Phase 0 skeleton.** It establishes and verifies the
-//! wrapping/fallthrough seam end-to-end with exactly one real
-//! devserver-specific method (`devserver_ping`). The real model-management
-//! methods (`model_status`, `hf_pull_model`, `litellm_proxy_*`) and the
+//! **Beyond the Phase 0 skeleton.** The wrapping/fallthrough seam is verified
+//! end-to-end; on top of it there are now two real devserver-specific methods
+//! -- `devserver_ping` (liveness/identity) and `model_status` (the unified
+//! model surface: the configured Leo provider's real capabilities + a live
+//! health probe, via `spartan_backend::model_status_json`) -- plus the
 //! static-file server (`/__spartan/session` token handoff for the `web/`
-//! client) land on top of this same seam in later increments -- they are
-//! deliberately not present yet, not stubbed with fake behavior.
+//! client). The remaining model-management methods (`hf_pull_model`,
+//! `litellm_proxy_*`) land on this same seam in later increments -- deliberately
+//! not present yet, never stubbed with fake behavior.
 
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
@@ -40,6 +42,14 @@ pub mod static_serve;
 /// doubles as the Phase 0 proof that a devserver method is reached while
 /// every other method still falls through to the backend.
 pub const DEVSERVER_PING: &str = "devserver_ping";
+
+/// Aggregated model-status method (Track A): reports the real, currently
+/// configured Leo provider's identity + capabilities + a live health probe.
+/// This is the "unified model-management surface" Track A exists to provide,
+/// answered by `spartan_backend::model_status_json`, which uses the same
+/// `build_leo_provider` every real Leo call already goes through, so the
+/// status can never disagree with what a task would actually run.
+pub const MODEL_STATUS: &str = "model_status";
 
 /// Devserver-specific state, held *alongside* -- never inside -- the shared
 /// `BackendState`. Later increments grow this with the real model registry,
@@ -94,6 +104,12 @@ pub fn make_dispatcher(
                     "version": env!("CARGO_PKG_VERSION"),
                     "uptime_ms": devserver.uptime_ms(),
                 })),
+                error: None,
+            }
+        } else if req.method == MODEL_STATUS {
+            Response {
+                id: req.id,
+                result: Some(spartan_backend::model_status_json()),
                 error: None,
             }
         } else {
@@ -211,6 +227,36 @@ mod tests {
             result["uptime_ms"].is_u64(),
             "ping reports a real numeric uptime: {result:?}"
         );
+    }
+
+    /// `model_status` is a real devserver method (not a backend one) that
+    /// reports the configured Leo provider's real capabilities + live health.
+    #[test]
+    fn model_status_reports_the_configured_provider() {
+        let backend = Arc::new(Mutex::new(BackendState::new()));
+        let dispatch = make_dispatcher(Arc::new(DevServerState::new()));
+        let (tx, _rx) = mpsc::channel();
+
+        let resp = dispatch(
+            &backend,
+            Request {
+                id: 9,
+                method: MODEL_STATUS.to_string(),
+                params: serde_json::json!({}),
+            },
+            tx,
+        );
+
+        assert_eq!(resp.id, 9);
+        assert!(resp.error.is_none(), "model_status must succeed: {resp:?}");
+        let result = resp.result.expect("model_status returns a real result");
+        // Either a configured provider or an honest construction error -- both
+        // are real, neither is fabricated.
+        assert!(
+            result["configured"].is_boolean(),
+            "reports a real configured flag: {result:?}"
+        );
+        assert!(result["kind"].is_string(), "reports the provider kind");
     }
 
     /// An unknown method (a real `spartan-backend` method) falls through to

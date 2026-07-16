@@ -468,6 +468,44 @@ fn build_leo_provider(
     Ok(Box::new(FailoverProvider::new(chain)))
 }
 
+/// The unified model-status surface (Track A): the real, currently-configured
+/// Leo provider's identity, capabilities, and a **live** health probe -- built
+/// from the exact same `build_leo_provider` every real Leo call uses, so the
+/// status can never disagree with what a task would actually run. A provider
+/// that can't even be constructed (missing gguf path, unset ANTHROPIC_API_KEY)
+/// is reported honestly as `configured: false` with the real error, never a
+/// fabricated "healthy". Exposed for `spartan-devserver`'s `model_status`.
+pub fn model_status_json() -> serde_json::Value {
+    let settings = spartan_settings::load();
+    let ps = &settings.leo_provider;
+    match build_leo_provider(ps, settings.gpu_offload) {
+        Ok(provider) => {
+            let health = match provider.health_check() {
+                spartan_model::ProviderHealth::Healthy => "healthy",
+                spartan_model::ProviderHealth::Unauthorized => "unauthorized",
+                spartan_model::ProviderHealth::Unreachable => "unreachable",
+            };
+            serde_json::json!({
+                "configured": true,
+                "kind": format!("{:?}", ps.kind),
+                "model": ps.model,
+                "provider_id": provider.id(),
+                "is_local": provider.is_local(),
+                "context_window": provider.context_window(),
+                "supports_native_tool_calling": provider.supports_native_tool_calling(),
+                "health": health,
+                "fallback_count": ps.fallbacks.len(),
+            })
+        }
+        Err(e) => serde_json::json!({
+            "configured": false,
+            "kind": format!("{:?}", ps.kind),
+            "model": ps.model,
+            "error": e,
+        }),
+    }
+}
+
 fn leo_start_task(
     state: &Arc<Mutex<BackendState>>,
     out_tx: Sender<String>,
@@ -3500,6 +3538,28 @@ mod tests {
                 .expect("Ollama provider construction must never fail");
         assert!(provider.is_local());
         assert_eq!(provider.id(), "llama3.1:8b");
+    }
+
+    #[test]
+    fn model_status_json_reports_a_real_configured_provider() {
+        // Loads whatever settings exist (defaults to Ollama when none), builds
+        // the real provider, and reports a real live health probe. We assert on
+        // the shape, not a specific health (Ollama may or may not be running).
+        let status = model_status_json();
+        // Either a configured provider with the expected fields, or an honest
+        // construction error -- never a fabricated success.
+        if status["configured"] == serde_json::Value::Bool(true) {
+            assert!(status["kind"].is_string(), "reports the provider kind");
+            assert!(status["is_local"].is_boolean());
+            assert!(status["context_window"].is_u64());
+            let health = status["health"].as_str().unwrap();
+            assert!(
+                matches!(health, "healthy" | "unauthorized" | "unreachable"),
+                "health is a real enum value, got {health:?}"
+            );
+        } else {
+            assert!(status["error"].is_string(), "an error is reported plainly");
+        }
     }
 
     #[test]
