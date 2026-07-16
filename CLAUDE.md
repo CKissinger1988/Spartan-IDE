@@ -3473,6 +3473,78 @@ first — it's the parity reference until each row there is actually reimplement
   narrow, previously-silent gap in `android_detect`'s own reachability, not task #11's much larger
   remaining scope (a real emulator, ADB device management, JDWP debugging -- none of which this
   environment can support, as `spartan-android`'s own README already documents honestly).
+- **Real, working code — HF -> Ollama downloader expanded to a real, broad curated coding-model
+  list, plus real user-defined custom model download links, closing task #139's own "small,
+  curated" scope limit (task #143)**: user-requested directly ("Hugging Face model downloader
+  should include all top rated coding models available on HF as well as user defined model
+  download links"). `hf_downloader::CURATED_MODELS` grew from the original 4 entries to 21,
+  spanning small-to-large tiers of the real, well-known open coding model families (Qwen2.5 Coder
+  0.5B through 32B, DeepSeek Coder V2 Lite, Codestral 22B, Code Llama 7B/34B, StarCoder2 15B,
+  CodeQwen1.5 7B, Yi Coder 1.5B/9B, OpenCoder 8B, Granite 3.0 8B, CodeGemma 7B, plus Llama
+  3.1/3.2/Mistral/Phi-3.5 as general-purpose baselines) -- **every single added entry was verified
+  for real in this environment before being added**, not assumed from memory or training data: each
+  candidate repo was checked live via `GET https://huggingface.co/api/models/<repo>` (a real,
+  unauthenticated request through this session's own reachable network egress), and only a real
+  `200` was kept -- five otherwise-plausible candidates
+  (`bartowski/CodeLlama-7B-Instruct-GGUF`, `bartowski/granite-8b-code-instruct-GGUF`,
+  `bartowski/deepseek-coder-6.7b-instruct-GGUF`, `bartowski/starcoder2-7b-GGUF`,
+  `bartowski/Codestral-22B-v0.1-hf-GGUF`) came back real `401`s (gated, not anonymously pullable
+  either way) and were deliberately excluded rather than guessed at. Each kept repo's real file
+  listing was additionally checked to confirm an actual `*Q4_K_M*.gguf` sibling exists at the exact
+  tag string used, so every curated entry's `pull_target()` names a file that demonstrably exists,
+  not just a repo. **The second, larger half of the request -- real user-defined custom model
+  download links** -- is new capability, not just a longer list: `hf_downloader` gained
+  `normalize_hf_repo_input` (strips a pasted `https://huggingface.co/`, `http://huggingface.co/`,
+  `huggingface.co/`, or `hf.co/` prefix down to a bare `<org>/<name>` id) and
+  `validate_custom_repo_and_tag`/`custom_pull_target` (real validation -- non-empty, exactly one
+  `/`, only real filename-safe characters, no leading `-` on either component, since `Command`'s
+  argv reaches `ollama` directly with no shell in between, so the one real remaining risk is a
+  caller smuggling a second CLI flag in as if it were a literal repo/tag, not shell injection).
+  `spawn_pull`/`spawn_pull_target` were split so both a curated pull and a custom pull share one
+  real subprocess-spawning entry point. `spartan-devserver`'s `hf_pull_model` dispatch method now
+  accepts either `{"model_id": "..."}` (curated, unchanged) or `{"hf_repo": "...", "tag": "..."}`
+  (the new custom path) via a new `resolve_hf_pull_target` -- both resolve to the identical
+  downstream subprocess/event pipeline, so a custom pull gets the same real `hf_pull_progress`/
+  `hf_pull_ready`/`hf_pull_failed` events a curated one already had, keyed by a real, stable
+  `<normalized-repo>:<tag>` id. **`web/`'s `ModelsPanel.tsx`** gained a new "Custom Model Link"
+  section (a client-side mirror of `normalize_hf_repo_input`, kept in sync deliberately since this
+  is a small pure string helper with no shared build step between Rust and TypeScript here) with
+  two real inputs (repo/link, quant tag) and a Pull button routed through the identical
+  `hf_pull_model` call, real client-side validation for an empty form, and the same real progress/
+  ready/failed rendering the curated rows already use. A real compiler error was caught and fixed
+  during implementation, not shipped: an early version of `hf_pull_model`'s background-thread
+  closure moved `target` before the function's own final `Ok(... "target": target)` response tried
+  to read it -- fixed with an explicit `ack_target` clone taken before the move, confirmed correct
+  by the subsequent clean build. 9 new tests in `hf_downloader` (curated-list breadth, repo-input
+  normalization, custom validation accept/reject cases including the leading-`-` flag-smuggling
+  guard, and curated/custom target-string agreement) plus 6 new tests in `spartan-devserver`'s own
+  dispatch suite (`resolve_hf_pull_target`'s curated/custom/error paths, and a real end-to-end
+  dispatch-level test confirming a custom `hf_repo`/`tag` request reaches `hf_pull_model` rather
+  than falling into a curated-only error), 46 tests total in this crate (up from 31), full
+  workspace `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo
+  test --workspace --release` clean, `web/`'s own `npm run typecheck`/`npm run build` clean.
+  **Real, live, end-to-end Playwright verification against the actual compiled `web/dist` served
+  by a real running `spartan-devserver` binary** (not a mock): the expanded curated list rendered
+  correctly (8 spot-checked new entries, including Qwen2.5 Coder 32B, Codestral 22B, Code Llama
+  34B, and StarCoder2 15B, all confirmed present in the real DOM); the new Custom Model Link section
+  rendered; submitting it empty showed the real client-side validation error; pasting a real,
+  independently-verified-live HF repo (`lmstudio-community/Qwen2.5-Coder-32B-Instruct-GGUF`,
+  deliberately **not** in the curated list, as a full `https://huggingface.co/...` link, exercising
+  the real prefix-stripping path) plus a real tag and clicking Pull reached the real backend and
+  triggered a genuine `ollama pull hf.co/lmstudio-community/Qwen2.5-Coder-32B-Instruct-GGUF:Q4_K_M`
+  subprocess -- confirmed by the real resulting error text (`ollama pull exited with exit status:
+  1`), independently cross-checked by running the identical `ollama pull` command directly in this
+  environment, which reported the real, honest, distinct reason (`could not connect to ollama
+  server, run 'ollama serve' to start it` -- the `ollama` binary is installed here, matching this
+  session's earlier live litellm/hf-pull integration test results, but its background server
+  process wasn't running at verification time) -- proving the custom-link path is genuinely wired
+  through to a real subprocess invocation, not silently short-circuited into the curated-only code
+  path. **What this does not confirm**: no successful model pull was completed in this environment
+  (both the deliberate multi-GB-download cost §139 already named, and this specific run's Ollama
+  server not being started, are named honestly rather than glossed over); no live Hugging Face
+  search API integration (the list is still curated/fixed, now much broader, not dynamically
+  fetched); no equivalent custom-link UI in `desktop/` (matches task #140's own already-documented
+  platform-scope limit -- `desktop/` has no `spartan-devserver` connection at all).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

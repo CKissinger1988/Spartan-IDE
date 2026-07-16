@@ -32,6 +32,27 @@ interface ModelsPanelProps {
 }
 
 /**
+ * Client-side mirror of `hf_downloader::normalize_hf_repo_input` (Rust) --
+ * strips the same real, common pasted-link prefixes down to a bare
+ * `<org>/<name>` repo id. Kept in sync deliberately (not shared code, since
+ * this is a small pure string helper and the two languages don't share a
+ * build step here) so a locally-computed pull-state key matches the real
+ * `event_id` the backend computes for the identical input, letting the UI
+ * show pulling/ready/failed state immediately rather than only after the
+ * first `hf_pull_progress` event arrives.
+ */
+function normalizeHfRepoInput(input: string): string {
+  const s = input.trim();
+  const prefixes = ["https://huggingface.co/", "http://huggingface.co/", "huggingface.co/", "hf.co/"];
+  for (const prefix of prefixes) {
+    if (s.startsWith(prefix)) {
+      return s.slice(prefix.length).replace(/\/+$/, "");
+    }
+  }
+  return s.replace(/\/+$/, "");
+}
+
+/**
  * Real Model Management panel -- the first UI surface for the real Track A
  * devserver-only methods (`model_status`, `litellm_proxy_start`/`_stop`/
  * `_status`, `hf_list_models`/`hf_pull_model`) that have had zero callers
@@ -60,6 +81,10 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
   const [hfModels, setHfModels] = useState<HfModel[]>([]);
   const [hfError, setHfError] = useState<string | null>(null);
   const [pullStates, setPullStates] = useState<Record<string, PullState>>({});
+
+  const [customRepo, setCustomRepo] = useState("");
+  const [customTag, setCustomTag] = useState("Q4_K_M");
+  const [customFormError, setCustomFormError] = useState<string | null>(null);
 
   const refreshModelStatus = useCallback(() => {
     client
@@ -163,6 +188,30 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
     },
     [client]
   );
+
+  /**
+   * The real "user defined model download links" path -- any real, public,
+   * anonymously-pullable HF GGUF repo, not just a curated entry. Goes
+   * through the identical `hf_pull_model` backend method and identical
+   * `hf_pull_progress`/`hf_pull_ready`/`hf_pull_failed` event plumbing as a
+   * curated pull; the only difference is `hf_repo`+`tag` instead of
+   * `model_id` in the request, and the resulting pull-state key is the real
+   * `<normalized-repo>:<tag>` shape `resolve_hf_pull_target` (Rust) builds.
+   */
+  const pullCustomModel = useCallback(() => {
+    const repo = customRepo.trim();
+    const tag = customTag.trim();
+    if (!repo || !tag) {
+      setCustomFormError("enter both a repo (org/name or a pasted HF link) and a quant tag");
+      return;
+    }
+    const key = `${normalizeHfRepoInput(repo)}:${tag}`;
+    setCustomFormError(null);
+    setPullStates((prev) => ({ ...prev, [key]: { phase: "pulling", lines: [] } }));
+    client.call("hf_pull_model", { hf_repo: repo, tag }).catch((e: Error) => {
+      setPullStates((prev) => ({ ...prev, [key]: { phase: "failed", error: e.message } }));
+    });
+  }, [client, customRepo, customTag]);
 
   return (
     <div className="git-panel">
@@ -270,6 +319,73 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
             </div>
           );
         })}
+      </div>
+
+      <div className="git-section-label mono">Custom Model Link (any public HF GGUF repo)</div>
+      <div className="git-section">
+        <div style={{ padding: "4px 4px" }}>
+          <div className="mono" style={{ fontSize: 10.5, color: "var(--text-dim)", marginBottom: 4 }}>
+            Paste a Hugging Face repo (e.g. <code>org/name-GGUF</code> or a full
+            huggingface.co/hf.co link) and the exact quant tag from its file list.
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <input
+              className="git-commit-input mono"
+              style={{ minHeight: 0, flex: 2, minWidth: 180, resize: "none" }}
+              value={customRepo}
+              onChange={(e) => setCustomRepo(e.target.value)}
+              placeholder="org/name-GGUF or https://huggingface.co/org/name-GGUF"
+            />
+            <input
+              className="git-commit-input mono"
+              style={{ minHeight: 0, flex: 1, minWidth: 80, resize: "none" }}
+              value={customTag}
+              onChange={(e) => setCustomTag(e.target.value)}
+              placeholder="Q4_K_M"
+            />
+            <button
+              className="git-commit-button"
+              disabled={pullStates[`${normalizeHfRepoInput(customRepo)}:${customTag.trim()}`]?.phase === "pulling"}
+              onClick={pullCustomModel}
+            >
+              {pullStates[`${normalizeHfRepoInput(customRepo)}:${customTag.trim()}`]?.phase === "pulling"
+                ? "Pulling…"
+                : "Pull"}
+            </button>
+          </div>
+          {customFormError && (
+            <div className="git-panel-empty mono" style={{ marginTop: 4 }}>
+              {customFormError}
+            </div>
+          )}
+          {(() => {
+            const key = `${normalizeHfRepoInput(customRepo)}:${customTag.trim()}`;
+            const state = pullStates[key];
+            if (!state || state.phase === "idle") return null;
+            return (
+              <div style={{ marginTop: 4 }}>
+                {state.phase === "ready" && (
+                  <span className="mono" style={{ fontSize: 10.5, color: "var(--accent)" }}>
+                    ✓ ready
+                  </span>
+                )}
+                {state.phase === "failed" && (
+                  <span className="mono" style={{ fontSize: 10.5, color: "#e05a4a" }}>
+                    {state.error}
+                  </span>
+                )}
+                {state.phase === "pulling" && state.lines.length > 0 && (
+                  <pre
+                    className="mono"
+                    style={{ fontSize: 10, maxHeight: 80, overflowY: "auto", margin: "3px 0 0" }}
+                  >
+                    {state.lines.join("\n")}
+                  </pre>
+                )}
+              </div>
+            );
+          })()}
+        </div>
       </div>
     </div>
   );

@@ -78,13 +78,19 @@ pub const LITELLM_PROXY_STATUS: &str = "litellm_proxy_status";
 /// devserver knows how to pull (id/display name/repo/tag/description) --
 /// synchronous, no subprocess involved.
 pub const HF_LIST_MODELS: &str = "hf_list_models";
-/// Triggers a real `ollama pull hf.co/<repo>:<tag>` for a curated model id.
-/// Async, ack-then-event, the same shape `litellm_proxy_start` already
-/// uses: an immediate `{"status": "starting"}` while the real, possibly
-/// multi-minute download runs on its own thread, streaming Ollama's own
-/// real pull-progress output as `hf_pull_progress` events (each carrying
-/// the real `model_id`, so multiple concurrent pulls stay distinguishable)
-/// and finishing with `hf_pull_ready`/`hf_pull_failed`.
+/// Triggers a real `ollama pull hf.co/<repo>:<tag>`, either for a curated
+/// model id (`{"model_id": "..."}`) or a real user-defined custom model
+/// download link (`{"hf_repo": "<org>/<name-or-URL>", "tag": "Q4_K_M"}`) --
+/// the latter is the real "user defined model download links" mechanism,
+/// going through the identical validation, subprocess, and event plumbing
+/// as a curated pull. Async, ack-then-event, the same shape
+/// `litellm_proxy_start` already uses: an immediate `{"status":
+/// "starting"}` while the real, possibly multi-minute download runs on its
+/// own thread, streaming Ollama's own real pull-progress output as
+/// `hf_pull_progress` events (each carrying a real, stable `model_id` --
+/// the curated id, or `<repo>:<tag>` for a custom pull -- so multiple
+/// concurrent pulls stay distinguishable) and finishing with
+/// `hf_pull_ready`/`hf_pull_failed`.
 pub const HF_PULL_MODEL: &str = "hf_pull_model";
 
 const LITELLM_HEALTH_TIMEOUT: Duration = Duration::from_secs(60);
@@ -262,25 +268,65 @@ fn hf_list_models_json() -> serde_json::Value {
     serde_json::json!({ "models": models })
 }
 
+/// Resolves the real `(event_id, pull_target)` pair for either an
+/// `hf_pull_model` call path -- a curated `model_id` lookup, or a
+/// user-defined custom `hf_repo`+`tag` pair (the real "user defined model
+/// download links" mechanism, validated via
+/// `hf_downloader::custom_pull_target` before ever reaching a subprocess).
+/// `model_id` wins if both are somehow present, matching this crate's own
+/// "first matching real param wins" convention elsewhere (e.g.
+/// `litellm_proxy_start`'s port/config_path handling).
+fn resolve_hf_pull_target(
+    model_id: Option<String>,
+    hf_repo: Option<String>,
+    tag: Option<String>,
+) -> Result<(String, String), String> {
+    match (model_id, hf_repo, tag) {
+        (Some(model_id), _, _) => {
+            let model = hf_downloader::find_model(&model_id)
+                .ok_or_else(|| format!("unknown curated model id: {model_id:?}"))?;
+            Ok((model.id.to_string(), hf_downloader::pull_target(model)))
+        }
+        (None, Some(hf_repo), Some(tag)) => {
+            let normalized = hf_downloader::normalize_hf_repo_input(&hf_repo);
+            let target = hf_downloader::custom_pull_target(&hf_repo, &tag)?;
+            Ok((format!("{normalized}:{}", tag.trim()), target))
+        }
+        _ => Err(
+            "hf_pull_model requires either a string `model_id`, or both a string `hf_repo` and \
+             string `tag`"
+                .to_string(),
+        ),
+    }
+}
+
 /// Starts a real HF -> Ollama pull in the background: an immediate
 /// `{"status": "starting"}` ack, then a spawned thread runs the real,
 /// possibly multi-minute `ollama pull`, forwarding real subprocess output
 /// as `hf_pull_progress` events and finishing with `hf_pull_ready`/
 /// `hf_pull_failed` -- the same "ack now, event later" shape
-/// `litellm_proxy_start` already established.
-fn hf_pull_model(out_tx: Sender<String>, model_id: String) -> Result<serde_json::Value, String> {
-    let model = hf_downloader::find_model(&model_id)
-        .copied()
-        .ok_or_else(|| format!("unknown curated model id: {model_id:?}"))?;
+/// `litellm_proxy_start` already established. Accepts either a curated
+/// `model_id` or a user-defined custom `hf_repo`+`tag` pair, resolved by
+/// `resolve_hf_pull_target` above -- from this point on, both paths are
+/// identical: same validation-already-done target string, same subprocess
+/// spawn, same event shapes.
+fn hf_pull_model(
+    out_tx: Sender<String>,
+    model_id: Option<String>,
+    hf_repo: Option<String>,
+    tag: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let (event_id, target) = resolve_hf_pull_target(model_id, hf_repo, tag)?;
 
     if !hf_downloader::is_ollama_available() {
         return Err("`ollama` isn't on $PATH -- install it from https://ollama.com".to_string());
     }
 
+    let ack_target = target.clone();
     thread::spawn(move || {
         let (line_tx, line_rx) = mpsc::channel::<String>();
         let forward_out_tx = out_tx.clone();
-        let forward_model_id = model.id.to_string();
+        let forward_model_id = event_id.clone();
         thread::spawn(move || {
             for line in line_rx {
                 let event = Event {
@@ -293,27 +339,27 @@ fn hf_pull_model(out_tx: Sender<String>, model_id: String) -> Result<serde_json:
             }
         });
 
-        let event = match hf_downloader::spawn_pull(&model, line_tx) {
+        let event = match hf_downloader::spawn_pull_target(&target, line_tx) {
             Ok(mut child) => match child.wait() {
                 Ok(status) if status.success() => Event {
                     event: "hf_pull_ready".to_string(),
-                    data: serde_json::json!({ "model_id": model.id }),
+                    data: serde_json::json!({ "model_id": event_id }),
                 },
                 Ok(status) => Event {
                     event: "hf_pull_failed".to_string(),
                     data: serde_json::json!({
-                        "model_id": model.id,
+                        "model_id": event_id,
                         "error": format!("ollama pull exited with {status}"),
                     }),
                 },
                 Err(e) => Event {
                     event: "hf_pull_failed".to_string(),
-                    data: serde_json::json!({ "model_id": model.id, "error": e.to_string() }),
+                    data: serde_json::json!({ "model_id": event_id, "error": e.to_string() }),
                 },
             },
             Err(e) => Event {
                 event: "hf_pull_failed".to_string(),
-                data: serde_json::json!({ "model_id": model.id, "error": e.to_string() }),
+                data: serde_json::json!({ "model_id": event_id, "error": e.to_string() }),
             },
         };
         if let Ok(line) = serde_json::to_string(&event) {
@@ -321,7 +367,7 @@ fn hf_pull_model(out_tx: Sender<String>, model_id: String) -> Result<serde_json:
         }
     });
 
-    Ok(serde_json::json!({ "status": "starting" }))
+    Ok(serde_json::json!({ "status": "starting", "target": ack_target }))
 }
 
 /// Builds the wrapping dispatcher: a real `Fn` of the exact shape
@@ -416,10 +462,17 @@ pub fn make_dispatcher(
                 .get("model_id")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let result = match model_id {
-                Some(model_id) => hf_pull_model(out_tx, model_id),
-                None => Err("hf_pull_model requires a string `model_id` param".to_string()),
-            };
+            let hf_repo = req
+                .params
+                .get("hf_repo")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let tag = req
+                .params
+                .get("tag")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let result = hf_pull_model(out_tx, model_id, hf_repo, tag);
             match result {
                 Ok(value) => Response {
                     id: req.id,
@@ -685,5 +738,91 @@ mod tests {
             resp.error.is_none(),
             "a fell-through list_dir must succeed over the real transport: {resp:?}"
         );
+    }
+
+    #[test]
+    fn resolve_hf_pull_target_looks_up_a_real_curated_model() {
+        let model = hf_downloader::CURATED_MODELS[0];
+        let (event_id, target) =
+            resolve_hf_pull_target(Some(model.id.to_string()), None, None).unwrap();
+        assert_eq!(event_id, model.id);
+        assert_eq!(target, hf_downloader::pull_target(&model));
+    }
+
+    #[test]
+    fn resolve_hf_pull_target_rejects_an_unknown_curated_id() {
+        let err = resolve_hf_pull_target(Some("not-a-real-id".to_string()), None, None)
+            .expect_err("unknown model_id must be a real error");
+        assert!(err.contains("not-a-real-id"));
+    }
+
+    #[test]
+    fn resolve_hf_pull_target_accepts_a_real_user_defined_custom_repo_and_tag() {
+        let (event_id, target) = resolve_hf_pull_target(
+            None,
+            Some("https://huggingface.co/bartowski/Foo-GGUF".to_string()),
+            Some("Q4_K_M".to_string()),
+        )
+        .unwrap();
+        assert_eq!(event_id, "bartowski/Foo-GGUF:Q4_K_M");
+        assert_eq!(target, "hf.co/bartowski/Foo-GGUF:Q4_K_M");
+    }
+
+    #[test]
+    fn resolve_hf_pull_target_rejects_a_malformed_custom_repo() {
+        let err = resolve_hf_pull_target(
+            None,
+            Some("not-a-real-repo-shape".to_string()),
+            Some("Q4_K_M".to_string()),
+        )
+        .expect_err("malformed custom hf_repo must be a real error");
+        assert!(err.contains("<org>/<name>"));
+    }
+
+    #[test]
+    fn resolve_hf_pull_target_rejects_missing_params() {
+        assert!(resolve_hf_pull_target(None, None, None).is_err());
+        assert!(resolve_hf_pull_target(None, Some("org/repo".to_string()), None).is_err());
+        assert!(resolve_hf_pull_target(None, None, Some("Q4_K_M".to_string())).is_err());
+    }
+
+    /// End-to-end through the dispatcher: a real user-defined custom link
+    /// (no `model_id`) reaches `hf_pull_model` and either starts a real
+    /// pull (if `ollama` happens to be installed here) or fails with the
+    /// real, honest "`ollama` isn't on $PATH" message -- never a param
+    /// error, proving the custom-link path is genuinely wired through
+    /// `make_dispatcher`, not just unit-tested in isolation.
+    #[test]
+    fn hf_pull_model_dispatch_accepts_a_real_custom_link_end_to_end() {
+        let backend = Arc::new(Mutex::new(BackendState::new()));
+        let dispatch = make_dispatcher(Arc::new(DevServerState::new()));
+        let (tx, _rx) = mpsc::channel();
+
+        let resp = dispatch(
+            &backend,
+            Request {
+                id: 11,
+                method: HF_PULL_MODEL.to_string(),
+                params: serde_json::json!({
+                    "hf_repo": "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",
+                    "tag": "Q4_K_M",
+                }),
+            },
+            tx,
+        );
+
+        assert_eq!(resp.id, 11);
+        // Either a real "starting" ack (ollama present) or a real, specific
+        // "ollama not on PATH" error -- never a params/validation error,
+        // which would indicate the custom-link path isn't reaching
+        // `resolve_hf_pull_target` correctly.
+        match (&resp.result, &resp.error) {
+            (Some(value), None) => assert_eq!(value["status"], "starting"),
+            (None, Some(message)) => assert!(
+                message.contains("ollama"),
+                "expected an ollama-availability error, got: {message}"
+            ),
+            other => panic!("expected exactly one of result/error, got {other:?}"),
+        }
     }
 }
