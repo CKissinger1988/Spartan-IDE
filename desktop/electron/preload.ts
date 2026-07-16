@@ -46,6 +46,7 @@ const ALLOWED_METHODS = new Set([
   "settings_get",
   "settings_set",
   "check_for_updates",
+  "model_status",
   "crash_reports_list",
   "crash_report_upload",
   "create_project",

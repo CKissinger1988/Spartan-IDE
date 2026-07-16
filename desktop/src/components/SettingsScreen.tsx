@@ -92,6 +92,22 @@ type UpdateCheckDisplay =
   | { kind: "ready"; result: UpdateCheckResult }
   | { kind: "failed"; error: string };
 
+/** Real shape of `model_status_json()` (`crates/spartan-backend`) -- either
+ * a configured provider (with a real live health probe) or an honest
+ * construction error, never a fabricated success. */
+interface ModelStatusResult {
+  configured: boolean;
+  kind: string;
+  model?: string;
+  provider_id?: string;
+  is_local?: boolean;
+  context_window?: number;
+  supports_native_tool_calling?: boolean;
+  health?: string;
+  fallback_count?: number;
+  error?: string;
+}
+
 function shortCommit(commit: string): string {
   return commit.slice(0, 7);
 }
@@ -153,6 +169,8 @@ export default function SettingsScreen(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckDisplay>({ kind: "not_checked" });
+  const [modelStatus, setModelStatus] = useState<ModelStatusResult | null>(null);
+  const [modelStatusChecking, setModelStatusChecking] = useState(false);
   const [crashReports, setCrashReports] = useState<CrashReportEntry[]>([]);
   const [crashReportsError, setCrashReportsError] = useState<string | null>(null);
   const [uploadStatus, setUploadStatus] = useState<Record<string, UploadStatus>>({});
@@ -201,6 +219,19 @@ export default function SettingsScreen(): React.ReactElement {
     window.spartan.call("check_for_updates", {}).catch((e: Error) => {
       setUpdateCheck({ kind: "failed", error: e.message });
     });
+  }, []);
+
+  // Real, synchronous (unlike check_for_updates above) -- model_status_json
+  // itself performs the live health probe before returning, so there's no
+  // async event to subscribe to, matching this method's own real backend
+  // shape.
+  const checkModelStatus = useCallback(() => {
+    setModelStatusChecking(true);
+    window.spartan
+      .call("model_status", {})
+      .then((result) => setModelStatus(result as ModelStatusResult))
+      .catch((e: Error) => setModelStatus({ configured: false, kind: "?", error: e.message }))
+      .finally(() => setModelStatusChecking(false));
   }, []);
 
   const save = useCallback(
@@ -534,6 +565,20 @@ export default function SettingsScreen(): React.ReactElement {
         too, via grammar-constrained sampling: the model's output is structurally forced to match
         the tool schema, so Leo's plan/execute loop works fully through it, not just free-text
         completion.
+      </div>
+      <div className="settings-row">
+        <button className="settings-button mono" disabled={modelStatusChecking} onClick={checkModelStatus}>
+          {modelStatusChecking ? "Checking…" : "Check Status"}
+        </button>
+        <span className="settings-update-status mono">
+          {modelStatus === null
+            ? "not checked yet"
+            : modelStatus.configured
+              ? `${modelStatus.kind} (${modelStatus.model}) — ${modelStatus.health}${
+                  modelStatus.is_local ? ", local" : ""
+                }`
+              : `not configured: ${modelStatus.error}`}
+        </span>
       </div>
 
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>

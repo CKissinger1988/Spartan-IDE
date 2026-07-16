@@ -2410,6 +2410,7 @@ pub fn handle_request(
             })
         })(),
         "check_for_updates" => check_for_updates(out_tx.clone()),
+        "model_status" => Ok(model_status_json()),
         "crash_reports_list" => crash_reports_list(),
         "crash_report_upload" => {
             get_str_param(&req.params, "filename").and_then(|f| crash_report_upload(&f))
@@ -3809,6 +3810,26 @@ mod tests {
         } else {
             assert!(status["error"].is_string(), "an error is reported plainly");
         }
+    }
+
+    /// `model_status_json()` itself has been real and tested since §75.43,
+    /// but `handle_request` never exposed it as a real callable method --
+    /// `spartan-devserver`'s own wrapping dispatcher answered `model_status`
+    /// directly and never fell through to this crate for it, so `desktop/`
+    /// (which talks to a plain `spartan-backend` process, not a devserver)
+    /// had no way to reach it at all. This confirms the dispatch arm itself
+    /// reaches the same real function, matching its own shape exactly.
+    #[test]
+    fn model_status_is_a_real_reachable_backend_method() {
+        let state = new_state();
+        let resp = call(&state, 1, "model_status", serde_json::json!({}));
+        assert!(resp.error.is_none(), "model_status must succeed: {resp:?}");
+        let result = resp.result.unwrap();
+        assert!(
+            result["configured"].is_boolean(),
+            "reports a real configured flag"
+        );
+        assert!(result["kind"].is_string(), "reports the provider kind");
     }
 
     #[test]

@@ -3417,6 +3417,32 @@ first — it's the parity reference until each row there is actually reimplement
   verification note); no equivalent UI in `desktop/` (a real, separate follow-up would need
   `desktop/`'s Electron main process to also spawn/connect to a `spartan-devserver`-class endpoint,
   a larger architectural change deliberately not made in this pass).
+- **Real, working code — real `model_status` wiring in `spartan-backend`'s own dispatch, closing
+  `desktop/`'s side of the gap the immediately preceding bullet named (task #141)**: user-requested
+  ("Continue with everything possible... do not stop"). `spartan_backend::model_status_json()`
+  itself has been real and tested since §75.43, but `handle_request` never exposed it as a real
+  callable method -- `spartan-devserver`'s own wrapping dispatcher answered `model_status` directly
+  and fell through to `handle_request` for everything else, so this crate itself never needed to
+  handle it until now. `desktop/`'s Electron main process talks to a plain `spartan-backend`
+  process (not a devserver), so its own Settings screen had genuinely no way to show a live model
+  health check at all, despite the underlying function existing since §75.43. One new dispatch arm
+  (`"model_status" => Ok(model_status_json())`, reusing the already-tested function verbatim, zero
+  new logic) plus one new dispatch-level test confirming the arm actually reaches it (the function
+  itself was already tested, the wiring wasn't). `main.ts`/`preload.ts` both gained `model_status`
+  in their IPC allowlists, added at the identical list position in both files the same way
+  `check_for_updates` already was, avoiding a repeat of the real drift bug §75.79 found and fixed
+  between these two files. `SettingsScreen.tsx`'s existing "Leo — Model Provider" section gained a
+  real, synchronous "Check Status" row (`model_status_json()` performs its own live health probe
+  before returning, so unlike `check_for_updates` there's no async event to subscribe to) showing
+  the real configured provider, model, live health (`healthy`/`unauthorized`/`unreachable`), and
+  whether it's local. 1 new Rust test (109 total in `spartan-backend`'s own `--lib` suite, up from
+  108), full workspace `cargo fmt --all -- --check`/`cargo clippy --workspace --release
+  --all-targets`/`cargo test --workspace --release` clean, `desktop/`'s own `npm run typecheck`
+  clean. **What this does not confirm**: no live Electron-window verification (the same standing
+  gap since §75.59) -- the new dispatch arm is verified at the Rust test level (a real request
+  reaching a real response through the exact same `handle_request` function `desktop/` calls
+  through IPC) rather than through an actual running Electron window, matching every other
+  `desktop/`-facing pass in this project's history that hit the same constraint.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -3474,7 +3500,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 685 tests: 7 spikes + 18 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 686 tests: 7 spikes + 18 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
