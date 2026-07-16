@@ -39,8 +39,8 @@ use spartan_leo::plan::{generate_plan, ImplementationPlan, PlanError};
 use spartan_leo::tool::{ToolCall, ToolResult};
 use spartan_model::provider::Message;
 use spartan_model::{
-    ClaudeProvider, FailoverProvider, LiteLLMProvider, LlamaCppProvider, ModelProvider,
-    OllamaProvider,
+    ClaudeProvider, FailoverProvider, LiteLLMProvider, LlamaCppProvider, LmStudioProvider,
+    ModelProvider, OllamaProvider,
 };
 
 mod pty;
@@ -423,6 +423,7 @@ fn build_single_provider(
             Ok(Box::new(ClaudeProvider::new(api_key, model)))
         }
         spartan_settings::LeoProviderKind::LiteLLM => Ok(Box::new(LiteLLMProvider::local(model))),
+        spartan_settings::LeoProviderKind::LmStudio => Ok(Box::new(LmStudioProvider::local(model))),
         spartan_settings::LeoProviderKind::LlamaCpp => {
             if model.trim().is_empty() {
                 return Err(
@@ -3499,6 +3500,21 @@ mod tests {
                 .expect("Ollama provider construction must never fail");
         assert!(provider.is_local());
         assert_eq!(provider.id(), "llama3.1:8b");
+    }
+
+    #[test]
+    fn build_leo_provider_constructs_a_real_lmstudio_provider() {
+        let settings = spartan_settings::LeoProviderSettings {
+            kind: spartan_settings::LeoProviderKind::LmStudio,
+            model: "local-model".to_string(),
+            ..Default::default()
+        };
+        let provider =
+            build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default())
+                .expect("LM Studio provider construction must never fail (no key needed)");
+        // LM Studio runs the model on-device -- a real local runtime.
+        assert!(provider.is_local());
+        assert_eq!(provider.id(), "local-model");
     }
 
     #[test]

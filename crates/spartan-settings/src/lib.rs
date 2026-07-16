@@ -87,6 +87,9 @@ pub enum LeoProviderKind {
     Claude,
     LiteLLM,
     LlamaCpp,
+    /// LM Studio's local server (§57) -- OpenAI-compatible, runs the model
+    /// in-process on this machine, so a real local runtime/privacy boundary.
+    LmStudio,
 }
 
 /// `model` is a real, free-form string (not an enum) since each real

@@ -11,7 +11,7 @@ interface GpuOffloadSettings {
 
 type LeoApprovalMode = "ManualEveryStep" | "AutoApproveSafe";
 
-type LeoProviderKind = "Ollama" | "Claude" | "LiteLLM" | "LlamaCpp";
+type LeoProviderKind = "Ollama" | "Claude" | "LiteLLM" | "LlamaCpp" | "LmStudio";
 
 interface LeoProviderSettings {
   kind: LeoProviderKind;
@@ -63,7 +63,10 @@ const DEFAULT_MODEL_FOR_KIND: Record<LeoProviderKind, string> = {
   Ollama: "llama3.1:8b",
   Claude: "claude-3-5-sonnet-latest",
   LiteLLM: "gpt-4o",
-  // Real, deliberate empty default -- unlike the other three providers'
+  // LM Studio serves whichever model it has loaded; this is a placeholder the
+  // user replaces with their loaded model's id (or leaves as a reminder).
+  LmStudio: "local-model",
+  // Real, deliberate empty default -- unlike the other providers'
   // real, valid model-name defaults, there is no universal real .gguf
   // path this could point at; the user must Browse to (or type) a real
   // local file.
@@ -477,6 +480,7 @@ export default function SettingsScreen(): React.ReactElement {
           <option value="Ollama">Ollama (local)</option>
           <option value="Claude">Claude (Anthropic API)</option>
           <option value="LiteLLM">LiteLLM (local proxy → cloud backends)</option>
+          <option value="LmStudio">LM Studio (local server)</option>
           <option value="LlamaCpp">llama.cpp (local, in-process GGUF)</option>
         </select>
       </div>
