@@ -111,33 +111,45 @@ forked/vendored either) — see the root `CLAUDE.md`.
   starting `spartan-devserver --project-root:<a real temp git repo>` and
   driving the served app with Playwright staged a real modified file,
   committed it, and the resulting commit was independently confirmed via
-  `git log`/`git show` run directly against the repo on disk. **LSP is now
-  real in `spartan-backend` itself** (`open_file`/`edit`/`undo`/`redo`
-  spawn/drive a real language-server session and stream `lsp_diagnostics`/
-  `lsp_error` events, closing a gap that had existed in *both*
+  `git log`/`git show` run directly against the repo on disk.
+- **LSP is now real and wired here too, via a second, backend-mode editing
+  path.** `spartan-backend`'s own `open_file`/`edit`/`undo`/`redo` spawn/
+  drive a real language-server session and stream `lsp_diagnostics`/
+  `lsp_error` events (closing a gap that had existed in *both*
   Electron-based shells since the pivot away from the wgpu reference
-  shell) — and `desktop/`'s own Editor now renders it live, since that
-  shell's file-open/edit path already goes through the backend's IPC
-  methods unconditionally. **This app does not yet benefit**, because its
-  own editing path is still File System Access + WASM, not the backend's
-  `open_file`/`edit` methods this new LSP wiring hangs off of — wiring
-  diagnostics in here means first giving this app a real "backend-mode"
-  editing path (routing file open/edit/save through `BackendClient` when
-  connected, the way `desktop/` already does unconditionally), a real,
-  separate, larger increment, not attempted in this pass. DAP and Leo
-  remain unwired in every shell.
-- **Git operates on the devserver's own project root, not necessarily the
-  File System Access folder.** A real, named consequence of the above: the
-  folder opened via "Open Folder…" (File System Access) and the directory
-  the connected devserver was launched against (`--project-root:`) are two
-  independent concepts in this increment — nothing unifies them yet. In the
-  common case (the devserver is launched from the same project the user
-  opens), they're the same directory in practice, but this app has no way
-  to verify that and doesn't claim to.
-- **Single file open at a time.** No tabs, no multi-file model — a real,
-  narrow first-increment scope, the same kind of deliberate v1 cut this
-  project's own history already applies elsewhere (e.g. `gui-builder`'s own
-  real v1 scope, §75.38).
+  shell) — `desktop/`'s Editor already rendered this live since its own
+  file-open/edit path always went through the backend's IPC methods
+  unconditionally, but this app's original editing path (File System
+  Access + WASM) has no `doc_id` for that wiring to key off of. Closed by
+  adding a real, independent second path: `components/BackendFileTree.tsx`
+  (a direct port of `desktop/src/components/FileTree.tsx` onto
+  `BackendClient.call`, rooted at the devserver's own project root) and
+  `components/BackendEditor.tsx` (a direct port of `desktop/src/
+  components/Editor.tsx`, same real edit/undo/redo/save/diagnostics
+  wiring, reached over the WebSocket transport instead of Electron IPC).
+  A third sidebar tab, "Backend", appears alongside Files/Git once a
+  devserver with a known project root is connected; `App.tsx` tracks
+  whichever of the two editing paths was opened most recently as one
+  discriminated `activeContent` slot rather than two independent "current
+  file" states. Real, live-verified against a real running devserver +
+  `pyright-langserver`: opened a real file with a real deliberate type
+  error via the Backend tab, confirmed the real diagnostic rendered in the
+  gutter (screenshotted) matching `desktop/`'s own treatment exactly, typed
+  a real live fix through the actual textarea, and confirmed the
+  diagnostic genuinely cleared. DAP and Leo remain unwired in every shell.
+- **The two editing paths are independent, not unified.** A real, named
+  consequence, not an oversight: the folder opened via "Open Folder…"
+  (File System Access) and the devserver's own project root
+  (`--project-root:`) can be different directories — nothing in this app
+  verifies they match, and `activeContent` only ever holds one open file
+  at a time regardless of which path opened it last. In the common case
+  (the devserver is launched from the same project the user opens), the
+  two happen to agree, but this app makes no attempt to enforce or check
+  that.
+- **Single file open at a time, across both paths combined.** No tabs, no
+  multi-file model — a real, narrow first-increment scope, the same kind
+  of deliberate v1 cut this project's own history already applies
+  elsewhere (e.g. `gui-builder`'s own real v1 scope, §75.38).
 - **Chromium-only.** The File System Access API is not implemented in
   Firefox or Safari. This is a real, permanent platform limit, not a bug —
   the app detects this and shows an honest message instead of failing
@@ -163,6 +175,14 @@ forked/vendored either) — see the root `CLAUDE.md`.
 - `src/components/GitPanel.tsx` — real Source Control panel, a direct port
   of `desktop/src/components/GitPanel.tsx` onto `BackendClient.call`, shown
   only once a devserver connection advertises a real project root.
+- `src/components/BackendFileTree.tsx`, `src/components/BackendEditor.tsx`
+  — the real backend-mode editing path, direct ports of `desktop/src/
+  components/FileTree.tsx`/`Editor.tsx` onto `BackendClient.call`, shown
+  under a "Backend" sidebar tab alongside Files/Git once a devserver
+  connection advertises a real project root. This is what makes real,
+  live LSP diagnostics (`lsp_diagnostics`/`lsp_error` events) usable in
+  this app -- the File System Access + WASM path (`FileTree.tsx`/
+  `Editor.tsx`) has no `doc_id` for that wiring to key off of.
 - `src/App.tsx` — top-level shell; its own doc comment names the same scope
   cuts as this file, kept in sync.
 - `src/syntax.ts`, `src/theme.css` — copied verbatim from `desktop/src/` (one

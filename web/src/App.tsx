@@ -1,12 +1,21 @@
 import React, { useCallback, useEffect, useState } from "react";
 import FileTree from "./components/FileTree";
 import GitPanel from "./components/GitPanel";
+import BackendFileTree from "./components/BackendFileTree";
 import Editor, { type OpenFile } from "./components/Editor";
+import BackendEditor, { type BackendOpenFile, type LspDiagnostic } from "./components/BackendEditor";
 import { ensureBufferWasmInit, Document as WasmDocument } from "./buffer";
 import { isFileSystemAccessSupported, pickProjectDirectory, readFileText } from "./fsAccess";
 import { applyTheme, type ThemeName } from "./applyTheme";
 import { applyFontFamily } from "./applyFontFamily";
 import { BackendClient } from "./backendClient";
+
+type ActiveContent =
+  | { kind: "local"; file: OpenFile }
+  | { kind: "backend"; file: BackendOpenFile }
+  | null;
+
+type SidebarView = "files" | "git" | "backend";
 
 type BackendStatus = "connecting" | "connected" | "client-only";
 
@@ -26,24 +35,33 @@ const FONT_STORAGE_KEY = "spartan.fontFamily";
  * to WASM, real save-to-disk, real (single-step) undo.
  *
  * **Real, deliberately out-of-scope in this first increment, named
- * honestly rather than silently missing**: LSP, DAP, and Leo are still
- * not wired to anything here. `spartan-backend`'s real WebSocket
- * transport (§75.88) exists and is real, tested, production code; a later
- * increment answered the token-delivery design question that transport's
- * own doc comment explicitly left open (how a browser tab legitimately
- * learns the per-process token and the correct origin -- the
- * `/__spartan/session` same-origin handoff), and a further increment used
- * that same handoff to advertise the devserver's own real project root, so
- * **git is now real and wired** when a devserver is connected: see
- * `GitPanel`, toggled alongside the File System Access-backed `FileTree`.
- * Multi-file tabs are also not built yet -- only one file open at a time,
- * the same real, narrow first-increment scoping this project's own
- * history already applies elsewhere (e.g. `gui-builder`'s own real v1
- * cuts, §75.38).
+ * honestly rather than silently missing**: DAP and Leo are still not
+ * wired to anything here. `spartan-backend`'s real WebSocket transport
+ * (§75.88) exists and is real, tested, production code; a later increment
+ * answered the token-delivery design question that transport's own doc
+ * comment explicitly left open (how a browser tab legitimately learns the
+ * per-process token and the correct origin -- the `/__spartan/session`
+ * same-origin handoff), a further increment used that same handoff to
+ * advertise the devserver's own real project root so **git is real and
+ * wired** (`GitPanel`), and a further increment gave this app a real
+ * **backend-mode editing path** (`BackendFileTree`/`BackendEditor`,
+ * routing file open/edit/undo/redo/save through `BackendClient` instead
+ * of File System Access + WASM) purely so `spartan-backend`'s own real
+ * LSP diagnostics wiring -- which needs a real `doc_id` the WASM path has
+ * no equivalent for -- has something to attach to here, the same way it
+ * already does in `desktop/`. The two editing paths are independent and
+ * both real: File System Access + WASM (`FileTree`/`Editor`) works with
+ * no backend at all; `BackendFileTree`/`BackendEditor` only appear once a
+ * devserver is connected with a known project root, and operate on that
+ * root, not necessarily the File System Access folder. Multi-file tabs
+ * are also not built yet -- only one file open at a time (whichever kind
+ * was opened most recently), the same real, narrow first-increment
+ * scoping this project's own history already applies elsewhere (e.g.
+ * `gui-builder`'s own real v1 cuts, §75.38).
  */
 export default function App(): React.ReactElement {
   const [root, setRoot] = useState<FileSystemDirectoryHandle | null>(null);
-  const [file, setFile] = useState<OpenFile | null>(null);
+  const [activeContent, setActiveContent] = useState<ActiveContent>(null);
   const [error, setError] = useState<string | null>(null);
   const [wasmReady, setWasmReady] = useState(false);
   const [theme, setTheme] = useState<ThemeName>(
@@ -54,7 +72,12 @@ export default function App(): React.ReactElement {
   );
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("connecting");
   const [backendClient, setBackendClient] = useState<BackendClient | null>(null);
-  const [sidebarView, setSidebarView] = useState<"files" | "git">("files");
+  const [sidebarView, setSidebarView] = useState<SidebarView>("files");
+  // Real, live LSP diagnostics, keyed by doc_id (only ever populated for
+  // backend-mode files -- the WASM path has no doc_id for this to key
+  // off of). Kept across a sidebar-view switch so re-opening the same
+  // backend file doesn't lose its already-known diagnostics.
+  const [diagnosticsByDoc, setDiagnosticsByDoc] = useState<Record<number, LspDiagnostic[]>>({});
 
   // Optional backend upgrade: when this page is served by a real
   // spartan-devserver (§75.88 + the /__spartan/session handoff), connect to
@@ -84,14 +107,36 @@ export default function App(): React.ReactElement {
     };
   }, []);
 
+  // Real, live LSP diagnostics stream -- the same real lsp_diagnostics/
+  // lsp_error events desktop/'s App.tsx subscribes to via window.spartan.
+  // onEvent, here via BackendClient.onEvent's single-argument
+  // {event, data} shape instead.
+  useEffect(() => {
+    if (!backendClient) return;
+    return backendClient.onEvent((e) => {
+      if (e.event === "lsp_diagnostics") {
+        const { doc_id, diagnostics } = e.data as { doc_id: number; diagnostics: LspDiagnostic[] };
+        setDiagnosticsByDoc((prev) => ({ ...prev, [doc_id]: diagnostics }));
+      } else if (e.event === "lsp_error") {
+        console.warn("lsp_error:", e.data);
+      }
+    });
+  }, [backendClient]);
+
   // A real, connected devserver with a real, resolved project root is what
-  // makes the Git panel usable -- the File System Access API never gives
-  // this app an OS path for whatever folder `root` (above) points at, so
-  // git operations run against the devserver's *own* launch directory
-  // instead (see `GitPanel`'s and `backendClient.ts`'s own doc comments).
-  const canGit = backendStatus === "connected" && !!backendClient?.projectRoot;
-  const activeSidebarView: "files" | "git" =
-    sidebarView === "git" && canGit ? "git" : root ? "files" : canGit ? "git" : "files";
+  // makes the Git panel *and* backend-mode editing usable -- the File
+  // System Access API never gives this app an OS path for whatever folder
+  // `root` (above) points at, so both operate on the devserver's *own*
+  // launch directory instead (see `GitPanel`'s/`BackendFileTree`'s and
+  // `backendClient.ts`'s own doc comments).
+  const backendReady = backendStatus === "connected" && !!backendClient?.projectRoot;
+  const availableSidebarViews: SidebarView[] = [
+    ...(root ? (["files"] as const) : []),
+    ...(backendReady ? (["git", "backend"] as const) : []),
+  ];
+  const activeSidebarView: SidebarView = availableSidebarViews.includes(sidebarView)
+    ? sidebarView
+    : (availableSidebarViews[0] ?? "files");
 
   // Applied on mount and every real change, matching `desktop/`'s own
   // startup-apply-then-live-apply pattern (`App.tsx`/`SettingsScreen.tsx`).
@@ -130,7 +175,7 @@ export default function App(): React.ReactElement {
         }
         const content = await readFileText(handle);
         const doc = new WasmDocument(content);
-        setFile({ path, handle, doc, content, dirty: false });
+        setActiveContent({ kind: "local", file: { path, handle, doc, content, dirty: false } });
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -138,10 +183,30 @@ export default function App(): React.ReactElement {
     [wasmReady]
   );
 
+  const openBackendFile = useCallback(
+    async (path: string) => {
+      if (!backendClient) return;
+      setError(null);
+      try {
+        const result = (await backendClient.call("open_file", { path })) as {
+          doc_id: number;
+          content: string;
+        };
+        setActiveContent({
+          kind: "backend",
+          file: { path, docId: result.doc_id, content: result.content, dirty: false },
+        });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [backendClient]
+  );
+
   const handleContentChange = useCallback((path: string, content: string, saved?: boolean) => {
-    setFile((prev) => {
-      if (!prev || prev.path !== path) return prev;
-      return { ...prev, content, dirty: saved ? false : true };
+    setActiveContent((prev) => {
+      if (!prev || prev.file.path !== path) return prev;
+      return { ...prev, file: { ...prev.file, content, dirty: saved ? false : true } } as ActiveContent;
     });
   }, []);
 
@@ -169,8 +234,8 @@ export default function App(): React.ReactElement {
           Open Folder…
         </button>
         <span className="toolbar-note">
-          {canGit
-            ? "Connected to a local devserver -- git is live, no LSP/DAP/Leo yet"
+          {backendReady
+            ? "Connected to a local devserver -- git and backend-mode editing (with live LSP diagnostics) are live, no DAP/Leo yet"
             : "Client-side only in this increment -- no LSP/DAP/Leo/git yet, see README.md"}
         </span>
         <select
@@ -193,46 +258,76 @@ export default function App(): React.ReactElement {
         />
       </div>
       <div className="main-body">
-        {(root || canGit) && (
+        {availableSidebarViews.length > 0 && (
           <div className="file-tree-panel">
-            {root && canGit && (
+            {availableSidebarViews.length > 1 && (
               <div className="sidebar-toggle-row">
-                <button
-                  className={`sidebar-toggle-btn ${activeSidebarView === "files" ? "sidebar-toggle-active" : ""}`}
-                  onClick={() => setSidebarView("files")}
-                >
-                  Files
-                </button>
-                <button
-                  className={`sidebar-toggle-btn ${activeSidebarView === "git" ? "sidebar-toggle-active" : ""}`}
-                  onClick={() => setSidebarView("git")}
-                >
-                  Git
-                </button>
+                {availableSidebarViews.includes("files") && (
+                  <button
+                    className={`sidebar-toggle-btn ${activeSidebarView === "files" ? "sidebar-toggle-active" : ""}`}
+                    onClick={() => setSidebarView("files")}
+                  >
+                    Files
+                  </button>
+                )}
+                {availableSidebarViews.includes("git") && (
+                  <button
+                    className={`sidebar-toggle-btn ${activeSidebarView === "git" ? "sidebar-toggle-active" : ""}`}
+                    onClick={() => setSidebarView("git")}
+                  >
+                    Git
+                  </button>
+                )}
+                {availableSidebarViews.includes("backend") && (
+                  <button
+                    className={`sidebar-toggle-btn ${activeSidebarView === "backend" ? "sidebar-toggle-active" : ""}`}
+                    onClick={() => setSidebarView("backend")}
+                  >
+                    Backend
+                  </button>
+                )}
               </div>
             )}
             {activeSidebarView === "files" && root ? (
               <FileTree root={root} onOpenFile={openFile} />
-            ) : activeSidebarView === "git" && canGit && backendClient?.projectRoot ? (
+            ) : activeSidebarView === "git" && backendReady && backendClient?.projectRoot ? (
               <GitPanel client={backendClient} root={backendClient.projectRoot} />
+            ) : activeSidebarView === "backend" && backendReady && backendClient?.projectRoot ? (
+              <BackendFileTree
+                client={backendClient}
+                root={backendClient.projectRoot}
+                onOpenFile={openBackendFile}
+              />
             ) : null}
           </div>
         )}
         <div className="content-area">
           {error && <div className="tree-error">{error}</div>}
-          {!error && file && <Editor file={file} onContentChange={handleContentChange} />}
-          {!error && !file && (
+          {!error && activeContent?.kind === "local" && (
+            <Editor file={activeContent.file} onContentChange={handleContentChange} />
+          )}
+          {!error && activeContent?.kind === "backend" && backendClient && (
+            <BackendEditor
+              client={backendClient}
+              file={activeContent.file}
+              onContentChange={handleContentChange}
+              diagnostics={diagnosticsByDoc[activeContent.file.docId]}
+            />
+          )}
+          {!error && !activeContent && (
             <div className="empty-state">
-              {root ? "Select a file to open it." : "Open a folder to get started."}
+              {root || backendReady
+                ? "Select a file to open it."
+                : "Open a folder to get started."}
             </div>
           )}
         </div>
       </div>
       <div className="status-bar mono">
-        {file ? (
+        {activeContent ? (
           <>
-            <span>{file.path}</span>
-            <span>{file.dirty ? "● unsaved" : "saved"}</span>
+            <span>{activeContent.file.path}</span>
+            <span>{activeContent.file.dirty ? "● unsaved" : "saved"}</span>
           </>
         ) : (
           <span>No file open</span>
@@ -250,6 +345,27 @@ export default function App(): React.ReactElement {
         >
           backend: {backendStatus}
         </span>
+        {activeContent?.kind === "backend" &&
+          (() => {
+            const diags = diagnosticsByDoc[activeContent.file.docId];
+            if (diags === undefined) return null;
+            const errorCount = diags.filter((d) => d.severity === "error").length;
+            const warningCount = diags.filter((d) => d.severity === "warning").length;
+            return (
+              <span
+                className="status-lsp-summary"
+                title={`${errorCount} error${errorCount === 1 ? "" : "s"}, ${warningCount} warning${
+                  warningCount === 1 ? "" : "s"
+                }`}
+              >
+                {errorCount > 0 && <span className="status-lsp-errors">⛔ {errorCount}</span>}
+                {warningCount > 0 && <span className="status-lsp-warnings">⚠ {warningCount}</span>}
+                {errorCount === 0 && warningCount === 0 && (
+                  <span className="status-lsp-clean">✓ LSP</span>
+                )}
+              </span>
+            );
+          })()}
       </div>
     </div>
   );

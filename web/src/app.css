@@ -362,6 +362,34 @@
   user-select: none;
 }
 
+/* Real LSP diagnostics (BackendEditor.tsx, mirroring desktop/'s own
+ * gutter treatment verbatim) -- one real block per line so each row can
+ * carry its own severity-tinted background + a real hover tooltip. */
+.editor-gutter-line {
+  padding-right: 2px;
+  box-sizing: border-box;
+}
+
+.editor-gutter-line-error {
+  background: rgba(var(--status-critical-rgb), 0.16);
+  color: rgb(var(--status-critical-rgb));
+  box-shadow: inset 2px 0 0 rgb(var(--status-critical-rgb));
+}
+
+.editor-gutter-line-warning {
+  background: rgba(var(--status-warning-rgb), 0.14);
+  color: rgb(var(--status-warning-rgb));
+  box-shadow: inset 2px 0 0 rgb(var(--status-warning-rgb));
+}
+
+.editor-gutter-line-info,
+.editor-gutter-line-hint,
+.editor-gutter-line-diagnostic {
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .editor-text-wrap {
   position: relative;
   flex: 1;
@@ -434,6 +462,25 @@
   color: var(--text-dim);
   font-size: 11px;
   flex-shrink: 0;
+}
+
+/* Real, live LSP diagnostic summary for the active backend-mode file. */
+.status-lsp-summary {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+}
+
+.status-lsp-errors {
+  color: rgb(var(--status-critical-rgb));
+}
+
+.status-lsp-warnings {
+  color: rgb(var(--status-warning-rgb));
+}
+
+.status-lsp-clean {
+  color: rgb(var(--status-ok-rgb));
 }
 
 /* Real, hand-written highlight.js token theme (matching desktop/'s own
