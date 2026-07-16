@@ -255,6 +255,71 @@ fn open_file(
     Ok(serde_json::json!({ "doc_id": doc_id, "content": content }))
 }
 
+/// Real, live `textDocument/hover` (task #134, closing `lsp_integration.rs`'s
+/// own previously-named "no hover/completion IPC methods exist yet" gap).
+/// **Never blocks the caller** -- the single request-processing thread
+/// every other IPC method shares must stay free, so this spawns the real,
+/// possibly-slow blocking `LspSession::request_hover` call on its own
+/// thread and reports the result via a real `lsp_hover_result` event
+/// instead of a synchronous response, the same real "ack now, event
+/// later" shape `leo_start_task`/`devcontainer_up` already established.
+/// A real, honest `Err` up front (no such doc, or the file has no live
+/// LSP session at all) still returns synchronously -- there is nothing
+/// slow to wait for in either case.
+///
+/// **A real bug, found only by live end-to-end browser testing, not by
+/// inspection or by the existing Rust integration test's own loose
+/// stringify-and-`contains("int")` assertion**: `LspClient::request`
+/// (and so `LspSession::request_hover`) deliberately returns the *entire*
+/// raw JSON-RPC response message (`{"id":..,"jsonrpc":"2.0","result":{
+/// "contents":...}}`), not just its inner `result` payload -- correct at
+/// that low level, since `request()` is a generic one-shot RPC helper with
+/// no per-method knowledge of what a "clean" result looks like. Sending
+/// that raw envelope straight across the IPC boundary leaked an internal
+/// wire-protocol detail to the real frontend: `desktop/`'s own
+/// `extractHoverText` expects a bare LSP hover result (a `contents` field
+/// directly on the object), so every real hover response silently failed
+/// to extract any text and no tooltip ever rendered, even though the
+/// backend had genuinely answered correctly. Fixed by unwrapping the
+/// envelope's own `result` field here, at the real IPC boundary, before
+/// it ever reaches an event -- the frontend now receives exactly the LSP
+/// hover payload it already expected, with no envelope to unwrap itself.
+fn lsp_hover(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+    line: i64,
+    character: i64,
+) -> Result<serde_json::Value, String> {
+    let session = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        doc.lsp_session
+            .clone()
+            .ok_or_else(|| "no live LSP session for this file".to_string())?
+    };
+    thread::spawn(move || {
+        let raw = session.request_hover(line, character);
+        let result = raw.and_then(|envelope| envelope.get("result").cloned());
+        let event = Event {
+            event: "lsp_hover_result".to_string(),
+            data: serde_json::json!({
+                "doc_id": doc_id,
+                "line": line,
+                "character": character,
+                "result": result,
+            }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+    Ok(serde_json::json!({ "status": "requested" }))
+}
+
 /// Real edit application -- `start_char`/`end_char` name a real char
 /// range (matching every other char-indexed API in `spartan-buffer`);
 /// `start_char == end_char` is a pure insert, `text.is_empty()` with
@@ -2086,6 +2151,12 @@ pub fn handle_request(
             let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
             open_file(&mut guard, &p, out_tx.clone())
         }),
+        "lsp_hover" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            let line = get_u64_param(&req.params, "line")? as i64;
+            let character = get_u64_param(&req.params, "character")? as i64;
+            lsp_hover(state, out_tx.clone(), doc_id, line, character)
+        })(),
         "edit" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;
             let start_char = get_u64_param(&req.params, "start_char")? as usize;
@@ -3929,6 +4000,54 @@ mod tests {
             serde_json::json!({ "doc_id": 999, "start_char": 0, "end_char": 0, "text": "x" }),
         );
         assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn lsp_hover_on_a_real_unopened_doc_id_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "lsp_hover",
+            serde_json::json!({ "doc_id": 999, "line": 0, "character": 0 }),
+        );
+        assert!(resp.error.unwrap().contains("no open document"));
+    }
+
+    #[test]
+    fn lsp_hover_on_a_real_open_synthetic_file_with_no_lsp_session_errors_honestly() {
+        // A real file with an unrecognized extension never gets a real LSP
+        // session at all (`lsp_integration::maybe_spawn_lsp`'s own honest
+        // `None` case) -- `lsp_hover` must report that specifically, not
+        // silently hang or crash.
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-lsp-hover-no-session-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("data.unknownext");
+        std::fs::write(&file, "hello").unwrap();
+
+        let state = new_state();
+        let open_resp = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        );
+        let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+        let resp = call(
+            &state,
+            2,
+            "lsp_hover",
+            serde_json::json!({ "doc_id": doc_id, "line": 0, "character": 0 }),
+        );
+        assert!(resp.error.unwrap().contains("no live LSP session"));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

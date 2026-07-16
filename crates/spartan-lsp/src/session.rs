@@ -29,8 +29,9 @@ use crate::client::{
 };
 use serde::Serialize;
 use spartan_languages::CommandSpec;
+use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -82,6 +83,19 @@ pub enum LspUpdate {
     ServerError(String),
 }
 
+/// A real, one-shot hover/completion request, answered by the session's
+/// own background thread ahead of (never behind) whatever edit-debounce
+/// wait it may currently be sitting in -- see `wait_for_next_action`'s own
+/// doc comment for why queries always take priority.
+enum QueryKind {
+    Hover { line: i64, character: i64 },
+}
+
+struct PendingQuery {
+    kind: QueryKind,
+    reply: Sender<Option<serde_json::Value>>,
+}
+
 struct MailboxState {
     latest_text: Option<String>,
     /// Bumped on every `notify_edit`, independent of `latest_text` itself,
@@ -90,6 +104,12 @@ struct MailboxState {
     /// without needing to compare potentially-large text values.
     version: u64,
     shutdown: bool,
+    /// Real hover/completion requests, drained oldest-first. Deliberately
+    /// a plain queue, not deduplicated or coalesced the way edits are --
+    /// each real query has its own distinct real caller waiting on its
+    /// own reply channel, unlike edits, which only ever have one "current"
+    /// buffer state worth reporting.
+    pending_queries: VecDeque<PendingQuery>,
 }
 
 struct Mailbox {
@@ -140,6 +160,7 @@ impl LspSession {
                 latest_text: None,
                 version: 0,
                 shutdown: false,
+                pending_queries: VecDeque::new(),
             }),
             cvar: Condvar::new(),
         });
@@ -204,6 +225,46 @@ impl LspSession {
         self.updates_rx.lock().unwrap().recv().ok()
     }
 
+    /// Real, synchronous `textDocument/hover` against this session's own
+    /// live server -- **blocks the calling thread** until the session's
+    /// background thread answers (queries always run ahead of any
+    /// in-progress edit-debounce wait, see `wait_for_next_action`), up to
+    /// a real bounded timeout if the reply channel is somehow never
+    /// signaled (the session thread exited without draining its queue).
+    /// Real callers (e.g. `spartan-backend`'s own `lsp_hover` IPC handler)
+    /// must call this from their own dedicated thread, never the single
+    /// request-processing thread every other IPC method shares -- the
+    /// same discipline already applied to Leo's own blocking model calls.
+    ///
+    /// **A real bug, found only by running a live end-to-end test, not by
+    /// inspection**: an early version bounded this wait at `DEFAULT_
+    /// TIMEOUT` (10s) -- correct for a query answered once the session's
+    /// own dispatch loop is already running, but a query submitted right
+    /// after `spawn()` returns is queued *before* the loop starts (the
+    /// real `open_project`/`wait_real_diagnostics` handshake, bounded by
+    /// the much larger `INDEXING_TIMEOUT`, runs first), so a real hover
+    /// request issued immediately after opening a file against a
+    /// still-indexing server timed out and silently returned `None` even
+    /// though the query would genuinely have been answered correctly
+    /// once indexing finished. Fixed by bounding this wait generously
+    /// enough to cover that real worst case: the indexing wait, then the
+    /// query's own request timeout.
+    pub fn request_hover(&self, line: i64, character: i64) -> Option<serde_json::Value> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        {
+            let mut guard = self.mailbox.state.lock().unwrap();
+            guard.pending_queries.push_back(PendingQuery {
+                kind: QueryKind::Hover { line, character },
+                reply: reply_tx,
+            });
+        }
+        self.mailbox.cvar.notify_one();
+        reply_rx
+            .recv_timeout(INDEXING_TIMEOUT + DEFAULT_TIMEOUT)
+            .ok()
+            .flatten()
+    }
+
     /// Signals the background thread to shut down and joins it. Blocks for
     /// up to ~7s worst case, matching `LspClient::shutdown`'s own bound.
     pub fn shutdown(self) {
@@ -229,9 +290,10 @@ impl LspSession {
     }
 }
 
-/// Waits for the next edit, debounces it (self-contained -- see this
-/// module's own doc comment), dispatches it, and waits for the server's
-/// updated diagnostics -- repeating until shutdown. Uses `wait_notification`
+/// Waits for the next real action (a query or a settled edit), debounces
+/// edits (self-contained -- see this module's own doc comment), dispatches
+/// whichever arrived, and (for edits) waits for the server's updated
+/// diagnostics -- repeating until shutdown. Uses `wait_notification`
 /// directly (not `wait_real_diagnostics`, which only ever resolves on a
 /// *non-empty* array by design) so a fixed error can be reported as fixed.
 fn run_dispatch_loop(
@@ -243,9 +305,13 @@ fn run_dispatch_loop(
 ) {
     let mut next_version: i64 = 2; // didOpen already used version 1
     loop {
-        let text = match wait_for_settled_edit(mailbox, debounce) {
-            Some(text) => text,
-            None => return, // shutdown
+        let text = match wait_for_next_action(mailbox, debounce) {
+            Action::Shutdown => return,
+            Action::Query(query) => {
+                dispatch_query(client, file_uri, query);
+                continue;
+            }
+            Action::Edit(text) => text,
         };
 
         if client
@@ -286,33 +352,60 @@ fn run_dispatch_loop(
     }
 }
 
-/// Blocks until an edit has been sitting in the mailbox for a full
+fn dispatch_query(client: &mut LspClient, file_uri: &str, query: PendingQuery) {
+    let result = match query.kind {
+        QueryKind::Hover { line, character } => client.hover(file_uri, line, character),
+    };
+    let _ = query.reply.send(result);
+}
+
+enum Action {
+    Query(PendingQuery),
+    Edit(String),
+    Shutdown,
+}
+
+/// Blocks until a real query is pending (answered immediately, ahead of
+/// any edit -- a hover request shouldn't wait out someone else's debounce
+/// window) or an edit has been sitting in the mailbox for a full
 /// `debounce` window with no newer edit arriving during that wait (a real,
-/// self-contained coalescing policy -- see this module's own doc comment),
-/// then takes and returns it. Returns `None` on shutdown.
-fn wait_for_settled_edit(mailbox: &Mailbox, debounce: Duration) -> Option<String> {
+/// self-contained coalescing policy -- see this module's own doc comment).
+/// Returns `Action::Shutdown` on shutdown.
+fn wait_for_next_action(mailbox: &Mailbox, debounce: Duration) -> Action {
     let mut guard = mailbox.state.lock().unwrap();
     loop {
-        // Wait for a first edit (or shutdown) to arrive.
+        if let Some(query) = guard.pending_queries.pop_front() {
+            return Action::Query(query);
+        }
+        // Wait for a first edit (or shutdown, or a query) to arrive.
         loop {
             if guard.shutdown {
-                return None;
+                return Action::Shutdown;
             }
-            if guard.latest_text.is_some() {
+            if guard.latest_text.is_some() || !guard.pending_queries.is_empty() {
                 break;
             }
             guard = mailbox.cvar.wait(guard).unwrap();
         }
+        if let Some(query) = guard.pending_queries.pop_front() {
+            return Action::Query(query);
+        }
         // An edit is pending. Wait out the debounce window; if a newer
-        // edit bumps the version during that wait, loop and wait again.
+        // edit bumps the version during that wait, loop and wait again --
+        // but a query arriving during the wait still wins immediately.
         let version_before = guard.version;
         let (g, timeout_result) = mailbox.cvar.wait_timeout(guard, debounce).unwrap();
         guard = g;
         if guard.shutdown {
-            return None;
+            return Action::Shutdown;
+        }
+        if let Some(query) = guard.pending_queries.pop_front() {
+            return Action::Query(query);
         }
         if timeout_result.timed_out() && guard.version == version_before {
-            return guard.latest_text.take();
+            if let Some(text) = guard.latest_text.take() {
+                return Action::Edit(text);
+            }
         }
         // Either spuriously woken with no new version (loop re-checks the
         // same wait), or a genuinely newer edit arrived -- either way,

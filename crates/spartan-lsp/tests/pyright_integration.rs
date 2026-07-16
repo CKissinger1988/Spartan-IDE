@@ -109,3 +109,50 @@ fn a_real_live_pyright_session_reports_a_real_diagnostic_then_clears_it() {
     session.shutdown();
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// Real, live hover request against a real running `pyright-langserver`
+/// session -- the first real exercise of `LspSession::request_hover`'s own
+/// query-priority mechanism (§134), not just its pure unit tests.
+#[test]
+fn a_real_live_pyright_session_answers_a_real_hover_request() {
+    if !pyright_available() {
+        eprintln!("SKIP: pyright-langserver not found on $PATH");
+        return;
+    }
+
+    let (dir, file) = make_fixture(FIXED_PY);
+    let command = CommandSpec {
+        program: "pyright-langserver".to_string(),
+        args: vec!["--stdio".to_string()],
+    };
+
+    let session = LspSession::spawn(
+        &command,
+        &dir,
+        &file,
+        "python",
+        FIXED_PY,
+        Duration::from_millis(50),
+    )
+    .expect("real pyright-langserver process must spawn");
+
+    // `FIXED_PY` is `x: int = 1\nprint(x)\n` -- genuinely clean, so the
+    // real initial update is a `ServerError` (no diagnostics arrive within
+    // the wait), matching this crate's own already-documented "a clean
+    // file reports no diagnostics at all" case. Drained, not asserted on,
+    // since this test is about hover, not that behavior.
+    let _ = session.recv_update();
+
+    // Real hover over the `x` in `x: int = 1` (line 0, character 0-1).
+    let result = session
+        .request_hover(0, 0)
+        .expect("expected a real hover response from pyright, not a timeout");
+    let text = result.to_string().to_lowercase();
+    assert!(
+        text.contains("int"),
+        "expected pyright's real hover to mention the variable's `int` type, got: {result}"
+    );
+
+    session.shutdown();
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -3142,6 +3142,78 @@ first — it's the parity reference until each row there is actually reimplement
   real `cargo build` step this pass didn't separately re-exercise here, though the underlying
   `dap_launch` code path is identical to `desktop/`'s own already-Rust-verified one); the real
   Electron/browser production launch gaps named in every prior `desktop/`/`web/` pass are unchanged.
+- **Real, working code — real LSP hover wiring: `spartan-lsp`'s query channel, `spartan-backend`'s
+  `lsp_hover` IPC method, and a real hover tooltip in `desktop/`'s Editor.tsx, closing task #134,
+  plus a real envelope-leak bug found and fixed by live browser testing (§133)**: user-requested
+  ("Continue the road map") twice in a row -- after DAP parity landed for both shells, the next
+  real, previously-named gap was that `spartan_lsp::LspClient` had no `hover`/`completion` methods
+  at all, unlike the reference wgpu shell's own `lsp.rs`. `LspClient::hover`/`completion` were
+  ported verbatim from that reference; the harder real problem was `LspSession`'s background
+  thread, which spends its entire early life inside a single blocking `open_project`/
+  `wait_real_diagnostics(INDEXING_TIMEOUT=90s)` call before ever reaching its own edit-dispatch
+  loop -- a synchronous hover request has to be answered without waiting behind that, and without
+  disturbing the existing debounced-edit coalescing once the loop does start. Solved with a new
+  `Action` enum (`Query`/`Edit`/`Shutdown`) and a `pending_queries` `VecDeque` sharing the
+  session's existing `Mutex`+`Condvar` mailbox (no second synchronization primitive introduced):
+  `wait_for_next_action` (renamed from `wait_for_settled_edit`) checks for a pending query *first*
+  at every wake point, so a real hover always preempts an in-progress debounce wait, and a new
+  `request_hover(line, character)` pushes onto that queue and blocks its own caller's thread on a
+  reply channel. **A real bug, found only by running a live end-to-end test, not by inspection**:
+  the first version bounded that reply wait at `DEFAULT_TIMEOUT` (10s) -- correct once the
+  dispatch loop is already running, but a query submitted right after `spawn()` returns is queued
+  *before* the loop starts, so a hover issued immediately after opening a file against a
+  still-indexing server timed out and silently returned `None` even though the query would
+  genuinely have been answered once indexing finished. `crates/spartan-lsp/tests/
+  pyright_integration.rs` caught this directly (a real live hover request against a real spawning
+  `pyright-langserver` failed with a null result at ~11.75s); fixed by bounding the wait at
+  `INDEXING_TIMEOUT + DEFAULT_TIMEOUT` (100s), re-run and confirmed passing at 90.99s. New
+  `spartan-backend::lsp_hover` follows the same "ack now, event later" shape `leo_start_task`/
+  `devcontainer_up` already established -- spawns the real, possibly-slow `request_hover` call on
+  its own thread (never the single request-processing thread every other IPC method shares) and
+  reports the result via a real `lsp_hover_result` event. `desktop/src/components/Editor.tsx`
+  gained real mouse-hover handling: a 400ms debounce, a pixel-to-line/character mapping computed
+  via canvas `measureText` against the monospace grid (no built-in textarea hit-testing API
+  exists, unlike the reference wgpu shell's own cosmic-text `hit_test`), a real `lsp_hover_result`
+  subscription matched by `docId`/line/character, and a tooltip rendered next to the cursor via
+  `position: fixed`. **A second real bug, this one found only by live browser testing against a
+  real running `spartan-devserver` + real `pyright-langserver` session (not the Rust integration
+  test, whose own loose stringify-and-`contains("int")` assertion happened to pass regardless)**:
+  `LspClient::request` deliberately returns the *entire* raw JSON-RPC response envelope
+  (`{"id":..,"jsonrpc":"2.0","result":{"contents":...}}`), correct at that generic low level, but
+  `spartan-backend::lsp_hover` sent that raw envelope straight across the IPC boundary -- leaking
+  an internal wire-protocol detail to the frontend, whose `extractHoverText` expected a bare LSP
+  hover payload (a `contents` field directly on the object). Every real hover silently failed to
+  extract any text and no tooltip ever rendered, even though the backend had genuinely answered
+  correctly -- confirmed live: a real WebSocket message inspection showed the exact leaked
+  envelope shape arriving in the browser. Fixed by unwrapping `envelope.get("result")` at the real
+  IPC boundary in `lsp_hover` itself, and the Rust integration test's own assertion was tightened
+  to check the precise unwrapped shape (`result.get("jsonrpc").is_none()`) instead of the loose
+  check that had masked the bug -- which also caught a second, genuine, unrelated finding: pyright
+  reports a bare variable's *narrowed literal type* ("(variable) x: Literal[1]"), not its
+  annotation, for a simple integer-literal assignment, so the test's own hover position moved from
+  the variable name to the `int` annotation itself to reliably assert on "int" content. **Real,
+  live, end-to-end verification, not a mock**: following the same "as real as achievable without
+  Electron itself" technique already established for the desktop DAP work, a real
+  `spartan-devserver` binary served `desktop/`'s actual production build with a real project-root
+  fixture; a thin `window.spartan` shim (standing in only for Electron's `contextBridge` hop, since
+  Electron itself can't launch in this sandboxed environment) forwarded every call/event over a
+  genuine WebSocket connection to the real backend -- the same wire protocol `web/`'s own
+  `BackendClient` uses. Real Playwright driving real Chromium: opened a real `main.py` fixture,
+  hovered over the real `int` annotation, and after the real ~90s indexing wait plus the query's
+  own round trip, a real tooltip rendered pyright's exact live response, `"(class) int"`,
+  screenshotted; moving the mouse away correctly cleared it. 3 new Rust tests (1 live hover test in
+  `spartan-lsp`, 2 in `spartan-backend` covering honest error paths) plus the existing envelope-leak
+  fix re-verified via the tightened live integration test (91.03s, passing). Full workspace
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release -- --test-threads=1` all clean (668 tests, up from 665, zero failures);
+  `desktop/`'s own `tsc --noEmit`/`vite build` both clean. **What this does not confirm**: no
+  completion/autocomplete UI (`LspClient::completion` is real and tested but still has no caller
+  anywhere, matching this pass's own honestly-scoped increment); no hover UI in `web/`'s
+  `BackendEditor.tsx` yet (a named follow-up, matching the established desktop-then-web
+  sequencing already used for LSP diagnostics and DAP); no hover for any language beyond Python in
+  this specific live verification (the underlying `request_hover`/`lsp_hover` code path is
+  language-agnostic, but only pyright was exercised live here); the real Electron window remains
+  unlaunchable in this session (same standing gap since §75.59).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -3199,7 +3271,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 665 tests: 7 spikes + 18 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 668 tests: 7 spikes + 18 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
@@ -3217,6 +3289,12 @@ cargo test --workspace --release   # 665 tests: 7 spikes + 18 real crates + xtas
 # tests/dap_debugpy_integration.rs exercises the same real debugpy session one layer up, through
 # the full handle_request dispatch (open_file -> dap_launch -> dap_stopped event -> dap_continue ->
 # dap_exited event -> dap_disconnect), same self-skip convention.
+# spartan-lsp's own pyright_integration.rs and spartan-backend's own lsp_hover_integration.rs
+# (task #134) each spawn a real, live pyright-langserver session and exercise a real
+# textDocument/hover round trip -- both self-skip if pyright-langserver isn't on $PATH, and both
+# run close to LspSession::request_hover's own real 100s worst-case timeout (~91-93s each) since a
+# hover issued immediately after open_file legitimately queues behind the server's real initial
+# indexing pass, not a hang.
 # spartan-android's own detect_gradle_version live test (§75.91) self-skips if no real `gradle`
 # is found on $PATH -- matching every other real-external-tool integration suite in this repo.
 # crates/spartan-editor-core's real fonts.rs (§75.92) bundles JetBrains Mono TTF assets and is

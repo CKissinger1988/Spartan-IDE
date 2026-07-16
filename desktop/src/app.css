@@ -511,6 +511,31 @@
 .editor-root {
   display: flex;
   height: 100%;
+  position: relative;
+}
+
+/* Real LSP hover tooltip (task #134) -- `position: fixed` + real
+ * viewport-relative coordinates from the triggering mouse event, so it
+ * renders correctly next to the cursor regardless of scroll position.
+ * `pointer-events: none` so it never itself intercepts the next
+ * mousemove/click that would otherwise dismiss or reposition it. */
+.editor-hover-tooltip {
+  position: fixed;
+  z-index: 50;
+  max-width: 480px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  pointer-events: none;
 }
 
 .editor-gutter {

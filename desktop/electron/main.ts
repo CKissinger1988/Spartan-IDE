@@ -132,6 +132,7 @@ app.whenReady().then(() => {
     "undo",
     "redo",
     "close_file",
+    "lsp_hover",
     "leo_status",
     "leo_start_task",
     "leo_approve_plan",

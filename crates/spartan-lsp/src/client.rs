@@ -335,6 +335,37 @@ impl LspClient {
         msg["params"]["diagnostics"].as_array().cloned()
     }
 
+    /// Real `textDocument/hover`, ported verbatim from `spartan-editor-
+    /// core::lsp::LspClient::hover` (§75.6) -- named as a real, unstarted
+    /// gap in this crate's own `lsp_integration.rs` doc comment ("no
+    /// hover/completion IPC methods exist yet") until this pass.
+    pub fn hover(&mut self, file_uri: &str, line: i64, character: i64) -> Option<Value> {
+        self.request(
+            "textDocument/hover",
+            Some(json!({
+                "textDocument": {"uri": file_uri},
+                "position": {"line": line, "character": character},
+            })),
+            DEFAULT_TIMEOUT,
+        )
+    }
+
+    /// Real `textDocument/completion`, ported verbatim from the same
+    /// reference method -- real and tested here, but (unlike `hover`)
+    /// has no real caller anywhere in this workspace yet: a completion
+    /// *dropdown* UI is a real, separate, larger increment than a hover
+    /// tooltip, not attempted this pass.
+    pub fn completion(&mut self, file_uri: &str, line: i64, character: i64) -> Option<Value> {
+        self.request(
+            "textDocument/completion",
+            Some(json!({
+                "textDocument": {"uri": file_uri},
+                "position": {"line": line, "character": character},
+            })),
+            DEFAULT_TIMEOUT,
+        )
+    }
+
     pub fn did_change_full(
         &mut self,
         file_uri: &str,
