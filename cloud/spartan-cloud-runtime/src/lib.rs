@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
-    StartContainerOptions, StopContainerOptions,
+    StartContainerOptions, StatsOptions, StopContainerOptions,
 };
 use bollard::image::CreateImageOptions;
 use bollard::models::{ContainerStateStatusEnum, HostConfig};
@@ -94,6 +94,20 @@ pub struct AllocationSpec {
     pub limits: PlanLimits,
 }
 
+/// A live resource-usage snapshot for one managed container -- the defensive
+/// telemetry the admin monitoring dashboard surfaces (the counterpart to the
+/// reaper + caps: spotting abuse, not just capping it). Values are best-effort
+/// from a single `docker stats` snapshot; a field the daemon didn't report is
+/// `None` rather than a fabricated zero.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerUsage {
+    pub id: AllocationId,
+    pub owner: UserId,
+    pub memory_bytes: Option<u64>,
+    pub memory_limit_bytes: Option<u64>,
+    pub pids: Option<u64>,
+}
+
 /// The swappable isolation seam. Every method is tenant-scoped and, on the
 /// real driver, resource-capped. A Firecracker/Fly-Machines driver is a
 /// future `impl` of exactly this trait.
@@ -117,6 +131,9 @@ pub trait ContainerRuntime: Send + Sync {
     /// activity. `now_unix` is a parameter (not read from the clock inside)
     /// purely so it's testable without waiting out a real lifetime.
     async fn reap_expired(&self, now_unix: u64) -> Result<Vec<AllocationId>, RuntimeError>;
+    /// A live per-container resource snapshot for every managed running
+    /// container (all tenants), for the admin monitoring dashboard.
+    async fn usage(&self) -> Result<Vec<ContainerUsage>, RuntimeError>;
     /// Whether this runtime's isolation is verified in the current deployment.
     /// `false` is an ops signal: do NOT run untrusted tenant code yet.
     fn isolation_verified(&self) -> bool;
@@ -371,6 +388,58 @@ impl ContainerRuntime for DockerRuntime {
         Ok(reaped)
     }
 
+    async fn usage(&self) -> Result<Vec<ContainerUsage>, RuntimeError> {
+        // All managed, running containers (across tenants).
+        let mut filters = HashMap::new();
+        filters.insert("label".to_string(), vec![format!("{MANAGED_LABEL}=1")]);
+        filters.insert("status".to_string(), vec!["running".to_string()]);
+        let options = ListContainersOptions {
+            all: false,
+            filters,
+            ..Default::default()
+        };
+        let summaries = self.docker.list_containers(Some(options)).await?;
+
+        let mut out = Vec::new();
+        for summary in summaries {
+            let Some(id) = summary.id else { continue };
+            let owner = summary
+                .labels
+                .as_ref()
+                .and_then(|l| l.get(OWNER_LABEL))
+                .cloned()
+                .unwrap_or_default();
+
+            // One-shot stats snapshot (no streaming). A container that vanished
+            // between the list and the stats call is simply skipped, not fatal.
+            let mut stream = self.docker.stats(
+                &id,
+                Some(StatsOptions {
+                    stream: false,
+                    one_shot: true,
+                }),
+            );
+            let usage = match stream.next().await {
+                Some(Ok(s)) => ContainerUsage {
+                    id: AllocationId(id),
+                    owner: UserId(owner),
+                    memory_bytes: s.memory_stats.usage,
+                    memory_limit_bytes: s.memory_stats.limit,
+                    pids: s.pids_stats.current,
+                },
+                _ => ContainerUsage {
+                    id: AllocationId(id),
+                    owner: UserId(owner),
+                    memory_bytes: None,
+                    memory_limit_bytes: None,
+                    pids: None,
+                },
+            };
+            out.push(usage);
+        }
+        Ok(out)
+    }
+
     fn isolation_verified(&self) -> bool {
         self.isolation_verified
     }
@@ -536,5 +605,32 @@ mod tests {
             Err(RuntimeError::NotFound)
         ));
         assert_eq!(runtime.count_active(&owner).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn usage_reports_a_real_running_container_with_its_owner() {
+        let Some(docker) = docker_or_skip().await else {
+            return;
+        };
+        let runtime = DockerRuntime::with_docker(docker, "runc", true);
+        let owner = UserId(format!("usage-owner-{}", std::process::id()));
+        let spec = AllocationSpec {
+            owner: owner.clone(),
+            image: "alpine:latest".to_string(),
+            limits: PlanLimits::for_tier(PlanTier::Free),
+        };
+        let id = runtime.create(&spec).await.expect("create a container");
+
+        let all = runtime.usage().await.expect("usage snapshot");
+        let mine = all
+            .iter()
+            .find(|u| u.id == id)
+            .expect("our container appears in usage");
+        assert_eq!(mine.owner, owner, "usage is attributed to the real owner");
+        // Memory limit should reflect the Free-tier cap (1 GiB) the container
+        // was actually created with.
+        assert_eq!(mine.memory_limit_bytes, Some(1024 * 1024 * 1024));
+
+        runtime.stop(&id).await.expect("cleanup the container");
     }
 }

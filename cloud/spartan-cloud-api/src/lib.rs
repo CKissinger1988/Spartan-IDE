@@ -199,6 +199,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/me", get(me))
         .route("/api/admin/grant_pro", post(grant_pro))
         .route("/api/admin/audit", get(audit_log))
+        .route("/api/admin/telemetry", get(telemetry))
         .route("/api/allocate", post(allocate))
         .route(
             "/api/secrets/:name",
@@ -451,6 +452,59 @@ async fn allocate(State(state): State<AppState>, user: AuthUser) -> Response {
                 expires_at_unix: now_unix().saturating_add(limits.max_lifetime_secs),
             };
             (StatusCode::CREATED, Json(info)).into_response()
+        }
+        Err(e) => internal_error(e),
+    }
+}
+
+#[derive(Serialize)]
+struct ContainerUsageJson {
+    id: String,
+    owner_id: String,
+    memory_bytes: Option<u64>,
+    memory_limit_bytes: Option<u64>,
+    pids: Option<u64>,
+}
+
+/// Admin-only: a live per-container resource snapshot across all tenants -- the
+/// monitoring-dashboard data feed (the defensive counterpart to the reaper +
+/// caps). Requires a connected runtime; without one it honestly 503s rather
+/// than returning an empty list as if all were idle.
+async fn telemetry(State(state): State<AppState>, admin: AuthUser) -> Response {
+    {
+        let store = state.store.lock().expect("store mutex poisoned");
+        match store.is_admin(&admin.user_id) {
+            Ok(true) => {}
+            Ok(false) => {
+                return api_error(
+                    StatusCode::FORBIDDEN,
+                    "forbidden",
+                    "admin privileges are required",
+                )
+            }
+            Err(e) => return internal_error(e),
+        }
+    }
+    let Some(runtime) = &state.runtime else {
+        return api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "runtime_unavailable",
+            "the container runtime is not connected",
+        );
+    };
+    match runtime.usage().await {
+        Ok(usages) => {
+            let json: Vec<ContainerUsageJson> = usages
+                .into_iter()
+                .map(|u| ContainerUsageJson {
+                    id: u.id.0,
+                    owner_id: u.owner.0,
+                    memory_bytes: u.memory_bytes,
+                    memory_limit_bytes: u.memory_limit_bytes,
+                    pids: u.pids,
+                })
+                .collect();
+            (StatusCode::OK, Json(json)).into_response()
         }
         Err(e) => internal_error(e),
     }
@@ -908,6 +962,50 @@ mod tests {
             .unwrap();
         assert_eq!(failed["detail"], "member@b.com");
         assert!(failed["actor_id"].is_null());
+    }
+
+    #[tokio::test]
+    async fn telemetry_requires_admin_and_reports_no_runtime_honestly() {
+        let state = AppState::in_memory();
+        let _admin_id = {
+            let store = state.store.lock().unwrap();
+            store.create_user("tel@b.com", "adminpw12", true).unwrap()
+        };
+        let app = router(state.clone());
+
+        // A non-admin is refused.
+        let member = signup_token(&app, "telmember@b.com").await;
+        let (status, _) = body_json(
+            app.clone()
+                .oneshot(req_empty("GET", "/api/admin/telemetry", &member))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        // The admin passes the gate but, with no runtime wired, gets an honest
+        // 503 rather than a faked empty snapshot.
+        let (_, login) = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/login",
+                    serde_json::json!({"email": "tel@b.com", "password": "adminpw12"}),
+                    None,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let admin_token = login["token"].as_str().unwrap().to_string();
+        let (status, body) = body_json(
+            app.oneshot(req_empty("GET", "/api/admin/telemetry", &admin_token))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["code"], "runtime_unavailable");
     }
 
     #[tokio::test]

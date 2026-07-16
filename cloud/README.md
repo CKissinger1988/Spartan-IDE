@@ -134,10 +134,11 @@ same trait — no API or domain-layer change needed.
    on a real KVM-capable target, flipping `isolation_verified` to `true` in a
    production deployment. The seam and the honest-default flag exist today.
 2. **WebAuthn admin auth** on the API (a defensive concept adapted from
-   `SpartanAI_Security_Core`, rebuilt safely), a per-tenant abuse/
-   resource-monitoring dashboard (the `GET /api/admin/audit` feed + live
-   `docker stats`-style telemetry, surfaced with Track C's status-reactive
-   aesthetic), and the per-container WS session endpoint (reusing
+   `SpartanAI_Security_Core`, rebuilt safely), a monitoring-dashboard *UI* over
+   the already-real feeds (`GET /api/admin/audit` + `GET /api/admin/telemetry`,
+   the latter a live per-container `docker stats`-style memory/pids snapshot via
+   bollard, admin-only, 503 when no runtime is wired), surfaced with Track C's
+   status-reactive aesthetic, and the per-container WS session endpoint (reusing
    `spartan-backend`'s envelope shape). The encrypted-at-rest secrets vault
    (AES-256-GCM) is real end to end: `spartan-cloud-data` stores it and the API
    exposes an owner-scoped REST surface — `PUT /api/secrets/:name`,
