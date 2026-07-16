@@ -62,6 +62,20 @@ interface EditorProps {
    * completely normal state (no LSP configured for this language, no
    * project root found, or a genuinely clean file), never an error. */
   diagnostics?: LspDiagnostic[];
+  /** Real, 1-indexed breakpoint line numbers for this file (matching the
+   * gutter's own displayed line numbers and the real DAP `break_lines`
+   * param `App.tsx` sends to `dap_launch` directly, no off-by-one
+   * translation needed at either end). */
+  breakpoints?: number[];
+  /** Real click-to-toggle -- `App.tsx` owns the actual breakpoint set
+   * (it must survive an editor unmount/tab switch), this component only
+   * reports which 1-indexed line was clicked. */
+  onToggleBreakpoint?: (line: number) => void;
+  /** Real, 1-indexed line the active DAP session is currently stopped
+   * at for this file, or `null`/`undefined` when no session is stopped
+   * here -- matches `DapFrame::line`'s own real 1-indexed DAP-spec
+   * value directly, no translation needed. */
+  stoppedLine?: number | null;
 }
 
 /**
@@ -100,6 +114,9 @@ export default function Editor({
   onContentChange,
   prefs = DEFAULT_EDITOR_PREFS,
   diagnostics = [],
+  breakpoints = [],
+  onToggleBreakpoint,
+  stoppedLine = null,
 }: EditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
@@ -116,6 +133,8 @@ export default function Editor({
     () => highlightSource(file.content, file.path),
     [file.content, file.path]
   );
+
+  const breakpointSet = useMemo(() => new Set(breakpoints), [breakpoints]);
 
   const diagnosticsByLine = useMemo(() => {
     const map = new Map<number, LspDiagnostic[]>();
@@ -225,15 +244,24 @@ export default function Editor({
         {lineNumbers.map((n) => {
           // Real LSP positions are 0-indexed; `n` (the displayed line
           // number) is 1-indexed, matching every other real line-number
-          // convention in this codebase.
+          // convention in this codebase, and matching real DAP
+          // breakpoint/stop-frame line numbers directly (no translation).
           const lineDiags = diagnosticsByLine.get(n - 1);
           const severity = lineDiags ? worstSeverity(lineDiags) : null;
+          const hasBreakpoint = breakpointSet.has(n);
+          const isStopped = stoppedLine === n;
           return (
             <div
               key={n}
-              className={`editor-gutter-line${severity ? ` editor-gutter-line-${severity}` : ""}`}
+              className={`editor-gutter-line${severity ? ` editor-gutter-line-${severity}` : ""}${isStopped ? " editor-gutter-line-stopped" : ""}`}
               title={lineDiags?.map((d) => `${d.severity}: ${d.message}`).join("\n")}
+              onClick={() => onToggleBreakpoint?.(n)}
             >
+              {onToggleBreakpoint && (
+                <span
+                  className={`editor-gutter-breakpoint-dot${hasBreakpoint ? " editor-gutter-breakpoint-dot-active" : ""}`}
+                />
+              )}
               {n}
             </div>
           );

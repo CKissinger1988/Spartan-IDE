@@ -10,6 +10,7 @@ import Editor, {
   type OpenFile,
   type LspDiagnostic,
 } from "./components/Editor";
+import DebugPanel, { type DapSessionState } from "./components/DebugPanel";
 import Placeholder from "./components/Placeholder";
 import WorkflowsScreen from "./components/WorkflowsScreen";
 import DesignScreen from "./components/DesignScreen";
@@ -55,6 +56,15 @@ export default function App(): React.ReactElement {
   // set for that doc_id (the backend always sends the complete current
   // list, never a delta).
   const [diagnosticsByDoc, setDiagnosticsByDoc] = useState<Record<number, LspDiagnostic[]>>({});
+  // Real DAP state (§132), both keyed by `doc_id` the same way
+  // `diagnosticsByDoc` already is -- breakpoints are 1-indexed line
+  // numbers (matching the gutter's own display and the real
+  // `dap_launch` `break_lines` param directly, no translation); a
+  // session entry exists only while a debug session for that file is
+  // live or has just finished (exited/errored), so the toolbar can show
+  // its final state before the user dismisses it via Stop or relaunches.
+  const [breakpointsByDoc, setBreakpointsByDoc] = useState<Record<number, number[]>>({});
+  const [dapSessionByDoc, setDapSessionByDoc] = useState<Record<number, DapSessionState>>({});
 
   useEffect(() => {
     const unsubscribe = window.spartan.onEvent((event, data) => {
@@ -67,6 +77,40 @@ export default function App(): React.ReactElement {
         // error. Logged for now; a dedicated status surface is real,
         // separate follow-up work.
         console.warn("lsp_error:", data);
+      } else if (event === "dap_stopped") {
+        const { doc_id, stopped } = data as {
+          doc_id: number;
+          stopped: DapSessionState["stopped"];
+        };
+        setDapSessionByDoc((prev) => {
+          const existing = prev[doc_id];
+          if (!existing) return prev;
+          return { ...prev, [doc_id]: { ...existing, status: "stopped", stopped } };
+        });
+      } else if (event === "dap_exited") {
+        const { doc_id } = data as { doc_id: number };
+        setDapSessionByDoc((prev) => {
+          const existing = prev[doc_id];
+          if (!existing) return prev;
+          return { ...prev, [doc_id]: { ...existing, status: "exited" } };
+        });
+      } else if (event === "dap_error") {
+        const { doc_id, message } = data as { doc_id: number; message: string };
+        setDapSessionByDoc((prev) => {
+          const existing = prev[doc_id];
+          if (!existing) return prev;
+          return { ...prev, [doc_id]: { ...existing, status: "error", message } };
+        });
+      } else if (event === "dap_build_failed") {
+        const { doc_id, diagnostics } = data as { doc_id: number; diagnostics: string[] };
+        setDapSessionByDoc((prev) => {
+          const existing = prev[doc_id];
+          if (!existing) return prev;
+          return {
+            ...prev,
+            [doc_id]: { ...existing, status: "build_failed", message: diagnostics.join("\n") },
+          };
+        });
       }
     });
     return unsubscribe;
@@ -154,11 +198,91 @@ export default function App(): React.ReactElement {
         delete next[file.docId];
         return next;
       });
+      setBreakpointsByDoc((prev) => {
+        const next = { ...prev };
+        delete next[file.docId];
+        return next;
+      });
+      setDapSessionByDoc((prev) => {
+        const next = { ...prev };
+        delete next[file.docId];
+        return next;
+      });
     },
     [files]
   );
 
   const activeFile = files[activeIndex] ?? null;
+
+  const toggleBreakpoint = useCallback(
+    (line: number) => {
+      if (!activeFile) return;
+      const docId = activeFile.docId;
+      setBreakpointsByDoc((prev) => {
+        const existing = prev[docId] ?? [];
+        const next = existing.includes(line)
+          ? existing.filter((l) => l !== line)
+          : [...existing, line].sort((a, b) => a - b);
+        return { ...prev, [docId]: next };
+      });
+    },
+    [activeFile]
+  );
+
+  // Real launch (§132) -- always starts a fresh session for the active
+  // file's own current breakpoint set, matching the reference wgpu
+  // shell's own F5 convention (an already-finished session is treated
+  // as gone, not resumable).
+  const dapLaunch = useCallback(() => {
+    if (!activeFile) return;
+    const docId = activeFile.docId;
+    const breakLines = breakpointsByDoc[docId] ?? [];
+    setDapSessionByDoc((prev) => ({
+      ...prev,
+      [docId]: { sessionId: -1, status: "launching" },
+    }));
+    window.spartan
+      .call("dap_launch", { doc_id: docId, break_lines: breakLines })
+      .then((result) => {
+        const { session_id } = result as { session_id: number };
+        setDapSessionByDoc((prev) => ({
+          ...prev,
+          [docId]: { ...prev[docId], sessionId: session_id },
+        }));
+      })
+      .catch((err: Error) => {
+        setDapSessionByDoc((prev) => ({
+          ...prev,
+          [docId]: { sessionId: -1, status: "error", message: err.message },
+        }));
+      });
+  }, [activeFile, breakpointsByDoc]);
+
+  const dapSendCommand = useCallback(
+    (method: string) => {
+      if (!activeFile) return;
+      const session = dapSessionByDoc[activeFile.docId];
+      if (!session || session.sessionId < 0) return;
+      window.spartan
+        .call(method, { session_id: session.sessionId })
+        .catch((err: Error) => console.error(`${method} failed:`, err));
+    },
+    [activeFile, dapSessionByDoc]
+  );
+
+  const dapStop = useCallback(() => {
+    if (!activeFile) return;
+    const docId = activeFile.docId;
+    const session = dapSessionByDoc[docId];
+    if (session && session.sessionId >= 0) {
+      window.spartan.call("dap_disconnect", { session_id: session.sessionId }).catch(() => {});
+    }
+    setDapSessionByDoc((prev) => {
+      const next = { ...prev };
+      delete next[docId];
+      return next;
+    });
+  }, [activeFile, dapSessionByDoc]);
   const screenLabel = NAV.flatMap((g) => g.items).find((i) => i.id === screen)?.label ?? screen;
 
   // Real §75.76 first-run onboarding gate -- deliberately blank (not the
@@ -217,17 +341,35 @@ export default function App(): React.ReactElement {
                   <GitPanel root={ROOT} />
                 )}
               </div>
-              <div className="content-area">
-                {activeFile ? (
-                  <Editor
-                    file={activeFile}
-                    onContentChange={handleContentChange}
-                    prefs={editorPrefs}
-                    diagnostics={diagnosticsByDoc[activeFile.docId]}
-                  />
-                ) : (
-                  <div className="empty-state mono">Open a file from the sidebar to start editing.</div>
-                )}
+              <div className="editor-and-debug">
+                <DebugPanel
+                  hasFile={activeFile !== null}
+                  session={activeFile ? (dapSessionByDoc[activeFile.docId] ?? null) : null}
+                  onLaunch={dapLaunch}
+                  onContinue={() => dapSendCommand("dap_continue")}
+                  onStepOver={() => dapSendCommand("dap_step_over")}
+                  onStepInto={() => dapSendCommand("dap_step_into")}
+                  onStop={dapStop}
+                />
+                <div className="content-area">
+                  {activeFile ? (
+                    <Editor
+                      file={activeFile}
+                      onContentChange={handleContentChange}
+                      prefs={editorPrefs}
+                      diagnostics={diagnosticsByDoc[activeFile.docId]}
+                      breakpoints={breakpointsByDoc[activeFile.docId] ?? []}
+                      onToggleBreakpoint={toggleBreakpoint}
+                      stoppedLine={
+                        dapSessionByDoc[activeFile.docId]?.status === "stopped"
+                          ? (dapSessionByDoc[activeFile.docId]?.stopped?.frame?.line ?? null)
+                          : null
+                      }
+                    />
+                  ) : (
+                    <div className="empty-state mono">Open a file from the sidebar to start editing.</div>
+                  )}
+                </div>
               </div>
             </div>
             <StatusBar

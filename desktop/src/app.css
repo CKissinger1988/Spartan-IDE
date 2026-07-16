@@ -168,6 +168,17 @@
   display: flex;
 }
 
+/* Real DAP debug panel wrapper (§132) -- stacks the debug toolbar above
+ * the existing `.content-area`, taking over what used to be `.editor-
+ * body`'s second direct flex child so the DebugPanel and the editor
+ * share the same remaining column width/height. */
+.editor-and-debug {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .file-tree-panel {
   width: 220px;
   background: var(--surface);
@@ -526,6 +537,7 @@
 .editor-gutter-line {
   padding-right: 2px;
   box-sizing: border-box;
+  cursor: pointer;
 }
 
 .editor-gutter-line-error {
@@ -546,6 +558,36 @@
   background: rgba(var(--accent-rgb), 0.12);
   color: var(--accent);
   box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Real DAP breakpoint gutter (§132) -- one small dot per line, filled
+ * only for lines with an active breakpoint; the whole line is clickable
+ * to toggle (see `Editor.tsx`'s `onClick={() => onToggleBreakpoint?.(n)}`
+ * on the same row). */
+.editor-gutter-breakpoint-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+  border: 1px solid var(--text-dim);
+  cursor: pointer;
+}
+
+.editor-gutter-breakpoint-dot-active {
+  background: rgb(var(--status-critical-rgb));
+  border-color: rgb(var(--status-critical-rgb));
+  box-shadow: 0 0 4px rgba(var(--status-critical-rgb), 0.7);
+}
+
+/* Real "currently stopped here" DAP indicator -- gold (the semantic
+ * "active" status hue, §75.93), distinct from the red breakpoint dot and
+ * from every LSP severity color above so the three concepts never read
+ * as the same thing on one gutter row. */
+.editor-gutter-line-stopped {
+  background: rgba(var(--hud-rgb), 0.18);
+  box-shadow: inset 2px 0 0 rgb(var(--hud-rgb));
 }
 
 /* Real syntax highlighting overlay (§75.62/§75.63) -- the highlight
@@ -614,6 +656,89 @@
   color: var(--text-dim);
   font-size: 11px;
   flex-shrink: 0;
+}
+
+/* Real DAP debug toolbar (§132) -- a compact inline bar above the
+ * editor, matching this codebase's own "small, honest first increment"
+ * style rather than a docked panel redesign. */
+.debug-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.debug-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.debug-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.debug-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.debug-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.debug-btn-primary {
+  border-color: rgb(var(--status-ok-rgb));
+  color: rgb(var(--status-ok-rgb));
+}
+
+.debug-btn-stop {
+  border-color: rgb(var(--status-critical-rgb));
+  color: rgb(var(--status-critical-rgb));
+}
+
+.debug-status {
+  color: var(--text-dim);
+  margin-left: 4px;
+}
+
+.debug-status-stopped {
+  color: rgb(var(--hud-rgb));
+}
+
+.debug-status-error,
+.debug-status-build_failed {
+  color: rgb(var(--status-critical-rgb));
+}
+
+.debug-variables {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-left: 2px;
+}
+
+.debug-variable-name {
+  color: var(--accent);
+}
+
+.debug-variable-eq {
+  color: var(--text-dim);
+}
+
+.debug-variable-value {
+  color: var(--text);
 }
 
 /* Real, live LSP diagnostic summary for the active file (backend
