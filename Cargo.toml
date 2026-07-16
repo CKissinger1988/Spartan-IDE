@@ -25,6 +25,7 @@ members = [
     "crates/spartan-backend",
     "crates/spartan-devserver",
     "crates/spartan-lsp",
+    "crates/spartan-dap",
     "xtask",
 ]
 

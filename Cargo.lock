@@ -5240,6 +5240,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "spartan-dap"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "spartan-languages",
+]
+
+[[package]]
 name = "spartan-devcontainer"
 version = "0.1.0"
 dependencies = [
