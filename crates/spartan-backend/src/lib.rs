@@ -39,7 +39,8 @@ use spartan_leo::plan::{generate_plan, ImplementationPlan, PlanError};
 use spartan_leo::tool::{ToolCall, ToolResult};
 use spartan_model::provider::Message;
 use spartan_model::{
-    ClaudeProvider, LiteLLMProvider, LlamaCppProvider, ModelProvider, OllamaProvider,
+    ClaudeProvider, FailoverProvider, LiteLLMProvider, LlamaCppProvider, ModelProvider,
+    OllamaProvider,
 };
 
 mod pty;
@@ -401,39 +402,69 @@ fn approval_mode_from_settings(mode: spartan_settings::LeoApprovalMode) -> Appro
 /// only, no code ported -- see `docs/architecture-spec.md` §75.70).
 /// `gpu_offload` only ever applies to the real local `OllamaProvider`
 /// path -- Claude/LiteLLM are remote, `num_gpu` has no meaning for them.
-fn build_leo_provider(
-    provider_settings: &spartan_settings::LeoProviderSettings,
+/// Build ONE real provider from its kind + model. Does not consider fallbacks
+/// (that's `build_leo_provider`'s job) -- so a fallback's own `fallbacks` field
+/// is ignored by construction, keeping the chain flat (primary + list), never
+/// a tree.
+fn build_single_provider(
+    kind: spartan_settings::LeoProviderKind,
+    model: &str,
     gpu_offload: spartan_settings::GpuOffloadSettings,
 ) -> Result<Box<dyn ModelProvider>, String> {
-    match provider_settings.kind {
+    match kind {
         spartan_settings::LeoProviderKind::Ollama => Ok(Box::new(
-            OllamaProvider::local(&provider_settings.model).with_gpu_layers(gpu_offload.num_gpu()),
+            OllamaProvider::local(model).with_gpu_layers(gpu_offload.num_gpu()),
         )),
         spartan_settings::LeoProviderKind::Claude => {
             let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
                 "ANTHROPIC_API_KEY is not set -- required to use Claude as Leo's provider"
                     .to_string()
             })?;
-            Ok(Box::new(ClaudeProvider::new(
-                api_key,
-                &provider_settings.model,
-            )))
+            Ok(Box::new(ClaudeProvider::new(api_key, model)))
         }
-        spartan_settings::LeoProviderKind::LiteLLM => {
-            Ok(Box::new(LiteLLMProvider::local(&provider_settings.model)))
-        }
+        spartan_settings::LeoProviderKind::LiteLLM => Ok(Box::new(LiteLLMProvider::local(model))),
         spartan_settings::LeoProviderKind::LlamaCpp => {
-            if provider_settings.model.trim().is_empty() {
+            if model.trim().is_empty() {
                 return Err(
                     "no .gguf model file path configured -- required to use llama.cpp as Leo's provider"
                         .to_string(),
                 );
             }
-            let provider = LlamaCppProvider::new(&provider_settings.model)
+            let provider = LlamaCppProvider::new(model)
                 .map_err(|e| format!("failed to load llama.cpp model: {e}"))?;
             Ok(Box::new(provider))
         }
     }
+}
+
+fn build_leo_provider(
+    provider_settings: &spartan_settings::LeoProviderSettings,
+    gpu_offload: spartan_settings::GpuOffloadSettings,
+) -> Result<Box<dyn ModelProvider>, String> {
+    let primary = build_single_provider(
+        provider_settings.kind,
+        &provider_settings.model,
+        gpu_offload,
+    )?;
+
+    // No fallbacks configured -> the primary alone, exactly as before.
+    if provider_settings.fallbacks.is_empty() {
+        return Ok(primary);
+    }
+
+    // A configured fallback chain -> wrap primary + each fallback in a real
+    // FailoverProvider (§75.x, task #123). Each fallback is built with the same
+    // gpu_offload (it only ever affects a local Ollama provider anyway). If any
+    // configured fallback can't be constructed (e.g. a missing gguf path or an
+    // unset ANTHROPIC_API_KEY), fail the whole build with a clear message
+    // rather than silently dropping that link from the chain.
+    let mut chain: Vec<Box<dyn ModelProvider>> = vec![primary];
+    for (i, fb) in provider_settings.fallbacks.iter().enumerate() {
+        let p = build_single_provider(fb.kind, &fb.model, gpu_offload)
+            .map_err(|e| format!("fallback provider #{}: {e}", i + 1))?;
+        chain.push(p);
+    }
+    Ok(Box::new(FailoverProvider::new(chain)))
 }
 
 fn leo_start_task(
@@ -3471,10 +3502,56 @@ mod tests {
     }
 
     #[test]
+    fn build_leo_provider_wraps_a_configured_fallback_chain_in_a_failover_provider() {
+        // Primary Ollama + one LiteLLM fallback -> a real FailoverProvider.
+        let settings = spartan_settings::LeoProviderSettings {
+            kind: spartan_settings::LeoProviderKind::Ollama,
+            model: "llama3.1:8b".to_string(),
+            fallbacks: vec![spartan_settings::LeoProviderSettings {
+                kind: spartan_settings::LeoProviderKind::LiteLLM,
+                model: "gpt-4o".to_string(),
+                ..Default::default()
+            }],
+        };
+        let provider =
+            build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default())
+                .expect("a valid fallback chain builds");
+        // The wrapper reports itself as "failover"; the chain contains a cloud
+        // (LiteLLM) provider, so the wrapper is conservatively non-local.
+        assert_eq!(provider.id(), "failover");
+        assert!(
+            !provider.is_local(),
+            "a chain containing a cloud provider is not local"
+        );
+    }
+
+    #[test]
+    fn build_leo_provider_fails_the_whole_chain_when_a_fallback_cannot_be_built() {
+        // A llama.cpp fallback with an empty model path can't be built -> the
+        // whole chain build fails with a clear, fallback-attributed message,
+        // rather than silently dropping that link.
+        let settings = spartan_settings::LeoProviderSettings {
+            kind: spartan_settings::LeoProviderKind::Ollama,
+            model: "llama3.1:8b".to_string(),
+            fallbacks: vec![spartan_settings::LeoProviderSettings {
+                kind: spartan_settings::LeoProviderKind::LlamaCpp,
+                model: String::new(),
+                ..Default::default()
+            }],
+        };
+        let result = build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default());
+        match result {
+            Ok(_) => panic!("an unbuildable fallback must fail the chain"),
+            Err(err) => assert!(err.contains("fallback provider #1"), "err was: {err}"),
+        }
+    }
+
+    #[test]
     fn build_leo_provider_constructs_a_real_litellm_provider() {
         let settings = spartan_settings::LeoProviderSettings {
             kind: spartan_settings::LeoProviderKind::LiteLLM,
             model: "gpt-4o".to_string(),
+            ..Default::default()
         };
         let provider =
             build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default())
@@ -3492,6 +3569,7 @@ mod tests {
         let settings = spartan_settings::LeoProviderSettings {
             kind: spartan_settings::LeoProviderKind::Claude,
             model: "claude-3-5-sonnet-latest".to_string(),
+            ..Default::default()
         };
         let result = build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default());
         match result {
@@ -3513,6 +3591,7 @@ mod tests {
         let settings = spartan_settings::LeoProviderSettings {
             kind: spartan_settings::LeoProviderKind::Claude,
             model: "claude-3-5-sonnet-latest".to_string(),
+            ..Default::default()
         };
         let provider =
             build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default())
@@ -3531,6 +3610,7 @@ mod tests {
         let settings = spartan_settings::LeoProviderSettings {
             kind: spartan_settings::LeoProviderKind::LlamaCpp,
             model: String::new(),
+            ..Default::default()
         };
         let result = build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default());
         match result {
@@ -3544,6 +3624,7 @@ mod tests {
         let settings = spartan_settings::LeoProviderSettings {
             kind: spartan_settings::LeoProviderKind::LlamaCpp,
             model: "/nonexistent/path/to/a/model.gguf".to_string(),
+            ..Default::default()
         };
         let result = build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default());
         match result {
@@ -3572,6 +3653,7 @@ mod tests {
         let settings = spartan_settings::LeoProviderSettings {
             kind: spartan_settings::LeoProviderKind::LlamaCpp,
             model: model_path,
+            ..Default::default()
         };
         let provider =
             build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default())

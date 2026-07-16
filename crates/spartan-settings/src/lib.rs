@@ -105,6 +105,15 @@ pub enum LeoProviderKind {
 pub struct LeoProviderSettings {
     pub kind: LeoProviderKind,
     pub model: String,
+    /// Optional ordered fallback providers. When non-empty, Leo uses a
+    /// `FailoverProvider` (see `spartan-model`): the primary (`kind`/`model`)
+    /// is tried first, then each fallback in order, failing over only when a
+    /// provider is unavailable *before* emitting output (a real 429/401/
+    /// connection error), never mid-stream. A fallback's own `fallbacks` field
+    /// is ignored (the chain is exactly primary + this list, not a tree) --
+    /// `#[serde(default)]` so every pre-existing settings file still parses.
+    #[serde(default)]
+    pub fallbacks: Vec<LeoProviderSettings>,
 }
 
 impl Default for LeoProviderSettings {
@@ -112,6 +121,7 @@ impl Default for LeoProviderSettings {
         Self {
             kind: LeoProviderKind::Ollama,
             model: "llama3.1:8b".to_string(),
+            fallbacks: Vec::new(),
         }
     }
 }
@@ -378,6 +388,7 @@ mod tests {
             leo_provider: LeoProviderSettings {
                 kind: LeoProviderKind::Claude,
                 model: "claude-3-5-sonnet-latest".to_string(),
+                ..Default::default()
             },
             editor: EditorSettings {
                 font_size: 16,
@@ -514,6 +525,7 @@ mod tests {
             LeoProviderSettings {
                 kind: LeoProviderKind::Ollama,
                 model: "llama3.1:8b".to_string(),
+                ..Default::default()
             }
         );
     }
