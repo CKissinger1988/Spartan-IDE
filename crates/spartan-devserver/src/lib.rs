@@ -144,7 +144,19 @@ pub fn run_websocket_server(
 /// SOP + the Origin allowlist together -- can open the WebSocket. The token
 /// is freshly generated per run (never a persisted default), matching
 /// `ws_transport`'s own security posture exactly.
-pub fn run(web_root: PathBuf, host: &str, static_port: u16) -> std::io::Result<()> {
+///
+/// `project_root`, when given, is advertised verbatim (already
+/// caller-canonicalized -- this function does no path resolution of its
+/// own) via the session endpoint, closing the gap `static_serve`'s own doc
+/// comment names: a browser's `FileSystemDirectoryHandle` has no real OS
+/// path to give `git_status`/`open_file`/Leo, but the devserver's own
+/// launch directory does.
+pub fn run(
+    web_root: PathBuf,
+    host: &str,
+    static_port: u16,
+    project_root: Option<PathBuf>,
+) -> std::io::Result<()> {
     // Bind the static server (its port is user-facing) and the WS listener
     // (ephemeral) up front so both real ports are known before wiring.
     let static_server = static_serve::bind(&format!("{host}:{static_port}"))?;
@@ -175,9 +187,13 @@ pub fn run(web_root: PathBuf, host: &str, static_port: u16) -> std::io::Result<(
         let _ = ws_transport::serve(backend, ws_listener, security, dispatch);
     });
 
+    let project_root_display = project_root
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(none)".to_string());
     eprintln!(
         "spartan-devserver: serving {web_root:?} on http://{host}:{actual_static_port} \
-         (WebSocket on 127.0.0.1:{ws_port}, token handed off via {})",
+         (WebSocket on 127.0.0.1:{ws_port}, token handed off via {}, project root: {project_root_display})",
         static_serve::SESSION_PATH
     );
     static_serve::serve(
@@ -186,6 +202,7 @@ pub fn run(web_root: PathBuf, host: &str, static_port: u16) -> std::io::Result<(
             web_root,
             ws_port,
             ws_token,
+            project_root: project_root.map(|p| p.to_string_lossy().to_string()),
         },
     )
 }

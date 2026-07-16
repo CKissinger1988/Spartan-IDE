@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import FileTree from "./components/FileTree";
+import GitPanel from "./components/GitPanel";
 import Editor, { type OpenFile } from "./components/Editor";
 import { ensureBufferWasmInit, Document as WasmDocument } from "./buffer";
 import { isFileSystemAccessSupported, pickProjectDirectory, readFileText } from "./fsAccess";
@@ -25,16 +26,20 @@ const FONT_STORAGE_KEY = "spartan.fontFamily";
  * to WASM, real save-to-disk, real (single-step) undo.
  *
  * **Real, deliberately out-of-scope in this first increment, named
- * honestly rather than silently missing**: LSP, DAP, Leo, and git are
+ * honestly rather than silently missing**: LSP, DAP, and Leo are still
  * not wired to anything here. `spartan-backend`'s real WebSocket
- * transport (§75.88) exists and is real, tested, production code, but
- * connecting to it needs a real answer to the token-delivery design
- * question that transport's own doc comment explicitly left open (how a
- * browser tab legitimately learns the per-process token and the correct
- * origin) -- not guessed at here. Multi-file tabs are also not built yet
- * -- only one file open at a time, the same real, narrow first-increment
- * scoping this project's own history already applies elsewhere (e.g.
- * `gui-builder`'s own real v1 cuts, §75.38).
+ * transport (§75.88) exists and is real, tested, production code; a later
+ * increment answered the token-delivery design question that transport's
+ * own doc comment explicitly left open (how a browser tab legitimately
+ * learns the per-process token and the correct origin -- the
+ * `/__spartan/session` same-origin handoff), and a further increment used
+ * that same handoff to advertise the devserver's own real project root, so
+ * **git is now real and wired** when a devserver is connected: see
+ * `GitPanel`, toggled alongside the File System Access-backed `FileTree`.
+ * Multi-file tabs are also not built yet -- only one file open at a time,
+ * the same real, narrow first-increment scoping this project's own
+ * history already applies elsewhere (e.g. `gui-builder`'s own real v1
+ * cuts, §75.38).
  */
 export default function App(): React.ReactElement {
   const [root, setRoot] = useState<FileSystemDirectoryHandle | null>(null);
@@ -48,6 +53,8 @@ export default function App(): React.ReactElement {
     () => localStorage.getItem(FONT_STORAGE_KEY) ?? ""
   );
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("connecting");
+  const [backendClient, setBackendClient] = useState<BackendClient | null>(null);
+  const [sidebarView, setSidebarView] = useState<"files" | "git">("files");
 
   // Optional backend upgrade: when this page is served by a real
   // spartan-devserver (§75.88 + the /__spartan/session handoff), connect to
@@ -64,6 +71,7 @@ export default function App(): React.ReactElement {
           return;
         }
         client = c;
+        setBackendClient(c);
         setBackendStatus("connected");
       })
       .catch(() => {
@@ -72,8 +80,18 @@ export default function App(): React.ReactElement {
     return () => {
       cancelled = true;
       client?.close();
+      setBackendClient(null);
     };
   }, []);
+
+  // A real, connected devserver with a real, resolved project root is what
+  // makes the Git panel usable -- the File System Access API never gives
+  // this app an OS path for whatever folder `root` (above) points at, so
+  // git operations run against the devserver's *own* launch directory
+  // instead (see `GitPanel`'s and `backendClient.ts`'s own doc comments).
+  const canGit = backendStatus === "connected" && !!backendClient?.projectRoot;
+  const activeSidebarView: "files" | "git" =
+    sidebarView === "git" && canGit ? "git" : root ? "files" : canGit ? "git" : "files";
 
   // Applied on mount and every real change, matching `desktop/`'s own
   // startup-apply-then-live-apply pattern (`App.tsx`/`SettingsScreen.tsx`).
@@ -151,7 +169,9 @@ export default function App(): React.ReactElement {
           Open Folder…
         </button>
         <span className="toolbar-note">
-          Client-side only in this increment -- no LSP/DAP/Leo/git yet, see README.md
+          {canGit
+            ? "Connected to a local devserver -- git is live, no LSP/DAP/Leo yet"
+            : "Client-side only in this increment -- no LSP/DAP/Leo/git yet, see README.md"}
         </span>
         <select
           className="toolbar-btn"
@@ -173,9 +193,29 @@ export default function App(): React.ReactElement {
         />
       </div>
       <div className="main-body">
-        {root && (
+        {(root || canGit) && (
           <div className="file-tree-panel">
-            <FileTree root={root} onOpenFile={openFile} />
+            {root && canGit && (
+              <div className="sidebar-toggle-row">
+                <button
+                  className={`sidebar-toggle-btn ${activeSidebarView === "files" ? "sidebar-toggle-active" : ""}`}
+                  onClick={() => setSidebarView("files")}
+                >
+                  Files
+                </button>
+                <button
+                  className={`sidebar-toggle-btn ${activeSidebarView === "git" ? "sidebar-toggle-active" : ""}`}
+                  onClick={() => setSidebarView("git")}
+                >
+                  Git
+                </button>
+              </div>
+            )}
+            {activeSidebarView === "files" && root ? (
+              <FileTree root={root} onOpenFile={openFile} />
+            ) : activeSidebarView === "git" && canGit && backendClient?.projectRoot ? (
+              <GitPanel client={backendClient} root={backendClient.projectRoot} />
+            ) : null}
           </div>
         )}
         <div className="content-area">

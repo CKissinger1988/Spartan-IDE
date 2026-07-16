@@ -2,11 +2,11 @@
 
 Real, first-increment browser IDE for Spartan, built around the same **hybrid**
 architecture decision the user made explicitly (§75.85, §75.86): editing/
-buffer logic works standalone client-side in the browser, with LSP/DAP/Leo/git
-activating only when a local `spartan-backend` instance is reachable over its
-real WebSocket transport (§75.88). **This increment ships only the pure
-client-side half.** See "What's not built yet" below for the honest account
-of what's deferred and why.
+buffer logic works standalone client-side in the browser, with backend
+capabilities activating only when a local `spartan-devserver` instance is
+reachable over its real WebSocket transport (§75.88). **Git is real and wired
+when a devserver is connected; LSP/DAP/Leo are not yet.** See "What's not
+built yet" below for the honest account of what's deferred and why.
 
 Inspired by vscode.dev's *concepts* only — a browser-based editor working
 directly against real local files via a native browser API, no server round
@@ -90,17 +90,40 @@ forked/vendored either) — see the root `CLAUDE.md`.
 
 ## What's not built yet (named honestly, not silently missing)
 
-- **No LSP, no DAP, no Leo, no git.** `spartan-backend`'s real WebSocket
-  transport (§75.88) exists, is production code, and is tested (10 real
-  tests, including token/Origin auth enforcement and real shared-state
-  behavior across two simultaneous connections) — but this app doesn't
-  connect to it yet. Its own doc comment names an explicit, unresolved
-  design question this increment deliberately did not guess at: how a
-  browser tab legitimately learns the per-process auth token and which
-  Origin to expect, without either weakening the real defense-in-depth auth
-  the user explicitly chose (token + Origin allowlist, both — see
-  `crates/spartan-backend/src/ws_transport.rs`) or requiring a manual
-  copy-paste step that would make this feel broken rather than integrated.
+- **Git is now real and wired; LSP, DAP, and Leo are not.** A later
+  increment (Track A, `crates/spartan-devserver`) answered the
+  token-delivery design question this section used to name as unresolved:
+  the devserver serves this app's own static files, so a same-origin
+  `fetch("/__spartan/session")` (see `backendClient.ts`) safely hands a
+  connected page the live WebSocket token + Origin, and a further increment
+  extended that same handoff to advertise the devserver's own real,
+  canonicalized `--project-root:` as `projectRoot` — the piece that was
+  still missing even after the transport question was solved, since
+  `spartan-backend`'s `git_status`/`open_file`/Leo methods all need a real
+  absolute filesystem path, and the File System Access API deliberately
+  never exposes one for a folder picked via `showDirectoryPicker()` (a
+  real, permanent browser security property, not an oversight). When a
+  devserver is connected and advertises a project root, `App.tsx` shows a
+  real Files/Git sidebar toggle and `components/GitPanel.tsx` — a direct
+  port of `desktop/src/components/GitPanel.tsx` (§75.65) onto
+  `BackendClient.call` — drives real `git_status`/`git_stage`/
+  `git_unstage`/`git_commit` against that root. Real, live-verified:
+  starting `spartan-devserver --project-root:<a real temp git repo>` and
+  driving the served app with Playwright staged a real modified file,
+  committed it, and the resulting commit was independently confirmed via
+  `git log`/`git show` run directly against the repo on disk. **LSP, DAP,
+  and Leo remain unwired** — no analogous "which project root" gap exists
+  for them (they'd reuse the same `projectRoot`), but no UI or IPC wiring
+  for any of the three has been built here yet; this is real, separate,
+  unstarted follow-up work, the natural next increment.
+- **Git operates on the devserver's own project root, not necessarily the
+  File System Access folder.** A real, named consequence of the above: the
+  folder opened via "Open Folder…" (File System Access) and the directory
+  the connected devserver was launched against (`--project-root:`) are two
+  independent concepts in this increment — nothing unifies them yet. In the
+  common case (the devserver is launched from the same project the user
+  opens), they're the same directory in practice, but this app has no way
+  to verify that and doesn't claim to.
 - **Single file open at a time.** No tabs, no multi-file model — a real,
   narrow first-increment scope, the same kind of deliberate v1 cut this
   project's own history already applies elsewhere (e.g. `gui-builder`'s own
@@ -124,6 +147,12 @@ forked/vendored either) — see the root `CLAUDE.md`.
 - `src/components/FileTree.tsx`, `src/components/Editor.tsx` — real UI,
   adapted from `desktop/src/components/`'s own equivalents, swapping IPC
   calls for direct File System Access API / WASM calls.
+- `src/backendClient.ts` — the real `BackendClient`: session handoff +
+  WebSocket connection to a local `spartan-devserver`, exposing its
+  advertised `projectRoot` alongside the usual `call`/`onEvent` surface.
+- `src/components/GitPanel.tsx` — real Source Control panel, a direct port
+  of `desktop/src/components/GitPanel.tsx` onto `BackendClient.call`, shown
+  only once a devserver connection advertises a real project root.
 - `src/App.tsx` — top-level shell; its own doc comment names the same scope
   cuts as this file, kept in sync.
 - `src/syntax.ts`, `src/theme.css` — copied verbatim from `desktop/src/` (one

@@ -165,6 +165,148 @@
   min-height: 0;
 }
 
+/* Real Git panel (§75.65's own desktop/ source, ported verbatim below for
+   git-panel-*), plus the Files/Git sidebar toggle that switches between it
+   and the File System Access-backed FileTree -- copied verbatim from
+   desktop/src/app.css so both shells share one visual language. */
+.sidebar-toggle-row {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.sidebar-toggle-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 0;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color var(--transition-fast);
+}
+
+.sidebar-toggle-btn:hover {
+  color: var(--text);
+}
+
+.sidebar-toggle-active {
+  color: var(--accent);
+  box-shadow:
+    inset 0 -2px 0 var(--accent),
+    inset 0 -2px 6px rgba(var(--accent-rgb), 0.3);
+}
+
+.git-panel {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.git-panel-empty {
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 8px;
+}
+
+.git-branch {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  padding: 2px 0 6px;
+}
+
+.git-commit-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px;
+  resize: vertical;
+  min-height: 44px;
+}
+
+.git-commit-input:focus {
+  outline: 1px solid var(--accent);
+}
+
+.git-commit-button {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 5px 0;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition:
+    background var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.git-commit-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.git-commit-button:not(:disabled):hover {
+  background: var(--accent-hover);
+  box-shadow: var(--glow-accent);
+}
+
+.git-section-label {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 4px;
+}
+
+.git-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.git-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.git-row:hover {
+  background: var(--accent-hover);
+}
+
+.git-status-glyph {
+  width: 12px;
+  color: var(--accent);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.git-row-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.git-conflict-marker {
+  color: #e05a4a;
+  font-weight: bold;
+}
+
 .tree-row {
   display: flex;
   align-items: center;

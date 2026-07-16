@@ -25,6 +25,12 @@ export const SESSION_PATH = "/__spartan/session";
 export interface BackendSession {
   wsPort: number;
   wsToken: string;
+  /** The devserver's real, absolute, already-canonicalized project root, or
+   * `null` if none could be resolved (see `main.rs`/`static_serve.rs`). This
+   * is what makes `git_status`/`open_file`/Leo methods usable from the
+   * browser at all -- the File System Access API deliberately never exposes
+   * a real OS path for a folder the user picks via `showDirectoryPicker`. */
+  projectRoot: string | null;
 }
 
 /** An unsolicited event pushed by the backend (no `id`), e.g. Leo progress
@@ -53,9 +59,14 @@ export class BackendClient {
   private nextId = 1;
   private readonly pending = new Map<number, PendingCall>();
   private readonly listeners = new Set<EventListener>();
+  /** The devserver's advertised project root (see `BackendSession`), or
+   * `null` if the connected devserver couldn't resolve one. Real
+   * git/file/Leo methods all need this real absolute path. */
+  readonly projectRoot: string | null;
 
-  private constructor(ws: WebSocket) {
+  private constructor(ws: WebSocket, projectRoot: string | null) {
     this.ws = ws;
+    this.projectRoot = projectRoot;
     ws.addEventListener("message", (ev) => this.onMessage(ev));
     ws.addEventListener("close", () => this.rejectAllPending("connection closed"));
   }
@@ -84,7 +95,7 @@ export class BackendClient {
         once: true,
       });
     });
-    return new BackendClient(ws);
+    return new BackendClient(ws, session.projectRoot ?? null);
   }
 
   private onMessage(ev: MessageEvent): void {

@@ -40,10 +40,22 @@ pub const SESSION_PATH: &str = "/__spartan/session";
 /// Coordinates advertised by `SESSION_PATH`, plus the real directory of
 /// static files to serve. `ws_token`/`ws_port` are the live values from the
 /// WebSocket server this devserver started -- never a persisted default.
+///
+/// `project_root`, when present, is the real, already-canonicalized
+/// absolute filesystem path the devserver was launched against -- the
+/// answer to a second, narrower question the browser can never answer for
+/// itself: `spartan-backend`'s own `git_status`/`open_file`/`list_dir`/Leo
+/// methods all take a real absolute path string, but the File System
+/// Access API deliberately never exposes one for a folder the user picks
+/// (a real, permanent browser security property, not an oversight). A
+/// connected `web/` client uses this advertised root directly instead of
+/// guessing at (or being unable to obtain) the OS path behind whatever
+/// `FileSystemDirectoryHandle` it may separately hold.
 pub struct StaticServeConfig {
     pub web_root: PathBuf,
     pub ws_port: u16,
     pub ws_token: String,
+    pub project_root: Option<String>,
 }
 
 /// Path-jail: resolve a request URL path (e.g. `/assets/index.js`, or `/`
@@ -139,6 +151,7 @@ pub fn serve(server: Server, config: StaticServeConfig) -> io::Result<()> {
             let body = serde_json::json!({
                 "wsPort": config.ws_port,
                 "wsToken": config.ws_token,
+                "projectRoot": config.project_root,
             })
             .to_string();
             // No `Access-Control-Allow-Origin` header on purpose -- the
@@ -277,6 +290,7 @@ mod tests {
             web_root: root.clone(),
             ws_port: 54321,
             ws_token: "a-real-live-token".to_string(),
+            project_root: Some("/real/project/root".to_string()),
         };
         thread::spawn(move || {
             let _ = serve(server, config);
@@ -291,6 +305,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(json["wsPort"], 54321);
         assert_eq!(json["wsToken"], "a-real-live-token");
+        assert_eq!(json["projectRoot"], "/real/project/root");
         assert!(
             !headers.to_lowercase().contains("access-control-allow-origin"),
             "the token endpoint must NOT emit a permissive CORS header -- SOP is the guard: {headers}"
@@ -305,6 +320,32 @@ mod tests {
             bad_status.contains("404"),
             "a traversal attempt over the wire must 404: {bad_status}"
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A devserver launched with no known project root (never forced --
+    /// e.g. `main.rs` always defaults it to the cwd, but this crate's own
+    /// API shouldn't assume that) advertises a real, honest `null`, not a
+    /// fabricated placeholder string.
+    #[test]
+    fn the_session_endpoint_advertises_a_real_null_project_root_when_none_is_configured() {
+        let root = make_web_root();
+        let (server, port) = bind_ephemeral("127.0.0.1").unwrap();
+        let config = StaticServeConfig {
+            web_root: root.clone(),
+            ws_port: 1,
+            ws_token: "t".to_string(),
+            project_root: None,
+        };
+        thread::spawn(move || {
+            let _ = serve(server, config);
+        });
+        thread::sleep(Duration::from_millis(20));
+
+        let (_, _, body) = http_get(port, SESSION_PATH);
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(json["projectRoot"].is_null(), "expected null: {json}");
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -345,6 +386,7 @@ mod tests {
                     web_root: root,
                     ws_port,
                     ws_token: token,
+                    project_root: Some("/orchestrated/project".to_string()),
                 },
             );
         });
@@ -355,6 +397,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&body).unwrap();
         let advertised_port = json["wsPort"].as_u64().unwrap() as u16;
         let advertised_token = json["wsToken"].as_str().unwrap();
+        assert_eq!(json["projectRoot"], "/orchestrated/project");
 
         // ...and use them to open a real WS connection from the allowlisted
         // origin. It must succeed and answer a real devserver_ping.
