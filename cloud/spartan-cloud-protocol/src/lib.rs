@@ -105,6 +105,22 @@ pub struct AllocationInfo {
     pub expires_at_unix: u64,
 }
 
+/// Store (create or overwrite) one of the caller's own encrypted secrets.
+/// The value is a UTF-8 string (deploy keys, registry tokens, capability
+/// tokens are all text); it is encrypted at rest server-side and **never**
+/// read back over the API -- secrets go in and are used server-side, they are
+/// not a retrieval store (a deliberate exposure-reducing choice).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PutSecretRequest {
+    pub value: String,
+}
+
+/// The caller's own secret *names* (never values).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SecretNamesResponse {
+    pub names: Vec<String>,
+}
+
 /// A uniform error envelope for control-plane responses.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ApiError {

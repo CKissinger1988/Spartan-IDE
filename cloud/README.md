@@ -139,8 +139,11 @@ same trait — no API or domain-layer change needed.
    `docker stats`-style telemetry, surfaced with Track C's status-reactive
    aesthetic), and the per-container WS session endpoint (reusing
    `spartan-backend`'s envelope shape). The encrypted-at-rest secrets vault
-   (AES-256-GCM) is now real in `spartan-cloud-data`; still to do is a REST
-   surface for tenants to manage their own secrets.
+   (AES-256-GCM) is real end to end: `spartan-cloud-data` stores it and the API
+   exposes an owner-scoped REST surface — `PUT /api/secrets/:name`,
+   `GET /api/secrets` (names only), `DELETE /api/secrets/:name`. Values are
+   write-only over the API (never read back — a deliberate exposure-reducing
+   choice; the server uses them when provisioning).
 
 ## Standing safety posture
 

@@ -15,18 +15,18 @@
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::extract::{FromRequestParts, State};
+use axum::extract::{FromRequestParts, Path, State};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use spartan_cloud_data::{DataError, Store};
 use spartan_cloud_protocol::{
-    AllocationInfo, AllocationStatus, ApiError, AuthResponse, LoginRequest, PlanTier, SessionToken,
-    SignupRequest, UserId,
+    AllocationInfo, AllocationStatus, ApiError, AuthResponse, LoginRequest, PlanTier,
+    PutSecretRequest, SecretNamesResponse, SessionToken, SignupRequest, UserId,
 };
 use spartan_cloud_runtime::{AllocationSpec, ContainerRuntime};
 use spartan_cloud_tenant::{
@@ -75,6 +75,15 @@ impl AppState {
     pub fn in_memory() -> Self {
         Self::new(
             Store::open_in_memory().expect("in-memory store must open"),
+            Arc::new(StubEntitlementProvider::new()),
+            24 * 60 * 60,
+        )
+    }
+
+    /// In-memory state with an unlocked secrets vault (tests, ephemeral runs).
+    pub fn in_memory_with_vault(master_key: &[u8; 32]) -> Self {
+        Self::new(
+            Store::open_in_memory_with_key(master_key).expect("keyed in-memory store must open"),
             Arc::new(StubEntitlementProvider::new()),
             24 * 60 * 60,
         )
@@ -191,6 +200,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/admin/grant_pro", post(grant_pro))
         .route("/api/admin/audit", get(audit_log))
         .route("/api/allocate", post(allocate))
+        .route(
+            "/api/secrets/:name",
+            put(put_secret_handler).delete(delete_secret_handler),
+        )
+        .route("/api/secrets", get(list_secrets_handler))
         .with_state(state)
 }
 
@@ -442,6 +456,94 @@ async fn allocate(State(state): State<AppState>, user: AuthUser) -> Response {
     }
 }
 
+/// Reject a secret name that isn't a safe, bounded identifier. Names are used
+/// as opaque DB keys, but validating them keeps the surface tidy and the audit
+/// log readable, and bounds storage. Allows letters/digits/`_`/`-`/`.`, 1..=128.
+fn valid_secret_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+fn map_vault_err(e: DataError) -> Response {
+    match e {
+        DataError::VaultLocked => api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "vault_locked",
+            "the secrets vault is not configured on this server",
+        ),
+        other => internal_error(other),
+    }
+}
+
+/// Store (create/overwrite) one of the caller's own encrypted secrets. The
+/// value is encrypted at rest and never read back over the API.
+async fn put_secret_handler(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(name): Path<String>,
+    Json(req): Json<PutSecretRequest>,
+) -> Response {
+    if !valid_secret_name(&name) {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_name",
+            "secret name must be 1-128 chars of [A-Za-z0-9_.-]",
+        );
+    }
+    let result = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        store.put_secret(&user.user_id, &name, req.value.as_bytes())
+    };
+    match result {
+        Ok(()) => {
+            // Audit the fact of a secret write (never the value).
+            audit(&state, Some(&user.user_id), "secret_put", Some(&name), None);
+            (StatusCode::NO_CONTENT, ()).into_response()
+        }
+        Err(e) => map_vault_err(e),
+    }
+}
+
+/// The caller's own secret *names* (never values). Owner-scoped.
+async fn list_secrets_handler(State(state): State<AppState>, user: AuthUser) -> Response {
+    let result = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        store.list_secret_names(&user.user_id)
+    };
+    match result {
+        Ok(names) => (StatusCode::OK, Json(SecretNamesResponse { names })).into_response(),
+        Err(e) => map_vault_err(e),
+    }
+}
+
+/// Delete one of the caller's own secrets. Idempotent (absent is fine).
+async fn delete_secret_handler(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(name): Path<String>,
+) -> Response {
+    let result = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        store.delete_secret(&user.user_id, &name)
+    };
+    match result {
+        Ok(()) => {
+            audit(
+                &state,
+                Some(&user.user_id),
+                "secret_delete",
+                Some(&name),
+                None,
+            );
+            (StatusCode::NO_CONTENT, ()).into_response()
+        }
+        Err(e) => map_vault_err(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,6 +581,40 @@ mod tests {
             b = b.header("authorization", format!("Bearer {t}"));
         }
         b.body(Body::empty()).unwrap()
+    }
+
+    fn req_json(method: &str, uri: &str, body: serde_json::Value, bearer: &str) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {bearer}"))
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    fn req_empty(method: &str, uri: &str, bearer: &str) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", format!("Bearer {bearer}"))
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    async fn signup_token(app: &Router, email: &str) -> String {
+        let (_, body) = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/signup",
+                    serde_json::json!({"email": email, "password": "pw123456"}),
+                    None,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        body["token"].as_str().unwrap().to_string()
     }
 
     #[tokio::test]
@@ -772,6 +908,115 @@ mod tests {
             .unwrap();
         assert_eq!(failed["detail"], "member@b.com");
         assert!(failed["actor_id"].is_null());
+    }
+
+    #[tokio::test]
+    async fn secrets_put_list_delete_are_owner_scoped() {
+        let app = router(AppState::in_memory_with_vault(&[42u8; 32]));
+        let alice = signup_token(&app, "alice-secrets@b.com").await;
+        let bob = signup_token(&app, "bob-secrets@b.com").await;
+
+        // Alice stores two secrets.
+        for name in ["registry_token", "deploy_key"] {
+            let (status, _) = body_json(
+                app.clone()
+                    .oneshot(req_json(
+                        "PUT",
+                        &format!("/api/secrets/{name}"),
+                        serde_json::json!({"value": "s3cr3t-value"}),
+                        &alice,
+                    ))
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::NO_CONTENT, "put {name} succeeds");
+        }
+
+        // Alice lists her two names.
+        let (status, list) = body_json(
+            app.clone()
+                .oneshot(req_empty("GET", "/api/secrets", &alice))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let mut names: Vec<&str> = list["names"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n.as_str().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["deploy_key", "registry_token"]);
+
+        // Bob (a different tenant) sees none of Alice's secrets.
+        let (_, bob_list) = body_json(
+            app.clone()
+                .oneshot(req_empty("GET", "/api/secrets", &bob))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(bob_list["names"].as_array().unwrap().is_empty());
+
+        // Alice deletes one; her list shrinks to the other.
+        let (status, _) = body_json(
+            app.clone()
+                .oneshot(req_empty("DELETE", "/api/secrets/deploy_key", &alice))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_, list) = body_json(
+            app.clone()
+                .oneshot(req_empty("GET", "/api/secrets", &alice))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(list["names"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn secret_put_rejects_a_bad_name_and_a_locked_vault_is_503() {
+        // Bad name against an unlocked vault -> 400.
+        let app = router(AppState::in_memory_with_vault(&[7u8; 32]));
+        let token = signup_token(&app, "badname@b.com").await;
+        let (status, body) = body_json(
+            app.clone()
+                .oneshot(req_json(
+                    "PUT",
+                    "/api/secrets/has%20space",
+                    serde_json::json!({"value": "v"}),
+                    &token,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["code"], "invalid_name");
+
+        // A locked vault (no master key) -> 503 vault_locked, not a 500.
+        let locked = router(AppState::in_memory());
+        let token2 = signup_token(&locked, "locked@b.com").await;
+        let (status, body) = body_json(
+            locked
+                .oneshot(req_json(
+                    "PUT",
+                    "/api/secrets/k",
+                    serde_json::json!({"value": "v"}),
+                    &token2,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["code"], "vault_locked");
     }
 
     #[tokio::test]
