@@ -19,12 +19,13 @@
 //! end-to-end; on top of it there are real devserver-specific methods --
 //! `devserver_ping` (liveness/identity), `model_status` (the unified model
 //! surface: the configured Leo provider's real capabilities + a live health
-//! probe, via `spartan_backend::model_status_json`), and now a real LiteLLM
-//! proxy lifecycle (`litellm_proxy_start`/`_stop`/`_status`, backed by
-//! `litellm_proxy`) -- plus the static-file server (`/__spartan/session`
-//! token handoff for the `web/` client). The HF -> Ollama downloader
-//! (`hf_pull_model`) lands on this same seam in a later increment --
-//! deliberately not present yet, never stubbed with fake behavior.
+//! probe, via `spartan_backend::model_status_json`), a real LiteLLM proxy
+//! lifecycle (`litellm_proxy_start`/`_stop`/`_status`, backed by
+//! `litellm_proxy`), and a real Hugging Face -> Ollama model downloader
+//! (`hf_list_models`/`hf_pull_model`, backed by `hf_downloader`) -- plus the
+//! static-file server (`/__spartan/session` token handoff for the `web/`
+//! client). Every method named in this crate's own original design is now
+//! real; no devserver-specific method remains a stub.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
@@ -35,7 +36,9 @@ use std::time::{Duration, Instant};
 use spartan_backend::ws_transport::{self, WsSecurity};
 use spartan_backend::{handle_request, BackendState, Event, Request, Response};
 
+pub mod hf_downloader;
 pub mod litellm_proxy;
+mod subprocess;
 
 pub mod static_serve;
 
@@ -70,6 +73,19 @@ pub const LITELLM_PROXY_STOP: &str = "litellm_proxy_stop";
 /// since exited on its own, so a crashed proxy doesn't linger as a false
 /// "running" forever.
 pub const LITELLM_PROXY_STATUS: &str = "litellm_proxy_status";
+
+/// Lists the real, curated set of Hugging Face -> Ollama models this
+/// devserver knows how to pull (id/display name/repo/tag/description) --
+/// synchronous, no subprocess involved.
+pub const HF_LIST_MODELS: &str = "hf_list_models";
+/// Triggers a real `ollama pull hf.co/<repo>:<tag>` for a curated model id.
+/// Async, ack-then-event, the same shape `litellm_proxy_start` already
+/// uses: an immediate `{"status": "starting"}` while the real, possibly
+/// multi-minute download runs on its own thread, streaming Ollama's own
+/// real pull-progress output as `hf_pull_progress` events (each carrying
+/// the real `model_id`, so multiple concurrent pulls stay distinguishable)
+/// and finishing with `hf_pull_ready`/`hf_pull_failed`.
+pub const HF_PULL_MODEL: &str = "hf_pull_model";
 
 const LITELLM_HEALTH_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -229,6 +245,85 @@ fn litellm_proxy_status(devserver: &DevServerState) -> serde_json::Value {
     }
 }
 
+/// Real, synchronous listing of the curated HF -> Ollama models.
+fn hf_list_models_json() -> serde_json::Value {
+    let models: Vec<serde_json::Value> = hf_downloader::CURATED_MODELS
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "display_name": m.display_name,
+                "hf_repo": m.hf_repo,
+                "tag": m.tag,
+                "description": m.description,
+            })
+        })
+        .collect();
+    serde_json::json!({ "models": models })
+}
+
+/// Starts a real HF -> Ollama pull in the background: an immediate
+/// `{"status": "starting"}` ack, then a spawned thread runs the real,
+/// possibly multi-minute `ollama pull`, forwarding real subprocess output
+/// as `hf_pull_progress` events and finishing with `hf_pull_ready`/
+/// `hf_pull_failed` -- the same "ack now, event later" shape
+/// `litellm_proxy_start` already established.
+fn hf_pull_model(out_tx: Sender<String>, model_id: String) -> Result<serde_json::Value, String> {
+    let model = hf_downloader::find_model(&model_id)
+        .copied()
+        .ok_or_else(|| format!("unknown curated model id: {model_id:?}"))?;
+
+    if !hf_downloader::is_ollama_available() {
+        return Err("`ollama` isn't on $PATH -- install it from https://ollama.com".to_string());
+    }
+
+    thread::spawn(move || {
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let forward_out_tx = out_tx.clone();
+        let forward_model_id = model.id.to_string();
+        thread::spawn(move || {
+            for line in line_rx {
+                let event = Event {
+                    event: "hf_pull_progress".to_string(),
+                    data: serde_json::json!({ "model_id": forward_model_id, "line": line }),
+                };
+                if let Ok(l) = serde_json::to_string(&event) {
+                    let _ = forward_out_tx.send(l);
+                }
+            }
+        });
+
+        let event = match hf_downloader::spawn_pull(&model, line_tx) {
+            Ok(mut child) => match child.wait() {
+                Ok(status) if status.success() => Event {
+                    event: "hf_pull_ready".to_string(),
+                    data: serde_json::json!({ "model_id": model.id }),
+                },
+                Ok(status) => Event {
+                    event: "hf_pull_failed".to_string(),
+                    data: serde_json::json!({
+                        "model_id": model.id,
+                        "error": format!("ollama pull exited with {status}"),
+                    }),
+                },
+                Err(e) => Event {
+                    event: "hf_pull_failed".to_string(),
+                    data: serde_json::json!({ "model_id": model.id, "error": e.to_string() }),
+                },
+            },
+            Err(e) => Event {
+                event: "hf_pull_failed".to_string(),
+                data: serde_json::json!({ "model_id": model.id, "error": e.to_string() }),
+            },
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+
+    Ok(serde_json::json!({ "status": "starting" }))
+}
+
 /// Builds the wrapping dispatcher: a real `Fn` of the exact shape
 /// `ws_transport::serve`/`run_websocket_server` expect, capturing the
 /// devserver's own state, handling devserver-specific methods, and falling
@@ -308,6 +403,34 @@ pub fn make_dispatcher(
                 id: req.id,
                 result: Some(litellm_proxy_status(&devserver)),
                 error: None,
+            }
+        } else if req.method == HF_LIST_MODELS {
+            Response {
+                id: req.id,
+                result: Some(hf_list_models_json()),
+                error: None,
+            }
+        } else if req.method == HF_PULL_MODEL {
+            let model_id = req
+                .params
+                .get("model_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let result = match model_id {
+                Some(model_id) => hf_pull_model(out_tx, model_id),
+                None => Err("hf_pull_model requires a string `model_id` param".to_string()),
+            };
+            match result {
+                Ok(value) => Response {
+                    id: req.id,
+                    result: Some(value),
+                    error: None,
+                },
+                Err(message) => Response {
+                    id: req.id,
+                    result: None,
+                    error: Some(message),
+                },
             }
         } else {
             handle_request(state, req, out_tx)

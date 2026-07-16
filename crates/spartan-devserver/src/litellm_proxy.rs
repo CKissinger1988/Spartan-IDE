@@ -13,11 +13,12 @@
 //! so a caller *can* detect a crash, but this module itself never restarts
 //! anything automatically.
 
-use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::{Duration, Instant};
+
+use crate::subprocess;
 
 /// LiteLLM's own documented liveness endpoint. Not live-verified against a
 /// real `litellm` binary in this environment (none is installed here -- see
@@ -90,11 +91,8 @@ pub fn is_litellm_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Spawns `program` with `args`, streaming its real stdout+stderr lines to
-/// `progress_tx` on their own reader threads (a piped `Child`'s stdout must
-/// be drained by someone or the child can block once its OS pipe buffer
-/// fills -- two threads, since stdout and stderr are two independent
-/// pipes). Generalized over `program`/`args` -- not just `litellm` -- purely
+/// Spawns `program` with `args` via the shared `subprocess::spawn_streaming`
+/// helper. Generalized over `program`/`args` -- not just `litellm` -- purely
 /// so this module's own tests can exercise the real spawn/stream mechanics
 /// against an always-available stand-in process without needing a real
 /// `litellm` install.
@@ -104,32 +102,11 @@ fn spawn_child(
     port: u16,
     progress_tx: Sender<String>,
 ) -> Result<ProxyProcess, LiteLlmProxyError> {
-    let mut cmd = Command::new(program);
-    cmd.args(args);
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(|e| {
+    let child = subprocess::spawn_streaming(program, args, progress_tx).map_err(|e| {
         LiteLlmProxyError(format!(
             "failed to spawn `{program}`: {e} (is it installed and on $PATH?)"
         ))
     })?;
-
-    if let Some(stdout) = child.stdout.take() {
-        let tx = progress_tx.clone();
-        thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                let _ = tx.send(line);
-            }
-        });
-    }
-    if let Some(stderr) = child.stderr.take() {
-        thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                let _ = progress_tx.send(line);
-            }
-        });
-    }
-
     Ok(ProxyProcess { child, port })
 }
 

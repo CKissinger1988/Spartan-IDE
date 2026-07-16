@@ -3351,6 +3351,42 @@ first — it's the parity reference until each row there is actually reimplement
   the proxy and selecting it as a `LiteLLMProvider` target remains separate, unstarted follow-up);
   no restart-on-crash (named above); the HF -> Ollama downloader (`hf_pull_model`) remains the one
   other gap this crate's own doc comment still names as not yet present.
+- **Real, working code — real Hugging Face -> Ollama model downloader, closing the last named gap
+  in `spartan-devserver`'s own doc comment (task #139)**: user-requested ("Continue with
+  everything possible... do not stop"). New `crates/spartan-devserver/src/hf_downloader.rs`: a
+  small, hand-curated list of real, genuinely-existing public GGUF repos (`CURATED_MODELS` --
+  deliberately not a live Hugging Face search API call, real, separate, unstarted future work) and
+  a real `ollama pull hf.co/<repo>:<tag>` trigger, using Ollama's own real, documented `hf.co/`
+  pull syntax rather than reimplementing any download logic -- the same "go through the tool's own
+  real interface" choice `spartan_model::OllamaProvider` already makes for Ollama's HTTP API. The
+  spawn/stream mechanics were extracted into a new shared `src/subprocess.rs` (`spawn_streaming`),
+  a real, small refactor of `litellm_proxy.rs`'s own previously-private `spawn_child` helper --
+  reused by both modules instead of copied twice, with `litellm_proxy`'s own full test suite
+  re-run and re-confirmed passing unmodified after the extraction. **A deliberate, named safety
+  choice, not an oversight**: no curated model is ever actually pulled in this environment or in
+  CI -- each is a real multi-hundred-MB-to-multi-GB download, an honest cost this pass does not
+  pay, consistent with this session's own disk-space constraints throughout. Instead,
+  `tests/hf_pull_integration.rs` (self-skipping if `ollama` isn't installed) drives a real
+  `ollama pull hf.co/<repo>:<tag>` against a **deliberately nonexistent** HF repo -- Ollama's own
+  real resolution genuinely reaches out and fails fast, proving the spawn/dispatch path truly
+  invokes Ollama's real pull mechanism end to end without paying a real model's download cost.
+  Two new dispatcher methods: `hf_list_models` (synchronous, returns the curated list as JSON) and
+  `hf_pull_model` (async, the same ack-now-event-later shape `litellm_proxy_start` already
+  established -- `hf_pull_progress`/`hf_pull_ready`/`hf_pull_failed` events, each carrying the real
+  `model_id` so multiple concurrent pulls stay distinguishable). No cancel/stop control for an
+  in-flight pull -- a real, deliberately deferred follow-up, named here rather than silently
+  absorbed, matching `litellm_proxy`'s own "no restart-on-crash" precedent. 8 new tests (4 pure
+  `hf_downloader` list/lookup tests, 2 always-on `subprocess` mechanics tests reused by both
+  modules, 1 self-skipping `hf_pull_integration.rs`, plus `litellm_proxy`'s own suite re-verified
+  against the refactored `spawn_child`), full workspace `cargo fmt --all -- --check`/`cargo clippy
+  --workspace --release --all-targets`/`cargo test --workspace --release` clean, `spartan-backend`'s
+  own full suite re-confirmed unaffected. **Every devserver-specific method named in this crate's
+  own original design is now real** -- `spartan-devserver`'s own top-of-file doc comment no longer
+  names any remaining stub. **What this does not confirm**: no live pull of any real curated model
+  was performed (the deliberate safety choice above); no UI wiring in `web/`/`desktop/` for
+  browsing/triggering a pull (this closes the crate-level gap only, a Settings-panel model browser
+  remains separate, unstarted follow-up); no live Hugging Face search API integration (the curated
+  list is fixed, not dynamically fetched).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -3408,7 +3444,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 677 tests: 7 spikes + 18 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 685 tests: 7 spikes + 18 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
@@ -3475,6 +3511,10 @@ cargo test --workspace --release   # 677 tests: 7 spikes + 18 real crates + xtas
 # integration suite in this repo. The always-on mechanics test (spawn/stream/health/stop) lives in
 # litellm_proxy.rs's own #[cfg(test)] module instead, using `python3 -m http.server` as a real
 # stand-in subprocess so it never needs a real litellm install to run in CI.
+# spartan-devserver's own tests/hf_pull_integration.rs (task #139) needs a real `ollama` CLI on
+# $PATH -- self-skips (prints a message) if it isn't found. When it runs, it deliberately pulls a
+# nonexistent HF repo (a real, fast-failing Ollama HTTP round trip) rather than any real curated
+# model -- no real GGUF model download is ever performed by this suite.
 # spartan-backend (§75.59) is the real IPC service the new desktop/ Electron shell drives --
 # `cargo build --release -p spartan-backend` before running `desktop/` at all (its
 # `electron/main.ts` looks for that exact release binary path and refuses to start without it).
