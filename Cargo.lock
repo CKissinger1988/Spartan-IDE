@@ -5207,6 +5207,7 @@ dependencies = [
  "spartan-git",
  "spartan-languages",
  "spartan-leo",
+ "spartan-lsp",
  "spartan-model",
  "spartan-settings",
  "spartan-updater",

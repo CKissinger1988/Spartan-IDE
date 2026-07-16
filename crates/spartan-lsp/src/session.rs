@@ -100,9 +100,16 @@ struct Mailbox {
 /// A real, live LSP session for one open file, running on its own OS
 /// thread for its entire lifetime -- spawn, the initialize/didOpen
 /// handshake, and every subsequent didChange dispatch all happen there.
+///
+/// `updates_rx` is wrapped in a `Mutex` purely to make `LspSession: Sync`
+/// (a plain `mpsc::Receiver` is `Send` but not `Sync`) -- real callers
+/// (e.g. `spartan-backend`'s own LSP wiring) share one session behind an
+/// `Arc` between the thread that calls `notify_edit`/`signal_shutdown` and
+/// a single dedicated thread that drains `recv_update()`; the mutex is
+/// never contended in that real usage since only the latter ever locks it.
 pub struct LspSession {
     mailbox: Arc<Mailbox>,
-    updates_rx: Receiver<LspUpdate>,
+    updates_rx: Mutex<Receiver<LspUpdate>>,
     thread: JoinHandle<()>,
 }
 
@@ -175,7 +182,7 @@ impl LspSession {
 
         Ok(Self {
             mailbox,
-            updates_rx,
+            updates_rx: Mutex::new(updates_rx),
             thread,
         })
     }
@@ -194,18 +201,31 @@ impl LspSession {
     /// `spartan-editor-core`'s render-tick `poll_updates`) drives an event
     /// loop with this directly rather than polling.
     pub fn recv_update(&self) -> Option<LspUpdate> {
-        self.updates_rx.recv().ok()
+        self.updates_rx.lock().unwrap().recv().ok()
     }
 
     /// Signals the background thread to shut down and joins it. Blocks for
     /// up to ~7s worst case, matching `LspClient::shutdown`'s own bound.
     pub fn shutdown(self) {
+        self.signal_shutdown();
+        let _ = self.thread.join();
+    }
+
+    /// Signals the background thread to shut down *without* joining it --
+    /// for a caller sharing this session via `Arc` with a separate
+    /// update-draining thread (see `spartan-backend`'s own LSP wiring),
+    /// where blocking the request-handling thread for up to ~7s on every
+    /// `close_file` would hurt responsiveness for no real benefit: the
+    /// draining thread keeps running until the internal LSP thread
+    /// finishes on its own and drops `updates_tx`, at which point
+    /// `recv_update` naturally returns `None` and that thread exits --
+    /// real cleanup, just not synchronously waited on here.
+    pub fn signal_shutdown(&self) {
         {
             let mut guard = self.mailbox.state.lock().unwrap();
             guard.shutdown = true;
         }
         self.mailbox.cvar.notify_one();
-        let _ = self.thread.join();
     }
 }
 

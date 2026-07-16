@@ -26,7 +26,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -43,6 +43,7 @@ use spartan_model::{
     ModelProvider, OllamaProvider,
 };
 
+mod lsp_integration;
 mod pty;
 pub mod ws_transport;
 
@@ -117,6 +118,11 @@ struct OpenDoc {
     /// edit clears it, since a fresh edit invalidates whatever "forward"
     /// used to mean.
     redo_stack: Vec<spartan_buffer::CheckpointId>,
+    /// Real, live LSP session for this file, if the detected language has
+    /// a configured server and a real project root could be found (see
+    /// `lsp_integration::maybe_spawn_lsp`'s own doc comment for exactly
+    /// when it's `None` instead, all honest, non-error cases).
+    lsp_session: Option<Arc<spartan_lsp::LspSession>>,
 }
 
 /// One real, model-proposed tool call awaiting explicit human approval --
@@ -217,17 +223,23 @@ fn list_dir(path: &str) -> Result<serde_json::Value, String> {
         .map_err(|e| format!("serialize: {e}"))
 }
 
-fn open_file(state: &mut BackendState, path: &str) -> Result<serde_json::Value, String> {
+fn open_file(
+    state: &mut BackendState,
+    path: &str,
+    out_tx: Sender<String>,
+) -> Result<serde_json::Value, String> {
     let content = std::fs::read_to_string(path).map_err(|e| format!("read({path}): {e}"))?;
     let document = Document::new(&content);
     let doc_id = state.next_doc_id;
     state.next_doc_id += 1;
+    let lsp_session = lsp_integration::maybe_spawn_lsp(doc_id, Path::new(path), &content, out_tx);
     state.open_docs.insert(
         doc_id,
         OpenDoc {
             path: PathBuf::from(path),
             document,
             redo_stack: Vec::new(),
+            lsp_session,
         },
     );
     Ok(serde_json::json!({ "doc_id": doc_id, "content": content }))
@@ -260,6 +272,12 @@ fn edit(
     // A real new edit invalidates whatever "redo" used to mean, the same
     // real rule the wgpu shell's own `EditorView` already enforces.
     open_doc.redo_stack.clear();
+    // Real, live didChange dispatch -- debounced inside the session itself
+    // (see `spartan_lsp::LspSession`'s own doc comment), so every keystroke
+    // can safely call this without flooding the real language server.
+    if let Some(session) = &open_doc.lsp_session {
+        session.notify_edit(open_doc.document.text());
+    }
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -282,6 +300,11 @@ fn undo(state: &mut BackendState, doc_id: u64) -> Result<serde_json::Value, Stri
     let changed = open_doc.document.undo();
     if changed {
         open_doc.redo_stack.push(pre_undo_checkpoint);
+        // An undo is a real content change too -- the live LSP session (if
+        // any) needs to see it or its diagnostics silently go stale.
+        if let Some(session) = &open_doc.lsp_session {
+            session.notify_edit(open_doc.document.text());
+        }
     }
     Ok(serde_json::json!({ "changed": changed, "content": open_doc.document.text() }))
 }
@@ -300,7 +323,12 @@ fn redo(state: &mut BackendState, doc_id: u64) -> Result<serde_json::Value, Stri
         return Ok(serde_json::json!({ "changed": false, "content": open_doc.document.text() }));
     };
     match open_doc.document.jump_to_checkpoint(checkpoint) {
-        Ok(()) => Ok(serde_json::json!({ "changed": true, "content": open_doc.document.text() })),
+        Ok(()) => {
+            if let Some(session) = &open_doc.lsp_session {
+                session.notify_edit(open_doc.document.text());
+            }
+            Ok(serde_json::json!({ "changed": true, "content": open_doc.document.text() }))
+        }
         Err(_) => {
             // The checkpoint aged out of the bounded ring since `undo`
             // pushed it -- a real, possible outcome, not an error to
@@ -311,7 +339,14 @@ fn redo(state: &mut BackendState, doc_id: u64) -> Result<serde_json::Value, Stri
 }
 
 fn close_file(state: &mut BackendState, doc_id: u64) -> Result<serde_json::Value, String> {
-    state.open_docs.remove(&doc_id);
+    if let Some(open_doc) = state.open_docs.remove(&doc_id) {
+        // Real, non-blocking teardown -- see `LspSession::signal_shutdown`'s
+        // own doc comment for why this doesn't wait for the real ~7s-worst-
+        // case graceful LSP shutdown sequence to finish before returning.
+        if let Some(session) = &open_doc.lsp_session {
+            session.signal_shutdown();
+        }
+    }
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -1979,7 +2014,7 @@ pub fn handle_request(
         "list_dir" => get_str_param(&req.params, "path").and_then(|p| list_dir(&p)),
         "open_file" => get_str_param(&req.params, "path").and_then(|p| {
             let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
-            open_file(&mut guard, &p)
+            open_file(&mut guard, &p, out_tx.clone())
         }),
         "edit" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;
