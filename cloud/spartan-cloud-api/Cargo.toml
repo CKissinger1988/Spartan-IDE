@@ -30,6 +30,15 @@ axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Real WebAuthn admin auth (a defensive concept adapted from
+# SpartanAI_Security_Core, rebuilt safely -- see cloud/README.md's own
+# "What's NOT here yet" list, now being closed). The in-progress
+# registration/authentication *ceremony state* (the server's own challenge +
+# policy) is kept server-side in an in-memory map keyed by a real opaque
+# nonce, the exact same pattern this file's own `exec_capabilities` already
+# established for the exec-session capability token -- so no "danger" state-
+# serialization feature is needed; the ceremony state never leaves the server.
+webauthn-rs = "0.5"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

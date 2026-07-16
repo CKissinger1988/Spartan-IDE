@@ -122,6 +122,12 @@ button:disabled { opacity: 0.5; cursor: default; }
 .audit-row .action { color: var(--accent); font-weight: 600; }
 .audit-row .detail { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hidden { display: none !important; }
+.divider { display: flex; align-items: center; gap: 8px; margin: 16px 0; color: var(--text-dim); font-size: 11px; }
+.divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+#webauthn-login-status, #webauthn-register-status { font-size: 12px; margin-top: 8px; min-height: 1em; }
+.security-key-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.security-key-row .count { font-size: 13px; }
+.security-key-row .count strong { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -138,6 +144,9 @@ button:disabled { opacity: 0.5; cursor: default; }
     </div>
     <div id="login-error"></div>
   </form>
+  <div class="divider">or</div>
+  <button id="webauthn-login-button" type="button" style="width: 100%;">Sign in with a security key</button>
+  <div id="webauthn-login-status"></div>
 </div>
 
 <div id="dashboard" class="hidden">
@@ -153,6 +162,14 @@ button:disabled { opacity: 0.5; cursor: default; }
       <h2>Container Telemetry <span class="refresh-note" id="telemetry-updated">not yet refreshed</span></h2>
       <div id="telemetry-grid" class="telemetry-grid"></div>
       <div id="telemetry-empty" class="empty-note hidden">No managed containers are currently running.</div>
+    </section>
+    <section class="panel glass-hologram">
+      <h2>Security Keys</h2>
+      <div class="security-key-row">
+        <div class="count">Registered: <strong id="webauthn-count">—</strong></div>
+        <button id="webauthn-register-button" type="button">Register New Security Key</button>
+      </div>
+      <div id="webauthn-register-status"></div>
     </section>
     <section class="panel glass-hologram">
       <h2>Audit Log <span class="refresh-note" id="audit-updated">not yet refreshed</span></h2>
@@ -223,6 +240,7 @@ $("logout-button").addEventListener("click", () => {
   $("login-screen").classList.remove("hidden");
   $("email").value = "";
   $("password").value = "";
+  $("webauthn-login-status").textContent = "";
 });
 
 function severityFor(pct) {
@@ -277,12 +295,151 @@ function renderAudit(events) {
   }
 }
 
+// Real WebAuthn client-side ceremony support -- a defensive concept
+// adapted from SpartanAI_Security_Core, rebuilt safely, closing
+// cloud/README.md's own named "WebAuthn admin auth... deliberately not
+// attempted" gap. No library: the server's own real challenge JSON
+// (`CreationChallengeResponse`/`RequestChallengeResponse`, both
+// `#[serde(rename_all = "camelCase")]`) already matches the browser's real
+// `PublicKeyCredentialCreationOptions`/`...RequestOptions` dictionary field
+// names exactly -- the only real work here is converting the wire format's
+// base64url strings to/from the `ArrayBuffer`s the WebAuthn API itself
+// requires, and back again for the response.
+function b64urlToBytes(b64url) {
+  const b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4));
+  const raw = atob(b64 + pad);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
+function bytesToB64url(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+$("webauthn-register-button").addEventListener("click", async () => {
+  const status = $("webauthn-register-status");
+  status.textContent = "Starting registration…";
+  try {
+    const start = await apiCall("/api/admin/webauthn/register/start", { method: "POST" });
+    if (start.status !== 200) {
+      status.textContent = "Failed to start: " + (start.body && start.body.message);
+      return;
+    }
+    const pk = start.body.challenge.publicKey;
+    const publicKey = Object.assign({}, pk, {
+      challenge: b64urlToBytes(pk.challenge),
+      user: Object.assign({}, pk.user, { id: b64urlToBytes(pk.user.id) }),
+      excludeCredentials: (pk.excludeCredentials || []).map((c) =>
+        Object.assign({}, c, { id: b64urlToBytes(c.id) })
+      ),
+    });
+    status.textContent = "Waiting for your security key…";
+    const cred = await navigator.credentials.create({ publicKey });
+    const credentialJson = {
+      id: cred.id,
+      rawId: bytesToB64url(cred.rawId),
+      type: cred.type,
+      response: {
+        attestationObject: bytesToB64url(cred.response.attestationObject),
+        clientDataJSON: bytesToB64url(cred.response.clientDataJSON),
+      },
+    };
+    const finish = await apiCall("/api/admin/webauthn/register/finish", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        registration_id: start.body.registration_id,
+        credential: credentialJson,
+      }),
+    });
+    if (finish.status !== 200) {
+      status.textContent = "Registration failed: " + (finish.body && finish.body.message);
+      return;
+    }
+    status.textContent = "Security key registered.";
+    await refreshWebauthnCount();
+  } catch (err) {
+    status.textContent = "Error: " + err;
+  }
+});
+
+async function refreshWebauthnCount() {
+  const r = await apiCall("/api/admin/webauthn/credentials");
+  if (r.status === 200) $("webauthn-count").textContent = String(r.body.count);
+}
+
+$("webauthn-login-button").addEventListener("click", async () => {
+  const status = $("webauthn-login-status");
+  const email = $("email").value;
+  if (!email) {
+    status.textContent = "Enter your email above first.";
+    return;
+  }
+  status.textContent = "Looking up your account…";
+  try {
+    const start = await apiCall("/api/webauthn/login/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    if (start.status !== 200) {
+      status.textContent = (start.body && start.body.message) || "No security key on file.";
+      return;
+    }
+    const pk = start.body.challenge.publicKey;
+    const publicKey = Object.assign({}, pk, {
+      challenge: b64urlToBytes(pk.challenge),
+      allowCredentials: (pk.allowCredentials || []).map((c) =>
+        Object.assign({}, c, { id: b64urlToBytes(c.id) })
+      ),
+    });
+    status.textContent = "Waiting for your security key…";
+    const cred = await navigator.credentials.get({ publicKey });
+    const credentialJson = {
+      id: cred.id,
+      rawId: bytesToB64url(cred.rawId),
+      type: cred.type,
+      response: {
+        authenticatorData: bytesToB64url(cred.response.authenticatorData),
+        clientDataJSON: bytesToB64url(cred.response.clientDataJSON),
+        signature: bytesToB64url(cred.response.signature),
+        userHandle: cred.response.userHandle ? bytesToB64url(cred.response.userHandle) : null,
+      },
+    };
+    const finish = await apiCall("/api/webauthn/login/finish", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        authentication_id: start.body.authentication_id,
+        credential: credentialJson,
+      }),
+    });
+    if (finish.status !== 200 || !finish.body || !finish.body.token) {
+      status.textContent = (finish.body && finish.body.message) || "Authentication failed.";
+      return;
+    }
+    authToken = finish.body.token;
+    status.textContent = "";
+    $("login-screen").classList.add("hidden");
+    $("dashboard").classList.remove("hidden");
+    await refreshAll();
+    telemetryTimer = setInterval(refreshAll, 5000);
+  } catch (err) {
+    status.textContent = "Error: " + err;
+  }
+});
+
 async function refreshAll() {
   $("dash-error").textContent = "";
   const [tel, audit] = await Promise.all([
     apiCall("/api/admin/telemetry"),
     apiCall("/api/admin/audit"),
   ]);
+  await refreshWebauthnCount();
   if (tel.status === 200) {
     renderTelemetry(tel.body);
     $("telemetry-updated").textContent = "updated " + new Date().toLocaleTimeString();

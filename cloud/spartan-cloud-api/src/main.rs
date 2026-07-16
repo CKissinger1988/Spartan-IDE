@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use spartan_cloud_api::{router, AppState};
+use spartan_cloud_api::{router, AppState, Url};
 use spartan_cloud_data::Store;
 use spartan_cloud_runtime::ContainerRuntime;
 use spartan_cloud_tenant::StubEntitlementProvider;
@@ -42,6 +42,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or("127.0.0.1:8080")
         .to_string();
     let db_path = parse_flag(&args, "--db:").unwrap_or("spartan-cloud.db");
+    // The real WebAuthn relying-party origin -- must be a real domain name
+    // (never a bare IP literal; `Url::domain()` requires one), matching
+    // whatever real origin clients will actually connect to. Defaults to
+    // `localhost`, the standard real choice for local development (browsers
+    // treat it as a secure context without TLS).
+    let rp_origin_str = parse_flag(&args, "--rp-origin:").unwrap_or("http://localhost:8080");
+    let rp_origin = Url::parse(rp_origin_str)
+        .map_err(|e| format!("invalid --rp-origin: {rp_origin_str:?}: {e}"))?;
+    let rp_id = rp_origin
+        .domain()
+        .ok_or_else(|| {
+            format!("--rp-origin must have a real domain, not an IP: {rp_origin_str:?}")
+        })?
+        .to_string();
 
     // The at-rest secrets-vault master key is env-provided (64 hex chars = 32
     // bytes), never persisted alongside the ciphertext and never hardcoded. If
@@ -78,6 +92,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         store,
         Arc::new(StubEntitlementProvider::new()),
         24 * 60 * 60,
+        &rp_id,
+        &rp_origin,
     );
 
     // Optionally connect a container runtime. The OCI runtime is env-selected

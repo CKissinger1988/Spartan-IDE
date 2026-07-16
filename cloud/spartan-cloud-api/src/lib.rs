@@ -35,6 +35,13 @@ use spartan_cloud_runtime::{AllocationSpec, ContainerRuntime};
 use spartan_cloud_tenant::{
     can_allocate, EntitlementProvider, ExecCapability, PlanLimits, Session, StubEntitlementProvider,
 };
+use webauthn_rs::prelude::*;
+
+/// Re-exported so `main.rs` (and any other real caller) can build a real
+/// `rp_origin` `Url` for `AppState::new` without needing `url` listed as its
+/// own separate direct dependency -- it's already a real transitive one via
+/// `webauthn-rs`'s own prelude.
+pub use webauthn_rs::prelude::Url;
 
 /// How long an exec-session capability token stays valid after being issued.
 /// Real, deliberately short: it only needs to survive the moment between the
@@ -46,6 +53,47 @@ const EXEC_CAPABILITY_TTL_SECS: u64 = 60;
 /// The default base image for a bare allocation. A real product ships a
 /// curated workspace image; this is an honest placeholder base.
 const DEFAULT_IMAGE: &str = "alpine:latest";
+
+/// How long a real WebAuthn registration/authentication ceremony's
+/// server-side challenge state stays valid -- long enough for a real user
+/// to interact with a real authenticator prompt, short enough that an
+/// abandoned ceremony doesn't linger. The same real, deliberate-TTL
+/// discipline `EXEC_CAPABILITY_TTL_SECS` already established.
+const WEBAUTHN_CEREMONY_TTL_SECS: u64 = 120;
+
+/// In-flight WebAuthn registration ceremony state, kept server-side (never
+/// sent to the client) -- the client only ever sees the opaque
+/// `registration_id` used to look this back up on `/finish`.
+struct PendingRegistration {
+    user_id: UserId,
+    state: PasskeyRegistration,
+    expires_at_unix: u64,
+}
+
+/// In-flight WebAuthn authentication ceremony state -- the sibling of
+/// `PendingRegistration` for the login path.
+struct PendingAuthentication {
+    user_id: UserId,
+    state: PasskeyAuthentication,
+    expires_at_unix: u64,
+}
+
+/// Derives a real, stable `Uuid` from a `UserId`'s own hex string --
+/// `new_user_id()` (in `spartan-cloud-data`) already generates a real random
+/// 128-bit value and hex-encodes it, so decoding that hex back to 16 bytes
+/// gives the exact original random bytes, a real bijective mapping (not a
+/// hash) into `webauthn-rs`'s own required `Uuid` user-handle type.
+fn user_id_to_uuid(user_id: &UserId) -> Uuid {
+    let mut bytes = [0u8; 16];
+    for (i, chunk) in user_id.0.as_bytes().chunks(2).take(16).enumerate() {
+        if let Ok(s) = std::str::from_utf8(chunk) {
+            if let Ok(b) = u8::from_str_radix(s, 16) {
+                bytes[i] = b;
+            }
+        }
+    }
+    Uuid::from_bytes(bytes)
+}
 
 /// Shared server state. The SQLite `Store` isn't `Sync`, so it's behind a
 /// `Mutex`; handlers lock it only for the brief synchronous DB op and never
@@ -66,6 +114,14 @@ pub struct AppState {
     /// reasoning `spartan-backend::ws_transport`'s own per-process token
     /// already established for this codebase.
     exec_capabilities: Arc<Mutex<HashMap<String, ExecCapability>>>,
+    /// The real WebAuthn relying-party configuration + crypto verifier.
+    webauthn: Arc<Webauthn>,
+    /// In-flight registration/authentication ceremonies, keyed by a real
+    /// opaque nonce -- the same in-memory, never-persisted, short-lived-
+    /// token pattern `exec_capabilities` already established, applied here
+    /// to WebAuthn's own server-side challenge state instead.
+    webauthn_registrations: Arc<Mutex<HashMap<String, PendingRegistration>>>,
+    webauthn_authentications: Arc<Mutex<HashMap<String, PendingAuthentication>>>,
 }
 
 impl AppState {
@@ -73,13 +129,23 @@ impl AppState {
         store: Store,
         entitlements: Arc<StubEntitlementProvider>,
         session_ttl_secs: u64,
+        rp_id: &str,
+        rp_origin: &Url,
     ) -> Self {
+        let webauthn = WebauthnBuilder::new(rp_id, rp_origin)
+            .expect("invalid WebAuthn relying-party configuration")
+            .rp_name("Spartan Cloud")
+            .build()
+            .expect("WebAuthn configuration must build");
         Self {
             store: Arc::new(Mutex::new(store)),
             entitlements,
             session_ttl_secs,
             runtime: None,
             exec_capabilities: Arc::new(Mutex::new(HashMap::new())),
+            webauthn: Arc::new(webauthn),
+            webauthn_registrations: Arc::new(Mutex::new(HashMap::new())),
+            webauthn_authentications: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -91,11 +157,20 @@ impl AppState {
     }
 
     /// A ready-to-serve in-memory state (tests, ephemeral runs). No runtime.
+    /// A real, fixed `localhost` relying-party origin -- correct for both
+    /// `tower::oneshot`-driven tests (which never hit a real WebAuthn
+    /// ceremony anyway, no real browser origin exists) and this project's
+    /// own real live-Chromium verification, which serves the real app at
+    /// `http://localhost:<port>` for exactly this reason (`Url::domain()`
+    /// requires a real domain name, not a bare IP literal, so `127.0.0.1`
+    /// would not work here).
     pub fn in_memory() -> Self {
         Self::new(
             Store::open_in_memory().expect("in-memory store must open"),
             Arc::new(StubEntitlementProvider::new()),
             24 * 60 * 60,
+            "localhost",
+            &Url::parse("http://localhost:8080").expect("valid URL"),
         )
     }
 
@@ -105,6 +180,8 @@ impl AppState {
             Store::open_in_memory_with_key(master_key).expect("keyed in-memory store must open"),
             Arc::new(StubEntitlementProvider::new()),
             24 * 60 * 60,
+            "localhost",
+            &Url::parse("http://localhost:8080").expect("valid URL"),
         )
     }
 
@@ -159,6 +236,36 @@ fn internal_error(e: impl std::fmt::Display) -> Response {
         "internal_error",
         "an internal error occurred",
     )
+}
+
+/// A small, real helper factoring out the `is_admin` check
+/// `grant_pro`/`audit_log`/`telemetry` each already repeat inline -- used
+/// only by the new WebAuthn admin endpoints below, so it doesn't touch
+/// (or risk regressing) any of those already-tested call sites. Returns
+/// `Some(response)` to return early on failure, `None` to continue --
+/// deliberately not `Result<(), Response>`, which would trip clippy's own
+/// `result_large_err` the same way `issue_and_store_session`'s own doc
+/// comment already names and avoids for the identical reason.
+fn require_admin(state: &AppState, user_id: &UserId) -> Option<Response> {
+    let store = state.store.lock().expect("store mutex poisoned");
+    match store.is_admin(user_id) {
+        Ok(true) => None,
+        Ok(false) => Some(api_error(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "admin privileges are required",
+        )),
+        Err(e) => Some(internal_error(e)),
+    }
+}
+
+/// A real, random-enough nonce for a WebAuthn ceremony id -- `Uuid::new_v4`
+/// (a real 122-bit random value), already a real transitive dependency via
+/// `webauthn-rs`'s own prelude, so no new crate dependency is needed just
+/// for this. Ceremony ids are never persisted to the session store, unlike
+/// the real bearer tokens `Session::issue` generates.
+fn new_ceremony_id() -> String {
+    Uuid::new_v4().to_string()
 }
 
 /// Authenticated-user extractor: pulls the `Authorization: Bearer <token>`
@@ -231,6 +338,20 @@ pub fn router(state: AppState) -> Router {
             put(put_secret_handler).delete(delete_secret_handler),
         )
         .route("/api/secrets", get(list_secrets_handler))
+        .route(
+            "/api/admin/webauthn/register/start",
+            post(webauthn_register_start),
+        )
+        .route(
+            "/api/admin/webauthn/register/finish",
+            post(webauthn_register_finish),
+        )
+        .route(
+            "/api/admin/webauthn/credentials",
+            get(webauthn_credentials_count),
+        )
+        .route("/api/webauthn/login/start", post(webauthn_login_start))
+        .route("/api/webauthn/login/finish", post(webauthn_login_finish))
         .route("/admin", get(admin_dashboard))
         .with_state(state)
 }
@@ -433,6 +554,346 @@ async fn audit_log(State(state): State<AppState>, admin: AuthUser) -> Response {
         })
         .collect();
     (StatusCode::OK, Json(json)).into_response()
+}
+
+#[derive(Serialize)]
+struct WebauthnRegisterStartResponse {
+    challenge: CreationChallengeResponse,
+    registration_id: String,
+}
+
+/// Admin-only: begin registering a new WebAuthn credential -- a real
+/// additional auth factor layered on top of the existing password login,
+/// closing `cloud/README.md`'s own named "WebAuthn admin auth...
+/// deliberately not attempted: no FIDO2 hardware in this environment" gap.
+/// Chrome DevTools Protocol's WebAuthn virtual-authenticator support
+/// (exposed via Playwright) is what makes this genuinely live-testable
+/// without physical hardware, contradicting that original blocker. Real
+/// `exclude_credentials` from the admin's own already-registered keys, so
+/// re-registering the exact same authenticator is refused by the browser
+/// itself rather than silently duplicated.
+async fn webauthn_register_start(State(state): State<AppState>, admin: AuthUser) -> Response {
+    if let Some(resp) = require_admin(&state, &admin.user_id) {
+        return resp;
+    }
+    let (email, existing_json) = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        let email = match store.email_of(&admin.user_id) {
+            Ok(Some(e)) => e,
+            Ok(None) => return internal_error("admin user has no email on record"),
+            Err(e) => return internal_error(e),
+        };
+        let existing = match store.list_passkeys(&admin.user_id) {
+            Ok(v) => v,
+            Err(e) => return internal_error(e),
+        };
+        (email, existing)
+    };
+    let exclude: Vec<CredentialID> = existing_json
+        .iter()
+        .filter_map(|(_, json)| serde_json::from_str::<Passkey>(json).ok())
+        .map(|p| p.cred_id().clone())
+        .collect();
+
+    let uuid = user_id_to_uuid(&admin.user_id);
+    let (ccr, reg_state) = match state.webauthn.start_passkey_registration(
+        uuid,
+        &email,
+        &email,
+        if exclude.is_empty() {
+            None
+        } else {
+            Some(exclude)
+        },
+    ) {
+        Ok(v) => v,
+        Err(e) => return internal_error(e),
+    };
+
+    let registration_id = new_ceremony_id();
+    {
+        let mut regs = state.webauthn_registrations.lock().expect("mutex poisoned");
+        regs.insert(
+            registration_id.clone(),
+            PendingRegistration {
+                user_id: admin.user_id.clone(),
+                state: reg_state,
+                expires_at_unix: now_unix() + WEBAUTHN_CEREMONY_TTL_SECS,
+            },
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(WebauthnRegisterStartResponse {
+            challenge: ccr,
+            registration_id,
+        }),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct WebauthnRegisterFinishRequest {
+    registration_id: String,
+    credential: RegisterPublicKeyCredential,
+}
+
+async fn webauthn_register_finish(
+    State(state): State<AppState>,
+    admin: AuthUser,
+    Json(req): Json<WebauthnRegisterFinishRequest>,
+) -> Response {
+    if let Some(resp) = require_admin(&state, &admin.user_id) {
+        return resp;
+    }
+    let pending = {
+        let mut regs = state.webauthn_registrations.lock().expect("mutex poisoned");
+        regs.remove(&req.registration_id)
+    };
+    let Some(pending) = pending else {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "unknown_registration",
+            "no matching registration ceremony (unknown or already used registration_id)",
+        );
+    };
+    if pending.user_id != admin.user_id {
+        // The registration must be finished by the same admin who started
+        // it -- a real cross-account confusion this check refuses outright,
+        // matching this file's own established ownership-check discipline
+        // (e.g. `session_token_is_refused_for_an_allocation_the_caller_does_
+        // not_own`'s exec-capability check).
+        return api_error(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "this registration ceremony belongs to a different account",
+        );
+    }
+    if now_unix() > pending.expires_at_unix {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "registration_expired",
+            "the registration ceremony expired; start again",
+        );
+    }
+    let passkey = match state
+        .webauthn
+        .finish_passkey_registration(&req.credential, &pending.state)
+    {
+        Ok(pk) => pk,
+        Err(e) => {
+            return api_error(
+                StatusCode::BAD_REQUEST,
+                "registration_failed",
+                &format!("credential verification failed: {e}"),
+            )
+        }
+    };
+    let passkey_json = match serde_json::to_string(&passkey) {
+        Ok(j) => j,
+        Err(e) => return internal_error(e),
+    };
+    {
+        let store = state.store.lock().expect("store mutex poisoned");
+        if let Err(e) = store.add_passkey(&admin.user_id, &passkey_json) {
+            return internal_error(e);
+        }
+    }
+    audit(
+        &state,
+        Some(&admin.user_id),
+        "webauthn_register",
+        None,
+        None,
+    );
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+}
+
+#[derive(Serialize)]
+struct WebauthnCredentialsCountResponse {
+    count: u32,
+}
+
+/// Admin-only: how many security keys are registered for the caller's own
+/// account -- feeds the dashboard's real "N security keys registered" line,
+/// without ever exposing the credential material itself.
+async fn webauthn_credentials_count(State(state): State<AppState>, admin: AuthUser) -> Response {
+    if let Some(resp) = require_admin(&state, &admin.user_id) {
+        return resp;
+    }
+    let count = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        match store.count_passkeys(&admin.user_id) {
+            Ok(c) => c,
+            Err(e) => return internal_error(e),
+        }
+    };
+    (
+        StatusCode::OK,
+        Json(WebauthnCredentialsCountResponse { count }),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct WebauthnLoginStartRequest {
+    email: String,
+}
+
+#[derive(Serialize)]
+struct WebauthnLoginStartResponse {
+    challenge: RequestChallengeResponse,
+    authentication_id: String,
+}
+
+/// Public (no bearer token yet -- this *is* a login path): begin a real
+/// WebAuthn authentication as an alternative to a password. A real, named
+/// privacy trade-off versus the password path (see `find_user_by_email`'s
+/// own doc comment): this necessarily reveals whether an account exists and
+/// has a registered key, since the browser needs to know which credentials
+/// to offer -- acceptable here since this is an additional-factor admin
+/// flow, not the general-signup account-enumeration-sensitive path.
+async fn webauthn_login_start(
+    State(state): State<AppState>,
+    Json(req): Json<WebauthnLoginStartRequest>,
+) -> Response {
+    let (user_id, creds) = {
+        let store = state.store.lock().expect("store mutex poisoned");
+        let user_id = match store.find_user_by_email(&req.email) {
+            Ok(Some(id)) => id,
+            Ok(None) => {
+                return api_error(
+                    StatusCode::NOT_FOUND,
+                    "no_account",
+                    "no account with this email",
+                )
+            }
+            Err(e) => return internal_error(e),
+        };
+        let raw = match store.list_passkeys(&user_id) {
+            Ok(v) => v,
+            Err(e) => return internal_error(e),
+        };
+        (user_id, raw)
+    };
+    let passkeys: Vec<Passkey> = creds
+        .iter()
+        .filter_map(|(_, json)| serde_json::from_str::<Passkey>(json).ok())
+        .collect();
+    if passkeys.is_empty() {
+        return api_error(
+            StatusCode::NOT_FOUND,
+            "no_credential",
+            "no security key registered for this account",
+        );
+    }
+    let (rcr, auth_state) = match state.webauthn.start_passkey_authentication(&passkeys) {
+        Ok(v) => v,
+        Err(e) => return internal_error(e),
+    };
+    let authentication_id = new_ceremony_id();
+    {
+        let mut auths = state
+            .webauthn_authentications
+            .lock()
+            .expect("mutex poisoned");
+        auths.insert(
+            authentication_id.clone(),
+            PendingAuthentication {
+                user_id,
+                state: auth_state,
+                expires_at_unix: now_unix() + WEBAUTHN_CEREMONY_TTL_SECS,
+            },
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(WebauthnLoginStartResponse {
+            challenge: rcr,
+            authentication_id,
+        }),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct WebauthnLoginFinishRequest {
+    authentication_id: String,
+    credential: PublicKeyCredential,
+}
+
+async fn webauthn_login_finish(
+    State(state): State<AppState>,
+    Json(req): Json<WebauthnLoginFinishRequest>,
+) -> Response {
+    let pending = {
+        let mut auths = state
+            .webauthn_authentications
+            .lock()
+            .expect("mutex poisoned");
+        auths.remove(&req.authentication_id)
+    };
+    let Some(pending) = pending else {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "unknown_authentication",
+            "no matching authentication ceremony (unknown or already used authentication_id)",
+        );
+    };
+    if now_unix() > pending.expires_at_unix {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "authentication_expired",
+            "the authentication ceremony expired; start again",
+        );
+    }
+    let auth_result = match state
+        .webauthn
+        .finish_passkey_authentication(&req.credential, &pending.state)
+    {
+        Ok(r) => r,
+        Err(e) => {
+            audit(
+                &state,
+                None,
+                "webauthn_login_failed",
+                None,
+                Some(&format!("{e}")),
+            );
+            return api_error(
+                StatusCode::UNAUTHORIZED,
+                "authentication_failed",
+                "credential verification failed",
+            );
+        }
+    };
+
+    // Real post-authentication counter/backup-state persistence -- most
+    // passkeys never actually change here (see `Passkey::update_credential`'s
+    // own doc comment), but when one does, it's written back by its real
+    // row id, never guessed at.
+    {
+        let store = state.store.lock().expect("store mutex poisoned");
+        let raw = match store.list_passkeys(&pending.user_id) {
+            Ok(v) => v,
+            Err(e) => return internal_error(e),
+        };
+        for (row_id, json) in raw {
+            if let Ok(mut passkey) = serde_json::from_str::<Passkey>(&json) {
+                if passkey.update_credential(&auth_result) == Some(true) {
+                    if let Ok(updated_json) = serde_json::to_string(&passkey) {
+                        let _ = store.update_passkey(row_id, &updated_json);
+                    }
+                }
+            }
+        }
+    }
+
+    audit(&state, Some(&pending.user_id), "webauthn_login", None, None);
+    match issue_and_store_session(&state, pending.user_id) {
+        Ok(auth) => (StatusCode::OK, Json(auth)).into_response(),
+        Err(e) => internal_error(e),
+    }
 }
 
 async fn allocate(State(state): State<AppState>, user: AuthUser) -> Response {
@@ -1769,5 +2230,227 @@ mod tests {
         // and the honest 503 (not a faked allocation) is returned.
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body["code"], "runtime_unavailable");
+    }
+
+    // Real WebAuthn tests below. A full registration/authentication
+    // ceremony needs a real authenticator (hardware or a browser's own
+    // virtual one) genuinely signing a real server-issued challenge --
+    // `tower::oneshot` alone can't produce that, so these exercise every
+    // real code path *around* the crypto (auth gating, ownership,
+    // not-found/expired ceremony handling) honestly, rather than faking a
+    // ceremony result. The actual real, live, end-to-end ceremony proof is
+    // a separate Playwright + Chrome DevTools Protocol virtual-authenticator
+    // run against the real running binary (see cloud/README.md).
+
+    async fn admin_token(state: &AppState, app: &Router, email: &str) -> String {
+        {
+            let store = state.store.lock().unwrap();
+            store.create_user(email, "adminpw12", true).unwrap();
+        }
+        let (_, login) = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/login",
+                    serde_json::json!({"email": email, "password": "adminpw12"}),
+                    None,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        login["token"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn webauthn_register_start_requires_admin() {
+        let state = AppState::in_memory();
+        let app = router(state.clone());
+        let token = signup_token(&app, "plain@b.com").await;
+
+        let resp = app
+            .oneshot(post_json(
+                "/api/admin/webauthn/register/start",
+                serde_json::json!({}),
+                Some(&token),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn webauthn_register_start_returns_a_real_challenge_for_an_admin() {
+        let state = AppState::in_memory();
+        let app = router(state.clone());
+        let token = admin_token(&state, &app, "admin-webauthn@b.com").await;
+
+        let (status, body) = body_json(
+            app.oneshot(post_json(
+                "/api/admin/webauthn/register/start",
+                serde_json::json!({}),
+                Some(&token),
+            ))
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body["registration_id"].as_str().unwrap().is_empty());
+        // A real CreationChallengeResponse shape: a base64url challenge and
+        // the relying party id this AppState was built with.
+        assert!(body["challenge"]["publicKey"]["challenge"].is_string());
+        assert_eq!(body["challenge"]["publicKey"]["rp"]["id"], "localhost");
+    }
+
+    #[tokio::test]
+    async fn webauthn_register_finish_rejects_an_unknown_registration_id() {
+        let state = AppState::in_memory();
+        let app = router(state.clone());
+        let token = admin_token(&state, &app, "admin2@b.com").await;
+
+        let (status, body) = body_json(
+            app.oneshot(post_json(
+                "/api/admin/webauthn/register/finish",
+                serde_json::json!({
+                    "registration_id": "nonexistent",
+                    "credential": {
+                        "id": "x", "rawId": "eA", "type": "public-key",
+                        "response": {"attestationObject": "eA", "clientDataJSON": "eA"}
+                    }
+                }),
+                Some(&token),
+            ))
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["code"], "unknown_registration");
+    }
+
+    #[tokio::test]
+    async fn webauthn_register_finish_refuses_a_ceremony_started_by_a_different_admin() {
+        let state = AppState::in_memory();
+        let app = router(state.clone());
+        let token_a = admin_token(&state, &app, "admin-a@b.com").await;
+        let token_b = admin_token(&state, &app, "admin-b@b.com").await;
+
+        let (_, start_body) = body_json(
+            app.clone()
+                .oneshot(post_json(
+                    "/api/admin/webauthn/register/start",
+                    serde_json::json!({}),
+                    Some(&token_a),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let registration_id = start_body["registration_id"].as_str().unwrap().to_string();
+
+        // Admin B tries to finish admin A's own ceremony.
+        let resp = app
+            .oneshot(post_json(
+                "/api/admin/webauthn/register/finish",
+                serde_json::json!({
+                    "registration_id": registration_id,
+                    "credential": {
+                        "id": "x", "rawId": "eA", "type": "public-key",
+                        "response": {"attestationObject": "eA", "clientDataJSON": "eA"}
+                    }
+                }),
+                Some(&token_b),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn webauthn_credentials_count_starts_at_zero_and_requires_admin() {
+        let state = AppState::in_memory();
+        let app = router(state.clone());
+        let admin = admin_token(&state, &app, "admin3@b.com").await;
+        let plain = signup_token(&app, "plain2@b.com").await;
+
+        let (status, body) = body_json(
+            app.clone()
+                .oneshot(get("/api/admin/webauthn/credentials", Some(&admin)))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["count"], 0);
+
+        let resp = app
+            .oneshot(get("/api/admin/webauthn/credentials", Some(&plain)))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn webauthn_login_start_is_a_real_honest_404_for_an_unknown_email() {
+        let app = router(AppState::in_memory());
+        let (status, body) = body_json(
+            app.oneshot(post_json(
+                "/api/webauthn/login/start",
+                serde_json::json!({"email": "nobody@b.com"}),
+                None,
+            ))
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["code"], "no_account");
+    }
+
+    #[tokio::test]
+    async fn webauthn_login_start_is_a_real_honest_404_for_an_account_with_no_registered_key() {
+        let state = AppState::in_memory();
+        let app = router(state.clone());
+        {
+            let store = state.store.lock().unwrap();
+            store.create_user("nokey@b.com", "pw123456", false).unwrap();
+        }
+        let (status, body) = body_json(
+            app.oneshot(post_json(
+                "/api/webauthn/login/start",
+                serde_json::json!({"email": "nokey@b.com"}),
+                None,
+            ))
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["code"], "no_credential");
+    }
+
+    #[tokio::test]
+    async fn webauthn_login_finish_rejects_an_unknown_authentication_id() {
+        let app = router(AppState::in_memory());
+        let (status, body) = body_json(
+            app.oneshot(post_json(
+                "/api/webauthn/login/finish",
+                serde_json::json!({
+                    "authentication_id": "nonexistent",
+                    "credential": {
+                        "id": "x", "rawId": "eA", "type": "public-key",
+                        "response": {
+                            "authenticatorData": "eA", "clientDataJSON": "eA", "signature": "eA"
+                        }
+                    }
+                }),
+                None,
+            ))
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["code"], "unknown_authentication");
     }
 }

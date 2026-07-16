@@ -153,7 +153,70 @@ impl Store {
                 nonce      BLOB NOT NULL,
                 ciphertext BLOB NOT NULL,
                 PRIMARY KEY (owner_id, name)
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS webauthn_credentials (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id     TEXT NOT NULL,
+                passkey_json TEXT NOT NULL,
+                FOREIGN KEY(owner_id) REFERENCES users(id)
+             );
+             CREATE INDEX IF NOT EXISTS idx_webauthn_owner ON webauthn_credentials(owner_id);",
+        )?;
+        Ok(())
+    }
+
+    /// Store a newly-registered WebAuthn credential for `owner`. The value is
+    /// an opaque, already-serialized JSON blob -- this crate deliberately has
+    /// no dependency on `webauthn-rs`'s own `Passkey` type (the same
+    /// separation this crate already keeps from `spartan-cloud-runtime`);
+    /// `spartan-cloud-api` owns serializing/deserializing the real credential
+    /// object. Returns the new row's id, needed later to update the same
+    /// credential's stored authenticator counter after a real authentication.
+    pub fn add_passkey(&self, owner: &UserId, passkey_json: &str) -> Result<i64, DataError> {
+        self.conn.execute(
+            "INSERT INTO webauthn_credentials (owner_id, passkey_json) VALUES (?1, ?2)",
+            params![owner.0, passkey_json],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// All of `owner`'s registered credentials, as `(row_id, opaque_json)`
+    /// pairs -- owner-scoped, the same enforced per-tenant isolation
+    /// invariant every other real per-tenant table in this store keeps.
+    pub fn list_passkeys(&self, owner: &UserId) -> Result<Vec<(i64, String)>, DataError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, passkey_json FROM webauthn_credentials WHERE owner_id = ?1")?;
+        let rows = stmt.query_map(params![owner.0], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DataError::from)
+    }
+
+    /// Real count of `owner`'s registered credentials -- feeds the admin
+    /// dashboard's own "N security keys registered" line without exposing
+    /// the credential material itself.
+    pub fn count_passkeys(&self, owner: &UserId) -> Result<u32, DataError> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM webauthn_credentials WHERE owner_id = ?1",
+            params![owner.0],
+            |r| r.get(0),
+        )?;
+        Ok(count as u32)
+    }
+
+    /// Overwrite one already-registered credential's stored JSON by its real
+    /// row id (never by content match) -- used after a real authentication
+    /// ceremony to persist an updated authenticator counter/backup-state,
+    /// the concrete defense against a cloned-authenticator replay that
+    /// `Passkey::update_credential`'s own real return value signals is
+    /// needed. Most passkeys (synced/platform ones) never actually change --
+    /// see that method's own doc comment -- so this is a real, occasionally-
+    /// no-op write, not dead code.
+    pub fn update_passkey(&self, row_id: i64, passkey_json: &str) -> Result<(), DataError> {
+        self.conn.execute(
+            "UPDATE webauthn_credentials SET passkey_json = ?1 WHERE id = ?2",
+            params![passkey_json, row_id],
         )?;
         Ok(())
     }
@@ -220,6 +283,41 @@ impl Store {
         } else {
             Ok(None)
         }
+    }
+
+    /// A plain email -> id lookup, no password involved -- used by the real
+    /// WebAuthn login-start endpoint, which needs to know *which* account's
+    /// registered credentials to challenge before any password is checked.
+    /// Deliberately distinct from `verify_login` (which never reveals
+    /// whether an email is registered); a WebAuthn login-start response
+    /// necessarily does reveal that (the browser needs to know which
+    /// credentials to offer), a real, named, narrower privacy trade-off than
+    /// the password path, acceptable for this additional-factor admin flow.
+    pub fn find_user_by_email(&self, email: &str) -> Result<Option<UserId>, DataError> {
+        let id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT id FROM users WHERE email = ?1",
+                params![email],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(id.map(UserId))
+    }
+
+    /// The real email for an already-known user id -- used by the WebAuthn
+    /// registration ceremony to give the authenticator a real, human-
+    /// readable account label rather than the opaque id.
+    pub fn email_of(&self, user_id: &UserId) -> Result<Option<String>, DataError> {
+        let email: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT email FROM users WHERE id = ?1",
+                params![user_id.0],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(email)
     }
 
     /// Whether a user has the admin flag (bootstraps the admin-only
@@ -685,5 +783,63 @@ mod tests {
             store.get_secret(&owner, "k"),
             Err(DataError::VaultLocked)
         ));
+    }
+
+    #[test]
+    fn find_user_by_email_finds_real_users_and_none_for_unknown() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.create_user("erin@example.com", "pw", false).unwrap();
+        assert_eq!(
+            store.find_user_by_email("erin@example.com").unwrap(),
+            Some(id)
+        );
+        assert_eq!(
+            store.find_user_by_email("nobody@example.com").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn email_of_finds_a_real_email_and_none_for_unknown_id() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.create_user("frank@example.com", "pw", false).unwrap();
+        assert_eq!(
+            store.email_of(&id).unwrap(),
+            Some("frank@example.com".to_string())
+        );
+        assert_eq!(store.email_of(&UserId("nonexistent".into())).unwrap(), None);
+    }
+
+    #[test]
+    fn webauthn_credentials_add_list_count_and_update_are_owner_scoped() {
+        let store = Store::open_in_memory().unwrap();
+        let a = store.create_user("alice@example.com", "pw", true).unwrap();
+        let b = store.create_user("bob@example.com", "pw", false).unwrap();
+
+        assert_eq!(store.count_passkeys(&a).unwrap(), 0);
+        let row_id = store.add_passkey(&a, r#"{"cred":"one"}"#).unwrap();
+        assert_eq!(store.count_passkeys(&a).unwrap(), 1);
+        assert_eq!(
+            store.count_passkeys(&b).unwrap(),
+            0,
+            "owner-scoped: b sees none of a's"
+        );
+
+        let listed = store.list_passkeys(&a).unwrap();
+        assert_eq!(listed, vec![(row_id, r#"{"cred":"one"}"#.to_string())]);
+        assert!(store.list_passkeys(&b).unwrap().is_empty());
+
+        // A second credential for the same owner is a distinct row.
+        store.add_passkey(&a, r#"{"cred":"two"}"#).unwrap();
+        assert_eq!(store.count_passkeys(&a).unwrap(), 2);
+
+        // Updating by real row id changes exactly that row, not the other.
+        store
+            .update_passkey(row_id, r#"{"cred":"one-updated"}"#)
+            .unwrap();
+        let listed = store.list_passkeys(&a).unwrap();
+        let updated = listed.iter().find(|(id, _)| *id == row_id).unwrap();
+        assert_eq!(updated.1, r#"{"cred":"one-updated"}"#);
+        assert!(listed.iter().any(|(_, j)| j == r#"{"cred":"two"}"#));
     }
 }

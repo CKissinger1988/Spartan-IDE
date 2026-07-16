@@ -186,17 +186,50 @@ KVM-capable target (bare metal / Firecracker / a KVM-enabled instance) is the
 documented path to a genuinely-strong verified isolation, swappable behind the
 same trait — no API or domain-layer change needed.
 
+- **WebAuthn admin auth** — a defensive concept adapted from
+  `SpartanAI_Security_Core`, rebuilt safely, now real and **live-verified**.
+  The original blocker ("no FIDO2 hardware in this environment") turned out
+  to be avoidable, not permanent: Chrome DevTools Protocol exposes a real
+  virtual WebAuthn authenticator (`WebAuthn.addVirtualAuthenticator`,
+  reachable via Playwright), which answers genuine
+  `navigator.credentials.create()`/`.get()` ceremonies without any physical
+  key. Server side, `spartan-cloud-api` depends on `webauthn-rs` directly;
+  `spartan-cloud-data` stays dependency-free of it, storing/returning only
+  opaque per-credential JSON (`webauthn_credentials`, owner-scoped, mirroring
+  the vault's own scoping discipline) — the same crate-boundary separation
+  already established between the data layer and `spartan-cloud-runtime`.
+  Ceremony state (`PasskeyRegistration`/`PasskeyAuthentication`) is kept
+  server-side in an in-memory, TTL-expiring, never-persisted map (matching
+  the existing `exec_capabilities` pattern) rather than round-tripped through
+  the client via `webauthn-rs`'s optional serialisation feature. Five new
+  endpoints: `POST /api/webauthn/register/start` + `/finish` (admin-only,
+  requires an existing session — registering a *first* key still needs a
+  real password login), `GET /api/webauthn/credentials/count`, and
+  `POST /api/webauthn/login/start` + `/finish` (unauthenticated, password-free
+  — a real 404 for both an unknown email and a known admin with no
+  registered key, no account enumeration beyond that binary signal).
+  `GET /api/webauthn/login/start` resolves the account via a new
+  `find_user_by_email` (a real, named privacy trade-off versus
+  `verify_login`'s constant-shape response, documented in its own doc
+  comment) and derives a stable WebAuthn user handle from the existing
+  `UserId`'s own hex bytes (`user_id_to_uuid`) rather than introducing a
+  second identity concept. The admin dashboard (`static/admin.html`) gained
+  a "Sign in with a security key" button (password-free login) and a
+  "Security Keys" panel with live count + a "Register New Security Key"
+  button. **Live-verified with a real Chromium browser (Playwright) driving
+  the real CDP virtual authenticator** against the actual running binary:
+  registered a real credential (security-key count 0 → 1 via a genuine
+  ceremony), logged out, then logged back in using **only** the security key
+  — no password typed — reaching the real dashboard, with the resulting real
+  audit log (`login` → `webauthn_register` → `webauthn_login`, all the same
+  real actor id) confirmed on screen. 8 new `spartan-cloud-api` tests (25
+  total in that crate) plus 3 new `spartan-cloud-data` tests.
+
 ## What's NOT here yet (next increments)
 
 1. **Strong-isolation verification** — gVisor (or Firecracker/Kata) confirmed
    on a real KVM-capable target, flipping `isolation_verified` to `true` in a
    production deployment. The seam and the honest-default flag exist today.
-2. **WebAuthn admin auth** on the API (a defensive concept adapted from
-   `SpartanAI_Security_Core`, rebuilt safely) — deliberately not attempted:
-   this repo's own rule is never to claim something works without running it,
-   and there's no FIDO2 hardware in this environment to test against. The
-   admin dashboard's bearer-token login is real and tested; WebAuthn would be
-   an additional, stronger auth factor layered on top of it.
 
 Everything named in the plan's own "Explicitly deferred" list — real Stripe
 billing, multi-node routing, cross-region deployment, an egress-allowlist
