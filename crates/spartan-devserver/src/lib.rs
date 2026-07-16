@@ -16,23 +16,26 @@
 //! Origin allowlist) verbatim instead of forking it.
 //!
 //! **Beyond the Phase 0 skeleton.** The wrapping/fallthrough seam is verified
-//! end-to-end; on top of it there are now two real devserver-specific methods
-//! -- `devserver_ping` (liveness/identity) and `model_status` (the unified
-//! model surface: the configured Leo provider's real capabilities + a live
-//! health probe, via `spartan_backend::model_status_json`) -- plus the
-//! static-file server (`/__spartan/session` token handoff for the `web/`
-//! client). The remaining model-management methods (`hf_pull_model`,
-//! `litellm_proxy_*`) land on this same seam in later increments -- deliberately
-//! not present yet, never stubbed with fake behavior.
+//! end-to-end; on top of it there are real devserver-specific methods --
+//! `devserver_ping` (liveness/identity), `model_status` (the unified model
+//! surface: the configured Leo provider's real capabilities + a live health
+//! probe, via `spartan_backend::model_status_json`), and now a real LiteLLM
+//! proxy lifecycle (`litellm_proxy_start`/`_stop`/`_status`, backed by
+//! `litellm_proxy`) -- plus the static-file server (`/__spartan/session`
+//! token handoff for the `web/` client). The HF -> Ollama downloader
+//! (`hf_pull_model`) lands on this same seam in a later increment --
+//! deliberately not present yet, never stubbed with fake behavior.
 
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use spartan_backend::ws_transport::{self, WsSecurity};
-use spartan_backend::{handle_request, BackendState, Request, Response};
+use spartan_backend::{handle_request, BackendState, Event, Request, Response};
+
+pub mod litellm_proxy;
 
 pub mod static_serve;
 
@@ -51,20 +54,42 @@ pub const DEVSERVER_PING: &str = "devserver_ping";
 /// status can never disagree with what a task would actually run.
 pub const MODEL_STATUS: &str = "model_status";
 
+/// Starts a real local LiteLLM proxy (`litellm --port <port> [--config
+/// <config_path>]`). Async, ack-then-event, matching `devcontainer_up`'s own
+/// shape: an immediate `{"status": "starting"}` while the real, possibly
+/// slow (loading model routes, etc.) spawn+health-check runs on its own
+/// thread, streaming real subprocess output as `litellm_progress` events
+/// and finishing with either `litellm_ready` or `litellm_failed`.
+pub const LITELLM_PROXY_START: &str = "litellm_proxy_start";
+/// Stops the currently-running proxy (a real, honest `not_running` result,
+/// never an error, if none is running -- matches `devcontainer_down`'s own
+/// "stopping something already gone is fine" precedent).
+pub const LITELLM_PROXY_STOP: &str = "litellm_proxy_stop";
+/// Reports the real current proxy status (`running` with its real port/pid,
+/// or `not_running`) -- also self-heals a stale handle whose process has
+/// since exited on its own, so a crashed proxy doesn't linger as a false
+/// "running" forever.
+pub const LITELLM_PROXY_STATUS: &str = "litellm_proxy_status";
+
+const LITELLM_HEALTH_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Devserver-specific state, held *alongside* -- never inside -- the shared
-/// `BackendState`. Later increments grow this with the real model registry,
-/// LiteLLM proxy handle(s), and static-server config; for the Phase 0
-/// skeleton it holds only a real construction instant so `devserver_ping`
+/// `BackendState`. Holds a real construction instant (so `devserver_ping`
 /// can report a genuine uptime, proving captured devserver state actually
-/// threads through the dispatcher rather than being a stateless placeholder.
+/// threads through the dispatcher rather than being a stateless placeholder)
+/// and the real, at-most-one LiteLLM proxy child process this devserver has
+/// spawned, if any. Later increments grow this with the real model registry
+/// and static-server config.
 pub struct DevServerState {
     started_at: Instant,
+    litellm: Mutex<Option<litellm_proxy::ProxyProcess>>,
 }
 
 impl DevServerState {
     pub fn new() -> Self {
         Self {
             started_at: Instant::now(),
+            litellm: Mutex::new(None),
         }
     }
 
@@ -80,6 +105,130 @@ impl Default for DevServerState {
     }
 }
 
+/// Starts a real LiteLLM proxy in the background: an immediate
+/// `{"status": "starting"}` ack, then a spawned thread runs the real,
+/// possibly-slow spawn+health-check, forwarding real subprocess stdout/
+/// stderr lines as `litellm_progress` events and finishing with
+/// `litellm_ready`/`litellm_failed` -- the exact same "ack now, event
+/// later" shape `spartan_backend::devcontainer_up` already established.
+fn litellm_proxy_start(
+    devserver: Arc<DevServerState>,
+    out_tx: Sender<String>,
+    port: u16,
+    config_path: Option<String>,
+) -> Result<serde_json::Value, String> {
+    {
+        let mut guard = devserver.litellm.lock().unwrap();
+        if let Some(process) = guard.as_mut() {
+            if process.is_running() {
+                return Err(format!(
+                    "a LiteLLM proxy is already running on port {} (pid {})",
+                    process.port,
+                    process.pid()
+                ));
+            }
+            // A stale handle whose process already exited on its own --
+            // clear it so this fresh spawn can take its place.
+            *guard = None;
+        }
+    }
+
+    if !litellm_proxy::is_litellm_available() {
+        return Err(
+            "`litellm` isn't on $PATH -- install it with `pip install 'litellm[proxy]'`"
+                .to_string(),
+        );
+    }
+
+    thread::spawn(move || {
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let forward_out_tx = out_tx.clone();
+        thread::spawn(move || {
+            for line in line_rx {
+                let event = Event {
+                    event: "litellm_progress".to_string(),
+                    data: serde_json::json!({ "line": line }),
+                };
+                if let Ok(l) = serde_json::to_string(&event) {
+                    let _ = forward_out_tx.send(l);
+                }
+            }
+        });
+
+        let event = match litellm_proxy::spawn(port, config_path.as_deref(), line_tx) {
+            Ok(mut process) => match litellm_proxy::wait_for_health(
+                &mut process,
+                litellm_proxy::DEFAULT_HEALTH_PATH,
+                LITELLM_HEALTH_TIMEOUT,
+            ) {
+                Ok(()) => {
+                    let pid = process.pid();
+                    *devserver.litellm.lock().unwrap() = Some(process);
+                    Event {
+                        event: "litellm_ready".to_string(),
+                        data: serde_json::json!({ "port": port, "pid": pid }),
+                    }
+                }
+                Err(e) => {
+                    let _ = process.stop();
+                    Event {
+                        event: "litellm_failed".to_string(),
+                        data: serde_json::json!({ "error": e.to_string() }),
+                    }
+                }
+            },
+            Err(e) => Event {
+                event: "litellm_failed".to_string(),
+                data: serde_json::json!({ "error": e.to_string() }),
+            },
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+
+    Ok(serde_json::json!({ "status": "starting" }))
+}
+
+/// Stops the real currently-running proxy, if any. Stopping when nothing is
+/// running is a real, honest `not_running` result, not an error -- matches
+/// `spartan_backend::devcontainer_down`'s own precedent that "stop what's
+/// already gone" is a harmless no-op, not a failure.
+fn litellm_proxy_stop(devserver: &DevServerState) -> Result<serde_json::Value, String> {
+    let process = devserver.litellm.lock().unwrap().take();
+    match process {
+        Some(process) => {
+            let port = process.port;
+            process.stop().map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "status": "stopped", "port": port }))
+        }
+        None => Ok(serde_json::json!({ "status": "not_running" })),
+    }
+}
+
+/// Reports the real current proxy status, self-healing a stale handle
+/// whose process has since exited on its own (a real crash) rather than
+/// reporting a false "running" forever.
+fn litellm_proxy_status(devserver: &DevServerState) -> serde_json::Value {
+    let mut guard = devserver.litellm.lock().unwrap();
+    // A match guard binds `process` immutably, but `is_running` needs
+    // `&mut self` -- checked separately instead, so the mutable borrow is
+    // real and the pattern match only branches on its already-computed
+    // result.
+    let running = guard.as_mut().map(|process| process.is_running());
+    match running {
+        Some(true) => {
+            let process = guard.as_ref().expect("just confirmed Some above");
+            serde_json::json!({ "status": "running", "port": process.port, "pid": process.pid() })
+        }
+        Some(false) => {
+            *guard = None;
+            serde_json::json!({ "status": "not_running" })
+        }
+        None => serde_json::json!({ "status": "not_running" }),
+    }
+}
+
 /// Builds the wrapping dispatcher: a real `Fn` of the exact shape
 /// `ws_transport::serve`/`run_websocket_server` expect, capturing the
 /// devserver's own state, handling devserver-specific methods, and falling
@@ -92,10 +241,10 @@ pub fn make_dispatcher(
 ) -> impl Fn(&Arc<Mutex<BackendState>>, Request, Sender<String>) -> Response + Clone + Send + 'static
 {
     move |state, req, out_tx| {
-        // One devserver-specific method today; the rest fall through
+        // Devserver-specific methods; everything else falls through
         // unchanged. `==` (not `match ... as_str()`) so `req` can be moved
         // into `handle_request` in the fallthrough arm without a borrow
-        // conflict -- and reads cleanly for a single special case.
+        // conflict.
         if req.method == DEVSERVER_PING {
             Response {
                 id: req.id,
@@ -110,6 +259,54 @@ pub fn make_dispatcher(
             Response {
                 id: req.id,
                 result: Some(spartan_backend::model_status_json()),
+                error: None,
+            }
+        } else if req.method == LITELLM_PROXY_START {
+            let port = req
+                .params
+                .get("port")
+                .and_then(|v| v.as_u64())
+                .map(|p| p as u16);
+            let config_path = req
+                .params
+                .get("config_path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let result = match port {
+                Some(port) => {
+                    litellm_proxy_start(Arc::clone(&devserver), out_tx, port, config_path)
+                }
+                None => Err("litellm_proxy_start requires a numeric `port` param".to_string()),
+            };
+            match result {
+                Ok(value) => Response {
+                    id: req.id,
+                    result: Some(value),
+                    error: None,
+                },
+                Err(message) => Response {
+                    id: req.id,
+                    result: None,
+                    error: Some(message),
+                },
+            }
+        } else if req.method == LITELLM_PROXY_STOP {
+            match litellm_proxy_stop(&devserver) {
+                Ok(value) => Response {
+                    id: req.id,
+                    result: Some(value),
+                    error: None,
+                },
+                Err(message) => Response {
+                    id: req.id,
+                    result: None,
+                    error: Some(message),
+                },
+            }
+        } else if req.method == LITELLM_PROXY_STATUS {
+            Response {
+                id: req.id,
+                result: Some(litellm_proxy_status(&devserver)),
                 error: None,
             }
         } else {

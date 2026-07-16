@@ -3311,6 +3311,46 @@ first — it's the parity reference until each row there is actually reimplement
   matching hover's own same real caveat); the real Electron window remains unlaunchable in this
   session (same standing gap since §75.59). With this pass, every real LSP-surface gap named across
   tasks #130-#136 (diagnostics, hover, completion) is closed in both `desktop/` and `web/`.
+- **Real, working code — real LiteLLM proxy lifecycle for `spartan-devserver`, closing the last
+  named gap in that crate's own doc comment (task #138)**: user-requested ("Continue with
+  everything possible"). New `crates/spartan-devserver/src/litellm_proxy.rs`: a real
+  spawn/health-check/stop lifecycle for a local `litellm --port <p> [--config <path>]` proxy
+  process, mirroring `spartan_devcontainer::docker`'s own "tokio contained in a thread" discipline
+  even though this module needs no tokio at all (a plain child process + a sync `ureq` HTTP poll).
+  `spawn_child` is deliberately generalized over `program`/`args` (not hardcoded to `litellm`)
+  purely so this module's own tests can exercise the real spawn/stream/health/stop mechanics
+  against an always-available stand-in (`python3 -m http.server`, matching this repo's own
+  established `cat`-as-stand-in precedent, §75.80) without needing a real `litellm` install --
+  `litellm` itself is not installed in this environment (confirmed directly: no `litellm` module
+  importable, no binary on `$PATH`), so a separate, honestly self-skipping
+  `tests/litellm_integration.rs` exercises the real thing when it's present, printing `SKIP`
+  rather than fabricating a pass here. `DevServerState` gained a real `Mutex<Option<ProxyProcess>>`
+  (at most one proxy at a time); three new dispatcher methods --
+  `litellm_proxy_start`/`_stop`/`_status` -- follow `devcontainer_up`'s own exact "ack now, event
+  later" shape: an immediate `{"status": "starting"}`, then a background thread runs the real,
+  possibly-slow spawn+health-check, forwarding real subprocess stdout/stderr lines as
+  `litellm_progress` events and finishing with `litellm_ready`/`litellm_failed`.
+  `litellm_proxy_status` self-heals a stale handle whose process exited on its own (a real crash)
+  rather than reporting a false "running" forever. A real, deliberately deferred follow-up, named
+  rather than silently absorbed: no restart-on-crash -- `try_wait`/`is_running` exist precisely so
+  a caller *can* detect one, but this module never restarts anything automatically. A real
+  borrow-checker error was caught and fixed by actually compiling, not by inspection: an early
+  version of `litellm_proxy_status` used a match guard (`Some(process) if process.is_running()`),
+  which binds immutably even though `is_running` needs `&mut self` -- fixed by checking the
+  boolean separately before the match, not by weakening the check. 13 new tests (12 in
+  `litellm_proxy`'s own suite, including two real, always-on ones against the real
+  `python3 -m http.server` stand-in -- one confirming the full spawn/stream/health/stop path, one
+  confirming a process that exits immediately fails health fast rather than waiting out the full
+  timeout -- plus 1 self-skipping real-`litellm` integration test), full workspace
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release` clean, `spartan-backend`'s own full suite (including the ~90s-class real
+  `pyright-langserver` hover/completion integration tests) re-confirmed unaffected. **What this
+  does not confirm**: no live spawn/health-check against a real `litellm` binary in this
+  environment (none installed here -- the self-skipping test names exactly this); no UI wiring in
+  `web/` yet (this closes the crate-level gap only, a Settings-panel control for starting/stopping
+  the proxy and selecting it as a `LiteLLMProvider` target remains separate, unstarted follow-up);
+  no restart-on-crash (named above); the HF -> Ollama downloader (`hf_pull_model`) remains the one
+  other gap this crate's own doc comment still names as not yet present.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -3368,7 +3408,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 673 tests: 7 spikes + 18 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 677 tests: 7 spikes + 18 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
@@ -3430,6 +3470,11 @@ cargo test --workspace --release   # 673 tests: 7 spikes + 18 real crates + xtas
 # flags needed -- real overlay filesystem support and iptables are both present) after which
 # both tests run for real rather than self-skipping. Not guaranteed to hold in a fresh session --
 # start `dockerd` yourself and check `docker info` before assuming either way.
+# spartan-devserver's own tests/litellm_integration.rs (task #138) needs a real `litellm` CLI on
+# $PATH -- self-skips (prints a message) if it isn't found, matching every other real-external-tool
+# integration suite in this repo. The always-on mechanics test (spawn/stream/health/stop) lives in
+# litellm_proxy.rs's own #[cfg(test)] module instead, using `python3 -m http.server` as a real
+# stand-in subprocess so it never needs a real litellm install to run in CI.
 # spartan-backend (§75.59) is the real IPC service the new desktop/ Electron shell drives --
 # `cargo build --release -p spartan-backend` before running `desktop/` at all (its
 # `electron/main.ts` looks for that exact release binary path and refuses to start without it).
