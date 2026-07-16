@@ -3019,6 +3019,93 @@ first — it's the parity reference until each row there is actually reimplement
   live model-driven exercise of the new persona or random-thoughts UI (Ollama unreachable this
   session, unchanged since §75.56); the real Electron window remains unlaunchable this session
   (same standing gap since §75.59).
+- **Real, working code — real LSP wiring for `spartan-backend` and both Electron-based shells,
+  closing a real gap this new UI stack has carried since §75.59: only the reference wgpu shell ever
+  had live diagnostics (§75.6)**: new `crates/spartan-lsp`, a deliberate second promotion (matching
+  `spartan-dap`'s own precedent below, not an extraction) of the reference shell's already-tested
+  `lsp.rs`/`lsp_session.rs` for a background-thread IPC consumer instead of a render-loop poller --
+  real structured `LspDiagnostic` values (`Serialize`), not display strings, and a real
+  `Arc<Mutex<Receiver<LspUpdate>>>` `LspSession` so one dedicated draining thread and the request-
+  handling thread can share ownership safely. **A real bug found and fixed by testing, not
+  inspection**: comparing two `file://` URIs by exact string equality broke the moment a real path
+  contained a character `pyright-langserver` itself percent-encodes (e.g. a literal `(`/`)` in a
+  temp-dir name) -- the server's own URIs came back percent-encoded while this crate's own
+  locally-built URIs didn't, so a live diagnostic silently failed to match its own document. Fixed
+  with a real, general `percent_decode` used by both URI construction and comparison, locked in with
+  dedicated tests including the exact real encoded/unencoded pair that exposed it. `spartan-backend`
+  gained `lsp_integration.rs` (mirroring this same module's own shape `dap_integration.rs` reuses
+  below), a per-language-id resolver correctly splitting `.js`/`.jsx` from `.ts`/`.tsx` within the
+  registry's one shared `"typescript"` profile (matching `typescript-language-server`'s own real
+  dual-language handling), and a real `lsp_diagnostics`/`lsp_error` event pair streamed per `doc_id`.
+  `desktop/src/components/Editor.tsx` renders real per-line diagnostic severity in the gutter (color
+  + hover tooltip) and `StatusBar.tsx` shows a real live error/warning count -- the first time either
+  Electron-based shell has shown *any* diagnostic, ever. **`web/` gained two real, related
+  increments to make this worth having at all there**: a real Git panel (reusing `spartan-backend`'s
+  already-existing `git_status`/`git_stage`/`git_unstage`/`git_commit` methods over the WebSocket
+  transport, §75.88) and a new real backend-mode editing path (`BackendEditor.tsx`) alongside the
+  existing pure-client-side File System Access + WASM editor (§75.89) -- since `web/`'s own
+  client-only mode has no real Rust process to run a language server in at all, live LSP diagnostics
+  are only reachable through this new backend-connected path, named honestly as `web/`'s real
+  narrower scope compared to `desktop/`. A real, environment-specific gap found and worked around
+  during verification, not a code defect: a stale, previously-built `spartan-devserver` binary on
+  disk didn't yet expose the newer WebSocket methods this pass added, producing a real, confusing
+  "unknown method" error until rebuilt -- resolved by rebuilding, not by changing any product code.
+  Real, live, dual-adapter-style verification: `pyright-langserver` (no `rust-analyzer` in this
+  environment, matching this whole repo's own established substitution precedent) driven end-to-end
+  through the real `handle_request` dispatch -- a real deliberate type error correctly reported, a
+  real live edit correctly clearing it -- plus real, screenshotted Playwright verification of the
+  gutter/status-bar rendering in `desktop/` and the new Git panel + backend-mode diagnostics in
+  `web/`. Full workspace fmt/clippy/test and both shells' typecheck/build all clean.
+- **Real, working code — real DAP wiring for `spartan-backend` and the Electron desktop shell,
+  the debugging half of the same LSP-parity effort above (§132)**: user-requested ("Continue with
+  DAP wiring next"). New `crates/spartan-dap`, the direct DAP sibling of `spartan-lsp` above --
+  a second promotion of the reference shell's already-tested `dap.rs`/`dap_session.rs`/`build.rs`,
+  with two real, deliberate differences from the copy it's adapted from: structured `DapStopped`/
+  `DapFrame`/`DapVariable` values (`Serialize`) instead of display strings, and an explicit
+  `DapCommand::Disconnect` flowing through the same `&self` command channel every other command
+  uses, replacing the original's drop-triggered shutdown (which assumed sole ownership -- this
+  crate's real caller shares one session via `Arc` between a request thread and a dedicated
+  update-draining thread). **A real, previously-documented-but-unresolved gap (§75.8/§75.44/§75.45)
+  was finally fixed, found by testing**: `languages.toml`'s Python `dap_command` (bare `debugpy`)
+  was never actually invokable as a stdio DAP adapter -- confirmed by reading `debugpy`'s own
+  installed source, the real fix is `python3 -m debugpy.adapter` with no `--port`/`--host` flag
+  (those switch it into a socket-based `debugServer` mode instead). Applied in
+  `spartan-backend::dap_integration::resolve_dap_command`, a local adaptation, **deliberately not**
+  a `languages.toml` edit -- the reference wgpu shell's own `DapClient::spawn` has no argv support
+  at all, so changing the shared registry would silently trade its current fast-failing "adapter not
+  found" error for a real hang (a bare `python3` with no args and no piped input reads stdin as an
+  interactive REPL). `dap_launch` resolves a real, honestly narrow v1 scope per open file: Rust
+  (real `cargo build` then launch the resulting binary, matching the reference shell's own
+  Cargo-only limit) and Python (launch the interpreted source directly, no build step) are wired;
+  every other language with a configured `dap_command` (C#/Kotlin/Java/Go/TypeScript) is refused
+  with a specific, honest error naming exactly why -- this increment has no UI to collect a
+  pre-built program path for them yet. `BackendState` gained `dap_sessions`/`next_dap_id`
+  (independent of `open_docs`) and five new dispatch methods (`dap_launch`/`dap_continue`/
+  `dap_step_over`/`dap_step_into`/`dap_disconnect`), the same immediate-ack-then-event shape
+  `pty_spawn`/`devcontainer_up` already use, streaming real `dap_stopped`/`dap_exited`/`dap_error`/
+  `dap_build_failed` events per `doc_id`. **`desktop/`'s first real debugging surface**: `Editor.tsx`
+  gained click-to-toggle breakpoints in the gutter (1-indexed, matching real DAP `break_lines`/
+  `frame.line` directly) with a red dot per active breakpoint and a gold stopped-line highlight; new
+  `DebugPanel.tsx` is a compact toolbar (Debug / Continue / Step Over / Step Into / Stop) with
+  inline stack-frame/variable display while genuinely stopped -- deliberately compact, not a docked
+  panel, matching this codebase's own small-first-increment style. A finished session (exited/
+  errored) shows its final state, then reverts to a fresh "Debug" button rather than offering
+  Continue/Step on a dead session, matching the reference shell's own "F5 relaunches, doesn't
+  resume" convention. Real, live, dual-adapter verification, no mocks: a real compiled Rust fixture
+  + `lldb-dap-18` (breakpoint hit with a real local variable, continue-to-exit, step-over all
+  confirmed) and a real Python fixture + `debugpy.adapter` (breakpoint hit, continue-to-exit) --
+  the latter also exercised one full layer up, through `spartan-backend`'s real `handle_request`
+  dispatch end-to-end (`open_file` → `dap_launch` → real `dap_stopped` event → `dap_continue` → real
+  `dap_exited` event → `dap_disconnect`), and a third time through real, screenshotted Playwright
+  verification of the actual `desktop/` React component tree: breakpoint toggle, launch, the
+  stopped toolbar/variable/gutter display, continue-to-exit, relaunch, and Stop tearing a live
+  session down cleanly were each confirmed on screen. Full workspace fmt/clippy/test
+  (`--test-threads=1`, 80 test binaries, 665 tests total, zero failures) and `desktop/`'s own
+  typecheck/build both clean. **What this does not confirm**: no live Electron window launch this
+  session (same standing gap since §75.59); no DAP support for any language beyond Rust/Python in
+  either shell; no rope-anchored breakpoints (line numbers only, matching the reference shell's own
+  already-named v1 scope, §75.8); no `web/` debugging UI yet (this pass closed `desktop/` only,
+  following the same LSP-then-DAP, desktop-then-web sequencing the immediately preceding pass used).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -3076,12 +3163,24 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 622 tests: 7 spikes + 15 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 665 tests: 7 spikes + 18 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
                                     # spartan-android, spartan-editor-core, spartan-backend,
-                                    # spartan-buffer-wasm, xtask)
+                                    # spartan-buffer-wasm, spartan-devserver, spartan-lsp,
+                                    # spartan-dap, xtask)
+# spartan-lsp (LSP, real second promotion of the reference shell's own lsp.rs/lsp_session.rs) and
+# spartan-dap (DAP, the same pattern for dap.rs/dap_session.rs/build.rs) are what give
+# spartan-backend -- and so both Electron-based shells -- real live diagnostics/debugging for the
+# first time. spartan-dap's own tests/dap_lldb_integration.rs needs lldb-dap/lldb-dap-18 + rustc;
+# tests/dap_python_integration.rs needs python3 + the debugpy package (specifically its stdio
+# adapter mode, `python3 -m debugpy.adapter` -- see dap_integration.rs's own doc comment for the
+# real bug this fixes). Both self-skip honestly if their tool isn't found, matching every other
+# real-external-tool integration suite in this repo. spartan-backend's own
+# tests/dap_debugpy_integration.rs exercises the same real debugpy session one layer up, through
+# the full handle_request dispatch (open_file -> dap_launch -> dap_stopped event -> dap_continue ->
+# dap_exited event -> dap_disconnect), same self-skip convention.
 # spartan-android's own detect_gradle_version live test (§75.91) self-skips if no real `gradle`
 # is found on $PATH -- matching every other real-external-tool integration suite in this repo.
 # crates/spartan-editor-core's real fonts.rs (§75.92) bundles JetBrains Mono TTF assets and is
