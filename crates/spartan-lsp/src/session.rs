@@ -89,6 +89,7 @@ pub enum LspUpdate {
 /// doc comment for why queries always take priority.
 enum QueryKind {
     Hover { line: i64, character: i64 },
+    Completion { line: i64, character: i64 },
 }
 
 struct PendingQuery {
@@ -265,6 +266,29 @@ impl LspSession {
             .flatten()
     }
 
+    /// Real, synchronous `textDocument/completion` -- the direct sibling of
+    /// `request_hover` above, sharing the exact same query-priority
+    /// mailbox and the same real timeout reasoning (a completion request
+    /// can equally be issued while the session is still sitting in its
+    /// initial indexing wait). Same calling discipline as `request_hover`:
+    /// callers must run this from their own dedicated thread, never the
+    /// single request-processing thread every other IPC method shares.
+    pub fn request_completion(&self, line: i64, character: i64) -> Option<serde_json::Value> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        {
+            let mut guard = self.mailbox.state.lock().unwrap();
+            guard.pending_queries.push_back(PendingQuery {
+                kind: QueryKind::Completion { line, character },
+                reply: reply_tx,
+            });
+        }
+        self.mailbox.cvar.notify_one();
+        reply_rx
+            .recv_timeout(INDEXING_TIMEOUT + DEFAULT_TIMEOUT)
+            .ok()
+            .flatten()
+    }
+
     /// Signals the background thread to shut down and joins it. Blocks for
     /// up to ~7s worst case, matching `LspClient::shutdown`'s own bound.
     pub fn shutdown(self) {
@@ -355,6 +379,7 @@ fn run_dispatch_loop(
 fn dispatch_query(client: &mut LspClient, file_uri: &str, query: PendingQuery) {
     let result = match query.kind {
         QueryKind::Hover { line, character } => client.hover(file_uri, line, character),
+        QueryKind::Completion { line, character } => client.completion(file_uri, line, character),
     };
     let _ = query.reply.send(result);
 }

@@ -320,6 +320,54 @@ fn lsp_hover(
     Ok(serde_json::json!({ "status": "requested" }))
 }
 
+/// Real, live `textDocument/completion` (task #136, closing the
+/// "completion... has no real caller anywhere" gap named in `lsp_hover`'s
+/// own history). The direct sibling of `lsp_hover` above -- identical
+/// never-blocks-the-caller shape, identical envelope-unwrapping (the same
+/// real fix `lsp_hover` needed applies equally here: `LspSession::
+/// request_completion` returns the raw JSON-RPC response, not just its
+/// inner `result`). A real LSP completion `result` is either a bare
+/// `CompletionItem[]` or a `CompletionList { isIncomplete, items }` --
+/// both shapes are passed through unwrapped exactly as the server sent
+/// them, left for the frontend to normalize (matching `extractHoverText`'s
+/// own existing precedent of handling multiple real LSP response shapes
+/// at the UI boundary, not the IPC boundary).
+fn lsp_completion(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+    line: i64,
+    character: i64,
+) -> Result<serde_json::Value, String> {
+    let session = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        doc.lsp_session
+            .clone()
+            .ok_or_else(|| "no live LSP session for this file".to_string())?
+    };
+    thread::spawn(move || {
+        let raw = session.request_completion(line, character);
+        let result = raw.and_then(|envelope| envelope.get("result").cloned());
+        let event = Event {
+            event: "lsp_completion_result".to_string(),
+            data: serde_json::json!({
+                "doc_id": doc_id,
+                "line": line,
+                "character": character,
+                "result": result,
+            }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+    Ok(serde_json::json!({ "status": "requested" }))
+}
+
 /// Real edit application -- `start_char`/`end_char` name a real char
 /// range (matching every other char-indexed API in `spartan-buffer`);
 /// `start_char == end_char` is a pure insert, `text.is_empty()` with
@@ -2156,6 +2204,12 @@ pub fn handle_request(
             let line = get_u64_param(&req.params, "line")? as i64;
             let character = get_u64_param(&req.params, "character")? as i64;
             lsp_hover(state, out_tx.clone(), doc_id, line, character)
+        })(),
+        "lsp_completion" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            let line = get_u64_param(&req.params, "line")? as i64;
+            let character = get_u64_param(&req.params, "character")? as i64;
+            lsp_completion(state, out_tx.clone(), doc_id, line, character)
         })(),
         "edit" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;
@@ -4043,6 +4097,53 @@ mod tests {
             &state,
             2,
             "lsp_hover",
+            serde_json::json!({ "doc_id": doc_id, "line": 0, "character": 0 }),
+        );
+        assert!(resp.error.unwrap().contains("no live LSP session"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lsp_completion_on_a_real_unopened_doc_id_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "lsp_completion",
+            serde_json::json!({ "doc_id": 999, "line": 0, "character": 0 }),
+        );
+        assert!(resp.error.unwrap().contains("no open document"));
+    }
+
+    #[test]
+    fn lsp_completion_on_a_real_open_synthetic_file_with_no_lsp_session_errors_honestly() {
+        // The direct sibling of `lsp_hover`'s own identical test above --
+        // same real, honest error path, same "unrecognized extension never
+        // gets a real LSP session" cause.
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-lsp-completion-no-session-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("data.unknownext");
+        std::fs::write(&file, "hello").unwrap();
+
+        let state = new_state();
+        let open_resp = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        );
+        let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+        let resp = call(
+            &state,
+            2,
+            "lsp_completion",
             serde_json::json!({ "doc_id": doc_id, "line": 0, "character": 0 }),
         );
         assert!(resp.error.unwrap().contains("no live LSP session"));

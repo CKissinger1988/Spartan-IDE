@@ -133,6 +133,7 @@ app.whenReady().then(() => {
     "redo",
     "close_file",
     "lsp_hover",
+    "lsp_completion",
     "leo_status",
     "leo_start_task",
     "leo_approve_plan",

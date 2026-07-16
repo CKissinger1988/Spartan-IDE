@@ -110,6 +110,52 @@ fn a_real_live_pyright_session_reports_a_real_diagnostic_then_clears_it() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Real, live completion request against a real running
+/// `pyright-langserver` session -- the first real exercise of
+/// `LspSession::request_completion`'s own query-priority mechanism
+/// (task #136), the direct sibling of the hover test below.
+#[test]
+fn a_real_live_pyright_session_answers_a_real_completion_request() {
+    if !pyright_available() {
+        eprintln!("SKIP: pyright-langserver not found on $PATH");
+        return;
+    }
+
+    const COMPLETION_PY: &str = "import os\nos.\n";
+    let (dir, file) = make_fixture(COMPLETION_PY);
+    let command = CommandSpec {
+        program: "pyright-langserver".to_string(),
+        args: vec!["--stdio".to_string()],
+    };
+
+    let session = LspSession::spawn(
+        &command,
+        &dir,
+        &file,
+        "python",
+        COMPLETION_PY,
+        Duration::from_millis(50),
+    )
+    .expect("real pyright-langserver process must spawn");
+
+    let _ = session.recv_update();
+
+    // Real completion right after `os.` (line 1, character 3) -- a real,
+    // reliable trigger position since the `os` module's own real, large
+    // completion set (`getcwd`, `path`, `environ`, ...) is unambiguous.
+    let result = session
+        .request_completion(1, 3)
+        .expect("expected a real completion response from pyright, not a timeout");
+    let text = result.to_string().to_lowercase();
+    assert!(
+        text.contains("getcwd") || text.contains("path") || text.contains("environ"),
+        "expected pyright's real completion list to mention a real os module member, got: {result}"
+    );
+
+    session.shutdown();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// Real, live hover request against a real running `pyright-langserver`
 /// session -- the first real exercise of `LspSession::request_hover`'s own
 /// query-priority mechanism (§134), not just its pure unit tests.

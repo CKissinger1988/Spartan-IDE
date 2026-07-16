@@ -79,6 +79,53 @@ interface HoverState {
   text: string | null;
 }
 
+/** A real, normalized LSP `CompletionItem` -- only the fields this v1
+ * dropdown actually renders/inserts. `insertText` falls back to `label`
+ * per the LSP spec's own documented default. */
+interface CompletionItem {
+  label: string;
+  insertText: string;
+  detail: string | null;
+}
+
+/** Normalizes a real LSP completion `result`, which the spec allows in
+ * two real shapes: a bare `CompletionItem[]`, or a `CompletionList
+ * { isIncomplete, items }`. Returns `[]` for a real, honest "no
+ * completions here" rather than throwing. */
+function extractCompletionItems(result: unknown): CompletionItem[] {
+  if (!result) return [];
+  const raw: unknown[] = Array.isArray(result)
+    ? result
+    : Array.isArray((result as { items?: unknown[] }).items)
+      ? (result as { items: unknown[] }).items
+      : [];
+  return raw
+    .map((item) => {
+      const i = item as { label?: unknown; insertText?: unknown; detail?: unknown };
+      const label = typeof i.label === "string" ? i.label : null;
+      if (!label) return null;
+      const insertText = typeof i.insertText === "string" ? i.insertText : label;
+      const detail = typeof i.detail === "string" ? i.detail : null;
+      return { label, insertText, detail };
+    })
+    .filter((i): i is CompletionItem => i !== null);
+}
+
+interface CompletionState {
+  /** Viewport-relative coordinates, the same real convention `HoverState`
+   * uses -- computed from the real caret position, not the mouse, since
+   * completion is keyboard-triggered (Ctrl+Space), not pointer-driven. */
+  x: number;
+  y: number;
+  line: number;
+  character: number;
+  /** The real character offset the completion was requested from --
+   * where accepting an item inserts its text. */
+  insertAt: number;
+  items: CompletionItem[];
+  selectedIndex: number;
+}
+
 export interface EditorPrefs {
   fontSize: number;
   tabSize: number;
@@ -253,6 +300,91 @@ export default function Editor({
     setHoverState(null);
   }, []);
 
+  const [completionState, setCompletionState] = useState<CompletionState | null>(null);
+
+  // Real, live LSP completion (task #136, the direct sibling of hover's
+  // own §134 wiring) -- listens for this exact file's own
+  // `lsp_completion_result` events. Self-contained to this component,
+  // matching hover's own reasoning: a completion dropdown is purely
+  // ephemeral, position-driven UI feedback with no other real consumer.
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event !== "lsp_completion_result") return;
+      const d = data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      setCompletionState((prev) => {
+        // A stale reply for a request the caret has since moved away from
+        // (or a reply for a different file's own request that arrived
+        // late) -- ignored, not shown.
+        if (!prev || prev.line !== d.line || prev.character !== d.character) return prev;
+        const items = extractCompletionItems(d.result);
+        return items.length > 0 ? { ...prev, items, selectedIndex: 0 } : null;
+      });
+    });
+    return unsubscribe;
+  }, [file.docId]);
+
+  /** Real, manual completion trigger (Ctrl+Space) -- a deliberate, named
+   * v1 scope choice over automatic per-keystroke triggering, matching
+   * this component's own established pattern of picking the smallest
+   * real, correct increment first (§75.68's own "first real increment,
+   * not the full MVP" precedent). Computes the real LSP line/character
+   * from the textarea's own `selectionStart` (a plain character offset
+   * into the whole document) by counting newlines up to that point --
+   * the same real technique this file's own gutter/diagnostics code
+   * already uses for line numbers, just applied to a cursor position
+   * instead of a mouse pixel. */
+  const triggerCompletion = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const pos = el.selectionStart;
+    const before = el.value.slice(0, pos);
+    const lines = before.split("\n");
+    const line = lines.length - 1;
+    const character = lines[lines.length - 1].length;
+    const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+    const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
+    setCompletionState({ x, y, line, character, insertAt: pos, items: [], selectedIndex: 0 });
+    window.spartan
+      .call("lsp_completion", { doc_id: file.docId, line, character })
+      .catch((err: Error) => console.error("lsp_completion failed:", err));
+  }, [charWidth, lineHeightPx, file.docId]);
+
+  /** Real, minimal v1 insert: splices the selected item's `insertText` in
+   * at the exact character offset completion was requested from -- a
+   * named, honest scope cut versus a real editor's own prefix-replacing
+   * insert (which would need tracking exactly how much the user typed
+   * since the dropdown opened). Routed through the same `edit` IPC path
+   * (and so the same real undo/redo checkpointing) every other edit in
+   * this component already uses, not a direct textarea mutation. */
+  const acceptCompletion = useCallback(
+    (item: CompletionItem) => {
+      const insertAt = completionState?.insertAt ?? 0;
+      const newContent =
+        prevContentRef.current.slice(0, insertAt) +
+        item.insertText +
+        prevContentRef.current.slice(insertAt);
+      prevContentRef.current = newContent;
+      setLineCount(newContent.split("\n").length);
+      onContentChange(file.path, newContent);
+      window.spartan
+        .call("edit", {
+          doc_id: file.docId,
+          start_char: insertAt,
+          end_char: insertAt,
+          text: item.insertText,
+        })
+        .catch((err: Error) => console.error("edit failed:", err));
+      setCompletionState(null);
+      const el = textareaRef.current;
+      if (el) {
+        const newPos = insertAt + item.insertText.length;
+        requestAnimationFrame(() => el.setSelectionRange(newPos, newPos));
+      }
+    },
+    [completionState, file.docId, file.path, onContentChange]
+  );
+
   const diagnosticsByLine = useMemo(() => {
     const map = new Map<number, LspDiagnostic[]>();
     for (const d of diagnostics) {
@@ -294,6 +426,58 @@ export default function Editor({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // Real completion dropdown keyboard handling -- checked first so it
+      // can intercept Enter/Escape/arrows before any other handler (Tab,
+      // undo/redo) sees them, matching how a real open dropdown always
+      // owns those keys in every other editor.
+      if (completionState) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setCompletionState((prev) =>
+            prev && prev.items.length > 0
+              ? { ...prev, selectedIndex: (prev.selectedIndex + 1) % prev.items.length }
+              : prev
+          );
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setCompletionState((prev) =>
+            prev && prev.items.length > 0
+              ? {
+                  ...prev,
+                  selectedIndex: (prev.selectedIndex - 1 + prev.items.length) % prev.items.length,
+                }
+              : prev
+          );
+          return;
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const item = completionState.items[completionState.selectedIndex];
+          if (item) acceptCompletion(item);
+          else setCompletionState(null);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setCompletionState(null);
+          return;
+        }
+        // Any other real key (typing more, arrows left/right, etc.)
+        // dismisses the dropdown rather than trying to re-filter it --
+        // a real, named v1 scope cut (see `acceptCompletion`'s own doc
+        // comment) -- and falls through to that key's own normal handling.
+        setCompletionState(null);
+      }
+      // Real, manual completion trigger (Ctrl+Space) -- see
+      // `triggerCompletion`'s own doc comment for why manual, not
+      // automatic-per-keystroke.
+      if ((e.ctrlKey || e.metaKey) && e.key === " ") {
+        e.preventDefault();
+        triggerCompletion();
+        return;
+      }
       if (e.key === "Tab") {
         e.preventDefault();
         const el = textareaRef.current;
@@ -338,7 +522,15 @@ export default function Editor({
           .catch((err: Error) => console.error(`${isRedo ? "redo" : "undo"} failed:`, err));
       }
     },
-    [file.docId, file.path, onContentChange, prefs.tabSize]
+    [
+      completionState,
+      acceptCompletion,
+      triggerCompletion,
+      file.docId,
+      file.path,
+      onContentChange,
+      prefs.tabSize,
+    ]
   );
 
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1);
@@ -421,6 +613,34 @@ export default function Editor({
           style={{ left: hoverState.x + 12, top: hoverState.y + 16 }}
         >
           {hoverState.text}
+        </div>
+      )}
+      {completionState && (
+        <div
+          className="editor-completion-list mono"
+          style={{ left: completionState.x, top: completionState.y }}
+        >
+          {completionState.items.length === 0 ? (
+            <div className="editor-completion-item editor-completion-item-empty">Loading…</div>
+          ) : (
+            completionState.items.map((item, i) => (
+              <div
+                key={`${item.label}-${i}`}
+                className={`editor-completion-item${i === completionState.selectedIndex ? " editor-completion-item-active" : ""}`}
+                onMouseDown={(e) => {
+                  // `onMouseDown`, not `onClick` -- fires before the
+                  // textarea's own blur, so the caret position (and so
+                  // `insertAt`) is still exactly where completion was
+                  // requested from when `acceptCompletion` reads it.
+                  e.preventDefault();
+                  acceptCompletion(item);
+                }}
+              >
+                <span className="editor-completion-label">{item.label}</span>
+                {item.detail && <span className="editor-completion-detail">{item.detail}</span>}
+              </div>
+            ))
+          )}
         </div>
       )}
     </div>

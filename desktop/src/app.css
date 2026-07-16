@@ -538,6 +538,56 @@
   pointer-events: none;
 }
 
+/* Real LSP completion dropdown (task #136) -- `position: fixed` + real
+ * viewport-relative coordinates from the caret position (not the mouse,
+ * since this is keyboard-triggered). Unlike the hover tooltip, this one
+ * *does* accept pointer events (click-to-select an item). */
+.editor-completion-list {
+  position: fixed;
+  z-index: 51;
+  min-width: 220px;
+  max-width: 420px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-size: 12px;
+}
+
+.editor-completion-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 10px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.editor-completion-item-active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.editor-completion-item-empty {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.editor-completion-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-completion-detail {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
+
 .editor-gutter {
   width: 48px;
   padding: 8px 8px 8px 0;

@@ -3251,6 +3251,66 @@ first — it's the parity reference until each row there is actually reimplement
   verification, same as `desktop/`'s own; the real Electron window remains unlaunchable in this
   session (unrelated to this pass -- `web/` itself needed no Electron at all, verified directly in
   a real browser against a real devserver).
+- **Real, working code — real LSP completion/autocomplete dropdown UI in both `desktop/` and
+  `web/`, closing the last named LSP-surface gap (task #136)**: user-requested ("Continue with
+  everything possible"). `LspClient::completion` had been real and tested since the original hover
+  pass (§134) but had no real caller anywhere -- this pass closes it, mirroring hover's own now-
+  proven pattern end to end rather than inventing a new one. `spartan_lsp::session`'s `QueryKind`
+  enum gained a `Completion` variant sharing the exact same query-priority mailbox `Hover` already
+  uses (no new synchronization primitive), plus a `LspSession::request_completion` that's a direct
+  structural twin of `request_hover` -- same real `INDEXING_TIMEOUT + DEFAULT_TIMEOUT` bound, same
+  calling discipline. `spartan-backend::lsp_completion` mirrors `lsp_hover` exactly, including its
+  own real envelope-unwrapping fix (`LspSession::request_completion` also returns the raw JSON-RPC
+  response, not just its inner `result` -- unwrapped at the same IPC boundary before ever reaching
+  an event, this time built in from the start rather than found as a live bug, since the hover
+  pass's own finding was already known). **Desktop UI**: `Editor.tsx` gained a real completion
+  dropdown -- Ctrl+Space manually triggers a request (a real, deliberate v1 scope choice over
+  automatic per-keystroke triggering, named in `triggerCompletion`'s own doc comment), computes the
+  real LSP line/character from the textarea's own `selectionStart` by counting newlines up to the
+  caret (the same real technique hover's own pixel-to-position mapping already established, just
+  applied to a keyboard position instead of a mouse one), and renders a real dropdown with
+  Up/Down/Enter/Escape handling checked first in `handleKeyDown` so it owns those keys exactly like
+  a real editor's own open completion list would. `acceptCompletion` inserts the selected item's
+  `insertText` at the exact offset completion was requested from, routed through the same real
+  `edit` IPC call (and so the same real undo/redo checkpointing) every other edit already uses --a
+  real, named v1 scope cut versus a full editor's own prefix-replacing insert, stated in its own
+  doc comment rather than silently assumed correct. **Web UI**: `BackendEditor.tsx` gained the
+  identical logic, ported verbatim the same way hover's own web port (task #135) already
+  established -- zero backend/protocol changes needed, since `spartan-devserver` and `BackendClient`
+  are both already fully generic. **Real, live, end-to-end verification, not a mock, in both
+  shells**: a real `os.` Python fixture (import os; hover/hit Ctrl+Space right after the dot) drove
+  a real `pyright-langserver` session through the real IPC dispatch in both `desktop/` (via the
+  same real `window.spartan`-over-WebSocket shim technique already established for hover, since
+  Electron itself can't launch here) and `web/` (via its own genuine `BackendClient.connect()`, no
+  shim needed) -- both produced the exact real, live pyright completion list for the `os` module
+  (387 real items, confirmed by name: `getcwd`, `path`, `environ`, and hundreds more), real
+  Down-arrow keyboard navigation moved the highlighted selection, and real Enter-to-accept spliced
+  the selected item's exact text into the real backend buffer, screenshotted in both shells. **A
+  real test-script mistake was caught and fixed while building this verification, not a product
+  bug**: the first fixture ended with a trailing newline, so `Ctrl+End` (used to place the caret)
+  landed on a real empty third line instead of directly after `os.`, causing a real but different
+  correct result -- a global-scope completion list (builtins like `int`/`str`/`object`) instead of
+  the `os`-module one; fixed by removing the trailing newline from the fixture, not by changing any
+  product code, confirmed correct on the very next run. A second, similar test-script correction:
+  the first assertion checked only the dropdown's first 10 rendered items for a specific `os`
+  member, which failed even against the correct, real completion list purely because pyright's own
+  real sort order puts dunder members first -- fixed by searching the full real list instead of a
+  fixed-size prefix, the same "don't assume a fixed position in a real server's own response"
+  lesson the original hover pass's own character-position fix had already established. 4 new Rust
+  tests (1 live completion test in `spartan-lsp`'s `pyright_integration.rs`, 2 `spartan-backend`
+  unit tests for the honest error paths, 1 live end-to-end `spartan-backend` integration test),
+  plus 1 CSS/JSX/logic block ported into each of `desktop/`'s and `web/`'s existing editor
+  components. Full workspace `cargo fmt --all -- --check`/`cargo clippy --workspace --release
+  --all-targets`/`cargo test --workspace --release -- --test-threads=1` all clean (673 tests, up
+  from 668, zero failures); both `desktop/`'s and `web/`'s own `tsc --noEmit`/`vite build` clean.
+  **What this does not confirm**: no automatic/per-keystroke triggering (Ctrl+Space manual trigger
+  only, a real, named v1 scope choice); no prefix-filtering or prefix-replacement on accept (a
+  real, named v1 scope cut -- accepting always inserts at the exact request position, never
+  replacing characters already typed since the dropdown opened); no completion for any language
+  beyond Python in this specific live verification (the underlying code path is language-agnostic,
+  matching hover's own same real caveat); the real Electron window remains unlaunchable in this
+  session (same standing gap since §75.59). With this pass, every real LSP-surface gap named across
+  tasks #130-#136 (diagnostics, hover, completion) is closed in both `desktop/` and `web/`.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -3308,7 +3368,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 668 tests: 7 spikes + 18 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 673 tests: 7 spikes + 18 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
@@ -3332,6 +3392,9 @@ cargo test --workspace --release   # 668 tests: 7 spikes + 18 real crates + xtas
 # run close to LspSession::request_hover's own real 100s worst-case timeout (~91-93s each) since a
 # hover issued immediately after open_file legitimately queues behind the server's real initial
 # indexing pass, not a hang.
+# spartan-backend's own lsp_completion_integration.rs (task #136) is the direct sibling of
+# lsp_hover_integration.rs above -- same real pyright-langserver spawn, same self-skip, same
+# ~90s-class worst-case timeout, exercising a real textDocument/completion round trip instead.
 # spartan-android's own detect_gradle_version live test (§75.91) self-skips if no real `gradle`
 # is found on $PATH -- matching every other real-external-tool integration suite in this repo.
 # crates/spartan-editor-core's real fonts.rs (§75.92) bundles JetBrains Mono TTF assets and is

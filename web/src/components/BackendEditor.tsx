@@ -84,6 +84,50 @@ interface HoverState {
   text: string | null;
 }
 
+/** A real, normalized LSP `CompletionItem`, ported verbatim from
+ * `desktop/src/components/Editor.tsx` (task #136) -- see that file's own
+ * doc comment for the full real reasoning. Duplicated rather than
+ * imported, matching this file's own established precedent above. */
+interface CompletionItem {
+  label: string;
+  insertText: string;
+  detail: string | null;
+}
+
+function extractCompletionItems(result: unknown): CompletionItem[] {
+  if (!result) return [];
+  const raw: unknown[] = Array.isArray(result)
+    ? result
+    : Array.isArray((result as { items?: unknown[] }).items)
+      ? (result as { items: unknown[] }).items
+      : [];
+  return raw
+    .map((item) => {
+      const i = item as { label?: unknown; insertText?: unknown; detail?: unknown };
+      const label = typeof i.label === "string" ? i.label : null;
+      if (!label) return null;
+      const insertText = typeof i.insertText === "string" ? i.insertText : label;
+      const detail = typeof i.detail === "string" ? i.detail : null;
+      return { label, insertText, detail };
+    })
+    .filter((i): i is CompletionItem => i !== null);
+}
+
+interface CompletionState {
+  /** Viewport-relative coordinates, the same real convention `HoverState`
+   * uses -- computed from the real caret position, not the mouse, since
+   * completion is keyboard-triggered (Ctrl+Space), not pointer-driven. */
+  x: number;
+  y: number;
+  line: number;
+  character: number;
+  /** The real character offset the completion was requested from --
+   * where accepting an item inserts its text. */
+  insertAt: number;
+  items: CompletionItem[];
+  selectedIndex: number;
+}
+
 interface BackendEditorProps {
   client: BackendClient;
   file: BackendOpenFile;
@@ -233,6 +277,76 @@ export default function BackendEditor({
     setHoverState(null);
   }, []);
 
+  const [completionState, setCompletionState] = useState<CompletionState | null>(null);
+
+  // Real, live LSP completion (task #136, the web/ half of its own
+  // desktop-then-web follow-up) -- listens for this exact file's own
+  // `lsp_completion_result` events, ported verbatim from `desktop/`'s own
+  // `Editor.tsx`.
+  useEffect(() => {
+    const unsubscribe = client.onEvent((e) => {
+      if (e.event !== "lsp_completion_result") return;
+      const d = e.data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      setCompletionState((prev) => {
+        if (!prev || prev.line !== d.line || prev.character !== d.character) return prev;
+        const items = extractCompletionItems(d.result);
+        return items.length > 0 ? { ...prev, items, selectedIndex: 0 } : null;
+      });
+    });
+    return unsubscribe;
+  }, [client, file.docId]);
+
+  /** Real, manual completion trigger (Ctrl+Space), ported verbatim from
+   * `desktop/`'s own `triggerCompletion` -- see that file's own doc
+   * comment for the full real reasoning behind manual-trigger v1 scope. */
+  const triggerCompletion = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const pos = el.selectionStart;
+    const before = el.value.slice(0, pos);
+    const lines = before.split("\n");
+    const line = lines.length - 1;
+    const character = lines[lines.length - 1].length;
+    const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+    const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
+    setCompletionState({ x, y, line, character, insertAt: pos, items: [], selectedIndex: 0 });
+    client
+      .call("lsp_completion", { doc_id: file.docId, line, character })
+      .catch((err: Error) => console.error("lsp_completion failed:", err));
+  }, [client, charWidth, lineHeightPx, file.docId]);
+
+  /** Real, minimal v1 insert, ported verbatim from `desktop/`'s own
+   * `acceptCompletion` -- see that file's own doc comment for the named
+   * scope cut (no prefix replacement). */
+  const acceptCompletion = useCallback(
+    (item: CompletionItem) => {
+      const insertAt = completionState?.insertAt ?? 0;
+      const newContent =
+        prevContentRef.current.slice(0, insertAt) +
+        item.insertText +
+        prevContentRef.current.slice(insertAt);
+      prevContentRef.current = newContent;
+      setLineCount(newContent.split("\n").length);
+      onContentChange(file.path, newContent);
+      client
+        .call("edit", {
+          doc_id: file.docId,
+          start_char: insertAt,
+          end_char: insertAt,
+          text: item.insertText,
+        })
+        .catch((err: Error) => console.error("edit failed:", err));
+      setCompletionState(null);
+      const el = textareaRef.current;
+      if (el) {
+        const newPos = insertAt + item.insertText.length;
+        requestAnimationFrame(() => el.setSelectionRange(newPos, newPos));
+      }
+    },
+    [client, completionState, file.docId, file.path, onContentChange]
+  );
+
   const syncScroll = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -259,6 +373,50 @@ export default function BackendEditor({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // Real completion dropdown keyboard handling, ported verbatim from
+      // `desktop/`'s own `handleKeyDown` -- checked first so it can
+      // intercept Enter/Escape/arrows before any other handler sees them.
+      if (completionState) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setCompletionState((prev) =>
+            prev && prev.items.length > 0
+              ? { ...prev, selectedIndex: (prev.selectedIndex + 1) % prev.items.length }
+              : prev
+          );
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setCompletionState((prev) =>
+            prev && prev.items.length > 0
+              ? {
+                  ...prev,
+                  selectedIndex: (prev.selectedIndex - 1 + prev.items.length) % prev.items.length,
+                }
+              : prev
+          );
+          return;
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const item = completionState.items[completionState.selectedIndex];
+          if (item) acceptCompletion(item);
+          else setCompletionState(null);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setCompletionState(null);
+          return;
+        }
+        setCompletionState(null);
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === " ") {
+        e.preventDefault();
+        triggerCompletion();
+        return;
+      }
       if (e.key === "Tab") {
         e.preventDefault();
         const el = textareaRef.current;
@@ -295,7 +453,7 @@ export default function BackendEditor({
           .catch((err: Error) => console.error(`${isRedo ? "redo" : "undo"} failed:`, err));
       }
     },
-    [client, file.docId, file.path, onContentChange]
+    [completionState, acceptCompletion, triggerCompletion, client, file.docId, file.path, onContentChange]
   );
 
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1);
@@ -357,6 +515,30 @@ export default function BackendEditor({
           style={{ left: hoverState.x + 12, top: hoverState.y + 16 }}
         >
           {hoverState.text}
+        </div>
+      )}
+      {completionState && (
+        <div
+          className="editor-completion-list mono"
+          style={{ left: completionState.x, top: completionState.y }}
+        >
+          {completionState.items.length === 0 ? (
+            <div className="editor-completion-item editor-completion-item-empty">Loading…</div>
+          ) : (
+            completionState.items.map((item, i) => (
+              <div
+                key={`${item.label}-${i}`}
+                className={`editor-completion-item${i === completionState.selectedIndex ? " editor-completion-item-active" : ""}`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  acceptCompletion(item);
+                }}
+              >
+                <span className="editor-completion-label">{item.label}</span>
+                {item.detail && <span className="editor-completion-detail">{item.detail}</span>}
+              </div>
+            ))
+          )}
         </div>
       )}
     </div>
