@@ -68,6 +68,8 @@ first — it's the parity reference until each row there is actually reimplement
 | Security & Exploit Auditor — READ §73.2 BEFORE ASSUMING IT CAN TARGET ANYTHING BUT THE OPEN PROJECT | §73 |
 | Open source decompilers (Ghidra, radare2, JADX, ILSpy, CFR/Fernflower) — untrusted-content posture in §74.7 | §74 |
 | Real Tier 1 implementation begun (core buffer + language registry), what it does/doesn't mean | §75 |
+| Spartan Cloud — a separate, optional, paid multi-tenant backend (Track B) allocating isolated containers per user; NOT part of the original 75-section spec, its own `cloud/` Cargo workspace — READ `cloud/README.md` BEFORE ASSUMING GVISOR-STRENGTH ISOLATION IS VERIFIED (it isn't in this environment; `runc` is the confirmed baseline) | `cloud/README.md`, this file's own "Current status" entry below |
+| Holographic dashboard aesthetic — status-reactive glow/glassmorphic panels layered onto the existing blue/gold theme (Track C, cross-cutting across `desktop/`/`web/`/`mobile/`); NOT part of the original 75-section spec | this file's own "Current status" entry below |
 | Electron/React desktop shell (`desktop/`) — the current UI, replacing the wgpu shell as the primary surface; the wgpu shell (`crates/spartan-editor-core`) is the reference/backend proof, not deleted | §75.59 |
 | Desktop shell's 3-tier nav IA (Workspace/Build/Platform) and Workflows screen — READ §75.60 BEFORE ASSUMING VELOCITY CODE/ASSETS WERE COPIED (they were not; AGPL-3.0) | §75.60 |
 | Leo's persistent chat panel in the Electron shell + `spartan-backend`'s async event protocol | §75.61 |
@@ -3878,6 +3880,93 @@ first — it's the parity reference until each row there is actually reimplement
   same real, standing gaps tasks #144/#145 already named (no device/emulator, no real Electron
   window launch this session) apply identically here. Both real shells now expose every Track A/
   Android-adjacent `spartan-backend` capability this project has built.
+- **Real, working code — Spartan Cloud (Track B), a separate, optional multi-tenant backend
+  (tasks #125-#127, #137) — retroactively documented here (task #147) after being found real,
+  substantial, and shipped, but never recorded in this file, a genuine documentation gap given
+  this file's own stated role as source of truth**: a real, deliberately separate Cargo workspace
+  at `cloud/` (its own `[workspace]`, not a member of the root `Cargo.toml` -- invisible to
+  `cargo build --workspace` at the repo root, the same isolation `crates/plugins` already uses for
+  a different reason), positioned alongside the local-first IDE, not replacing it -- billing
+  deferred by explicit decision behind a real `EntitlementProvider` seam (`StubEntitlementProvider`
+  today, a real `StripeEntitlementProvider` swaps in later with zero caller changes, mirroring the
+  `ModelProvider` pattern). Five crates: `spartan-cloud-protocol` (shared DTOs, a real opaque
+  `SessionToken` deliberately not a JWT -- revocability matters more here than statelessness, since
+  a compromised/abusive tenant account must be killable immediately); `spartan-cloud-tenant`
+  (real per-tier `PlanLimits`/`can_allocate` quota admission -- CPU/memory/pids/wall-clock
+  lifetime/concurrency, no tier ever "unlimited"); `spartan-cloud-data` (SQLite + real argon2
+  password hashing, an append-only audit log with no update/delete method on this crate's own API,
+  and a real owner-scoped AES-256-GCM secrets vault -- a real, deliberate correction of the
+  `SpartanAI_Security_Core` reference concept it's adapted from, whose own code used
+  unauthenticated AES-256-CBC despite claiming GCM; the master key is env-provided, never
+  persisted with the ciphertext, and the vault is *locked*, not silently plaintext, when absent);
+  `spartan-cloud-runtime` (a real `ContainerRuntime` trait + `DockerRuntime` on `bollard`, every
+  method tenant-scoped and resource-capped, `network_mode: none`, no host bind-mounts, a real
+  60-second-interval reaper enforcing each allocation's hard wall-clock deadline -- the concrete
+  answer to §36.4.7's "uncapped consumption" failure mode); `spartan-cloud-api` (a real axum
+  control plane -- signup/login/admin-grant/audit/telemetry/allocate/exec, plus a real streaming
+  interactive session over WebSocket using a short-lived, consumed-on-first-use capability token
+  distinct from the general bearer token, and a real, self-contained `/admin` monitoring dashboard
+  reusing Track C's own `.glass-hologram`/`.hud-gauge` classes verbatim). **The plan's own Phase 0
+  gVisor spike was actually run, with a real, honest no-go result**: `runsc` installs from the
+  confirmed apt package, but hangs on startup in this nested sandbox (gVisor's platform needs KVM
+  or working `ptrace`/`systrap`, neither usable here, matching §75.74's own already-documented
+  `/dev/kvm` absence) -- not a code problem, an environment one. `DockerRuntime` is therefore
+  verified against plain `runc` (a shared-kernel baseline, not strong adversarial isolation), ships
+  with `isolation_verified: false` by default, and `/api/allocate` **refuses to allocate** against
+  an unverified runtime -- the honest default, not silently absorbed as if `runc` were sufficient.
+  A real KVM-capable target (bare metal/Firecracker/a KVM-enabled instance) is the documented path
+  to flipping that flag true, swappable behind the same trait. **WebAuthn admin auth** (task #137)
+  is real and live-verified: Chrome DevTools Protocol's virtual authenticator
+  (`WebAuthn.addVirtualAuthenticator`, reachable via Playwright) answered genuine
+  `navigator.credentials.create()`/`.get()` ceremonies with no physical key needed -- confirmed via
+  a real registered credential, logout, then a real password-free login using only the security
+  key, with the resulting real audit trail (`login` → `webauthn_register` → `webauthn_login`)
+  visible on screen. Real test counts as of this pass: `spartan-cloud-data` 11 tests (incl. GCM
+  tamper-detection + tenant isolation) + 3 more for WebAuthn credential storage,
+  `spartan-cloud-api` 25 tests (tower `oneshot` REST coverage, a real bound-socket WebSocket
+  end-to-end test, a real capability-token-replay-refused test), `spartan-cloud-runtime` 7 tests
+  including a real create→status→count→stop lifecycle, a real reaper test, and a real interactive
+  session test — all against a live daemon, self-skipping if none is reachable (mirroring
+  `spartan-devcontainer::docker_integration.rs`'s own convention). **What this does not confirm**:
+  no strong-isolation verification on a real KVM-capable target (the one item `cloud/README.md`'s
+  own "What's NOT here yet" section still names); no real Stripe billing, multi-node routing,
+  cross-region deployment, egress-allowlist proxy, image/registry caching, or org/team features
+  (all explicitly deferred by the original plan, not forgotten). See `cloud/README.md` for the
+  complete, standalone account this summary condenses.
+- **Real, working code — holographic dashboard aesthetic layer (Track C, task #124), cross-cutting
+  across `desktop/`/`web/`/`mobile/` — retroactively documented here (task #147) for the same
+  reason as Track B above**: a real visual-language layer adapted from the user's own
+  `SpartanAI_Security_Core`/`Dashboard_Apex` reference (concept only, zero code ported, every
+  offensive/autonomous part of those repos excluded entirely, matching the §75.70/§75.71 "concepts
+  only, rebuilt safely" precedent). Added to `theme.css` (kept in parity between `desktop/` and
+  `web/`): a real status-reactive glow axis (`--status-idle/active/warning/critical` -- blue/gold/
+  amber/red as a *semantic status* hue, deliberately orthogonal to the blue/gold brand identity
+  itself, the same distinction §75.93 already drew for mobile's own theme-invariant `StatusPill`),
+  a real `.glass-hologram` glassmorphic panel (`backdrop-filter` blur -- the genuinely new piece;
+  this project already had glow/chamfer/scanlines from earlier passes but no glassmorphism), a
+  severity-scaled pulse animation (faster = more urgent), and a dependency-free conic-gradient
+  `.hud-gauge` (reused verbatim by Spartan Cloud's own `/admin` telemetry dashboard, confirmed
+  above). Applied live: `desktop/`'s Leo panel is now glassmorphic; the Leo "Failed" state badge
+  gained the urgent red status pulse, fixing a real, previously-unnoticed inconsistency where it
+  alone had no glow while calmer states did; `web/`'s file-tree panel got the matching
+  glassmorphic treatment, and its backend-connection indicator became status-reactive (green glow
+  connected, dim client-only). `mobile/` got its own real, honestly-scoped extension via pure RN
+  styles: `StatusPill` gained a real status-reactive glow halo, and a new `hologramSurface(colors)`
+  helper in `theme.ts` (the RN analogue of `.glass-hologram`) was applied to
+  `ArtifactReviewScreen`'s diff/artifact card. **A real, named platform limitation, not glossed
+  over**: React Native has no `backdrop-filter`, so mobile's version is a translucent surface +
+  accent-colored hairline edge + soft glow, not a true backdrop blur -- that would need a native
+  `expo-blur` `BlurView` and a custom dev build, real, separate, unstarted follow-up work, matching
+  the wgpu shell's own already-established "glow + status-reactive color, not true blur" limit
+  named in §75.55's own SDF shader work. Real, screenshotted Playwright verification in both dark
+  and light themes for `desktop/` (DOM-confirmed `backdrop-filter` on the Leo panel, the red Failed
+  badge, zero page errors, no light-theme regression) and `web/` (status indicator renders and
+  reacts correctly); `mobile/`'s own established `npx tsc --noEmit` + `expo export` verification
+  path, no live device/emulator rendering (this project's own standing constraint since `mobile/`
+  was first built). **What this does not confirm**: no true backdrop blur on `mobile/` (named
+  above); the wgpu reference shell (`crates/spartan-editor-core`) was not extended with this layer
+  (it's no longer the primary UI target per §75.59's own pivot, and has no CSS-equivalent styling
+  layer to apply utility classes to in the first place).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
