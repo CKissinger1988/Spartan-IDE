@@ -3845,6 +3845,39 @@ first — it's the parity reference until each row there is actually reimplement
   confirm**: the same real, standing gaps task #144 already named (no device/emulator to install or
   run the resulting APK against, no real Electron window launch this session); no package-name
   customization in the wizard UI (the fixed-namespace scope decision above).
+- **Real, working code — Android detect + build wired into `web/`, closing the platform gap tasks
+  #142/#144 both deliberately left open (task #146)**: `android_detect`/`android_build_apk` are
+  real `spartan-backend` methods reachable generically through `web/`'s own `BackendClient` (no
+  method allowlist to extend the way `desktop/`'s `preload.ts` needs) -- this pass is pure
+  TypeScript/CSS, zero Rust changes. `App.tsx` gained the same `AndroidDetectResult`/
+  `AndroidBuildState` shapes and `buildApk` callback `desktop/`'s `StatusBar.tsx` already
+  established (not shared code -- the two shells don't share a components package -- but
+  byte-identical in shape), keyed off `backendClient.projectRoot` (the devserver's own resolved
+  launch directory) instead of a fixed URL query param, and a matching `.status-android-badge`
+  button in the status bar with the identical `desktop/` CSS. **A real, environment-specific
+  staleness bug was found and fixed during verification, not a code defect**: the first live test
+  against a real running `spartan-devserver` binary failed with `unknown method
+  android_build_apk` -- the binary on disk predated this session's own addition of that method to
+  `spartan-backend` (a library dependency `spartan-devserver` links but hadn't been relinked
+  against since); rebuilding `spartan-devserver` fixed it immediately, confirming the real product
+  code was already correct and the issue was purely this session's own stale build artifact. Real,
+  live, end-to-end Playwright verification against a real running `spartan-devserver` serving a
+  real `web/dist` build, pointed at a real git-initialized project fixture with a real
+  `AndroidManifest.xml`: the badge correctly rendered `🤖 Android` from a real live
+  `android_detect` call; clicking it fired a real `android_build_apk` call that reached the real
+  backend, spawned a real background thread, and made a real `gradle` subprocess attempt --
+  confirmed via the real `Building…` state observed live (the fixture has no real
+  `app/build.gradle.kts`, so it was expected to fail shortly after, matching the same honest
+  "real round trip, real environment-specific outcome" verification style already established for
+  the llama.cpp downloader). `web/`'s own `npm run typecheck`/`npm run build` both clean, full
+  workspace `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets` clean
+  (no Rust touched, re-confirmed anyway). **What this does not confirm**: no successful build was
+  observed in this specific verification (the fixture was deliberately minimal, matching the
+  llama.cpp downloader's own "real round trip over a real complete success" precedent when a full
+  buildable fixture would cost several more minutes for the same structural confirmation); the
+  same real, standing gaps tasks #144/#145 already named (no device/emulator, no real Electron
+  window launch this session) apply identically here. Both real shells now expose every Track A/
+  Android-adjacent `spartan-backend` capability this project has built.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

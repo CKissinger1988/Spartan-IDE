@@ -21,6 +21,28 @@ type SidebarView = "files" | "git" | "backend" | "models";
 
 type BackendStatus = "connecting" | "connected" | "client-only";
 
+/** Real shape of `spartan-backend`'s `android_detect` method -- byte-
+ * identical to desktop/'s own `StatusBar.tsx` copy (task #142/#146), not
+ * shared code since the two shells don't share a components package. */
+interface AndroidDetectResult {
+  isAndroidProject: boolean;
+  sdkRoot: string | null;
+  adbPath: string | null;
+  emulatorPath: string | null;
+  sdkmanagerPath: string | null;
+  avdmanagerPath: string | null;
+  gradlePath: string | null;
+  gradleVersion: string | null;
+}
+
+/** Real client-side state for the "Build APK" action -- byte-identical to
+ * desktop/'s own `StatusBar.tsx` copy (task #144/#146). */
+type AndroidBuildState =
+  | { phase: "idle" }
+  | { phase: "building"; lastLine?: string }
+  | { phase: "ready"; apkPath: string }
+  | { phase: "failed"; error: string };
+
 // Real §75.93 theme/font persistence -- this app has no `spartan-backend`
 // settings store to round-trip through (§75.89's own named scope: no
 // LSP/DAP/Leo/git connectivity yet), so a real, local `localStorage` key
@@ -96,6 +118,13 @@ export default function App(): React.ReactElement {
   // relaunches.
   const [breakpointsByDoc, setBreakpointsByDoc] = useState<Record<number, number[]>>({});
   const [dapSessionByDoc, setDapSessionByDoc] = useState<Record<number, DapSessionState>>({});
+  // Real android_detect/android_build_apk state (task #146), the web/
+  // sibling of desktop/'s own StatusBar wiring (tasks #142/#144) -- these
+  // are real spartan-backend methods reached generically through
+  // BackendClient, with no method allowlist to extend the way desktop/'s
+  // preload.ts needed.
+  const [androidInfo, setAndroidInfo] = useState<AndroidDetectResult | null>(null);
+  const [androidBuild, setAndroidBuild] = useState<AndroidBuildState | undefined>(undefined);
 
   // Optional backend upgrade: when this page is served by a real
   // spartan-devserver (§75.88 + the /__spartan/session handoff), connect to
@@ -124,6 +153,34 @@ export default function App(): React.ReactElement {
       setBackendClient(null);
     };
   }, []);
+
+  // Real, one-shot android_detect once a real project root is known -- the
+  // web/ sibling of desktop/'s own on-mount call (task #142), just keyed
+  // off the real devserver's own resolved project root instead of a fixed
+  // URL query param. A non-Android project (the common case) is a real,
+  // expected, silent result, not an error.
+  useEffect(() => {
+    const projectRoot = backendClient?.projectRoot;
+    if (!backendClient || !projectRoot) {
+      setAndroidInfo(null);
+      return;
+    }
+    backendClient
+      .call("android_detect", { project_root: projectRoot })
+      .then((result) => setAndroidInfo(result as AndroidDetectResult))
+      .catch(() => setAndroidInfo(null));
+  }, [backendClient]);
+
+  // Real "ack now, event later" trigger for android_build_apk -- mirrors
+  // desktop/'s own `buildApk` callback exactly.
+  const buildApk = useCallback(() => {
+    const projectRoot = backendClient?.projectRoot;
+    if (!backendClient || !projectRoot) return;
+    setAndroidBuild({ phase: "building" });
+    backendClient.call("android_build_apk", { project_root: projectRoot }).catch((e: Error) => {
+      setAndroidBuild({ phase: "failed", error: e.message });
+    });
+  }, [backendClient]);
 
   // Real, live LSP diagnostics stream -- the same real lsp_diagnostics/
   // lsp_error events desktop/'s App.tsx subscribes to via window.spartan.
@@ -171,6 +228,17 @@ export default function App(): React.ReactElement {
             [doc_id]: { ...existing, status: "build_failed", message: diagnostics.join("\n") },
           };
         });
+      } else if (e.event === "android_build_progress") {
+        const { line } = e.data as { line: string };
+        setAndroidBuild((prev) =>
+          prev?.phase === "building" ? { phase: "building", lastLine: line } : prev
+        );
+      } else if (e.event === "android_build_ready") {
+        const { apk_path } = e.data as { apk_path: string };
+        setAndroidBuild({ phase: "ready", apkPath: apk_path });
+      } else if (e.event === "android_build_failed") {
+        const { error } = e.data as { error: string };
+        setAndroidBuild({ phase: "failed", error });
       }
     });
   }, [backendClient]);
@@ -525,6 +593,35 @@ export default function App(): React.ReactElement {
               </span>
             );
           })()}
+        {androidInfo?.isAndroidProject && (
+          <button
+            className="status-android-badge"
+            type="button"
+            disabled={androidBuild?.phase === "building"}
+            onClick={buildApk}
+            title={`Gradle: ${androidInfo.gradlePath ?? "not found"}${
+              androidInfo.gradleVersion ? ` (${androidInfo.gradleVersion})` : ""
+            } | SDK: ${androidInfo.sdkRoot ?? "not found"} | adb: ${
+              androidInfo.adbPath ?? "not found"
+            }${
+              androidBuild?.phase === "building" && androidBuild.lastLine
+                ? `\n${androidBuild.lastLine}`
+                : androidBuild?.phase === "ready"
+                  ? `\nBuilt: ${androidBuild.apkPath}`
+                  : androidBuild?.phase === "failed"
+                    ? `\n${androidBuild.error}`
+                    : "\nClick to build a real debug APK (gradle assembleDebug)."
+            }`}
+          >
+            {androidBuild?.phase === "building"
+              ? "🤖 Building…"
+              : androidBuild?.phase === "ready"
+                ? "🤖 ✓ built"
+                : androidBuild?.phase === "failed"
+                  ? "🤖 ✗ failed"
+                  : "🤖 Android"}
+          </button>
+        )}
       </div>
     </div>
   );

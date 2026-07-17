@@ -674,6 +674,27 @@
   color: rgb(var(--status-ok-rgb));
 }
 
+/* Real, clickable "Build APK" status-bar badge (task #146) -- byte-
+ * identical rule to desktop/'s own copy. */
+.status-android-badge {
+  margin-left: 10px;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+.status-android-badge:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.status-android-badge:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
 /* Real, hand-written highlight.js token theme (matching desktop/'s own
  * §75.63 choice) -- token colors stay consistent with this app's real
  * color tokens rather than an unrelated imported palette. */
