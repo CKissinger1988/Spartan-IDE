@@ -1,6 +1,6 @@
 # Spartan IDE
 
-**Proprietary — all rights reserved.** © 2026 Christopher Kissinger. This repository is
+**Proprietary — all rights reserved.** © 2026 CKissinger1988. This repository is
 private; this README documents the real, internal state of the project for authorized
 readers. See [License](#license).
 
@@ -382,7 +382,7 @@ outside pull request.
 
 ## License
 
-**Proprietary — all rights reserved.** Copyright (c) 2026 Christopher Kissinger. See
+**Proprietary — all rights reserved.** Copyright (c) 2026 CKissinger1988. See
 [`LICENSE`](LICENSE). No portion of this source code is published or licensed for
 external use; the GitHub Pages site distributes compiled installers and this rendered
 README only, never source files.

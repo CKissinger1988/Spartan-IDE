@@ -20,7 +20,7 @@
   "build": {
     "appId": "com.spartan-ide.SpartanIDE",
     "productName": "Spartan IDE",
-    "copyright": "Copyright (c) 2026 Christopher Kissinger. All rights reserved. Proprietary and confidential.",
+    "copyright": "Copyright (c) 2026 CKissinger1988. All rights reserved. Proprietary and confidential.",
     "directories": {
       "output": "dist-package",
       "buildResources": "build-resources"
