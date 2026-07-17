@@ -1,16 +1,27 @@
 # Spartan IDE
 
+**Proprietary — all rights reserved.** © 2026 Christopher Kissinger. This repository is
+private; this README documents the real, internal state of the project for authorized
+readers. See [License](#license).
+
 **A from-scratch, agent-first desktop IDE.** A real Electron + React frontend
 (`desktop/`) drives a real Rust core — a hand-built rope buffer, tree-sitter syntax
 highlighting, in-house LSP/DAP clients, real git integration, and **Leo**, an agentic
 coding assistant with a plan → approve → execute → verify loop — over a local IPC
 service. No VS Code, Monaco, or CodeMirror code is forked or vendored anywhere in this
-repository.
+repository. Two more real, separate shells share the identical Rust core: `web/` (a
+client-side, File System Access + WASM browser IDE) and `mobile/` (a real Expo/React
+Native companion app).
 
 This README says exactly what's real and what isn't. See
 ["What's actually real right now"](#whats-actually-real-right-now) before assuming
 anything beyond that — and see [`CLAUDE.md`](CLAUDE.md) for the full, continuously
-updated status log this section summarizes.
+updated status log this section summarizes (it's the actual source of truth; this file
+is a snapshot of it for a reader who wants the short version).
+
+**Beta downloads and this same README, rendered, live on the project's own GitHub Pages
+site** (source-free — no repository access required, no source file ever served) —
+see [Beta downloads](#beta-downloads--live-documentation) below.
 
 ## Why from scratch
 
@@ -44,6 +55,28 @@ be driven headlessly.
 More screens (Settings, Design/GUI Builder, Dev Containers, the web app's file tree and
 live-editing states) are in `docs/screenshots/desktop/` and `docs/screenshots/web/`, and
 embedded with full captions in `desktop/README.md` and `web/README.md`.
+
+## Beta downloads & live documentation
+
+The project's own GitHub Pages site is the real, public entry point for anyone without
+repository access — this repository stays private and proprietary, so the site never
+serves a source file of any kind. It exists precisely because a public GitHub Release
+page on a private repo would 404/login-wall for anyone outside the org — real installer
+binaries are served directly from the Pages site's own static `/downloads/` path instead.
+
+The site includes:
+
+- **This README, rendered**, as a real documentation page — kept in sync automatically:
+  the Pages deploy workflow renders the actual `README.md` on every release, so the
+  public copy is never hand-duplicated and can't drift from what's checked in here.
+- **Real installers** for every platform this project packages: Windows (NSIS), macOS
+  (`.dmg`), Linux (`.deb`/`.AppImage`), Android (debug-signed `.apk`), plus the reference
+  wgpu shell's own archives.
+- **A live, in-browser copy of `web/`** — the client-side File System Access + WASM IDE,
+  usable with zero install.
+
+Every build on that page is produced by this repository's own `release.yml`/`pages.yml`
+CI workflows, not hand-assembled — see [`.github/workflows/`](.github/workflows/).
 
 ## Architecture
 
@@ -133,6 +166,22 @@ legacy/agent-deck-console/  This repo's prior product, preserved for feature-par
   interactive shell into it — test a project's Linux environment in isolation without touching
   your host machine. Not a VM — genuinely different OS *families* (Windows/macOS guests) are out
   of scope by design; see [`crates/spartan-devcontainer`](crates/spartan-devcontainer)
+- **Real LSP diagnostics, hover, and autocomplete**, and **real DAP breakpoint/step
+  debugging** — both live, driven by real language servers/debug adapters over
+  `crates/spartan-lsp`/`crates/spartan-dap`, in both the desktop shell and `web/`
+- **Seven real, live, user-selectable themes** (Spartan Dark/Light plus five distinct
+  design concepts — Minimalist Zen, Neon Aftergrid, Warm Paper, Command Deck, Glass
+  Native) — switch instantly from Settings, no restart required, in every real shell
+- **Real Android support**: SDK/toolchain detection, a real `assembleDebug` build
+  producing an installable APK, real `adb` device listing, install, and `logcat`
+  streaming, and a real Android template in the New Project wizard — see
+  [`crates/spartan-android`](crates/spartan-android). No emulator/system-image or JDWP
+  debugging yet; this environment has no `/dev/kvm` to build or verify that against.
+- **A unified local model-management surface**: one Settings screen to check model
+  provider health, start/stop a local LiteLLM proxy, and download GGUF models straight
+  from Hugging Face into Ollama, LM Studio, or llama.cpp's own local model directory —
+  see [`crates/spartan-backend`](crates/spartan-backend)'s model-management dispatch
+  methods.
 
 ### Trust & security
 
@@ -158,16 +207,29 @@ touching security, sandboxing, or approval flows (§9, §36).
 ## What's actually real right now
 
 - **Real, working, tested code**: everything under [Architecture](#architecture) above.
-  599 Rust tests across 15 real crates + 7 Tier 0 spikes + `xtask`, all passing; clippy and
-  `cargo fmt` clean. The Electron shell's own TypeScript typechecks and builds clean, and
-  every increment of it has been verified via a live, screenshotted Playwright pass driving
-  a real Vite dev server against a test-only mock of the Electron preload bridge — see
-  [Screenshots](#screenshots) above for real captures. GUI Builder's two-way AST sync is now
-  fully closed (`Reparent`/`ComponentInsert` included), the last named Tier 1 gap for that row.
-- **`web/` — a real, separate, first-increment browser IDE**: a vscode.dev-inspired
-  Vite+React app running a real WASM compilation of `spartan-buffer` against the browser's
-  File System Access API. No LSP/DAP/Leo/git yet — see [`web/README.md`](web/README.md)
-  for exactly what's built and what's deliberately deferred.
+  Several hundred Rust tests across 18 real crates + 7 Tier 0 spikes + `xtask`, all
+  passing; clippy and `cargo fmt` clean — see `CLAUDE.md`'s own "Build & test" section
+  for the exact, continuously-updated count (fabricating a fixed number here would go
+  stale immediately, so this file deliberately doesn't). The Electron shell's own
+  TypeScript typechecks and builds clean, and every increment of it has been verified via
+  a live, screenshotted Playwright pass driving a real Vite dev server against a
+  test-only mock of the Electron preload bridge — see [Screenshots](#screenshots) above
+  for real captures. GUI Builder's two-way AST sync is fully closed
+  (`Reparent`/`ComponentInsert` included).
+- **`web/` — a real, separate browser IDE, now with two editing paths**: a
+  vscode.dev-inspired Vite+React app. Its original path is fully client-side (a real WASM
+  compilation of `spartan-buffer` against the File System Access API, no backend needed).
+  A second, newer path connects to a real local `spartan-devserver` process over
+  WebSocket and gets real LSP diagnostics/hover/completion, real DAP breakpoint
+  debugging, a real Git panel, and real Android device/build tooling — see
+  [`web/README.md`](web/README.md) for exactly which path has which capability.
+- **A separate, optional multi-tenant backend — Spartan Cloud (`cloud/`)**: its own,
+  separate Cargo workspace (not part of `cargo build --workspace` at the repo root),
+  offering per-user container allocation over a real axum control plane, WebAuthn admin
+  auth, an encrypted-at-rest secrets vault, and per-tenant resource caps/audit logging.
+  Billing is deliberately stubbed behind a real `EntitlementProvider` trait. See
+  [`cloud/README.md`](cloud/README.md) for what's verified here vs. what needs a real
+  KVM-capable target this environment doesn't have.
 - **One honest, standing gap**: the *actual* Electron window has never been launched from
   inside this project's own development sessions, because Electron's postinstall script
   downloads its runtime binary from `github.com/electron/electron/releases`, and every
@@ -175,7 +237,12 @@ touching security, sandboxing, or approval flows (§9, §36).
   network policy. Everything else — the real Rust backend, the full IPC protocol, every
   React component — is built and tested; it needs a real `npm install` (no
   `ELECTRON_SKIP_BINARY_DOWNLOAD`) run somewhere with normal internet access to actually
-  see the window. See [`desktop/README.md`](desktop/README.md).
+  see the window. This project's own CI now runs real `electron-builder` packaging jobs
+  for Windows/macOS/Linux on hosted runners with real internet access — see
+  [Beta downloads](#beta-downloads--live-documentation) above for the resulting
+  installers, and [`desktop/README.md`](desktop/README.md) for the full account of this
+  gap and what's still unverified about the packaged output (unsigned, first CI-built
+  attempt, not yet hand-tested on a real machine of each OS).
 - **Reference-only**: [`prototypes/*.jsx`](prototypes/) are early React mockups of the
   intended UI, not wired to anything. [`legacy/agent-deck-console/`](legacy/agent-deck-console/)
   is this repo's prior, different product, kept for feature-parity reference (§55).
@@ -246,7 +313,26 @@ npm run dev          # real Vite dev server, http://localhost:5174
 
 Needs `wasm-bindgen-cli` installed at the exact version pinned in `Cargo.lock`
 (`cargo install wasm-bindgen-cli --version 0.2.126`). See [`web/README.md`](web/README.md)
-for what's real (File System Access API + WASM-backed editing) vs. deferred (LSP/DAP/Leo/git).
+for what's real (File System Access API + WASM-backed editing, plus a real backend-connected
+LSP/DAP/git path) vs. what's still deferred there (Leo chat UI in this shell).
+
+### Spartan Cloud (`cloud/`) — separate, optional
+
+```bash
+cd cloud
+cargo build --workspace
+cargo test --workspace
+```
+
+Its own, separate Cargo workspace — not part of the root `cargo build --workspace`. See
+[`cloud/README.md`](cloud/README.md).
+
+### Documentation site (`site/`)
+
+The real GitHub Pages source. Locally: `python3 -m http.server 8000 --directory site`.
+The production deploy (`.github/workflows/pages.yml`) additionally renders this file
+(`README.md`) into a live documentation page and copies real release installers into
+`site/downloads/` — neither step is reproducible locally without those same CI artifacts.
 
 ## Repository layout
 
@@ -264,14 +350,20 @@ spikes/                      Real, tested Tier 0 Rust spikes + npm-based web-pre
                               (tree-sitter-wasm-spike, git-browser-spike) — see
                               spikes/README.md
 mobile/                      Spartan Mobile IDE — real Expo/React Native companion app
+cloud/                       Spartan Cloud — separate, optional multi-tenant backend;
+                              its own Cargo workspace, not part of the root one
+site/                        Real GitHub Pages source (proprietary-safe: no source links,
+                              installers served directly, README rendered at deploy time)
 prototypes/                  Reference-only React UI mockups, not wired to anything
 legacy/agent-deck-console/   Prior product, preserved for feature-parity reference (§55)
 .github/workflows/           CI — fmt/clippy/test for Rust, typecheck/build/test for every
                               real npm project (desktop/, gui-builder/, mobile/, web/,
-                              spikes/tree-sitter-wasm-spike, spikes/git-browser-spike)
+                              spikes/tree-sitter-wasm-spike, spikes/git-browser-spike),
+                              plus tag-triggered release.yml (installers) and pages.yml
+                              (the public Pages site, including this README rendered live)
 LICENSE                      Proprietary, all rights reserved
-Cargo.toml / Cargo.lock      Rust workspace (spikes/ + crates/, excluding crates/plugins/
-                              and mobile/, which are separate toolchains)
+Cargo.toml / Cargo.lock      Rust workspace (spikes/ + crates/, excluding crates/plugins/,
+                              mobile/, and cloud/, which are separate toolchains/workspaces)
 ```
 
 ## Contributing / where to start reading
@@ -284,6 +376,13 @@ Cargo.toml / Cargo.lock      Rust workspace (spikes/ + crates/, excluding crates
    they exist because of documented, named failures in comparable tools, not
    hypothetically.
 
+This repository is private. There is no external contribution process — this section
+describes how to orient as an authorized internal contributor, not how to submit an
+outside pull request.
+
 ## License
 
-Proprietary — all rights reserved. See [`LICENSE`](LICENSE).
+**Proprietary — all rights reserved.** Copyright (c) 2026 Christopher Kissinger. See
+[`LICENSE`](LICENSE). No portion of this source code is published or licensed for
+external use; the GitHub Pages site distributes compiled installers and this rendered
+README only, never source files.

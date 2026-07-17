@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spartan IDE — a from-scratch, agent-first desktop IDE</title>
+    <meta
+      name="description"
+      content="Spartan IDE: a proprietary, from-scratch agent-first IDE. Real rope buffer, tree-sitter, LSP/DAP, git, and Leo -- an in-house coding agent. Electron desktop shell, browser client, and mobile companion. Beta installers for Linux, Windows, macOS, and Android."
+    />
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="wrap nav-row">
+        <div class="brand"><span class="brand-glyph">&#9670;</span>SPARTAN IDE</div>
+        <span class="badge">BETA</span>
+        <span class="badge badge-proprietary">PROPRIETARY</span>
+        <nav class="nav-links">
+          <a href="#features">Features</a>
+          <a href="#themes">Themes</a>
+          <a href="#downloads">Downloads</a>
+          <a href="./docs.html">Documentation</a>
+          <a href="./app/">Try it live</a>
+        </nav>
+      </div>
+    </header>
+
+    <section class="hero wrap">
+      <h1>A from-scratch, <span class="accent">agent-first</span> desktop IDE</h1>
+      <p class="lede">
+        Real rope buffer. Real tree-sitter syntax highlighting. Real LSP/DAP.
+        Real git. And Leo — an in-house coding agent with a plan → approve →
+        execute → verify loop, not a chat window bolted onto an editor. No
+        VS Code, Monaco, or CodeMirror code anywhere in the stack.
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#downloads">Download the beta</a>
+        <a class="btn btn-secondary" href="./app/">Try it in your browser</a>
+      </div>
+    </section>
+
+    <div class="hero-shot">
+      <img src="./assets/hero-editor-dark.png" alt="Spartan IDE editor screen, dark theme" loading="lazy" />
+    </div>
+
+    <section id="features" class="wrap">
+      <h2>What's actually real</h2>
+      <p class="section-lede">
+        This page tracks what's genuinely implemented and tested versus
+        reference-only. Here's what's real today.
+      </p>
+      <div class="feature-grid">
+        <div class="feature-card">
+          <span class="icon">&#9889;</span>
+          <h3>Leo, an agent-first core</h3>
+          <p>
+            A real plan → approve → execute → verify loop with checkpointing,
+            path-jailed tool execution, secrets redaction, and a hard
+            approval gate on every destructive action by default.
+          </p>
+        </div>
+        <div class="feature-card">
+          <span class="icon">&#128268;</span>
+          <h3>Multi-provider models</h3>
+          <p>
+            Ollama, Claude, LiteLLM, LM Studio, and direct in-process
+            llama.cpp GGUF inference with real grammar-constrained native
+            tool calling — swap providers from one Settings screen.
+          </p>
+        </div>
+        <div class="feature-card">
+          <span class="icon">&#128209;</span>
+          <h3>Real LSP + DAP</h3>
+          <p>
+            Live diagnostics, hover, autocomplete, and full breakpoint/step
+            debugging, driven by real language servers and debug adapters —
+            not simulated.
+          </p>
+        </div>
+        <div class="feature-card">
+          <span class="icon">&#127912;</span>
+          <h3>GUI Builder</h3>
+          <p>
+            Two-way AST sync between a live-rendered visual canvas and your
+            real JSX source — click a component, edit its props, and the
+            source file updates in place, formatting preserved.
+          </p>
+        </div>
+        <div class="feature-card">
+          <span class="icon">&#128230;</span>
+          <h3>Dev Containers</h3>
+          <p>
+            Real containers.dev-spec Docker lifecycle management, straight
+            from the editor — detect, start, exec into, and stop a project's
+            dev container without leaving the IDE.
+          </p>
+        </div>
+        <div class="feature-card">
+          <span class="icon">&#127760;</span>
+          <h3>Three real shells, one core</h3>
+          <p>
+            An Electron + React desktop shell, a client-side browser IDE
+            (File System Access + WASM), and a native mobile companion app —
+            all driving the same real Rust engine.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section id="themes" class="wrap">
+      <h2>Pick your own look</h2>
+      <p class="section-lede">
+        Seven real, live, user-selectable themes — switch instantly from
+        Settings, no restart required. Colors below are the actual rendered
+        output, not mockups.
+      </p>
+      <div class="theme-grid">
+        <div class="theme-card">
+          <div class="shot-wrap">
+            <img src="./assets/theme-command-deck.png" alt="Command Deck theme" loading="lazy" />
+          </div>
+          <div class="label">Command Deck</div>
+        </div>
+        <div class="theme-card">
+          <div class="shot-wrap">
+            <img src="./assets/theme-glass-native.png" alt="Glass Native theme" loading="lazy" />
+          </div>
+          <div class="label">Glass Native</div>
+        </div>
+        <div class="theme-card">
+          <div class="shot-wrap">
+            <img src="./assets/theme-warm-paper.png" alt="Warm Paper theme" loading="lazy" />
+          </div>
+          <div class="label">Warm Paper</div>
+        </div>
+        <div class="theme-card">
+          <div class="shot-wrap">
+            <img src="./assets/theme-neon-aftergrid.png" alt="Neon Aftergrid theme" loading="lazy" />
+          </div>
+          <div class="label">Neon Aftergrid</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="downloads" class="wrap">
+      <h2>Beta downloads</h2>
+      <p class="section-lede">
+        Every installer below is a real build produced by this project's own
+        release pipeline and served directly from this page — nothing hand-
+        assembled, no source code exposed. This is a beta: read each card's
+        own status line before installing.
+      </p>
+      <div class="download-grid">
+        <div class="download-card">
+          <h3><span class="platform-icon">&#9670;</span> Windows</h3>
+          <p>
+            The primary UI: real Electron + React shell driving the Rust
+            core over local IPC. A full NSIS installer — install-path
+            choice, Start Menu/Desktop shortcuts, a real uninstaller.
+          </p>
+          <span class="status-line beta">first CI-built attempt this release, not yet hand-verified; unsigned</span>
+          <a class="btn btn-secondary" href="./downloads/SpartanIDE-windows-x64-Setup.exe">Download Setup.exe →</a>
+        </div>
+        <div class="download-card">
+          <h3><span class="platform-icon">&#9670;</span> macOS</h3>
+          <p>
+            Same real Electron shell, packaged as a <code>.dmg</code> —
+            built on a real GitHub-hosted Mac runner, no Apple hardware of
+            our own required to produce it.
+          </p>
+          <span class="status-line beta">first CI-built attempt this release, not yet hand-verified; unsigned/unnotarized</span>
+          <a class="btn btn-secondary" href="./downloads/SpartanIDE-macos.dmg">Download .dmg →</a>
+        </div>
+        <div class="download-card">
+          <h3><span class="platform-icon">&#9670;</span> Linux</h3>
+          <p>
+            A genuine <code>apt</code>/<code>dpkg</code>-installable
+            <code>.deb</code>, or a portable no-install <code>.AppImage</code>
+            if you'd rather not install system-wide.
+          </p>
+          <span class="status-line beta">first CI-built attempt this release, not yet hand-verified</span>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <a class="btn btn-secondary" href="./downloads/SpartanIDE-linux-x64.deb">.deb →</a>
+            <a class="btn btn-secondary" href="./downloads/SpartanIDE-linux-x64.AppImage">.AppImage →</a>
+          </div>
+        </div>
+        <div class="download-card">
+          <h3><span class="platform-icon">&#9670;</span> Web (client-side)</h3>
+          <p>
+            The File System Access + WASM browser IDE — use it live, no
+            install needed.
+          </p>
+          <span class="status-line ok">the exact build served live below</span>
+          <a class="btn btn-secondary" href="./app/">Try it live →</a>
+        </div>
+        <div class="download-card">
+          <h3><span class="platform-icon">&#9670;</span> Mobile companion — Android</h3>
+          <p>
+            A real Expo/React Native app for reviewing agent runs on the go.
+            Debug-signed <code>.apk</code> — enable "unknown sources" to
+            install.
+          </p>
+          <span class="status-line beta">debug-signed, not Play Store-distributable</span>
+          <a class="btn btn-secondary" href="./downloads/SpartanIDE-mobile-android.apk">Download .apk →</a>
+        </div>
+        <div class="download-card">
+          <h3><span class="platform-icon">&#9670;</span> Reference shell</h3>
+          <p>
+            The original wgpu-native shell — kept internally as the tested
+            backend proof-of-concept, not the primary UI. Linux/Windows
+            archives.
+          </p>
+          <span class="status-line ok">real, tested, run repeatedly across multiple releases</span>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <a class="btn btn-secondary" href="./downloads/spartan-reference-shell-linux-x64.tar.gz">Linux →</a>
+            <a class="btn btn-secondary" href="./downloads/spartan-reference-shell-windows-x64.zip">Windows →</a>
+          </div>
+        </div>
+      </div>
+      <div class="callout">
+        <strong>Honest beta notice:</strong> no production code-signing on
+        any platform yet — expect an OS-level "unidentified developer"
+        warning on first launch. This software is proprietary; the source
+        is not published anywhere. If a download link above 404s, that
+        platform's build failed this release cycle — check back on the
+        next one.
+      </div>
+    </section>
+
+    <section class="wrap">
+      <div class="try-card">
+        <h2>Try the browser IDE right now</h2>
+        <p class="section-lede" style="margin-bottom: 24px">
+          No install. Opens a real local folder via the File System Access
+          API and edits it with a real WASM-compiled buffer engine — the
+          same rope/undo-tree code the desktop core uses.
+        </p>
+        <a class="btn btn-primary" href="./app/">Launch Spartan Web →</a>
+      </div>
+    </section>
+
+    <footer>
+      <div class="wrap foot-row">
+        <div>&copy; 2026 Christopher Kissinger. All rights reserved. Proprietary and confidential.</div>
+        <div>Spartan IDE — internal/authorized-access distribution only.</div>
+      </div>
+    </footer>
+  </body>
+</html>

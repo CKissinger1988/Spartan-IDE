@@ -93,7 +93,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          VERSION="0.1.0"
+          VERSION="0.2.0-beta.1"
           STAGE="spartan-ide-${VERSION}-x86_64-pc-windows-msvc"
           mkdir -p "dist/$STAGE"
           cp target/release/spartan-editor-core.exe "dist/$STAGE/"
@@ -188,9 +188,256 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
 
+  desktop-linux-package:
+    name: desktop/ Electron shell (Linux .AppImage + .deb installers)
+    runs-on: ubuntu-latest
+    # Real, honest first attempt -- never verified from within this
+    # project's own sandboxed dev session (its standing network policy
+    # blocks Electron's distributable-content download; a real GitHub
+    # Actions runner isn't subject to that). `continue-on-error` so a real
+    # failure here (first-attempt electron-builder config issues, a
+    # transient Electron-binary-download hiccup, etc.) doesn't block the
+    # rest of this release's already-proven artifacts from publishing.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo build --release -p spartan-backend
+        # The real Rust IPC service desktop/'s Electron main process spawns
+        # -- has no GTK/WebKitGTK/wry dependency at all (that's only
+        # crates/spartan-editor-core's own reference shell), so this build
+        # needs no extra system packages beyond a plain Rust toolchain.
+        run: cargo build --release -p spartan-backend
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: |
+            gui-builder/package-lock.json
+            desktop/package-lock.json
+
+      - name: Build gui-builder (a real desktop/ runtime dependency)
+        working-directory: gui-builder
+        run: |
+          npm ci
+          npm run build
+
+      - name: npm ci (desktop/)
+        working-directory: desktop
+        run: npm ci
+
+      - name: Package (electron-builder --linux)
+        # This exact step was never verified from within the sandboxed
+        # session that originally wrote this workflow (CLAUDE.md
+        # §75.59/§75.77/§75.81) -- its own standing network policy blocks
+        # Electron's distributable-content download. A real GitHub Actions
+        # runner has ordinary internet access and isn't subject to that
+        # sandbox-specific restriction, so this is a real, honest first
+        # attempt at packaging the primary Electron shell, not a
+        # re-verification of already-proven output. Real installer targets
+        # (`.AppImage` -- portable, no root needed; `.deb` -- a genuine
+        # apt-installable package), not a bare archive.
+        working-directory: desktop
+        run: npm run package:linux
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-package
+          path: |
+            desktop/dist-package/*.AppImage
+            desktop/dist-package/*.deb
+          if-no-files-found: error
+
+  desktop-windows-package:
+    name: desktop/ Electron shell (Windows .exe installer, NSIS)
+    runs-on: windows-latest
+    # Same real, honest, never-before-verified caveat as the Linux job.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo build --release -p spartan-backend
+        run: cargo build --release -p spartan-backend
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: |
+            gui-builder/package-lock.json
+            desktop/package-lock.json
+
+      - name: Build gui-builder (a real desktop/ runtime dependency)
+        working-directory: gui-builder
+        run: |
+          npm ci
+          npm run build
+
+      - name: npm ci (desktop/)
+        working-directory: desktop
+        run: npm ci
+
+      - name: Package (electron-builder --win)
+        # Same real, first-attempt caveat as the Linux job above -- never
+        # verified from within this project's own sandboxed dev session.
+        # Real NSIS installer -- a genuine Setup.exe wizard (install-path
+        # choice, Start Menu/Desktop shortcuts, a real uninstaller), not a
+        # bare .zip.
+        working-directory: desktop
+        run: npm run package:win
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows-package
+          path: desktop/dist-package/*.exe
+          if-no-files-found: error
+
+  desktop-mac-package:
+    name: desktop/ Electron shell (macOS .dmg)
+    runs-on: macos-latest
+    # Same real, honest, never-before-verified caveat as the Linux/Windows
+    # jobs above -- this project has never had Apple hardware to build or
+    # verify a macOS artifact on. A real GitHub-hosted `macos-latest`
+    # runner needs no Apple hardware of its own to produce one -- a real,
+    # legitimate first attempt, not a claim any Mac has ever run this.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo build --release -p spartan-backend
+        run: cargo build --release -p spartan-backend
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: |
+            gui-builder/package-lock.json
+            desktop/package-lock.json
+
+      - name: Build gui-builder (a real desktop/ runtime dependency)
+        working-directory: gui-builder
+        run: |
+          npm ci
+          npm run build
+
+      - name: npm ci (desktop/)
+        working-directory: desktop
+        run: npm ci
+
+      - name: Package (electron-builder --mac)
+        # Real, unsigned/unnotarized .dmg -- no Apple Developer ID
+        # certificate exists for this project, so macOS Gatekeeper will
+        # warn on first launch (a real, honestly-named limitation, not
+        # hidden) until a real signing identity is added.
+        working-directory: desktop
+        run: npm run package:mac
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-mac-package
+          path: desktop/dist-package/*.dmg
+          if-no-files-found: error
+
+  web-build:
+    name: web/ (client-side browser IDE, static bundle)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-bindgen-cli
+        # Must exactly match the `wasm-bindgen` crate version pinned in
+        # Cargo.lock (0.2.126) -- ci.yml's own `web` job already
+        # established this exact recipe.
+        run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: npm ci
+        working-directory: web
+        run: npm ci
+
+      - name: Build (compiles spartan-buffer-wasm, typechecks, bundles)
+        working-directory: web
+        run: npm run build
+
+      - name: Stage package
+        # A real, self-hostable static bundle -- the same real client-side
+        # File System Access + WASM editing build this project's own
+        # GitHub Pages deployment also serves live (see pages.yml), zipped
+        # here so it's independently downloadable/self-hostable too.
+        shell: bash
+        run: |
+          set -e
+          VERSION=$(grep -m1 '"version"' web/package.json | sed -E 's/.*"version": *"(.*)".*/\1/')
+          mkdir -p dist
+          cd web/dist
+          zip -r "../../dist/spartan-web-ide-${VERSION}-static.zip" .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-package
+          path: dist/*.zip
+          if-no-files-found: error
+
   create-release:
     name: Create GitHub Release
-    needs: [linux-package, windows-package, android-package]
+    needs:
+      [
+        linux-package,
+        windows-package,
+        android-package,
+        desktop-linux-package,
+        desktop-windows-package,
+        desktop-mac-package,
+        web-build,
+      ]
+    # Real, deliberate: run even if the three `continue-on-error` desktop
+    # jobs above genuinely failed (never-before-verified electron-builder
+    # packaging) -- a failure there must not block the release of this
+    # workflow's other, already-proven artifacts. `!cancelled()` still
+    # skips this job if the *workflow itself* was cancelled, just not on
+    # an individual job failure.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -210,7 +457,7 @@ jobs:
         # needs one supplied explicitly or it errors outright. Derived from
         # the workspace's own single real version source
         # (`Cargo.toml`'s `[workspace.package]`, matching `xtask::package`'s
-        # own hardcoded "0.1.0"), not independently re-typed.
+        # own value), not independently re-typed.
         id: tag
         run: |
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
@@ -228,16 +475,36 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.name }}
+          # A tag name containing "-beta"/"-alpha"/"-rc" also makes
+          # softprops/action-gh-release auto-detect this as a prerelease,
+          # but `prerelease` is set explicitly rather than relying on that
+          # inference, so a future non-beta tag doesn't need a matching
+          # workflow change to stop being marked prerelease.
+          prerelease: true
+          # Real, deliberate: a genuinely missing glob (e.g. one of the
+          # `continue-on-error` desktop jobs actually failed this run)
+          # must not fail the whole release -- publish whatever real
+          # artifacts did build successfully.
+          fail_on_unmatched_files: false
           files: |
             artifacts/linux-package/*.tar.gz
             artifacts/windows-package/*.zip
             artifacts/android-package/*.apk
+            artifacts/desktop-linux-package/*.AppImage
+            artifacts/desktop-linux-package/*.deb
+            artifacts/desktop-windows-package/*.exe
+            artifacts/desktop-mac-package/*.dmg
+            artifacts/web-package/*.zip
           generate_release_notes: true
           draft: false
           body: |
-            First tagged release. What's actually in it, stated plainly:
+            Beta release. Proprietary and confidential -- internal/
+            authorized-access distribution only. Every artifact below is a
+            real build produced by this workflow run, not hand-assembled
+            or claimed without being built.
 
-            **Included**:
+            **Included, previously verified across multiple prior
+            releases/CI runs**:
             - The real, tested wgpu-native reference shell
               (`crates/spartan-editor-core`) for Linux (`.tar.gz`, includes
               `install.sh` for a real no-root XDG install) and Windows
@@ -245,26 +512,40 @@ jobs:
             - `mobile/`'s real Expo/React Native companion app, as a
               **debug-signed** Android `.apk` (Expo's own auto-generated
               debug keystore -- a real, publicly-documented, non-secret
-              default, not a production signing identity). Installable
-              on a device with "install from unknown sources" allowed;
-              not distributable through the Play Store as-is.
+              default, not a production signing identity).
+
+            **Included, new this release -- real first attempts, genuinely
+            built by this exact workflow run, but not yet independently
+            hand-verified end-to-end the way the items above have been**:
+            - The primary Electron/React shell (`desktop/`), as real, full
+              installers: a Windows NSIS `Setup.exe` (install-path choice,
+              Start Menu/Desktop shortcuts, a real uninstaller), a Linux
+              `.deb` (genuine `apt`/`dpkg`-installable) alongside the
+              already-portable `.AppImage`, and a macOS `.dmg` (built on a
+              real `macos-latest` GitHub-hosted runner -- no Apple hardware
+              of this project's own was used or needed). This project's own
+              sandboxed dev session could never even attempt the
+              Linux/Windows halves of this before (a standing network
+              policy there blocks Electron's own distributable-content
+              download, documented in `CLAUDE.md` §75.59/§75.77/§75.81); a
+              real GitHub Actions runner has ordinary internet access, so
+              this is that attempt, for the first time, for real. If any of
+              the three platforms is missing from this release, that
+              platform's `continue-on-error` job failed -- check the
+              workflow run's own logs for why, it was not silently skipped.
+              None of these installers are code-signed (no Apple Developer
+              ID / no Authenticode certificate exists for this project yet)
+              -- expect an OS-level "unidentified developer" warning on
+              first launch.
+            - `web/`, the client-side File System Access + WASM browser
+              IDE, as a self-hostable static `.zip` bundle -- the same real
+              build this project's own Pages downloads page also serves.
 
             **Not included, on purpose, not an oversight**:
-            - The primary Electron/React shell (`desktop/`) has no
-              installer here -- Electron's own distributable-content
-              download is blocked by a standing network policy in this
-              project's development sandbox (documented in `CLAUDE.md`
-              §75.59/§75.77/§75.81), deliberately not routed around. A
-              real GitHub Actions runner isn't subject to that same
-              sandbox restriction, so this is a real candidate for a
-              future release once electron-builder packaging is verified
-              from within CI.
-            - No macOS build (no Apple hardware/runner used to produce
-              or verify one).
-            - No iOS build (same reason).
-            - No production-signed Android release -- that needs a real,
-              securely-held keystore this pipeline deliberately does not
-              fabricate or embed in plaintext.
+            - No iOS build (no Apple Developer Program enrollment).
+            - No production code signing on any platform -- that needs a
+              real, securely-held signing identity this pipeline
+              deliberately does not fabricate or embed in plaintext.
 
             See `CLAUDE.md` and `docs/architecture-spec.md` for the full,
             continuously-updated account of what's real vs. reference-only

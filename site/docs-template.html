@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Documentation — Spartan IDE</title>
+    <meta
+      name="description"
+      content="Spartan IDE's own README, rendered live from the private source repository at each release -- architecture, real feature list, and honest build/verification notes."
+    />
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>&#128737;&#65039;</text></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="wrap nav-row">
+        <a href="./" style="text-decoration: none">
+          <div class="brand"><span class="brand-glyph">&#9670;</span>SPARTAN IDE</div>
+        </a>
+        <span class="badge">BETA</span>
+        <span class="badge badge-proprietary">PROPRIETARY</span>
+        <nav class="nav-links">
+          <a href="./#features">Features</a>
+          <a href="./#downloads">Downloads</a>
+          <a href="./docs.html">Documentation</a>
+          <a href="./app/">Try it live</a>
+        </nav>
+      </div>
+    </header>
+
+    <section class="wrap docs-hero">
+      <h1>Documentation</h1>
+      <p class="section-lede" style="margin-bottom: 0">
+        The project's own <code>README.md</code>, rendered as-is from the private
+        source repository at each real release build -- not a separate marketing
+        copy maintained by hand. It is regenerated automatically every time
+        <a href="./#downloads">a new beta is published</a>, so it can't drift from
+        what's actually checked in.
+      </p>
+      <div class="callout" style="margin-top: 24px; text-align: left">
+        <strong>Note on relative links:</strong> this page is a straight render of
+        the internal README. Some links inside it point to files and directories
+        inside the private source repository (<code>CLAUDE.md</code>,
+        <code>docs/architecture-spec.md</code>, individual <code>crates/</code>
+        paths, in-repo screenshots) that are not published here and will not
+        resolve from this page -- that's expected, not a bug in this site. Links
+        to real, published pages on this site (like
+        <a href="./#downloads">Downloads</a> and <a href="./app/">Try it live</a>)
+        work normally.
+      </div>
+    </section>
+
+    <section class="wrap">
+      <article class="markdown-body">
+        {{README_BODY}}
+      </article>
+    </section>
+
+    <footer>
+      <div class="wrap foot-row">
+        <div>&copy; 2026 Christopher Kissinger. All rights reserved. Proprietary and confidential.</div>
+        <div>Spartan IDE — internal/authorized-access distribution only.</div>
+      </div>
+    </footer>
+  </body>
+</html>

@@ -1,6 +1,6 @@
 {
   "name": "spartan-desktop",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.1",
   "private": true,
   "license": "UNLICENSED",
   "description": "Spartan IDE desktop shell -- real Electron + React frontend driving the existing Rust core (spartan-buffer, tree-sitter, LSP/DAP, Leo, spartan-git) over a local IPC service. See CLAUDE.md/docs/architecture-spec.md for why this exists alongside crates/spartan-editor-core (the original wgpu-native shell, kept as the backend proof-of-concept and reference).",
@@ -13,11 +13,14 @@
     "build": "npm run build:renderer && npm run build:electron",
     "start": "npm run build && electron .",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p electron/tsconfig.json",
-    "package:linux": "npm run build && electron-builder --linux --publish=never"
+    "package:linux": "npm run build && electron-builder --linux --publish=never",
+    "package:win": "npm run build && electron-builder --win --publish=never",
+    "package:mac": "npm run build && electron-builder --mac --publish=never"
   },
   "build": {
     "appId": "com.spartan-ide.SpartanIDE",
     "productName": "Spartan IDE",
+    "copyright": "Copyright (c) 2026 Christopher Kissinger. All rights reserved. Proprietary and confidential.",
     "directories": {
       "output": "dist-package",
       "buildResources": "build-resources"
@@ -29,10 +32,6 @@
     ],
     "extraResources": [
       {
-        "from": "../target/release/spartan-backend",
-        "to": "spartan-backend"
-      },
-      {
         "from": "../gui-builder/dist",
         "to": "gui-builder"
       },
@@ -43,9 +42,45 @@
     ],
     "linux": {
       "target": [
-        "AppImage"
+        "AppImage",
+        "deb"
       ],
-      "category": "Development"
+      "category": "Development",
+      "extraResources": [
+        {
+          "from": "../target/release/spartan-backend",
+          "to": "spartan-backend"
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "extraResources": [
+        {
+          "from": "../target/release/spartan-backend.exe",
+          "to": "spartan-backend.exe"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools",
+      "extraResources": [
+        {
+          "from": "../target/release/spartan-backend",
+          "to": "spartan-backend"
+        }
+      ]
     }
   },
   "devDependencies": {
