@@ -2047,6 +2047,75 @@ fn android_detect(project_root: &str) -> Result<serde_json::Value, String> {
     }))
 }
 
+/// Real, live `assembleDebug` build (task #11's next increment beyond
+/// `android_detect`'s detection-only scope) -- a real Android SDK
+/// (build-tools/platforms/cmdline-tools) confirmed present in this
+/// environment (unlike when `spartan-android` was first written) made
+/// this achievable for the first time: compile + package a real,
+/// installable debug APK. Still not the full §21 scope -- no emulator/
+/// device exists here (no `/dev/kvm`, no system-images), so there is
+/// nothing to install or run the resulting APK against; that stays
+/// real, separate, unstarted follow-up, named honestly rather than
+/// implied. The same "ack now, event later" shape `hf_pull_model`/
+/// `llamacpp_download_model` already established -- a real Gradle build
+/// can easily run minutes on a cold dependency cache, so it always runs
+/// on its own thread, forwarding every real Gradle output line as an
+/// `android_build_progress` event and finishing with
+/// `android_build_ready` (the real produced `.apk` path) or
+/// `android_build_failed`.
+fn android_build_apk(
+    out_tx: Sender<String>,
+    project_root: String,
+) -> Result<serde_json::Value, String> {
+    if project_root.trim().is_empty() {
+        return Err("android_build_apk requires a non-empty `project_root`".to_string());
+    }
+    let root = std::path::PathBuf::from(&project_root);
+    if !spartan_android::is_android_project(&root) {
+        return Err(format!(
+            "{project_root:?} does not look like a real Android/Gradle project"
+        ));
+    }
+
+    thread::spawn(move || {
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let forward_out_tx = out_tx.clone();
+        thread::spawn(move || {
+            for line in line_rx {
+                let event = Event {
+                    event: "android_build_progress".to_string(),
+                    data: serde_json::json!({ "line": line }),
+                };
+                if let Ok(l) = serde_json::to_string(&event) {
+                    let _ = forward_out_tx.send(l);
+                }
+            }
+        });
+
+        let toolchain = spartan_android::detect_toolchain();
+        let event = match spartan_android::build::build_debug_apk(
+            &root,
+            toolchain.sdk_root.as_deref(),
+            toolchain.gradle_path.as_deref(),
+            line_tx,
+        ) {
+            Ok(apk_path) => Event {
+                event: "android_build_ready".to_string(),
+                data: serde_json::json!({ "apk_path": apk_path.to_string_lossy() }),
+            },
+            Err(e) => Event {
+                event: "android_build_failed".to_string(),
+                data: serde_json::json!({ "error": e }),
+            },
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+
+    Ok(serde_json::json!({ "status": "starting" }))
+}
+
 /// Real Docker container-name-safe sanitization (Docker's own real
 /// charset is `[a-zA-Z0-9][a-zA-Z0-9_.-]+`) -- deterministic per project
 /// path, so re-running "up" against the same project reuses the same
@@ -2869,6 +2938,8 @@ pub fn handle_request(
         "android_detect" => {
             get_str_param(&req.params, "project_root").and_then(|r| android_detect(&r))
         }
+        "android_build_apk" => get_str_param(&req.params, "project_root")
+            .and_then(|r| android_build_apk(out_tx.clone(), r)),
         "devcontainer_exec_spawn" => (|| {
             let container_id = get_str_param(&req.params, "container_id")?;
             let cols = get_u64_param(&req.params, "cols")? as u16;
@@ -3531,6 +3602,69 @@ mod tests {
         assert!(resp.error.is_none());
         assert_eq!(resp.result.unwrap()["isAndroidProject"], true);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn android_build_apk_refuses_a_non_android_project() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-android-build-refuse-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "android_build_apk",
+            serde_json::json!({ "project_root": dir.to_string_lossy() }),
+        );
+        assert!(resp.error.is_some());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn android_build_apk_refuses_an_empty_project_root() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "android_build_apk",
+            serde_json::json!({ "project_root": "" }),
+        );
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn android_build_apk_acks_immediately_for_a_real_recognized_android_project() {
+        // Confirms the dispatch arm reaches the real handler and returns
+        // the real "ack now, event later" shape without ever blocking on
+        // the (possibly multi-minute) real Gradle build itself -- the
+        // background thread's own eventual real/failed event is covered
+        // by spartan-android's own build.rs tests, including a real,
+        // self-skipping live `assembleDebug` run.
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-android-build-ack-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let manifest_dir = dir.join("app").join("src").join("main");
+        std::fs::create_dir_all(&manifest_dir).unwrap();
+        std::fs::write(manifest_dir.join("AndroidManifest.xml"), "<manifest />").unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "android_build_apk",
+            serde_json::json!({ "project_root": dir.to_string_lossy() }),
+        );
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["status"], "starting");
+        // Deliberately not cleaned up here: a real background thread is now
+        // racing to spawn a real Gradle process against this directory (it
+        // will fail fast and harmlessly -- no real build.gradle exists in
+        // this fixture -- but this test doesn't wait for or assert on that
+        // event), so deleting the directory immediately would race with it.
     }
 
     /// Real, live confirmation that this crate's own dispatch correctly

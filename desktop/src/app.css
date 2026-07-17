@@ -842,6 +842,20 @@
 .status-android-badge {
   margin-left: 10px;
   color: var(--text-dim);
+  background: none;
+  border: none;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+.status-android-badge:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.status-android-badge:disabled {
+  cursor: default;
+  opacity: 0.7;
 }
 
 /* Real, persistent Leo chat panel (§75.61) -- docked on the right,

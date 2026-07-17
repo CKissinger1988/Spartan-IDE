@@ -16,6 +16,16 @@ export interface AndroidDetectResult {
   gradleVersion: string | null;
 }
 
+/** Real client-side state for the "Build APK" action (task #144) -- a
+ * real `assembleDebug` gradle build streamed from `spartan-backend`'s own
+ * `android_build_apk`/`android_build_progress`/`android_build_ready`/
+ * `android_build_failed` events. */
+export type AndroidBuildState =
+  | { phase: "idle" }
+  | { phase: "building"; lastLine?: string }
+  | { phase: "ready"; apkPath: string }
+  | { phase: "failed"; error: string };
+
 interface StatusBarProps {
   fileCount: number;
   activePath: string | null;
@@ -29,6 +39,13 @@ interface StatusBarProps {
    * renders a badge when `isAndroidProject` is true -- a non-Android
    * project (the common case) shows nothing extra. */
   androidInfo?: AndroidDetectResult | null;
+  /** Real, live state of an in-progress/finished `assembleDebug` build --
+   * `undefined` when no build has ever been triggered this session. */
+  androidBuild?: AndroidBuildState;
+  /** Clicking the Android badge triggers a real build -- a no-op prop
+   * (not rendered as clickable) when omitted, matching this component's
+   * own existing "no callback, no interactivity" convention elsewhere. */
+  onBuildApk?: () => void;
 }
 
 export default function StatusBar({
@@ -36,6 +53,8 @@ export default function StatusBar({
   activePath,
   diagnostics,
   androidInfo,
+  androidBuild,
+  onBuildApk,
 }: StatusBarProps): React.ReactElement {
   const ext = activePath?.split(".").pop() ?? "";
   const errorCount = diagnostics?.filter((d) => d.severity === "error").length ?? 0;
@@ -61,16 +80,33 @@ export default function StatusBar({
         </span>
       )}
       {androidInfo?.isAndroidProject && (
-        <span
+        <button
           className="status-android-badge"
+          type="button"
+          disabled={androidBuild?.phase === "building"}
+          onClick={onBuildApk}
           title={`Gradle: ${androidInfo.gradlePath ?? "not found"}${
             androidInfo.gradleVersion ? ` (${androidInfo.gradleVersion})` : ""
           } | SDK: ${androidInfo.sdkRoot ?? "not found"} | adb: ${
             androidInfo.adbPath ?? "not found"
+          }${
+            androidBuild?.phase === "building" && androidBuild.lastLine
+              ? `\n${androidBuild.lastLine}`
+              : androidBuild?.phase === "ready"
+                ? `\nBuilt: ${androidBuild.apkPath}`
+                : androidBuild?.phase === "failed"
+                  ? `\n${androidBuild.error}`
+                  : "\nClick to build a real debug APK (gradle assembleDebug)."
           }`}
         >
-          🤖 Android
-        </span>
+          {androidBuild?.phase === "building"
+            ? "🤖 Building…"
+            : androidBuild?.phase === "ready"
+              ? "🤖 ✓ built"
+              : androidBuild?.phase === "failed"
+                ? "🤖 ✗ failed"
+                : "🤖 Android"}
+        </button>
       )}
     </div>
   );

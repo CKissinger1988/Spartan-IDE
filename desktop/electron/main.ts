@@ -161,6 +161,7 @@ app.whenReady().then(() => {
     "check_for_updates",
     "model_status",
     "android_detect",
+    "android_build_apk",
     "litellm_proxy_start",
     "litellm_proxy_stop",
     "litellm_proxy_status",

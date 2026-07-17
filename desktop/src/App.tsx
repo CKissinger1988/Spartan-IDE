@@ -3,7 +3,7 @@ import Sidebar from "./components/Sidebar";
 import FileTree from "./components/FileTree";
 import GitPanel from "./components/GitPanel";
 import TabBar from "./components/TabBar";
-import StatusBar, { type AndroidDetectResult } from "./components/StatusBar";
+import StatusBar, { type AndroidDetectResult, type AndroidBuildState } from "./components/StatusBar";
 import Editor, {
   type EditorPrefs,
   DEFAULT_EDITOR_PREFS,
@@ -67,6 +67,11 @@ export default function App(): React.ReactElement {
   const [breakpointsByDoc, setBreakpointsByDoc] = useState<Record<number, number[]>>({});
   const [dapSessionByDoc, setDapSessionByDoc] = useState<Record<number, DapSessionState>>({});
   const [androidInfo, setAndroidInfo] = useState<AndroidDetectResult | null>(null);
+  // Real build state for task #144's "Build APK" action -- `idle` (never
+  // triggered this session) is represented by `undefined`, not a real
+  // phase, matching `StatusBar`'s own "no prop means no extra state" style
+  // elsewhere.
+  const [androidBuild, setAndroidBuild] = useState<AndroidBuildState | undefined>(undefined);
 
   // Real, one-shot on mount (ROOT is fixed for this window's lifetime, set
   // via the URL query param) -- android_detect has been real and tested
@@ -78,6 +83,16 @@ export default function App(): React.ReactElement {
       .call("android_detect", { project_root: ROOT })
       .then((result) => setAndroidInfo(result as AndroidDetectResult))
       .catch(() => setAndroidInfo(null));
+  }, []);
+
+  // Real "ack now, event later" trigger for `android_build_apk` -- a real
+  // Gradle `assembleDebug` build, which can easily run minutes on a cold
+  // dependency cache, so this never blocks the click itself.
+  const buildApk = useCallback(() => {
+    setAndroidBuild({ phase: "building" });
+    window.spartan.call("android_build_apk", { project_root: ROOT }).catch((e: Error) => {
+      setAndroidBuild({ phase: "failed", error: e.message });
+    });
   }, []);
 
   useEffect(() => {
@@ -125,6 +140,17 @@ export default function App(): React.ReactElement {
             [doc_id]: { ...existing, status: "build_failed", message: diagnostics.join("\n") },
           };
         });
+      } else if (event === "android_build_progress") {
+        const { line } = data as { line: string };
+        setAndroidBuild((prev) =>
+          prev?.phase === "building" ? { phase: "building", lastLine: line } : prev
+        );
+      } else if (event === "android_build_ready") {
+        const { apk_path } = data as { apk_path: string };
+        setAndroidBuild({ phase: "ready", apkPath: apk_path });
+      } else if (event === "android_build_failed") {
+        const { error } = data as { error: string };
+        setAndroidBuild({ phase: "failed", error });
       }
     });
     return unsubscribe;
@@ -391,6 +417,8 @@ export default function App(): React.ReactElement {
               activePath={activeFile?.path ?? null}
               diagnostics={activeFile ? diagnosticsByDoc[activeFile.docId] : undefined}
               androidInfo={androidInfo}
+              androidBuild={androidBuild}
+              onBuildApk={buildApk}
             />
           </>
         ) : (

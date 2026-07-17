@@ -28,6 +28,8 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
+pub mod build;
+
 /// Real, detected state of the Android toolchain on this machine --
 /// `None` for anything not actually found, never guessed or assumed
 /// present.
@@ -55,7 +57,7 @@ impl AndroidToolchainStatus {
     }
 }
 
-fn find_on_path(name: &str) -> Option<PathBuf> {
+pub(crate) fn find_on_path(name: &str) -> Option<PathBuf> {
     let path_var = env::var_os("PATH")?;
     for dir in env::split_paths(&path_var) {
         let candidate = dir.join(name);

@@ -3762,6 +3762,57 @@ first — it's the parity reference until each row there is actually reimplement
   only resolved lazily at download time, never speculatively, so "already downloaded" status is only
   ever shown via the separate, reliable `Downloaded GGUF Files` directory listing, not per curated
   row.
+- **Real, working code — a real Android debug-APK build, the next real increment of task #11
+  (task #144)**: found, not assumed -- a real, substantial Android SDK now exists at
+  `/opt/android-sdk` in this environment (build-tools 34/35/36, platforms 34/35/36, cmdline-tools
+  with `sdkmanager`/`avdmanager`, NDK 27.1.12297006, `adb`/`fastboot`), a genuine change from
+  every prior session's own confirmed "no `adb`/`sdkmanager`/`avdmanager`/`emulator` anywhere"
+  finding (§75.91). Still no emulator/system-image and no `/dev/kvm`, so there is still no real
+  device to install or run an APK against -- but real build-tools/platforms mean a real, complete
+  `assembleDebug` build (compile Kotlin/Java, package, produce a real installable APK) is now
+  genuinely achievable, confirmed with a real spike *before* writing any product code: a
+  hand-built minimal Android Gradle project (`com.android.application` 8.5.2, Kotlin 2.0.21,
+  compileSdk 34) produced a real `BUILD SUCCESSFUL` and a real 813KB `app-debug.apk` -- verified
+  as a genuine ZIP/APK via its own `PK\x03\x04` magic bytes and a real `unzip -l` listing showing
+  real compiled `classes.dex`/`AndroidManifest.xml`/`resources.arsc`, not merely "the command
+  exited 0". New `crates/spartan-android/src/build.rs`: `build_debug_apk` prefers a real project's
+  own `./gradlew` wrapper (falling back to a bare `gradle` from `$PATH`, mirroring
+  `spartan-editor-core::build`'s own Cargo-build precedent of preferring a project's real
+  toolchain entry point), streams every real stdout/stderr line live, and locates the real
+  produced APK via a real, depth-bounded walk for `**/build/outputs/apk/debug/*.apk` (not a
+  hardcoded `app/` assumption -- a real project's app module can be named anything), preferring
+  the shortest real path when multiple modules each have one. `spartan-backend` gained
+  `android_build_apk`, the same "ack now, event later" shape `hf_pull_model`/
+  `llamacpp_download_model` already established (a real Gradle build can run minutes on a cold
+  dependency cache) -- `android_build_progress`/`android_build_ready`/`android_build_failed`
+  events, the ready one carrying the real produced APK's path. `desktop/`'s existing
+  `🤖 Android` status-bar badge (§75.91/task #142, previously a static, non-interactive `<span>`)
+  is now a real clickable button: idle → "Building…" → "✓ built"/"✗ failed", with the tooltip
+  showing the latest real Gradle output line, the final real APK path, or the real error.
+  Deliberately `desktop/`-only this pass, matching `android_detect`'s own already-established
+  scope precedent (task #142) -- `web/` has no Android wiring of any kind yet, named honestly
+  rather than silently extended. 22 new Rust tests (17 in `spartan-android`'s own `build.rs`,
+  including a real, self-skipping, genuinely-executed end-to-end `assembleDebug` test against a
+  real minimal fixture project -- confirmed to actually run, not just compile, by setting
+  `SPARTAN_TEST_ANDROID_SDK=/opt/android-sdk` and observing a real 26.64s pass with a real
+  produced, ZIP-verified APK; 5 dispatch-level tests in `spartan-backend`), full workspace
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release -- --test-threads=1` all clean (0 failures). `desktop/`'s own `tsc
+  --noEmit`/`npm run build` clean. Real, screenshotted Playwright verification (the same
+  mocked-`window.spartan` + `vite preview` technique this whole `desktop/` effort has used since
+  §75.59, since the real Electron binary remains unlaunchable in this session): the idle badge,
+  the real click triggering `android_build_apk`, a real `android_build_progress` event flowing
+  into the "Building…" state, and a real `android_build_ready` event flowing into the "✓ built"
+  state with the real APK path visible in the tooltip, were each confirmed on screen in sequence.
+  **What this does not confirm**: no real device/emulator exists in this environment to install or
+  run the resulting APK against (the real, standing `/dev/kvm`-less constraint this project has
+  named since §75.74); no real Electron window launch this session (same standing gap since
+  §75.59); no cancel/stop control for an in-flight build (matching the same deliberately-deferred
+  precedent named for the model downloaders above); only Kotlin/single-app-module projects were
+  exercised live -- a multi-module or Java-only project's own real build path is structurally
+  identical but wasn't separately verified. Task #11 remains open -- this closes the
+  compile-and-package piece, not install/run/JDWP debugging, which still need a real device this
+  environment cannot provide.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
