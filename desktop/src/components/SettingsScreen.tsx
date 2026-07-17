@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { applyReduceMotion } from "../reduceMotion";
-import { applyTheme, type ThemeName } from "../applyTheme";
+import { applyTheme, THEME_LABELS, type ThemeName } from "../applyTheme";
 import { applyFontFamily } from "../applyFontFamily";
 import pkg from "../../package.json";
 
@@ -410,8 +410,11 @@ export default function SettingsScreen(): React.ReactElement {
             })
           }
         >
-          <option value="SpartanDark">Spartan Dark</option>
-          <option value="SpartanLight">Spartan Light</option>
+          {(Object.keys(THEME_LABELS) as ThemeName[]).map((name) => (
+            <option key={name} value={name}>
+              {THEME_LABELS[name]}
+            </option>
+          ))}
         </select>
       </div>
       <div className="settings-row">

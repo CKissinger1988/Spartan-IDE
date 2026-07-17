@@ -195,19 +195,29 @@ impl Default for EditorSettings {
     }
 }
 
-/// Real §75.93 theme selection. `SpartanDark` (the real, only theme this
-/// project has ever shipped -- §50.3/§75.54/§75.55/§75.76's own
-/// Antigravity-2.0-researched, Sci-Fi-accented palette) is the
+/// Real §75.93 theme selection, extended to 7 real options by the
+/// "make all GUI designs user changeable" pass. `SpartanDark` (the real,
+/// only theme this project has ever shipped -- §50.3/§75.54/§75.55/§75.76's
+/// own Antigravity-2.0-researched, Sci-Fi-accented palette) is the
 /// non-negotiable default so every existing real user's already-running
-/// app looks unchanged after upgrading. `SpartanLight` is a real, new,
-/// second theme built specifically for this pass -- see
-/// `desktop/src/theme.css`'s own `[data-theme="light"]` override block
-/// for its real token values.
+/// app looks unchanged after upgrading. `SpartanLight` is the real, second
+/// theme built by §75.93. The 5 newest variants (`MinimalistZen`,
+/// `NeonAftergrid`, `WarmPaper`, `CommandDeck`, `GlassNative`) are the real,
+/// standalone GUI design concepts first shipped as unwired HTML mockups
+/// (matching this project's own `prototypes/*.jsx` convention) and then
+/// wired live into both real Electron-based shells -- see
+/// `desktop/src/theme.css`'s own `[data-theme="..."]` override blocks for
+/// each one's real token values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ThemeName {
     #[default]
     SpartanDark,
     SpartanLight,
+    MinimalistZen,
+    NeonAftergrid,
+    WarmPaper,
+    CommandDeck,
+    GlassNative,
 }
 
 /// Real §75.76 appearance preferences. `reduce_motion` is a real,
@@ -506,6 +516,36 @@ mod tests {
     fn default_theme_is_spartan_dark_so_every_existing_user_sees_no_change() {
         assert_eq!(AppearanceSettings::default().theme, ThemeName::SpartanDark);
         assert_eq!(Settings::default().appearance.theme, ThemeName::SpartanDark);
+    }
+
+    #[test]
+    fn all_7_theme_variants_round_trip_through_json_and_are_pairwise_distinct() {
+        let all = [
+            ThemeName::SpartanDark,
+            ThemeName::SpartanLight,
+            ThemeName::MinimalistZen,
+            ThemeName::NeonAftergrid,
+            ThemeName::WarmPaper,
+            ThemeName::CommandDeck,
+            ThemeName::GlassNative,
+        ];
+        for theme in all {
+            let json = serde_json::to_string(&theme).unwrap();
+            let back: ThemeName = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, theme, "real round trip through JSON for {json}");
+        }
+        for i in 0..all.len() {
+            for j in (i + 1)..all.len() {
+                assert_ne!(all[i], all[j], "every real theme variant must be distinct");
+            }
+        }
+    }
+
+    #[test]
+    fn a_settings_json_naming_one_of_the_5_new_theme_variants_deserializes_correctly() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"appearance": {"theme": "CommandDeck"}}"#).unwrap();
+        assert_eq!(settings.appearance.theme, ThemeName::CommandDeck);
     }
 
     #[test]

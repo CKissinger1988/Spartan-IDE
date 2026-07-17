@@ -98,6 +98,141 @@
   --hud-rgb: 156, 122, 29;
 }
 
+/*
+ * Real "make all GUI designs user changeable" pass -- the 5 standalone GUI
+ * design concepts first shipped as unwired HTML mockups (real, self-
+ * contained files under `desktop/src/theme.css`'s own repo, matching this
+ * project's `prototypes/*.jsx` "demonstrates the design, is not the app"
+ * convention) are now real, live, selectable themes. Each block below is
+ * copied verbatim from that concept's own mockup `:root` token values --
+ * not re-derived -- so choosing a theme in Settings genuinely reproduces
+ * the exact palette the user reviewed in the screenshots before picking it.
+ *
+ * `--font-ui` is a new token (this pass) read by `body`'s font-family
+ * above -- `:root`'s own implicit default (no `--font-ui` set) resolves to
+ * the existing system-font stack via the CSS `var(..., fallback)` syntax,
+ * so SpartanDark/SpartanLight are completely unaffected; only the themes
+ * below that want a different UI typeface (monospace-everywhere for Neon
+ * Aftergrid/Command Deck, serif for Warm Paper) set it explicitly. Note
+ * `--font-mono` (code/gutter/terminal text) is untouched by any of these --
+ * JetBrains Mono stays the one real default for actual code everywhere.
+ */
+
+:root[data-theme="minimalist-zen"] {
+  --bg: #fafaf8;
+  --surface: #ffffff;
+  --surface-raised: #f2f2ee;
+  --border: #edede8;
+  --border-bright: #deded6;
+  --text: #1c1c1a;
+  --text-dim: #8a8a82;
+  --accent: #2e6fe0;
+  --accent-dim: rgba(46, 111, 224, 0.1);
+  --accent-hover: rgba(46, 111, 224, 0.06);
+  --accent-rgb: 46, 111, 224;
+
+  --hud: #b08d57;
+  --hud-dim: rgba(176, 141, 87, 0.14);
+  --hud-rgb: 176, 141, 87;
+}
+
+:root[data-theme="neon-aftergrid"] {
+  --bg: #06060a;
+  --surface: #0c0d14;
+  --surface-raised: #101220;
+  --border: #22243a;
+  --border-bright: #383b5c;
+  --text: #d8e4f5;
+  --text-dim: #6e7a99;
+  --accent: #3ef0ff;
+  --accent-dim: rgba(62, 240, 255, 0.12);
+  --accent-hover: rgba(62, 240, 255, 0.08);
+  --accent-rgb: 62, 240, 255;
+
+  --hud: #ff3dd8;
+  --hud-dim: rgba(255, 61, 216, 0.12);
+  --hud-rgb: 255, 61, 216;
+
+  --font-ui: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
+}
+
+:root[data-theme="warm-paper"] {
+  --bg: #f5efe3;
+  --surface: #fffdf8;
+  --surface-raised: #fbf3e4;
+  --border: #e7dcc7;
+  --border-bright: #d2c4a8;
+  --text: #2c2620;
+  --text-dim: #8c8070;
+  --accent: #c1622b;
+  --accent-dim: rgba(193, 98, 43, 0.12);
+  --accent-hover: rgba(193, 98, 43, 0.08);
+  --accent-rgb: 193, 98, 43;
+
+  --hud: #5e7a4e;
+  --hud-dim: rgba(94, 122, 78, 0.14);
+  --hud-rgb: 94, 122, 78;
+
+  --font-ui: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+}
+
+:root[data-theme="command-deck"] {
+  --bg: #12151c;
+  --surface: #171b24;
+  --surface-raised: #1d212c;
+  --border: #2a2f3d;
+  --border-bright: #3b4155;
+  --text: #c7d0e0;
+  --text-dim: #6e7789;
+  --accent: #5b9cf6;
+  --accent-dim: rgba(91, 156, 246, 0.12);
+  --accent-hover: rgba(91, 156, 246, 0.08);
+  --accent-rgb: 91, 156, 246;
+
+  --hud: #d8aa4e;
+  --hud-dim: rgba(216, 170, 78, 0.14);
+  --hud-rgb: 216, 170, 78;
+
+  --font-ui: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
+}
+
+:root[data-theme="glass-native"] {
+  --bg: #edf0f7;
+  --surface: rgba(255, 255, 255, 0.55);
+  --surface-raised: rgba(255, 255, 255, 0.72);
+  --border: rgba(36, 38, 46, 0.08);
+  --border-bright: rgba(36, 38, 46, 0.16);
+  --text: #24262e;
+  --text-dim: #6b6e7a;
+  --accent: #3d7eff;
+  --accent-dim: rgba(61, 126, 255, 0.14);
+  --accent-hover: rgba(61, 126, 255, 0.08);
+  --accent-rgb: 61, 126, 255;
+
+  --hud: #c9972f;
+  --hud-dim: rgba(201, 151, 47, 0.14);
+  --hud-rgb: 201, 151, 47;
+
+  --font-ui: -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+}
+
+/* Glass Native's one real structural (not just token) override: genuine
+   backdrop-filter glassmorphism on the app's own real chrome panels,
+   reusing the exact blur/saturate recipe Track C's `.glass-hologram`
+   utility already established (§124) rather than inventing a second one.
+   Real, scoped to this theme only -- every other theme's panels stay
+   opaque, matching their own mockups. */
+:root[data-theme="glass-native"] .nav-sidebar,
+:root[data-theme="glass-native"] .leo-panel,
+:root[data-theme="glass-native"] .tab-bar,
+:root[data-theme="glass-native"] .file-tree-panel,
+:root[data-theme="glass-native"] .status-bar,
+:root[data-theme="glass-native"] .git-panel,
+:root[data-theme="glass-native"] .settings-screen {
+  backdrop-filter: blur(20px) saturate(1.15);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -123,7 +258,7 @@ body {
     ),
     var(--bg);
   color: var(--text);
-  font-family: -apple-system, "Segoe UI", "Inter", sans-serif;
+  font-family: var(--font-ui, -apple-system, "Segoe UI", "Inter", sans-serif);
   font-size: 13px;
   overflow: hidden;
   user-select: none;

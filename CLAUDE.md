@@ -4120,6 +4120,75 @@ first — it's the parity reference until each row there is actually reimplement
   has built, including logcat; only task #11's emulator/system-image/JDWP half -- confirmed
   blocked by this environment's lack of `/dev/kvm` and CPU virtualization extensions -- remains
   open.
+- **Real, working code — all 5 GUI design concepts made real, live, user-selectable themes in
+  both `desktop/` and `web/`, extending `spartan_settings::ThemeName` from 2 to 7 real variants
+  (task #152)**: closes "Make all GUI designs user changeable," the direct follow-up to the 5
+  standalone HTML mockups the immediately preceding pass built and screenshotted for the user to
+  choose from. Rather than picking one winner, every real concept (Minimalist Zen, Neon Aftergrid,
+  Warm Paper, Command Deck, Glass Native) plus the existing SpartanDark/SpartanLight both became
+  real, live options in the same Settings theme dropdown both shells already had. `ThemeName`
+  gained 5 new variants (`#[serde(default)]`'s own existing forward-compatibility guarantee,
+  §75.79, covers a pre-existing settings file with no ripple); every exhaustive `match` on it in
+  the reference wgpu shell's own `theme.rs`/`settings_panel.rs` needed a real, deliberate,
+  documented fallback arm -- that renderer has no display/GPU in this session to verify a live
+  5-way palette swap, so the 5 new themes fall back to SpartanDark's exact tokens there rather than
+  failing to compile; `cycle_theme()`'s own keyboard cycle now visits all 7 in a fixed order.
+  `desktop/src/theme.css`/`web/src/theme.css` each gained 5 new `:root[data-theme="..."]` blocks,
+  every color value copied verbatim from that concept's own mockup `:root` tokens -- not
+  re-derived -- so picking a theme in Settings reproduces the exact palette the user reviewed in
+  the screenshots. A new `--font-ui` token (read by `body`'s font-family, defaulting via CSS
+  `var(fallback)` syntax to the existing system stack so SpartanDark/SpartanLight are untouched)
+  gives Neon Aftergrid/Command Deck a real monospace-everywhere UI and Warm Paper a real serif one;
+  Glass Native gets one real structural (not just token) addition -- genuine `backdrop-filter`
+  glassmorphism on each app's own real chrome panels, reusing Track C's already-existing
+  `.glass-hologram` blur/saturate recipe (§124) rather than inventing a second one, with the exact
+  selector list confirmed against each app's own real class names (`desktop/`'s `.nav-sidebar`/
+  `.leo-panel`/`.tab-bar`/etc. vs. `web/`'s differently-structured `.toolbar`/`.file-tree-panel`/
+  `.git-panel`/etc. -- grepped, not assumed identical, since the two shells' layouts genuinely
+  differ). `applyTheme.ts` (copied verbatim between `desktop/`/`web/`, matching that file's own
+  existing convention) generalized from a hardcoded 2-way ternary to a `Record`-driven lookup with
+  a new exported `THEME_LABELS` map, which both Settings screens' `<option>` lists now render from
+  directly instead of two hand-written `<option>` tags -- a real, incidental simplification, not
+  just mechanically bolted on. A real, pre-existing bug was found and fixed along the way, not
+  introduced by this pass: `web/src/theme.css`'s own Track C section (§124) was missing its opening
+  `/* ===` comment marker (present in `desktop/`'s copy, absent in `web/`'s), leaving roughly 15
+  lines of real prose parsed as invalid CSS by any real browser engine -- harmless by accident
+  (parsed as a bogus, ignored rule) but a real correctness bug, fixed by restoring the missing
+  marker. 6 new Rust tests (2 in `spartan-settings` covering the full 7-variant JSON round trip and
+  a real partial-JSON deserialization of one of the 5 new variants; 1 in `theme.rs` confirming the
+  wgpu shell's own documented fallback behavior via literal-value comparison, deliberately not
+  touching the real process-wide `OnceLock` to avoid repeating a real test-isolation bug this same
+  file already found and fixed once before, §75.93; 1 rewritten + 2 new in `settings_panel.rs`
+  covering the real 7-stop cycle and all 7 themes' labels being pairwise distinct), full workspace
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release -- --test-threads=1` all clean, zero failures. `desktop/`'s and `web/`'s own
+  `tsc --noEmit`/`vite build` both clean. **Real, live, screenshotted Playwright verification in
+  both shells** (the same mocked-`window.spartan` + `vite preview` technique this whole `desktop/`
+  effort has used since §75.59 for the Electron-launch gap; `web/` was driven directly against its
+  own real `vite preview` server, no mock needed): all 7 themes were cycled through the real
+  Settings `<select>` in both apps, with the real resulting `data-theme` attribute, `--bg`/
+  `--accent`/`--font-ui` custom-property values, and (for Warm Paper/Neon Aftergrid/Command Deck)
+  the real resolved `body` font-family each independently confirmed correct and distinct per theme
+  -- not just that the dropdown changed, that the actual computed styles changed; Glass Native's
+  real `backdrop-filter: blur(20px) saturate(1.15)` was confirmed present on `desktop/`'s real
+  `.nav-sidebar`/`.leo-panel` (first checked against the Settings screen, which correctly has no
+  `.status-bar` at all -- confirmed by checking the Editor screen instead, not a bug); `web/`'s own
+  `localStorage`-based persistence (no backend settings store in the pure client-side path, §75.89's
+  own already-documented scope) was confirmed to survive a real page reload with Command Deck still
+  selected; and a real `settings_set` call-log check in `desktop/` confirmed switching themes never
+  clobbered unrelated fields (`gpu_enabled`/`editor` were still present on every call) -- the same
+  real bug class (§75.79) this project has caught before. **What this does not confirm**: no real
+  Electron window launch this session (same standing gap since §75.59); no live mid-session palette
+  swap verification for the reference wgpu shell (no display/GPU this session -- the fallback
+  behavior is verified by code/test inspection and this shell's own already-established "applies
+  next launch" precedent, §75.93, not an actual second launch on screen); `mobile/` was deliberately
+  not extended with the 5 new themes (a real, narrower scope decision, matching §75.93's own
+  precedent of scoping mobile's font customization out since it has no code-editing surface for it
+  to meaningfully apply to -- these 5 concepts are IDE-chrome-specific designs with no mobile
+  equivalent to compare against); Warm Paper's real serif `--font-ui` has limited visible reach in
+  the current UI since most Settings/nav text already carries the `.mono` class (which reads the
+  separate `--font-mono` token, untouched by this pass) -- a real, honestly-named consequence of
+  this being a token-level pass, not a typography audit, not hidden or glossed over.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -4177,7 +4246,7 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 686 tests: 7 spikes + 18 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 746 tests: 7 spikes + 18 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,

@@ -9,7 +9,7 @@ import DebugPanel, { type DapSessionState } from "./components/DebugPanel";
 import LogcatPanel from "./components/LogcatPanel";
 import { ensureBufferWasmInit, Document as WasmDocument } from "./buffer";
 import { isFileSystemAccessSupported, pickProjectDirectory, readFileText } from "./fsAccess";
-import { applyTheme, type ThemeName } from "./applyTheme";
+import { applyTheme, THEME_LABELS, type ThemeName } from "./applyTheme";
 import { applyFontFamily } from "./applyFontFamily";
 import { BackendClient } from "./backendClient";
 
@@ -542,8 +542,11 @@ export default function App(): React.ReactElement {
           onChange={(e) => setTheme(e.target.value as ThemeName)}
           title="Theme"
         >
-          <option value="SpartanDark">Spartan Dark</option>
-          <option value="SpartanLight">Spartan Light</option>
+          {(Object.keys(THEME_LABELS) as ThemeName[]).map((name) => (
+            <option key={name} value={name}>
+              {THEME_LABELS[name]}
+            </option>
+          ))}
         </select>
         <input
           className="toolbar-btn mono"
