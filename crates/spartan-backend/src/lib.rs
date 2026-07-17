@@ -27,9 +27,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use spartan_buffer::Document;
 use spartan_leo::agent::{Agent, AgentError};
@@ -44,8 +45,33 @@ use spartan_model::{
 };
 
 mod dap_integration;
+/// Real Hugging Face -> Ollama model downloader (curated list + user-defined
+/// custom links) -- moved here from `spartan-devserver` so `desktop/`'s
+/// Electron shell (which spawns a plain `spartan-backend`, not a
+/// `spartan-devserver`) gets the same real model-management methods `web/`
+/// already has, without duplicating any logic. `spartan-devserver`'s own
+/// dispatcher now just falls through to `handle_request` for these methods.
+/// `pub` (not just `pub(crate)`) so this crate's own real integration tests
+/// (`tests/hf_pull_integration.rs`, `tests/litellm_integration.rs`, moved
+/// here alongside these modules) can exercise the real subprocess-spawning
+/// layer directly, the same real access they had in `spartan-devserver`.
+pub mod hf_downloader;
+pub mod litellm_proxy;
+/// Real Hugging Face -> llama.cpp GGUF downloader -- unlike
+/// `hf_downloader`/`lmstudio_downloader`, llama.cpp has no separate local
+/// server process to shell a pull command out to (`spartan_model::
+/// LlamaCppProvider` loads a `.gguf` file in-process), so this is a real,
+/// direct HTTP download into `~/.spartan/models/` instead of a subprocess
+/// handoff. See its own module doc comment for the full account.
+pub mod llamacpp_downloader;
+/// Real LM Studio model downloader via its bundled `lms` CLI -- moved here
+/// alongside `hf_downloader` for the identical reason.
+pub mod lmstudio_downloader;
 mod lsp_integration;
 mod pty;
+/// Shared subprocess-spawn-and-stream helper, used by `litellm_proxy`/
+/// `hf_downloader`/`lmstudio_downloader`.
+mod subprocess;
 pub mod ws_transport;
 
 // Both `Serialize` and `Deserialize`: the server only ever deserializes a
@@ -185,6 +211,12 @@ pub struct BackendState {
     /// a moment longer than the launch call that created it.
     dap_sessions: HashMap<u64, Arc<spartan_dap::DapSession>>,
     next_dap_id: u64,
+    /// Real, at-most-one LiteLLM proxy child process this backend has
+    /// spawned, if any (moved here from `spartan-devserver`'s own
+    /// `DevServerState` -- see this module's `hf_downloader`/`litellm_proxy`
+    /// doc comments for why). Protected by the same top-level state lock
+    /// every other field here already is, not a second inner mutex.
+    litellm: Option<litellm_proxy::ProxyProcess>,
 }
 
 impl BackendState {
@@ -662,6 +694,530 @@ pub fn model_status_json() -> serde_json::Value {
             "error": e,
         }),
     }
+}
+
+const LITELLM_HEALTH_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Starts a real LiteLLM proxy in the background: an immediate
+/// `{"status": "starting"}` ack, then a spawned thread runs the real,
+/// possibly-slow spawn+health-check, forwarding real subprocess stdout/
+/// stderr lines as `litellm_progress` events and finishing with
+/// `litellm_ready`/`litellm_failed` -- the same "ack now, event later"
+/// shape `devcontainer_up`/`leo_start_task` already established. Moved
+/// here verbatim from `spartan-devserver` (task #145) -- the only real
+/// change is where the proxy handle lives (`BackendState.litellm`,
+/// protected by the same top-level lock, instead of a second, devserver-
+/// only `Mutex`).
+fn litellm_proxy_start(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    port: u16,
+    config_path: Option<String>,
+) -> Result<serde_json::Value, String> {
+    {
+        let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+        if let Some(process) = guard.litellm.as_mut() {
+            if process.is_running() {
+                return Err(format!(
+                    "a LiteLLM proxy is already running on port {} (pid {})",
+                    process.port,
+                    process.pid()
+                ));
+            }
+            // A stale handle whose process already exited on its own --
+            // clear it so this fresh spawn can take its place.
+            guard.litellm = None;
+        }
+    }
+
+    if !litellm_proxy::is_litellm_available() {
+        return Err(
+            "`litellm` isn't on $PATH -- install it with `pip install 'litellm[proxy]'`"
+                .to_string(),
+        );
+    }
+
+    let state = Arc::clone(state);
+    thread::spawn(move || {
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let forward_out_tx = out_tx.clone();
+        thread::spawn(move || {
+            for line in line_rx {
+                let event = Event {
+                    event: "litellm_progress".to_string(),
+                    data: serde_json::json!({ "line": line }),
+                };
+                if let Ok(l) = serde_json::to_string(&event) {
+                    let _ = forward_out_tx.send(l);
+                }
+            }
+        });
+
+        let event = match litellm_proxy::spawn(port, config_path.as_deref(), line_tx) {
+            Ok(mut process) => match litellm_proxy::wait_for_health(
+                &mut process,
+                litellm_proxy::DEFAULT_HEALTH_PATH,
+                LITELLM_HEALTH_TIMEOUT,
+            ) {
+                Ok(()) => {
+                    let pid = process.pid();
+                    if let Ok(mut guard) = state.lock() {
+                        guard.litellm = Some(process);
+                    }
+                    Event {
+                        event: "litellm_ready".to_string(),
+                        data: serde_json::json!({ "port": port, "pid": pid }),
+                    }
+                }
+                Err(e) => {
+                    let _ = process.stop();
+                    Event {
+                        event: "litellm_failed".to_string(),
+                        data: serde_json::json!({ "error": e.to_string() }),
+                    }
+                }
+            },
+            Err(e) => Event {
+                event: "litellm_failed".to_string(),
+                data: serde_json::json!({ "error": e.to_string() }),
+            },
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+
+    Ok(serde_json::json!({ "status": "starting" }))
+}
+
+/// Stops the real currently-running proxy, if any. Stopping when nothing is
+/// running is a real, honest `not_running` result, not an error -- matches
+/// `devcontainer_down`'s own precedent that "stop what's already gone" is a
+/// harmless no-op, not a failure.
+fn litellm_proxy_stop(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value, String> {
+    let process = {
+        let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+        guard.litellm.take()
+    };
+    match process {
+        Some(process) => {
+            let port = process.port;
+            process.stop().map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "status": "stopped", "port": port }))
+        }
+        None => Ok(serde_json::json!({ "status": "not_running" })),
+    }
+}
+
+/// Reports the real current proxy status, self-healing a stale handle whose
+/// process has since exited on its own (a real crash) rather than reporting
+/// a false "running" forever.
+fn litellm_proxy_status(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value, String> {
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    // A match guard binds `process` immutably, but `is_running` needs
+    // `&mut self` -- checked separately instead, so the mutable borrow is
+    // real and the pattern match only branches on its already-computed
+    // result.
+    let running = guard.litellm.as_mut().map(|process| process.is_running());
+    Ok(match running {
+        Some(true) => {
+            let process = guard.litellm.as_ref().expect("just confirmed Some above");
+            serde_json::json!({ "status": "running", "port": process.port, "pid": process.pid() })
+        }
+        Some(false) => {
+            guard.litellm = None;
+            serde_json::json!({ "status": "not_running" })
+        }
+        None => serde_json::json!({ "status": "not_running" }),
+    })
+}
+
+/// Real, synchronous listing of the curated HF -> Ollama models.
+fn hf_list_models_json() -> serde_json::Value {
+    let models: Vec<serde_json::Value> = hf_downloader::CURATED_MODELS
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "display_name": m.display_name,
+                "hf_repo": m.hf_repo,
+                "tag": m.tag,
+                "description": m.description,
+            })
+        })
+        .collect();
+    serde_json::json!({ "models": models })
+}
+
+/// Resolves the real `(event_id, pull_target)` pair for either an
+/// `hf_pull_model` call path -- a curated `model_id` lookup, or a
+/// user-defined custom `hf_repo`+`tag` pair (the real "user defined model
+/// download links" mechanism, validated via
+/// `hf_downloader::custom_pull_target` before ever reaching a subprocess).
+/// `model_id` wins if both are somehow present, matching this crate's own
+/// "first matching real param wins" convention elsewhere (e.g.
+/// `litellm_proxy_start`'s port/config_path handling).
+fn resolve_hf_pull_target(
+    model_id: Option<String>,
+    hf_repo: Option<String>,
+    tag: Option<String>,
+) -> Result<(String, String), String> {
+    match (model_id, hf_repo, tag) {
+        (Some(model_id), _, _) => {
+            let model = hf_downloader::find_model(&model_id)
+                .ok_or_else(|| format!("unknown curated model id: {model_id:?}"))?;
+            Ok((model.id.to_string(), hf_downloader::pull_target(model)))
+        }
+        (None, Some(hf_repo), Some(tag)) => {
+            let normalized = hf_downloader::normalize_hf_repo_input(&hf_repo);
+            let target = hf_downloader::custom_pull_target(&hf_repo, &tag)?;
+            Ok((format!("{normalized}:{}", tag.trim()), target))
+        }
+        _ => Err(
+            "hf_pull_model requires either a string `model_id`, or both a string `hf_repo` and \
+             string `tag`"
+                .to_string(),
+        ),
+    }
+}
+
+/// Starts a real HF -> Ollama pull in the background: an immediate
+/// `{"status": "starting"}` ack, then a spawned thread runs the real,
+/// possibly multi-minute `ollama pull`, forwarding real subprocess output
+/// as `hf_pull_progress` events and finishing with `hf_pull_ready`/
+/// `hf_pull_failed` -- the same "ack now, event later" shape
+/// `litellm_proxy_start` already established. Accepts either a curated
+/// `model_id` or a user-defined custom `hf_repo`+`tag` pair, resolved by
+/// `resolve_hf_pull_target` above -- from this point on, both paths are
+/// identical: same validation-already-done target string, same subprocess
+/// spawn, same event shapes.
+fn hf_pull_model(
+    out_tx: Sender<String>,
+    model_id: Option<String>,
+    hf_repo: Option<String>,
+    tag: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let (event_id, target) = resolve_hf_pull_target(model_id, hf_repo, tag)?;
+
+    if !hf_downloader::is_ollama_available() {
+        return Err("`ollama` isn't on $PATH -- install it from https://ollama.com".to_string());
+    }
+
+    let ack_target = target.clone();
+    thread::spawn(move || {
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let forward_out_tx = out_tx.clone();
+        let forward_model_id = event_id.clone();
+        thread::spawn(move || {
+            for line in line_rx {
+                let event = Event {
+                    event: "hf_pull_progress".to_string(),
+                    data: serde_json::json!({ "model_id": forward_model_id, "line": line }),
+                };
+                if let Ok(l) = serde_json::to_string(&event) {
+                    let _ = forward_out_tx.send(l);
+                }
+            }
+        });
+
+        let event = match hf_downloader::spawn_pull_target(&target, line_tx) {
+            Ok(mut child) => match child.wait() {
+                Ok(status) if status.success() => Event {
+                    event: "hf_pull_ready".to_string(),
+                    data: serde_json::json!({ "model_id": event_id }),
+                },
+                Ok(status) => Event {
+                    event: "hf_pull_failed".to_string(),
+                    data: serde_json::json!({
+                        "model_id": event_id,
+                        "error": format!("ollama pull exited with {status}"),
+                    }),
+                },
+                Err(e) => Event {
+                    event: "hf_pull_failed".to_string(),
+                    data: serde_json::json!({ "model_id": event_id, "error": e.to_string() }),
+                },
+            },
+            Err(e) => Event {
+                event: "hf_pull_failed".to_string(),
+                data: serde_json::json!({ "model_id": event_id, "error": e.to_string() }),
+            },
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+
+    Ok(serde_json::json!({ "status": "starting", "target": ack_target }))
+}
+
+/// Real, synchronous listing of the same curated coding-model set
+/// `hf_list_models_json` serves, plus a real `lms_available` flag so the
+/// UI can show a correct, honest "detected"/"not detected" state up front
+/// -- part of making this "as simple to set up and use as possible":
+/// nothing to configure, but nothing hidden either.
+fn lmstudio_list_models_json() -> serde_json::Value {
+    let models: Vec<serde_json::Value> = hf_downloader::CURATED_MODELS
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "display_name": m.display_name,
+                "hf_repo": m.hf_repo,
+                "tag": m.tag,
+                "description": m.description,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "models": models,
+        "lms_available": lmstudio_downloader::is_lms_available(),
+    })
+}
+
+/// The direct LM Studio sibling of `resolve_hf_pull_target` -- identical
+/// shape (curated `model_id` wins if present, otherwise a validated custom
+/// `hf_repo`+`tag` pair), differing only in the final query string built
+/// (`lmstudio_downloader::pull_query`/`custom_pull_query`'s real
+/// `<repo>@<tag>` syntax instead of Ollama's `hf.co/<repo>:<tag>`). The
+/// real `event_id` shape (`<repo>:<tag>`) is deliberately kept identical to
+/// the HF/Ollama path so a UI can reuse the same key-matching logic for
+/// both panels.
+fn resolve_lmstudio_pull_query(
+    model_id: Option<String>,
+    hf_repo: Option<String>,
+    tag: Option<String>,
+) -> Result<(String, String), String> {
+    match (model_id, hf_repo, tag) {
+        (Some(model_id), _, _) => {
+            let model = hf_downloader::find_model(&model_id)
+                .ok_or_else(|| format!("unknown curated model id: {model_id:?}"))?;
+            Ok((model.id.to_string(), lmstudio_downloader::pull_query(model)))
+        }
+        (None, Some(hf_repo), Some(tag)) => {
+            let normalized = hf_downloader::normalize_hf_repo_input(&hf_repo);
+            let query = lmstudio_downloader::custom_pull_query(&hf_repo, &tag)?;
+            Ok((format!("{normalized}:{}", tag.trim()), query))
+        }
+        _ => Err(
+            "lmstudio_pull_model requires either a string `model_id`, or both a string \
+             `hf_repo` and string `tag`"
+                .to_string(),
+        ),
+    }
+}
+
+/// Starts a real LM Studio pull in the background -- the direct sibling of
+/// `hf_pull_model`, same "ack now, event later" shape, same accepted
+/// params, driving `lms get <query>` instead of `ollama pull`. Fails fast
+/// and honestly, with a clear, actionable message (naming exactly where
+/// `lms` is expected and what to do), if no real `lms` binary can be
+/// located at all -- never a silent hang.
+fn lmstudio_pull_model(
+    out_tx: Sender<String>,
+    model_id: Option<String>,
+    hf_repo: Option<String>,
+    tag: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let (event_id, query) = resolve_lmstudio_pull_query(model_id, hf_repo, tag)?;
+
+    if !lmstudio_downloader::is_lms_available() {
+        return Err(
+            "`lms` wasn't found on $PATH or at LM Studio's default install location -- \
+             install LM Studio from https://lmstudio.ai and run it at least once, no extra \
+             PATH setup needed"
+                .to_string(),
+        );
+    }
+
+    let ack_query = query.clone();
+    thread::spawn(move || {
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let forward_out_tx = out_tx.clone();
+        let forward_model_id = event_id.clone();
+        thread::spawn(move || {
+            for line in line_rx {
+                let event = Event {
+                    event: "lmstudio_pull_progress".to_string(),
+                    data: serde_json::json!({ "model_id": forward_model_id, "line": line }),
+                };
+                if let Ok(l) = serde_json::to_string(&event) {
+                    let _ = forward_out_tx.send(l);
+                }
+            }
+        });
+
+        let event = match lmstudio_downloader::spawn_pull_query(&query, line_tx) {
+            Ok(mut child) => match child.wait() {
+                Ok(status) if status.success() => Event {
+                    event: "lmstudio_pull_ready".to_string(),
+                    data: serde_json::json!({ "model_id": event_id }),
+                },
+                Ok(status) => Event {
+                    event: "lmstudio_pull_failed".to_string(),
+                    data: serde_json::json!({
+                        "model_id": event_id,
+                        "error": format!("lms get exited with {status}"),
+                    }),
+                },
+                Err(e) => Event {
+                    event: "lmstudio_pull_failed".to_string(),
+                    data: serde_json::json!({ "model_id": event_id, "error": e.to_string() }),
+                },
+            },
+            Err(e) => Event {
+                event: "lmstudio_pull_failed".to_string(),
+                data: serde_json::json!({ "model_id": event_id, "error": e.to_string() }),
+            },
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+
+    Ok(serde_json::json!({ "status": "starting", "target": ack_query }))
+}
+
+/// Real, synchronous listing for the llama.cpp panel: the same curated
+/// coding-model set (repo/tag only -- the real per-repo `.gguf` filename
+/// isn't resolved here, since that needs a real, possibly-slow HTTP call
+/// per model and this method must stay fast/synchronous like every other
+/// `*_list_models`) plus the real, already-downloaded files this backend
+/// already has on disk in `~/.spartan/models/` -- the UI cross-references
+/// the two by repo/tag substring rather than this method trying to
+/// precisely resolve and match all 21 curated filenames up front.
+fn llamacpp_list_models_json() -> serde_json::Value {
+    let models: Vec<serde_json::Value> = hf_downloader::CURATED_MODELS
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "display_name": m.display_name,
+                "hf_repo": m.hf_repo,
+                "tag": m.tag,
+                "description": m.description,
+            })
+        })
+        .collect();
+    let downloaded: Vec<serde_json::Value> = llamacpp_downloader::list_downloaded()
+        .into_iter()
+        .map(|d| {
+            serde_json::json!({
+                "filename": d.filename,
+                "size_bytes": d.size_bytes,
+                "path": llamacpp_downloader::models_dir().join(&d.filename).to_string_lossy(),
+            })
+        })
+        .collect();
+    serde_json::json!({ "models": models, "downloaded": downloaded })
+}
+
+/// The direct llama.cpp sibling of `resolve_hf_pull_target`/
+/// `resolve_lmstudio_pull_query` -- same accepted shape (a curated
+/// `model_id`, or a validated custom `hf_repo`+`tag` pair), resolving down
+/// to a real `(event_id, hf_repo, tag)` triple instead of a single target
+/// string, since the real download itself still needs one more real,
+/// live step (`llamacpp_downloader::resolve_gguf_filename`) this function
+/// deliberately does not perform -- that's a real, possibly-slow HTTP call
+/// of its own, done inside the background thread, not on the request
+/// thread, matching this crate's own "never block the one IPC channel"
+/// rule.
+fn resolve_llamacpp_download_target(
+    model_id: Option<String>,
+    hf_repo: Option<String>,
+    tag: Option<String>,
+) -> Result<(String, String, String), String> {
+    match (model_id, hf_repo, tag) {
+        (Some(model_id), _, _) => {
+            let model = hf_downloader::find_model(&model_id)
+                .ok_or_else(|| format!("unknown curated model id: {model_id:?}"))?;
+            Ok((
+                model.id.to_string(),
+                model.hf_repo.to_string(),
+                model.tag.to_string(),
+            ))
+        }
+        (None, Some(hf_repo), Some(tag)) => {
+            let normalized = hf_downloader::normalize_hf_repo_input(&hf_repo);
+            hf_downloader::validate_custom_repo_and_tag(&normalized, &tag)?;
+            Ok((
+                format!("{normalized}:{}", tag.trim()),
+                normalized,
+                tag.trim().to_string(),
+            ))
+        }
+        _ => Err(
+            "llamacpp_download_model requires either a string `model_id`, or both a string \
+             `hf_repo` and string `tag`"
+                .to_string(),
+        ),
+    }
+}
+
+/// Starts a real HF -> llama.cpp GGUF download in the background: an
+/// immediate `{"status": "starting"}` ack, then a spawned thread resolves
+/// the repo's real filename (a real, live HF API call --
+/// `llamacpp_downloader::resolve_gguf_filename`) and streams the real
+/// download itself, forwarding progress as `llamacpp_download_progress`
+/// events and finishing with `llamacpp_download_ready` (carrying the real
+/// saved file path, ready to hand straight to `settings_set`'s
+/// `leo_provider.model`) or `llamacpp_download_failed` -- the same
+/// "ack now, event later" shape `hf_pull_model`/`lmstudio_pull_model`
+/// already established. Unlike those two, there's no local binary to
+/// pre-check for -- a real HTTP client is always available -- so any
+/// failure (network, a repo with no matching quant, a write error) only
+/// ever surfaces async, through the `_failed` event, never synchronously.
+fn llamacpp_download_model(
+    out_tx: Sender<String>,
+    model_id: Option<String>,
+    hf_repo: Option<String>,
+    tag: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let (event_id, hf_repo, tag) = resolve_llamacpp_download_target(model_id, hf_repo, tag)?;
+
+    let ack_id = event_id.clone();
+    thread::spawn(move || {
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let forward_out_tx = out_tx.clone();
+        let forward_model_id = event_id.clone();
+        thread::spawn(move || {
+            for line in line_rx {
+                let event = Event {
+                    event: "llamacpp_download_progress".to_string(),
+                    data: serde_json::json!({ "model_id": forward_model_id, "line": line }),
+                };
+                if let Ok(l) = serde_json::to_string(&event) {
+                    let _ = forward_out_tx.send(l);
+                }
+            }
+        });
+
+        let event = match llamacpp_downloader::resolve_gguf_filename(&hf_repo, &tag) {
+            Ok(filename) => match llamacpp_downloader::download_gguf(&hf_repo, &filename, &line_tx)
+            {
+                Ok(path) => Event {
+                    event: "llamacpp_download_ready".to_string(),
+                    data: serde_json::json!({
+                        "model_id": event_id,
+                        "path": path.to_string_lossy(),
+                    }),
+                },
+                Err(e) => Event {
+                    event: "llamacpp_download_failed".to_string(),
+                    data: serde_json::json!({ "model_id": event_id, "error": e }),
+                },
+            },
+            Err(e) => Event {
+                event: "llamacpp_download_failed".to_string(),
+                data: serde_json::json!({ "model_id": event_id, "error": e }),
+            },
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+
+    Ok(serde_json::json!({ "status": "starting", "model_id": ack_id }))
 }
 
 fn leo_start_task(
@@ -2411,6 +2967,74 @@ pub fn handle_request(
         })(),
         "check_for_updates" => check_for_updates(out_tx.clone()),
         "model_status" => Ok(model_status_json()),
+        "litellm_proxy_start" => (|| {
+            let port = get_u64_param(&req.params, "port")? as u16;
+            let config_path = req
+                .params
+                .get("config_path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            litellm_proxy_start(state, out_tx.clone(), port, config_path)
+        })(),
+        "litellm_proxy_stop" => litellm_proxy_stop(state),
+        "litellm_proxy_status" => litellm_proxy_status(state),
+        "hf_list_models" => Ok(hf_list_models_json()),
+        "hf_pull_model" => {
+            let model_id = req
+                .params
+                .get("model_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let hf_repo = req
+                .params
+                .get("hf_repo")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let tag = req
+                .params
+                .get("tag")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            hf_pull_model(out_tx.clone(), model_id, hf_repo, tag)
+        }
+        "lmstudio_list_models" => Ok(lmstudio_list_models_json()),
+        "lmstudio_pull_model" => {
+            let model_id = req
+                .params
+                .get("model_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let hf_repo = req
+                .params
+                .get("hf_repo")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let tag = req
+                .params
+                .get("tag")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            lmstudio_pull_model(out_tx.clone(), model_id, hf_repo, tag)
+        }
+        "llamacpp_list_models" => Ok(llamacpp_list_models_json()),
+        "llamacpp_download_model" => {
+            let model_id = req
+                .params
+                .get("model_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let hf_repo = req
+                .params
+                .get("hf_repo")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let tag = req
+                .params
+                .get("tag")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            llamacpp_download_model(out_tx.clone(), model_id, hf_repo, tag)
+        }
         "crash_reports_list" => crash_reports_list(),
         "crash_report_upload" => {
             get_str_param(&req.params, "filename").and_then(|f| crash_report_upload(&f))
@@ -4006,6 +4630,71 @@ mod tests {
                 .expect("a real, valid .gguf file must construct successfully");
         assert!(provider.is_local());
         assert!(!provider.supports_native_tool_calling());
+    }
+
+    #[test]
+    fn resolve_llamacpp_download_target_resolves_a_real_curated_model_id() {
+        let model = hf_downloader::CURATED_MODELS[0];
+        let (event_id, hf_repo, tag) =
+            resolve_llamacpp_download_target(Some(model.id.to_string()), None, None).unwrap();
+        assert_eq!(event_id, model.id);
+        assert_eq!(hf_repo, model.hf_repo);
+        assert_eq!(tag, model.tag);
+    }
+
+    #[test]
+    fn resolve_llamacpp_download_target_resolves_and_normalizes_a_real_custom_repo_and_tag() {
+        let (event_id, hf_repo, tag) = resolve_llamacpp_download_target(
+            None,
+            Some("https://huggingface.co/bartowski/Foo-GGUF/".to_string()),
+            Some("Q4_K_M".to_string()),
+        )
+        .unwrap();
+        assert_eq!(event_id, "bartowski/Foo-GGUF:Q4_K_M");
+        assert_eq!(hf_repo, "bartowski/Foo-GGUF");
+        assert_eq!(tag, "Q4_K_M");
+    }
+
+    #[test]
+    fn resolve_llamacpp_download_target_errors_on_an_unknown_curated_id() {
+        let result =
+            resolve_llamacpp_download_target(Some("not-a-real-curated-id".to_string()), None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_llamacpp_download_target_errors_with_neither_model_id_nor_custom_pair() {
+        assert!(resolve_llamacpp_download_target(None, None, None).is_err());
+        assert!(resolve_llamacpp_download_target(
+            None,
+            Some("bartowski/Foo-GGUF".to_string()),
+            None
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn llamacpp_list_models_json_reports_the_real_curated_list_and_a_real_downloaded_array() {
+        let value = llamacpp_list_models_json();
+        let models = value.get("models").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(models.len(), hf_downloader::CURATED_MODELS.len());
+        // Real, on-disk listing -- an array (possibly empty), never absent.
+        assert!(value.get("downloaded").and_then(|v| v.as_array()).is_some());
+    }
+
+    #[test]
+    fn llamacpp_download_model_dispatch_arm_reaches_the_real_handler() {
+        let (tx, _rx) = mpsc::channel();
+        let model = hf_downloader::CURATED_MODELS[0];
+        let result = llamacpp_download_model(tx, Some(model.id.to_string()), None, None).unwrap();
+        assert_eq!(
+            result.get("status").and_then(|v| v.as_str()),
+            Some("starting")
+        );
+        assert_eq!(
+            result.get("model_id").and_then(|v| v.as_str()),
+            Some(model.id)
+        );
     }
 
     #[test]

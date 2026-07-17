@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useState } from "react";
-import type { BackendClient } from "../backendClient";
 
 interface ModelStatus {
   configured: boolean;
@@ -35,9 +34,8 @@ interface DownloadedGgufModel {
 
 /** The llama.cpp sibling of `PullState` -- a real `ready` phase carries the
  * real, on-disk `path` the download finished at, since that's exactly what
- * a "Use this model" button needs to hand `settings_set` -- unlike Ollama/
- * LM Studio, there's no separate local server to report readiness some
- * other way. */
+ * a "Use this model" button needs to hand `settings_set`. Byte-identical to
+ * `web/`'s own copy. */
 type LlamaCppPullState =
   | { phase: "idle" }
   | { phase: "downloading"; lines: string[] }
@@ -50,19 +48,14 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
-interface ModelsPanelProps {
-  client: BackendClient;
-}
-
 /**
  * Client-side mirror of `hf_downloader::normalize_hf_repo_input` (Rust) --
  * strips the same real, common pasted-link prefixes down to a bare
- * `<org>/<name>` repo id. Kept in sync deliberately (not shared code, since
- * this is a small pure string helper and the two languages don't share a
- * build step here) so a locally-computed pull-state key matches the real
- * `event_id` the backend computes for the identical input, letting the UI
- * show pulling/ready/failed state immediately rather than only after the
- * first `hf_pull_progress` event arrives.
+ * `<org>/<name>` repo id. Kept in sync deliberately (a small pure string
+ * helper, no shared build step between Rust and TypeScript here) so a
+ * locally-computed pull-state key matches the real `event_id` the backend
+ * computes for the identical input. Byte-identical to `web/`'s own copy in
+ * `ModelsPanel.tsx` -- both ports of the same real Rust logic.
  */
 function normalizeHfRepoInput(input: string): string {
   const s = input.trim();
@@ -76,30 +69,21 @@ function normalizeHfRepoInput(input: string): string {
 }
 
 /**
- * Real Model Management panel -- the first UI surface for the real Track A
- * devserver-only methods (`model_status`, `litellm_proxy_start`/`_stop`/
- * `_status`, `hf_list_models`/`hf_pull_model`, `lmstudio_list_models`/
- * `lmstudio_pull_model`) that have had zero callers anywhere in either
- * shell since they landed (tasks #128, #138, #139, #144). A direct sibling
- * of `GitPanel.tsx`'s own shape -- one `BackendClient`, `.call()`ed
- * directly, `.onEvent()` subscribed for the async litellm/HF/LM Studio
- * progress events, no new protocol needed since `spartan-devserver`'s
- * dispatcher already answers every one of these methods for real.
- *
- * The Ollama (HF) and LM Studio sections share the exact same real,
- * individually-verified curated model list (`hf_list_models`/
- * `lmstudio_list_models` both ultimately read `hf_downloader::
- * CURATED_MODELS`) -- one real source of truth for "top-rated coding
- * models," driven through two different local backends, rather than two
- * lists a user has to reconcile themselves.
- *
- * These methods only exist on `spartan-devserver`'s own wrapping
- * dispatcher (not `spartan-backend`'s), so this panel is real and reachable
- * here in `web/` -- `desktop/` talks to a plain `spartan-backend` process
- * directly and has no equivalent connection, a real, named platform
- * difference, not an oversight.
+ * Real Model Management screen for `desktop/` -- the direct Electron
+ * sibling of `web/`'s `ModelsPanel.tsx` (task #145: "these features need to
+ * be added to the desktop IDE as well"). Before this pass, `model_status`/
+ * `litellm_proxy_*`/`hf_*`/`lmstudio_*` only existed on `spartan-devserver`'s
+ * own wrapping dispatcher, which `desktop/`'s Electron main process never
+ * connects to (it spawns a plain `spartan-backend`) -- closed by moving all
+ * of that real logic down into `spartan-backend` itself (see
+ * `crates/spartan-backend/src/hf_downloader.rs`/`litellm_proxy.rs`/
+ * `lmstudio_downloader.rs`), so the identical real IPC methods `web/` has
+ * are now reachable here too via `window.spartan.call`, no `BackendClient`
+ * needed. Uses the exact same real backend methods/event names as `web/`'s
+ * panel; only the transport (`window.spartan` vs. a `BackendClient`
+ * instance) differs.
  */
-export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactElement {
+export default function ModelsScreen(): React.ReactElement {
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
   const [modelStatusError, setModelStatusError] = useState<string | null>(null);
 
@@ -118,7 +102,7 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
   const [customFormError, setCustomFormError] = useState<string | null>(null);
 
   // LM Studio's own pull states are kept in a *separate* map from Ollama's
-  // above -- both backends' event_id shape is deliberately identical
+  // above -- both backends' real event-id shape is deliberately identical
   // (`<repo>:<tag>` for a custom pull, the curated `model.id` otherwise),
   // so sharing one map would let an Ollama pull and an LM Studio pull of
   // the exact same curated model silently clobber each other's status.
@@ -131,12 +115,9 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
   const [customLmTag, setCustomLmTag] = useState("Q4_K_M");
   const [customLmFormError, setCustomLmFormError] = useState<string | null>(null);
 
-  // llama.cpp's own real, direct HTTP GGUF downloader (task #143) -- kept
-  // entirely separate from the two subprocess-driven maps above, since a
-  // real llama.cpp download's "ready" state carries an on-disk `path`
-  // neither Ollama's nor LM Studio's own event shape has any equivalent
-  // of (their pull targets become usable through their own already-running
-  // local server, never a file path this UI hands back to `settings_set`).
+  // llama.cpp's own real, direct HTTP GGUF downloader (task #143) -- see
+  // `web/`'s `ModelsPanel.tsx` for the full account of why this is kept
+  // separate from the two subprocess-driven maps above.
   const [llamacppModels, setLlamacppModels] = useState<HfModel[]>([]);
   const [llamacppDownloaded, setLlamacppDownloaded] = useState<DownloadedGgufModel[]>([]);
   const [llamacppError, setLlamacppError] = useState<string | null>(null);
@@ -150,34 +131,34 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
   const [customLlamacppFormError, setCustomLlamacppFormError] = useState<string | null>(null);
 
   const refreshModelStatus = useCallback(() => {
-    client
+    window.spartan
       .call("model_status")
       .then((result) => {
         setModelStatus(result as ModelStatus);
         setModelStatusError(null);
       })
       .catch((e: Error) => setModelStatusError(e.message));
-  }, [client]);
+  }, []);
 
   const refreshLitellmStatus = useCallback(() => {
-    client
+    window.spartan
       .call("litellm_proxy_status")
       .then((result) => setLitellmStatus(result as LiteLlmStatus))
       .catch((e: Error) => setLitellmError(e.message));
-  }, [client]);
+  }, []);
 
   const refreshHfModels = useCallback(() => {
-    client
+    window.spartan
       .call("hf_list_models")
       .then((result) => {
         setHfModels((result as { models: HfModel[] }).models);
         setHfError(null);
       })
       .catch((e: Error) => setHfError(e.message));
-  }, [client]);
+  }, []);
 
   const refreshLmStudioModels = useCallback(() => {
-    client
+    window.spartan
       .call("lmstudio_list_models")
       .then((result) => {
         const r = result as { models: HfModel[]; lms_available: boolean };
@@ -186,10 +167,10 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
         setLmError(null);
       })
       .catch((e: Error) => setLmError(e.message));
-  }, [client]);
+  }, []);
 
   const refreshLlamacppModels = useCallback(() => {
-    client
+    window.spartan
       .call("llamacpp_list_models")
       .then((result) => {
         const r = result as { models: HfModel[]; downloaded: DownloadedGgufModel[] };
@@ -198,7 +179,7 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
         setLlamacppError(null);
       })
       .catch((e: Error) => setLlamacppError(e.message));
-  }, [client]);
+  }, []);
 
   useEffect(() => {
     refreshModelStatus();
@@ -215,47 +196,47 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
   ]);
 
   useEffect(() => {
-    return client.onEvent((e) => {
-      if (e.event === "litellm_progress") {
-        const { line } = e.data as { line: string };
+    return window.spartan.onEvent((event, data) => {
+      if (event === "litellm_progress") {
+        const { line } = data as { line: string };
         setLitellmLog((prev) => [...prev.slice(-49), line]);
-      } else if (e.event === "litellm_ready") {
+      } else if (event === "litellm_ready") {
         setLitellmBusy(false);
         setLitellmError(null);
         refreshLitellmStatus();
-      } else if (e.event === "litellm_failed") {
-        const { error } = e.data as { error: string };
+      } else if (event === "litellm_failed") {
+        const { error } = data as { error: string };
         setLitellmBusy(false);
         setLitellmError(error);
         refreshLitellmStatus();
-      } else if (e.event === "hf_pull_progress") {
-        const { model_id, line } = e.data as { model_id: string; line: string };
+      } else if (event === "hf_pull_progress") {
+        const { model_id, line } = data as { model_id: string; line: string };
         setPullStates((prev) => {
           const existing = prev[model_id];
           const lines = existing?.phase === "pulling" ? existing.lines : [];
           return { ...prev, [model_id]: { phase: "pulling", lines: [...lines.slice(-49), line] } };
         });
-      } else if (e.event === "hf_pull_ready") {
-        const { model_id } = e.data as { model_id: string };
+      } else if (event === "hf_pull_ready") {
+        const { model_id } = data as { model_id: string };
         setPullStates((prev) => ({ ...prev, [model_id]: { phase: "ready" } }));
-      } else if (e.event === "hf_pull_failed") {
-        const { model_id, error } = e.data as { model_id: string; error: string };
+      } else if (event === "hf_pull_failed") {
+        const { model_id, error } = data as { model_id: string; error: string };
         setPullStates((prev) => ({ ...prev, [model_id]: { phase: "failed", error } }));
-      } else if (e.event === "lmstudio_pull_progress") {
-        const { model_id, line } = e.data as { model_id: string; line: string };
+      } else if (event === "lmstudio_pull_progress") {
+        const { model_id, line } = data as { model_id: string; line: string };
         setLmPullStates((prev) => {
           const existing = prev[model_id];
           const lines = existing?.phase === "pulling" ? existing.lines : [];
           return { ...prev, [model_id]: { phase: "pulling", lines: [...lines.slice(-49), line] } };
         });
-      } else if (e.event === "lmstudio_pull_ready") {
-        const { model_id } = e.data as { model_id: string };
+      } else if (event === "lmstudio_pull_ready") {
+        const { model_id } = data as { model_id: string };
         setLmPullStates((prev) => ({ ...prev, [model_id]: { phase: "ready" } }));
-      } else if (e.event === "lmstudio_pull_failed") {
-        const { model_id, error } = e.data as { model_id: string; error: string };
+      } else if (event === "lmstudio_pull_failed") {
+        const { model_id, error } = data as { model_id: string; error: string };
         setLmPullStates((prev) => ({ ...prev, [model_id]: { phase: "failed", error } }));
-      } else if (e.event === "llamacpp_download_progress") {
-        const { model_id, line } = e.data as { model_id: string; line: string };
+      } else if (event === "llamacpp_download_progress") {
+        const { model_id, line } = data as { model_id: string; line: string };
         setLlamacppPullStates((prev) => {
           const existing = prev[model_id];
           const lines = existing?.phase === "downloading" ? existing.lines : [];
@@ -264,16 +245,16 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
             [model_id]: { phase: "downloading", lines: [...lines.slice(-49), line] },
           };
         });
-      } else if (e.event === "llamacpp_download_ready") {
-        const { model_id, path } = e.data as { model_id: string; path: string };
+      } else if (event === "llamacpp_download_ready") {
+        const { model_id, path } = data as { model_id: string; path: string };
         setLlamacppPullStates((prev) => ({ ...prev, [model_id]: { phase: "ready", path } }));
         refreshLlamacppModels();
-      } else if (e.event === "llamacpp_download_failed") {
-        const { model_id, error } = e.data as { model_id: string; error: string };
+      } else if (event === "llamacpp_download_failed") {
+        const { model_id, error } = data as { model_id: string; error: string };
         setLlamacppPullStates((prev) => ({ ...prev, [model_id]: { phase: "failed", error } }));
       }
     });
-  }, [client, refreshLitellmStatus, refreshLlamacppModels]);
+  }, [refreshLitellmStatus, refreshLlamacppModels]);
 
   const startLitellm = useCallback(() => {
     const port = Number.parseInt(litellmPort, 10);
@@ -284,15 +265,15 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
     setLitellmBusy(true);
     setLitellmError(null);
     setLitellmLog([]);
-    client.call("litellm_proxy_start", { port }).catch((e: Error) => {
+    window.spartan.call("litellm_proxy_start", { port }).catch((e: Error) => {
       setLitellmBusy(false);
       setLitellmError(e.message);
     });
-  }, [client, litellmPort]);
+  }, [litellmPort]);
 
   const stopLitellm = useCallback(() => {
     setLitellmBusy(true);
-    client
+    window.spartan
       .call("litellm_proxy_stop")
       .then(() => {
         setLitellmBusy(false);
@@ -302,27 +283,15 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
         setLitellmBusy(false);
         setLitellmError(e.message);
       });
-  }, [client, refreshLitellmStatus]);
+  }, [refreshLitellmStatus]);
 
-  const pullModel = useCallback(
-    (modelId: string) => {
-      setPullStates((prev) => ({ ...prev, [modelId]: { phase: "pulling", lines: [] } }));
-      client.call("hf_pull_model", { model_id: modelId }).catch((e: Error) => {
-        setPullStates((prev) => ({ ...prev, [modelId]: { phase: "failed", error: e.message } }));
-      });
-    },
-    [client]
-  );
+  const pullModel = useCallback((modelId: string) => {
+    setPullStates((prev) => ({ ...prev, [modelId]: { phase: "pulling", lines: [] } }));
+    window.spartan.call("hf_pull_model", { model_id: modelId }).catch((e: Error) => {
+      setPullStates((prev) => ({ ...prev, [modelId]: { phase: "failed", error: e.message } }));
+    });
+  }, []);
 
-  /**
-   * The real "user defined model download links" path -- any real, public,
-   * anonymously-pullable HF GGUF repo, not just a curated entry. Goes
-   * through the identical `hf_pull_model` backend method and identical
-   * `hf_pull_progress`/`hf_pull_ready`/`hf_pull_failed` event plumbing as a
-   * curated pull; the only difference is `hf_repo`+`tag` instead of
-   * `model_id` in the request, and the resulting pull-state key is the real
-   * `<normalized-repo>:<tag>` shape `resolve_hf_pull_target` (Rust) builds.
-   */
   const pullCustomModel = useCallback(() => {
     const repo = customRepo.trim();
     const tag = customTag.trim();
@@ -333,31 +302,18 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
     const key = `${normalizeHfRepoInput(repo)}:${tag}`;
     setCustomFormError(null);
     setPullStates((prev) => ({ ...prev, [key]: { phase: "pulling", lines: [] } }));
-    client.call("hf_pull_model", { hf_repo: repo, tag }).catch((e: Error) => {
+    window.spartan.call("hf_pull_model", { hf_repo: repo, tag }).catch((e: Error) => {
       setPullStates((prev) => ({ ...prev, [key]: { phase: "failed", error: e.message } }));
     });
-  }, [client, customRepo, customTag]);
+  }, [customRepo, customTag]);
 
-  /**
-   * LM Studio's own curated-pull path -- the direct sibling of `pullModel`,
-   * calling `lmstudio_pull_model` (driving `lms get`) instead of
-   * `hf_pull_model` (driving `ollama pull`), writing into the separate
-   * `lmPullStates` map so it can never collide with an Ollama pull of the
-   * same curated model.
-   */
-  const pullLmModel = useCallback(
-    (modelId: string) => {
-      setLmPullStates((prev) => ({ ...prev, [modelId]: { phase: "pulling", lines: [] } }));
-      client.call("lmstudio_pull_model", { model_id: modelId }).catch((e: Error) => {
-        setLmPullStates((prev) => ({ ...prev, [modelId]: { phase: "failed", error: e.message } }));
-      });
-    },
-    [client]
-  );
+  const pullLmModel = useCallback((modelId: string) => {
+    setLmPullStates((prev) => ({ ...prev, [modelId]: { phase: "pulling", lines: [] } }));
+    window.spartan.call("lmstudio_pull_model", { model_id: modelId }).catch((e: Error) => {
+      setLmPullStates((prev) => ({ ...prev, [modelId]: { phase: "failed", error: e.message } }));
+    });
+  }, []);
 
-  /** The LM Studio sibling of `pullCustomModel` -- same real "user defined
-   * model download links" mechanism, driving `lmstudio_pull_model` instead
-   * of `hf_pull_model`. */
   const pullCustomLmModel = useCallback(() => {
     const repo = customLmRepo.trim();
     const tag = customLmTag.trim();
@@ -368,25 +324,21 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
     const key = `${normalizeHfRepoInput(repo)}:${tag}`;
     setCustomLmFormError(null);
     setLmPullStates((prev) => ({ ...prev, [key]: { phase: "pulling", lines: [] } }));
-    client.call("lmstudio_pull_model", { hf_repo: repo, tag }).catch((e: Error) => {
+    window.spartan.call("lmstudio_pull_model", { hf_repo: repo, tag }).catch((e: Error) => {
       setLmPullStates((prev) => ({ ...prev, [key]: { phase: "failed", error: e.message } }));
     });
-  }, [client, customLmRepo, customLmTag]);
+  }, [customLmRepo, customLmTag]);
 
-  /** Real, direct HTTP download for a curated llama.cpp model -- driving
-   * `llamacpp_download_model` instead of a subprocess pull. */
-  const downloadLlamacppModel = useCallback(
-    (modelId: string) => {
-      setLlamacppPullStates((prev) => ({ ...prev, [modelId]: { phase: "downloading", lines: [] } }));
-      client.call("llamacpp_download_model", { model_id: modelId }).catch((e: Error) => {
-        setLlamacppPullStates((prev) => ({
-          ...prev,
-          [modelId]: { phase: "failed", error: e.message },
-        }));
-      });
-    },
-    [client]
-  );
+  /** Real, direct HTTP download for a curated llama.cpp model. */
+  const downloadLlamacppModel = useCallback((modelId: string) => {
+    setLlamacppPullStates((prev) => ({ ...prev, [modelId]: { phase: "downloading", lines: [] } }));
+    window.spartan.call("llamacpp_download_model", { model_id: modelId }).catch((e: Error) => {
+      setLlamacppPullStates((prev) => ({
+        ...prev,
+        [modelId]: { phase: "failed", error: e.message },
+      }));
+    });
+  }, []);
 
   /** The llama.cpp sibling of `pullCustomModel`/`pullCustomLmModel` -- any
    * real, public HF GGUF repo, downloaded directly (no local server). */
@@ -400,37 +352,32 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
     const key = `${normalizeHfRepoInput(repo)}:${tag}`;
     setCustomLlamacppFormError(null);
     setLlamacppPullStates((prev) => ({ ...prev, [key]: { phase: "downloading", lines: [] } }));
-    client.call("llamacpp_download_model", { hf_repo: repo, tag }).catch((e: Error) => {
+    window.spartan.call("llamacpp_download_model", { hf_repo: repo, tag }).catch((e: Error) => {
       setLlamacppPullStates((prev) => ({ ...prev, [key]: { phase: "failed", error: e.message } }));
     });
-  }, [client, customLlamacppRepo, customLlamacppTag]);
+  }, [customLlamacppRepo, customLlamacppTag]);
 
   /**
    * Sets a real, already-downloaded `.gguf` file as Leo's active local
    * provider. Fetches the real current settings first -- `settings_set`'s
    * `gpu_enabled` param is mandatory (no fallback), so this can't just send
-   * `leo_provider` alone without first reading what's already saved for
-   * GPU offload, or it would risk a confusing required-param error / a
-   * real accidental reset if a caller ever loosened that requirement.
+   * `leo_provider` alone without first reading what's already saved.
    */
-  const useAsLlamaCppProvider = useCallback(
-    (path: string) => {
-      setUseModelStatus(`Setting ${path} as the active model…`);
-      client
-        .call("settings_get")
-        .then((current) => {
-          const s = current as { gpu_offload?: { enabled: boolean; layers?: number } };
-          return client.call("settings_set", {
-            gpu_enabled: s.gpu_offload?.enabled ?? false,
-            gpu_layers: s.gpu_offload?.layers,
-            leo_provider: { kind: "LlamaCpp", model: path },
-          });
-        })
-        .then(() => setUseModelStatus(`✓ ${path} set as Leo's active local model.`))
-        .catch((e: Error) => setUseModelStatus(`Failed: ${e.message}`));
-    },
-    [client]
-  );
+  const useAsLlamaCppProvider = useCallback((path: string) => {
+    setUseModelStatus(`Setting ${path} as the active model…`);
+    window.spartan
+      .call("settings_get")
+      .then((current) => {
+        const s = current as { gpu_offload?: { enabled: boolean; layers?: number } };
+        return window.spartan.call("settings_set", {
+          gpu_enabled: s.gpu_offload?.enabled ?? false,
+          gpu_layers: s.gpu_offload?.layers,
+          leo_provider: { kind: "LlamaCpp", model: path },
+        });
+      })
+      .then(() => setUseModelStatus(`✓ ${path} set as Leo's active local model.`))
+      .catch((e: Error) => setUseModelStatus(`Failed: ${e.message}`));
+  }, []);
 
   return (
     <div className="git-panel">

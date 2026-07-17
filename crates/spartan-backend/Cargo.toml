@@ -23,3 +23,10 @@ portable-pty = "0.9.0"
 similar = "3.1.1"
 tungstenite = "0.30"
 rand = "0.10"
+# Sync HTTP client for polling a spawned LiteLLM proxy's own health
+# endpoint (moved here from spartan-devserver along with litellm_proxy.rs/
+# hf_downloader.rs/lmstudio_downloader.rs/subprocess.rs so desktop/'s
+# Electron shell -- which spawns a plain spartan-backend, not
+# spartan-devserver -- gets the same real model-management methods
+# web/ already has). The same crate spartan-model's providers already use.
+ureq = "2"

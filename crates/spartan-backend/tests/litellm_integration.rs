@@ -11,7 +11,7 @@ use std::net::TcpListener;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use spartan_devserver::litellm_proxy;
+use spartan_backend::litellm_proxy;
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")

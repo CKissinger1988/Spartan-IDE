@@ -11,7 +11,7 @@
 //! spawn/stream mechanics genuinely invoke Ollama's real pull path end to
 //! end, without paying a real model's download cost.
 
-use spartan_devserver::hf_downloader::{self, HfModel};
+use spartan_backend::hf_downloader::{self, HfModel};
 use std::sync::mpsc;
 
 #[test]

@@ -5213,6 +5213,7 @@ dependencies = [
  "spartan-settings",
  "spartan-updater",
  "tungstenite",
+ "ureq",
 ]
 
 [[package]]
@@ -5270,7 +5271,6 @@ dependencies = [
  "spartan-backend",
  "tiny_http",
  "tungstenite",
- "ureq",
 ]
 
 [[package]]

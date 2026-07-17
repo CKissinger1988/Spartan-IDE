@@ -239,7 +239,9 @@ pub fn spawn_pull_target(target: &str, progress_tx: Sender<String>) -> std::io::
 }
 
 /// Spawns a real pull for a curated model -- a thin wrapper over
-/// `spawn_pull_target`.
+/// `spawn_pull_target`, used directly by this crate's own
+/// `tests/hf_pull_integration.rs` to exercise a real end-to-end spawn
+/// without going through the full dispatch layer.
 pub fn spawn_pull(model: &HfModel, progress_tx: Sender<String>) -> std::io::Result<Child> {
     spawn_pull_target(&pull_target(model), progress_tx)
 }

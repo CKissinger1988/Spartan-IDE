@@ -18,6 +18,7 @@ import ConsoleScreen from "./components/ConsoleScreen";
 import SessionsScreen from "./components/SessionsScreen";
 import SettingsScreen from "./components/SettingsScreen";
 import DevContainersScreen from "./components/DevContainersScreen";
+import ModelsScreen from "./components/ModelsScreen";
 import LeoChatPanel from "./components/LeoChatPanel";
 import NewProjectWizard from "./components/NewProjectWizard";
 import OnboardingScreen from "./components/OnboardingScreen";
@@ -406,12 +407,14 @@ export default function App(): React.ReactElement {
               {screen === "sessions" && <SessionsScreen root={ROOT} />}
               {screen === "settings" && <SettingsScreen />}
               {screen === "containers" && <DevContainersScreen root={ROOT} />}
+              {screen === "models" && <ModelsScreen />}
               {screen !== "workflows" &&
                 screen !== "design" &&
                 screen !== "console" &&
                 screen !== "sessions" &&
                 screen !== "settings" &&
-                screen !== "containers" && <Placeholder screen={screen} />}
+                screen !== "containers" &&
+                screen !== "models" && <Placeholder screen={screen} />}
             </div>
           </>
         )}

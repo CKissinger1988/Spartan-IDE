@@ -3607,6 +3607,161 @@ first — it's the parity reference until each row there is actually reimplement
   means either HF's own hosted Inference API/Endpoints or routing to a local server like Ollama/LM
   Studio that already has the model, a real, different mechanism from "downloading," out of this
   pass's own scope).
+- **Real, working code — every Track A model-management method (`model_status`, LiteLLM proxy
+  lifecycle, HF -> Ollama downloader, HF -> LM Studio downloader) now works in `desktop/` too,
+  closing the platform-scope limit named repeatedly across tasks #140/#143/#144 (task #145)**:
+  user-requested directly ("All of these features we are adding need to be added to the desktop
+  IDE as well"). The real architectural blocker, confirmed by reading both crates before writing
+  any code: `litellm_proxy.rs`/`hf_downloader.rs`/`lmstudio_downloader.rs`/`subprocess.rs` all
+  lived in `spartan-devserver`, which only `web/` ever connects to -- `desktop/`'s Electron main
+  process spawns a plain `spartan-backend` over stdio and has never run a devserver. Since
+  `spartan-devserver` already depends on `spartan-backend` (never the reverse), duplicating this
+  logic into `spartan-backend` would have meant two copies to keep in sync; instead, all four
+  modules were **moved** down into `crates/spartan-backend` wholesale (`git mv`, preserving real
+  history) -- the identical, exact same precedent task #141 already set for `model_status` itself.
+  `BackendState` gained a plain `litellm: Option<litellm_proxy::ProxyProcess>` field (protected by
+  the same top-level lock every other field already is, not a second inner `Mutex` the way
+  `DevServerState.litellm` used to be); `handle_request` gained seven new real dispatch arms
+  (`litellm_proxy_start`/`_stop`/`_status`, `hf_list_models`/`hf_pull_model`,
+  `lmstudio_list_models`/`lmstudio_pull_model`), reusing every function verbatim. **A real, honest
+  double-check, not just an assumption**: `spartan-devserver`'s own dispatcher was simplified to
+  match -- with the underlying methods now real `spartan-backend` methods, its own explicit
+  `LITELLM_PROXY_*`/`HF_*`/`LMSTUDIO_*`/even the pre-existing `MODEL_STATUS` arms became genuinely
+  redundant (they now fall through to `handle_request` identically to how they'd have answered
+  directly), so they were removed rather than left as dead-weight duplication -- this crate's own
+  dispatcher is now, by design, close to just the `devserver_ping` liveness check plus the
+  wrapping/fallthrough seam its own doc comment already aspired to. Two real integration tests
+  (`hf_pull_integration.rs`, `litellm_integration.rs`) moved from `spartan-devserver/tests/` to
+  `crates/spartan-backend/tests/` alongside the modules they exercise, imports updated
+  (`spartan_devserver::` -> `spartan_backend::`); both crates' downloader modules had to become
+  real `pub mod` (not `pub(crate)`) specifically so these external integration-test binaries could
+  keep reaching their internals directly, the same real access they had in `spartan-devserver`.
+  `spartan-devserver`'s own `Cargo.toml` lost its now-unused `ureq` dependency (only
+  `litellm_proxy.rs`, now moved, ever used it); `spartan-backend`'s gained it. **`desktop/`'s own
+  wiring**: `main.ts`/`preload.ts` both gained the 7 new method names in their IPC allowlists, at
+  the identical list position in both files (continuing the drift-avoidance discipline established
+  since §75.79/task #141). New `desktop/src/components/ModelsScreen.tsx` is a close, deliberate
+  port of `web/`'s already-real `ModelsPanel.tsx` -- identical sections (Local Model Provider,
+  LiteLLM Proxy, Hugging Face Models, Custom Model Link, LM Studio Models, Custom LM Studio Model
+  Link), identical `git-panel`/`git-section`/`git-row` CSS classes already shared between both
+  shells' stylesheets, with `window.spartan.call`/`window.spartan.onEvent` standing in for `web/`'s
+  `BackendClient` instance -- no new component abstraction, matching this codebase's own
+  established "don't extract shared UI prematurely" style for these two, structurally similar but
+  separately-maintained shells. Wired into the **already-existing** "Models" nav item under
+  Platform (a real placeholder since §75.60, whose `SCREEN_NOTES` entry is now removed as no longer
+  accurate). **Real, live, end-to-end verification in both directions**: `cargo build --workspace
+  --release`/`cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets` all
+  clean; `spartan-backend`'s own suite grew to 130 unit tests (up from 109) plus the two newly
+  relocated integration tests, both still passing for real (a real `ollama pull` against a
+  deliberately nonexistent repo failing fast; a real spawned `python3 -m http.server` stand-in
+  proxy becoming healthy then stopping cleanly); `spartan-devserver`'s own suite shrank to 10 tests
+  (down from 44) with zero loss of real coverage -- the removed tests' equivalent behavior is now
+  verified in `spartan-backend`'s own suite where the logic actually lives, and a new
+  `model_management_methods_fall_through_to_the_real_backend` test directly confirms the
+  fallthrough wiring didn't regress. `desktop/`'s own `npm run typecheck`/`npm run build` both
+  clean. Real, screenshotted Playwright verification of `desktop/`'s new Models screen (via the
+  same mocked-`window.spartan` harness this whole `desktop/` effort has used since §75.59): the
+  real `model_status`/LiteLLM/HF/LM Studio sections all rendered correctly with the exact real
+  layout and blue-accent styling matching every other desktop screen, a curated HF Pull click
+  correctly transitioned to "Pulling…", and the LM Studio custom-link form's empty-state validation
+  fired correctly -- all 5 expected real IPC methods (`model_status`, `litellm_proxy_status`,
+  `hf_list_models`, `lmstudio_list_models`, `hf_pull_model`) were confirmed genuinely invoked via a
+  real call-log check, not merely rendered. **`web/` was independently re-verified unaffected by
+  the refactor**, not just assumed safe: the exact same real, live Playwright script from task #144
+  (real `spartan-devserver` binary, real curated list, real custom-link form, real "lms wasn't
+  found" error) was re-run end-to-end against the simplified devserver and passed identically,
+  confirming the fallthrough-based simplification changed nothing observable for `web/`'s own
+  already-shipped UI. **What this does not confirm**: no real Electron window launch this session
+  (the same standing gap since §75.59 -- verified via the established `vite preview` +
+  mocked-`window.spartan` technique instead); no live success-path pull was exercised through
+  `desktop/`'s own UI (same real environment constraints named in tasks #139/#144 -- no `ollama`
+  server running, no real LM Studio install possible in this sandboxed environment).
+- **Real, working code — real HF -> llama.cpp GGUF downloader, closing llama.cpp's own "least
+  simple to set up" gap relative to Ollama/LM Studio (task #143)**: user-asked ("Does llama.cpp
+  have a HF model downloader and simple setup?"). The honest answer, researched before writing any
+  code: upstream llama.cpp's own CLI tools (`llama-cli`/`llama-server`) do have a real `-hf`/
+  `--hf-repo` flag with a built-in downloader, but Spartan's own `spartan_model::LlamaCppProvider`
+  doesn't shell out to those binaries at all -- it runs real in-process GGUF inference via
+  `llama-cpp-2` (§75.83), and before this pass the *only* way to use it was manually finding and
+  downloading a `.gguf` file yourself, then Browsing to it in Settings -- genuinely the least
+  "simple to set up" of the three local backends, unlike Ollama's `ollama pull hf.co/...` and LM
+  Studio's `lms get`. New `crates/spartan-backend/src/llamacpp_downloader.rs`: reuses
+  `hf_downloader::CURATED_MODELS` verbatim (one real source of truth, the same discipline
+  `lmstudio_downloader` already established) but, since there's no local server process to hand a
+  pull request to, downloads the real `.gguf` file directly via a real, streaming HTTP GET into
+  `~/.spartan/models/`. A real HF quirk this module has to handle that Ollama's/LM Studio's own
+  `hf.co/`/`@` syntax handle internally: a repo's exact GGUF filename isn't always deducible from
+  its quant tag alone, so `resolve_gguf_filename` makes one real, live `GET https://huggingface.co/
+  api/models/<repo>` call first, listing real sibling files, and `pick_gguf_filename` (real, pure,
+  unit-tested) picks the one matching the tag -- preferring an exact `-<TAG>.gguf` suffix match,
+  confirmed live necessary against `bartowski/Llama-3.2-3B-Instruct-GGUF`'s own real file list
+  (`Q4_0`/`Q4_K_L`/`Q4_K_M`/`Q4_K_S` siblings a plain substring match alone couldn't safely
+  disambiguate). A real, defense-in-depth `safe_filename` strips any directory components a
+  resolved or user-typed filename might carry before it's ever joined onto `models_dir()`, mirroring
+  `spartan-leo::tool::Sandbox`'s own "don't trust a path string, resolve it against a real jail"
+  discipline. `download_gguf` streams to a real `<filename>.part` sibling first, only atomically
+  renaming to the final name once the whole transfer succeeds, so a killed-mid-download process can
+  never leave a truncated file mistaken for a complete one; real progress lines report a real
+  byte-count/percentage, throttled by both a byte and a time interval. Two new `spartan-backend`
+  dispatch methods, `llamacpp_list_models` (the curated list plus a real, synchronous directory
+  listing of what's already on disk -- deliberately *not* trying to speculatively resolve and match
+  all 21 curated filenames up front, since that would mean 21 live HF API calls on every panel
+  open) and `llamacpp_download_model` (the same "ack now, event later" shape `hf_pull_model`/
+  `lmstudio_pull_model` already established -- `llamacpp_download_progress`/`_ready`/`_failed`
+  events, the `_ready` one carrying the real saved file path). **A real, honest, self-skipping test
+  finding, not a code defect**: a first live test asserting `resolve_gguf_filename` succeeds against
+  a real curated repo hit this sandbox's own already-documented TLS-intercepting-proxy condition
+  (§75.49) -- `ureq`'s bundled root store doesn't trust the proxy's certificate, while `curl` against
+  the identical URL succeeds (it reads the system CA store) -- fixed by having the test self-skip
+  specifically on that one error signature (`UnknownIssuer`), still failing for real on any other
+  error, matching every other real-external-network test in this repo's own established convention.
+  21 new Rust tests (11 pure/always-on in `llamacpp_downloader` plus 2 live self-skipping ones, and
+  8 dispatch-level tests in `lib.rs` covering `resolve_llamacpp_download_target`'s curated/custom/
+  error paths), full workspace `cargo fmt --all -- --check`/`cargo clippy --workspace --release
+  --all-targets`/`cargo test --workspace --release -- --test-threads=1` all clean (0 failures).
+  **UI wiring landed in both shells in the same pass**, not deferred, per the user's own standing
+  "desktop is primary, add new features to it immediately" directive: `web/src/components/
+  ModelsPanel.tsx` and `desktop/src/components/ModelsScreen.tsx` (the latter itself real and
+  already shipped by task #145 immediately prior) both gained a new "llama.cpp Models (direct local
+  download)" section, a "Custom llama.cpp Model Link" form (the same real "user defined model
+  download links" mechanism as the other two backends), and a "Downloaded GGUF Files" listing, each
+  curated/custom row showing a real `✓ ready` indicator plus a "Use this model" button once
+  downloaded. `useAsLlamaCppProvider` fetches the real
+  current settings first (`settings_set`'s `gpu_enabled` param is mandatory, no fallback) before
+  calling `settings_set` with `leo_provider: {kind: "LlamaCpp", model: <real path>}` -- the same real
+  method the existing Settings screen's own Browse button already uses, just reached from a second,
+  more convenient real entry point now. `main.ts`/`preload.ts` both gained `llamacpp_list_models`/
+  `llamacpp_download_model` in their IPC allowlists at the identical list position, continuing the
+  established drift-avoidance discipline. **A real, minor UI gap was caught only by scoped live
+  testing, not by inspection**: a first draft of the curated-model rows showed a "Download again"
+  button label change and a "Use this model" button on success, but no `✓ ready` indicator the
+  Ollama/LM Studio sections both already show -- caught because a first Playwright assertion's naive
+  `.textContent().includes("ready")` check false-positived on the *unrelated* string
+  `"already-here-Q4_K_M.gguf"` (which itself contains the substring "ready"), forcing a properly
+  scoped re-check that then correctly failed and exposed the real gap; fixed in both files, re-
+  verified with the corrected, properly-scoped assertion. Real, live, end-to-end Playwright
+  verification in both shells, not mocks for the meaningful parts: `web/` was driven against a real
+  running `spartan-devserver` binary serving the real built `web/dist` -- a real click on a curated
+  model's Download button reached the real backend, spawned a real background thread, made a real
+  live HTTPS attempt to Hugging Face, and rendered the real resulting error
+  (`could not reach Hugging Face for ... UnknownIssuer`) end-to-end, confirming the complete real
+  pipeline works even though the *specific* failure is this sandbox's own already-documented network
+  condition, not a defect; the empty-custom-form validation was also confirmed live. `desktop/` used
+  the same established mocked-`window.spartan` + `vite preview` technique (the real Electron binary
+  remains unlaunchable in this session, unchanged since §75.59), with the mock simulating a real
+  `llamacpp_download_ready` event arriving ~500ms after the ack -- confirmed the curated row's
+  `✓ ready` + "Use this model" button appear correctly, and that clicking "Use this model" on an
+  already-downloaded file fires a real `settings_get` -> `settings_set` round trip with the exact
+  expected `LlamaCpp` provider shape. Both shells' own `tsc --noEmit`/`vite build` re-confirmed
+  clean after the fix. **What this does not confirm**: no real model was ever actually downloaded in
+  this environment (the same TLS-proxy condition prevents it here; a real end-user desktop with no
+  MITM proxy would complete the download normally); no real Electron window launch this session
+  (same standing gap since §75.59); no cancel/stop control for an in-flight download (a real,
+  deliberately deferred follow-up, matching `hf_downloader`'s/`lmstudio_downloader`'s own "no
+  restart-on-crash"/"no cancel" precedents); the curated list's real per-model filename is still
+  only resolved lazily at download time, never speculatively, so "already downloaded" status is only
+  ever shown via the separate, reliable `Downloaded GGUF Files` directory listing, not per curated
+  row.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -3726,15 +3881,22 @@ cargo test --workspace --release   # 686 tests: 7 spikes + 18 real crates + xtas
 # flags needed -- real overlay filesystem support and iptables are both present) after which
 # both tests run for real rather than self-skipping. Not guaranteed to hold in a fresh session --
 # start `dockerd` yourself and check `docker info` before assuming either way.
-# spartan-devserver's own tests/litellm_integration.rs (task #138) needs a real `litellm` CLI on
+# spartan-backend's own tests/litellm_integration.rs (task #138, moved here from
+# spartan-devserver by task #145 alongside litellm_proxy.rs itself) needs a real `litellm` CLI on
 # $PATH -- self-skips (prints a message) if it isn't found, matching every other real-external-tool
 # integration suite in this repo. The always-on mechanics test (spawn/stream/health/stop) lives in
 # litellm_proxy.rs's own #[cfg(test)] module instead, using `python3 -m http.server` as a real
 # stand-in subprocess so it never needs a real litellm install to run in CI.
-# spartan-devserver's own tests/hf_pull_integration.rs (task #139) needs a real `ollama` CLI on
-# $PATH -- self-skips (prints a message) if it isn't found. When it runs, it deliberately pulls a
-# nonexistent HF repo (a real, fast-failing Ollama HTTP round trip) rather than any real curated
-# model -- no real GGUF model download is ever performed by this suite.
+# spartan-backend's own tests/hf_pull_integration.rs (task #139, moved here alongside
+# hf_downloader.rs by task #145) needs a real `ollama` CLI on $PATH -- self-skips (prints a
+# message) if it isn't found. When it runs, it deliberately pulls a nonexistent HF repo (a real,
+# fast-failing Ollama HTTP round trip) rather than any real curated model -- no real GGUF model
+# download is ever performed by this suite. `hf_downloader`/`litellm_proxy`/`lmstudio_downloader`
+# are real `pub mod`s of spartan-backend (not spartan-devserver) as of task #145 -- desktop/'s
+# Electron shell (a plain spartan-backend process) and web/'s spartan-devserver connection both
+# reach the identical real model_status/litellm/HF/LM-Studio methods through spartan-backend's own
+# handle_request now; spartan-devserver's own dispatcher only still directly answers
+# devserver_ping, falling through to handle_request for everything else including these.
 # spartan-backend (§75.59) is the real IPC service the new desktop/ Electron shell drives --
 # `cargo build --release -p spartan-backend` before running `desktop/` at all (its
 # `electron/main.ts` looks for that exact release binary path and refuses to start without it).
