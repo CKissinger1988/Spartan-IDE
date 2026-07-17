@@ -1,0 +1,14 @@
+[package]
+name = "spartan-cloud-tenant"
+version = "0.1.0"
+edition = "2021"
+
+# Pure multi-tenancy domain logic: users, opaque sessions, plan quotas, and
+# the entitlement seam for deferred billing. Deliberately free of HTTP, DB,
+# and Docker dependencies so it's fully unit-testable without a server or a
+# live daemon -- mirroring how `spartan-leo` is kept separable from
+# `spartan-backend`.
+
+[dependencies]
+spartan-cloud-protocol = { path = "../spartan-cloud-protocol" }
+rand = "0.10"

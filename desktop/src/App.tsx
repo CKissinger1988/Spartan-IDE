@@ -3,8 +3,20 @@ import Sidebar from "./components/Sidebar";
 import FileTree from "./components/FileTree";
 import GitPanel from "./components/GitPanel";
 import TabBar from "./components/TabBar";
-import StatusBar from "./components/StatusBar";
-import Editor, { type EditorPrefs, DEFAULT_EDITOR_PREFS, type OpenFile } from "./components/Editor";
+import StatusBar, {
+  type AndroidDetectResult,
+  type AndroidBuildState,
+  type AndroidDeviceInfo,
+  type AndroidInstallState,
+} from "./components/StatusBar";
+import Editor, {
+  type EditorPrefs,
+  DEFAULT_EDITOR_PREFS,
+  type OpenFile,
+  type LspDiagnostic,
+} from "./components/Editor";
+import DebugPanel, { type DapSessionState } from "./components/DebugPanel";
+import LogcatPanel from "./components/LogcatPanel";
 import Placeholder from "./components/Placeholder";
 import WorkflowsScreen from "./components/WorkflowsScreen";
 import DesignScreen from "./components/DesignScreen";
@@ -12,6 +24,7 @@ import ConsoleScreen from "./components/ConsoleScreen";
 import SessionsScreen from "./components/SessionsScreen";
 import SettingsScreen from "./components/SettingsScreen";
 import DevContainersScreen from "./components/DevContainersScreen";
+import ModelsScreen from "./components/ModelsScreen";
 import LeoChatPanel from "./components/LeoChatPanel";
 import NewProjectWizard from "./components/NewProjectWizard";
 import OnboardingScreen from "./components/OnboardingScreen";
@@ -43,6 +56,204 @@ export default function App(): React.ReactElement {
   // real default if this hasn't resolved yet (e.g. a file opened via a
   // deep link before the very first paint).
   const [editorPrefs, setEditorPrefs] = useState<EditorPrefs>(DEFAULT_EDITOR_PREFS);
+  // Real, live LSP diagnostics (§75.6-class backend wiring, closing the
+  // desktop/+web/ gap that shell has carried since the Electron pivot),
+  // keyed by `doc_id` so switching tabs doesn't lose another open file's
+  // diagnostics -- each `lsp_diagnostics` event fully replaces the prior
+  // set for that doc_id (the backend always sends the complete current
+  // list, never a delta).
+  const [diagnosticsByDoc, setDiagnosticsByDoc] = useState<Record<number, LspDiagnostic[]>>({});
+  // Real DAP state (§132), both keyed by `doc_id` the same way
+  // `diagnosticsByDoc` already is -- breakpoints are 1-indexed line
+  // numbers (matching the gutter's own display and the real
+  // `dap_launch` `break_lines` param directly, no translation); a
+  // session entry exists only while a debug session for that file is
+  // live or has just finished (exited/errored), so the toolbar can show
+  // its final state before the user dismisses it via Stop or relaunches.
+  const [breakpointsByDoc, setBreakpointsByDoc] = useState<Record<number, number[]>>({});
+  const [dapSessionByDoc, setDapSessionByDoc] = useState<Record<number, DapSessionState>>({});
+  const [androidInfo, setAndroidInfo] = useState<AndroidDetectResult | null>(null);
+  // Real build state for task #144's "Build APK" action -- `idle` (never
+  // triggered this session) is represented by `undefined`, not a real
+  // phase, matching `StatusBar`'s own "no prop means no extra state" style
+  // elsewhere.
+  const [androidBuild, setAndroidBuild] = useState<AndroidBuildState | undefined>(undefined);
+  // Real device-list + install state for task #148's next increment beyond
+  // the build-only support above -- `androidDevices` is `undefined` until
+  // the first `android_list_devices` call resolves (never fetched
+  // proactively; only once a build is ready and the user clicks Install,
+  // matching this component's own "don't call a real subprocess the user
+  // hasn't asked for yet" convention).
+  const [androidDevices, setAndroidDevices] = useState<AndroidDeviceInfo[] | undefined>(
+    undefined
+  );
+  const [androidInstall, setAndroidInstall] = useState<AndroidInstallState | undefined>(
+    undefined
+  );
+  // Real adb logcat streaming state (task #150) -- `logcatSessionId` is
+  // the real session id `android_logcat_start` returns, `null` when no
+  // session is currently live (never started, or already stopped/exited).
+  const [logcatOpen, setLogcatOpen] = useState(false);
+  const [logcatSessionId, setLogcatSessionId] = useState<number | null>(null);
+  const [logcatLines, setLogcatLines] = useState<string[]>([]);
+
+  // Real, one-shot on mount (ROOT is fixed for this window's lifetime, set
+  // via the URL query param) -- android_detect has been real and tested
+  // since §75.91 but had no UI caller anywhere in either shell until now.
+  // A non-Android project (the common case) is a real, expected, silent
+  // result, not an error.
+  useEffect(() => {
+    window.spartan
+      .call("android_detect", { project_root: ROOT })
+      .then((result) => setAndroidInfo(result as AndroidDetectResult))
+      .catch(() => setAndroidInfo(null));
+  }, []);
+
+  // Real "ack now, event later" trigger for `android_build_apk` -- a real
+  // Gradle `assembleDebug` build, which can easily run minutes on a cold
+  // dependency cache, so this never blocks the click itself.
+  const buildApk = useCallback(() => {
+    setAndroidBuild({ phase: "building" });
+    setAndroidInstall(undefined);
+    setAndroidDevices(undefined);
+    window.spartan.call("android_build_apk", { project_root: ROOT }).catch((e: Error) => {
+      setAndroidBuild({ phase: "failed", error: e.message });
+    });
+  }, []);
+
+  // Real "list, then install onto whichever real device is ready" flow
+  // (task #148) -- lists first every click (not cached) since a real
+  // device can be plugged/unplugged, or authorized, between clicks.
+  // With zero or one ready device this is fully automatic; with more
+  // than one, this deliberately picks the first ready one rather than
+  // adding a device-picker UI in this first increment -- `adb -s` still
+  // targets it correctly, and the tooltip lists every real device found
+  // either way.
+  const installApk = useCallback(() => {
+    if (androidBuild?.phase !== "ready") return;
+    const apkPath = androidBuild.apkPath;
+    setAndroidInstall({ phase: "installing" });
+    window.spartan
+      .call("android_list_devices", {})
+      .then((result) => {
+        const devices = (result as { devices: AndroidDeviceInfo[] }).devices;
+        setAndroidDevices(devices);
+        const target = devices.find((d) => d.state === "device");
+        if (!target && devices.length === 0) {
+          throw new Error("no real device attached (adb devices -l reported none)");
+        }
+        return window.spartan.call("android_install_apk", {
+          apk_path: apkPath,
+          ...(target ? { serial: target.serial } : {}),
+        });
+      })
+      .catch((e: Error) => {
+        setAndroidInstall({ phase: "failed", error: e.message });
+      });
+  }, [androidBuild]);
+
+  const toggleLogcat = useCallback(() => {
+    setLogcatOpen((v) => !v);
+  }, []);
+
+  const startLogcat = useCallback(() => {
+    setLogcatLines([]);
+    window.spartan
+      .call("android_logcat_start", {})
+      .then((result) => {
+        const { session_id } = result as { session_id: number };
+        setLogcatSessionId(session_id);
+      })
+      .catch((e: Error) => {
+        setLogcatLines([`error: ${e.message}`]);
+      });
+  }, []);
+
+  const stopLogcat = useCallback(() => {
+    if (logcatSessionId === null) return;
+    window.spartan.call("android_logcat_stop", { session_id: logcatSessionId }).catch(() => {});
+  }, [logcatSessionId]);
+
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event === "lsp_diagnostics") {
+        const { doc_id, diagnostics } = data as { doc_id: number; diagnostics: LspDiagnostic[] };
+        setDiagnosticsByDoc((prev) => ({ ...prev, [doc_id]: diagnostics }));
+      } else if (event === "lsp_error") {
+        // A real, honest server-side condition (handshake never completed,
+        // or no diagnostics update arrived in time) -- not a UI-breaking
+        // error. Logged for now; a dedicated status surface is real,
+        // separate follow-up work.
+        console.warn("lsp_error:", data);
+      } else if (event === "dap_stopped") {
+        const { doc_id, stopped } = data as {
+          doc_id: number;
+          stopped: DapSessionState["stopped"];
+        };
+        setDapSessionByDoc((prev) => {
+          const existing = prev[doc_id];
+          if (!existing) return prev;
+          return { ...prev, [doc_id]: { ...existing, status: "stopped", stopped } };
+        });
+      } else if (event === "dap_exited") {
+        const { doc_id } = data as { doc_id: number };
+        setDapSessionByDoc((prev) => {
+          const existing = prev[doc_id];
+          if (!existing) return prev;
+          return { ...prev, [doc_id]: { ...existing, status: "exited" } };
+        });
+      } else if (event === "dap_error") {
+        const { doc_id, message } = data as { doc_id: number; message: string };
+        setDapSessionByDoc((prev) => {
+          const existing = prev[doc_id];
+          if (!existing) return prev;
+          return { ...prev, [doc_id]: { ...existing, status: "error", message } };
+        });
+      } else if (event === "dap_build_failed") {
+        const { doc_id, diagnostics } = data as { doc_id: number; diagnostics: string[] };
+        setDapSessionByDoc((prev) => {
+          const existing = prev[doc_id];
+          if (!existing) return prev;
+          return {
+            ...prev,
+            [doc_id]: { ...existing, status: "build_failed", message: diagnostics.join("\n") },
+          };
+        });
+      } else if (event === "android_build_progress") {
+        const { line } = data as { line: string };
+        setAndroidBuild((prev) =>
+          prev?.phase === "building" ? { phase: "building", lastLine: line } : prev
+        );
+      } else if (event === "android_build_ready") {
+        const { apk_path } = data as { apk_path: string };
+        setAndroidBuild({ phase: "ready", apkPath: apk_path });
+      } else if (event === "android_build_failed") {
+        const { error } = data as { error: string };
+        setAndroidBuild({ phase: "failed", error });
+      } else if (event === "android_install_progress") {
+        const { line } = data as { line: string };
+        setAndroidInstall((prev) =>
+          prev?.phase === "installing" ? { phase: "installing", lastLine: line } : prev
+        );
+      } else if (event === "android_install_ready") {
+        setAndroidInstall({ phase: "ready" });
+      } else if (event === "android_install_failed") {
+        const { error } = data as { error: string };
+        setAndroidInstall({ phase: "failed", error });
+      } else if (event === "android_logcat_output") {
+        // Real, deliberate v1 simplification: this UI only ever starts
+        // one real logcat session at a time, so every real output event
+        // is appended without matching `session_id` against a ref --
+        // correct as long as that stays true, named rather than silently
+        // assumed.
+        const { line } = data as { session_id: number; line: string };
+        setLogcatLines((prev) => [...prev, line]);
+      } else if (event === "android_logcat_exit") {
+        setLogcatSessionId(null);
+      }
+    });
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -121,11 +332,96 @@ export default function App(): React.ReactElement {
       window.spartan.call("close_file", { doc_id: file.docId }).catch(() => {});
       setFiles((prev) => prev.filter((_, i) => i !== index));
       setActiveIndex((prev) => Math.max(0, Math.min(prev, files.length - 2)));
+      setDiagnosticsByDoc((prev) => {
+        const next = { ...prev };
+        delete next[file.docId];
+        return next;
+      });
+      setBreakpointsByDoc((prev) => {
+        const next = { ...prev };
+        delete next[file.docId];
+        return next;
+      });
+      setDapSessionByDoc((prev) => {
+        const next = { ...prev };
+        delete next[file.docId];
+        return next;
+      });
     },
     [files]
   );
 
   const activeFile = files[activeIndex] ?? null;
+
+  const toggleBreakpoint = useCallback(
+    (line: number) => {
+      if (!activeFile) return;
+      const docId = activeFile.docId;
+      setBreakpointsByDoc((prev) => {
+        const existing = prev[docId] ?? [];
+        const next = existing.includes(line)
+          ? existing.filter((l) => l !== line)
+          : [...existing, line].sort((a, b) => a - b);
+        return { ...prev, [docId]: next };
+      });
+    },
+    [activeFile]
+  );
+
+  // Real launch (§132) -- always starts a fresh session for the active
+  // file's own current breakpoint set, matching the reference wgpu
+  // shell's own F5 convention (an already-finished session is treated
+  // as gone, not resumable).
+  const dapLaunch = useCallback(() => {
+    if (!activeFile) return;
+    const docId = activeFile.docId;
+    const breakLines = breakpointsByDoc[docId] ?? [];
+    setDapSessionByDoc((prev) => ({
+      ...prev,
+      [docId]: { sessionId: -1, status: "launching" },
+    }));
+    window.spartan
+      .call("dap_launch", { doc_id: docId, break_lines: breakLines })
+      .then((result) => {
+        const { session_id } = result as { session_id: number };
+        setDapSessionByDoc((prev) => ({
+          ...prev,
+          [docId]: { ...prev[docId], sessionId: session_id },
+        }));
+      })
+      .catch((err: Error) => {
+        setDapSessionByDoc((prev) => ({
+          ...prev,
+          [docId]: { sessionId: -1, status: "error", message: err.message },
+        }));
+      });
+  }, [activeFile, breakpointsByDoc]);
+
+  const dapSendCommand = useCallback(
+    (method: string) => {
+      if (!activeFile) return;
+      const session = dapSessionByDoc[activeFile.docId];
+      if (!session || session.sessionId < 0) return;
+      window.spartan
+        .call(method, { session_id: session.sessionId })
+        .catch((err: Error) => console.error(`${method} failed:`, err));
+    },
+    [activeFile, dapSessionByDoc]
+  );
+
+  const dapStop = useCallback(() => {
+    if (!activeFile) return;
+    const docId = activeFile.docId;
+    const session = dapSessionByDoc[docId];
+    if (session && session.sessionId >= 0) {
+      window.spartan.call("dap_disconnect", { session_id: session.sessionId }).catch(() => {});
+    }
+    setDapSessionByDoc((prev) => {
+      const next = { ...prev };
+      delete next[docId];
+      return next;
+    });
+  }, [activeFile, dapSessionByDoc]);
   const screenLabel = NAV.flatMap((g) => g.items).find((i) => i.id === screen)?.label ?? screen;
 
   // Real §75.76 first-run onboarding gate -- deliberately blank (not the
@@ -184,15 +480,59 @@ export default function App(): React.ReactElement {
                   <GitPanel root={ROOT} />
                 )}
               </div>
-              <div className="content-area">
-                {activeFile ? (
-                  <Editor file={activeFile} onContentChange={handleContentChange} prefs={editorPrefs} />
-                ) : (
-                  <div className="empty-state mono">Open a file from the sidebar to start editing.</div>
-                )}
+              <div className="editor-and-debug">
+                <DebugPanel
+                  hasFile={activeFile !== null}
+                  session={activeFile ? (dapSessionByDoc[activeFile.docId] ?? null) : null}
+                  onLaunch={dapLaunch}
+                  onContinue={() => dapSendCommand("dap_continue")}
+                  onStepOver={() => dapSendCommand("dap_step_over")}
+                  onStepInto={() => dapSendCommand("dap_step_into")}
+                  onStop={dapStop}
+                />
+                <LogcatPanel
+                  visible={logcatOpen}
+                  running={logcatSessionId !== null}
+                  lines={logcatLines}
+                  onStart={startLogcat}
+                  onStop={stopLogcat}
+                  onClose={() => setLogcatOpen(false)}
+                />
+                <div className="content-area">
+                  {activeFile ? (
+                    <Editor
+                      file={activeFile}
+                      onContentChange={handleContentChange}
+                      prefs={editorPrefs}
+                      diagnostics={diagnosticsByDoc[activeFile.docId]}
+                      breakpoints={breakpointsByDoc[activeFile.docId] ?? []}
+                      onToggleBreakpoint={toggleBreakpoint}
+                      stoppedLine={
+                        dapSessionByDoc[activeFile.docId]?.status === "stopped"
+                          ? (dapSessionByDoc[activeFile.docId]?.stopped?.frame?.line ?? null)
+                          : null
+                      }
+                    />
+                  ) : (
+                    <div className="empty-state mono">Open a file from the sidebar to start editing.</div>
+                  )}
+                </div>
               </div>
             </div>
-            <StatusBar fileCount={files.length} activePath={activeFile?.path ?? null} />
+            <StatusBar
+              fileCount={files.length}
+              activePath={activeFile?.path ?? null}
+              diagnostics={activeFile ? diagnosticsByDoc[activeFile.docId] : undefined}
+              androidInfo={androidInfo}
+              androidBuild={androidBuild}
+              onBuildApk={buildApk}
+              androidDevices={androidDevices}
+              androidInstall={androidInstall}
+              onInstallApk={installApk}
+              logcatOpen={logcatOpen}
+              logcatRunning={logcatSessionId !== null}
+              onToggleLogcat={toggleLogcat}
+            />
           </>
         ) : (
           <>
@@ -208,12 +548,14 @@ export default function App(): React.ReactElement {
               {screen === "sessions" && <SessionsScreen root={ROOT} />}
               {screen === "settings" && <SettingsScreen />}
               {screen === "containers" && <DevContainersScreen root={ROOT} />}
+              {screen === "models" && <ModelsScreen />}
               {screen !== "workflows" &&
                 screen !== "design" &&
                 screen !== "console" &&
                 screen !== "sessions" &&
                 screen !== "settings" &&
-                screen !== "containers" && <Placeholder screen={screen} />}
+                screen !== "containers" &&
+                screen !== "models" && <Placeholder screen={screen} />}
             </div>
           </>
         )}

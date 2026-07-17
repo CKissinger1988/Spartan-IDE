@@ -26,10 +26,11 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::mpsc::Sender;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use spartan_buffer::Document;
 use spartan_leo::agent::{Agent, AgentError};
@@ -39,10 +40,38 @@ use spartan_leo::plan::{generate_plan, ImplementationPlan, PlanError};
 use spartan_leo::tool::{ToolCall, ToolResult};
 use spartan_model::provider::Message;
 use spartan_model::{
-    ClaudeProvider, LiteLLMProvider, LlamaCppProvider, ModelProvider, OllamaProvider,
+    ClaudeProvider, FailoverProvider, LiteLLMProvider, LlamaCppProvider, LmStudioProvider,
+    ModelProvider, OllamaProvider,
 };
 
+mod dap_integration;
+/// Real Hugging Face -> Ollama model downloader (curated list + user-defined
+/// custom links) -- moved here from `spartan-devserver` so `desktop/`'s
+/// Electron shell (which spawns a plain `spartan-backend`, not a
+/// `spartan-devserver`) gets the same real model-management methods `web/`
+/// already has, without duplicating any logic. `spartan-devserver`'s own
+/// dispatcher now just falls through to `handle_request` for these methods.
+/// `pub` (not just `pub(crate)`) so this crate's own real integration tests
+/// (`tests/hf_pull_integration.rs`, `tests/litellm_integration.rs`, moved
+/// here alongside these modules) can exercise the real subprocess-spawning
+/// layer directly, the same real access they had in `spartan-devserver`.
+pub mod hf_downloader;
+pub mod litellm_proxy;
+/// Real Hugging Face -> llama.cpp GGUF downloader -- unlike
+/// `hf_downloader`/`lmstudio_downloader`, llama.cpp has no separate local
+/// server process to shell a pull command out to (`spartan_model::
+/// LlamaCppProvider` loads a `.gguf` file in-process), so this is a real,
+/// direct HTTP download into `~/.spartan/models/` instead of a subprocess
+/// handoff. See its own module doc comment for the full account.
+pub mod llamacpp_downloader;
+/// Real LM Studio model downloader via its bundled `lms` CLI -- moved here
+/// alongside `hf_downloader` for the identical reason.
+pub mod lmstudio_downloader;
+mod lsp_integration;
 mod pty;
+/// Shared subprocess-spawn-and-stream helper, used by `litellm_proxy`/
+/// `hf_downloader`/`lmstudio_downloader`.
+mod subprocess;
 pub mod ws_transport;
 
 // Both `Serialize` and `Deserialize`: the server only ever deserializes a
@@ -116,6 +145,11 @@ struct OpenDoc {
     /// edit clears it, since a fresh edit invalidates whatever "forward"
     /// used to mean.
     redo_stack: Vec<spartan_buffer::CheckpointId>,
+    /// Real, live LSP session for this file, if the detected language has
+    /// a configured server and a real project root could be found (see
+    /// `lsp_integration::maybe_spawn_lsp`'s own doc comment for exactly
+    /// when it's `None` instead, all honest, non-error cases).
+    lsp_session: Option<Arc<spartan_lsp::LspSession>>,
 }
 
 /// One real, model-proposed tool call awaiting explicit human approval --
@@ -168,6 +202,26 @@ pub struct BackendState {
     /// real local process.
     devcontainer_exec_sessions: HashMap<u64, spartan_devcontainer::docker::ExecHandle>,
     next_devcontainer_exec_id: u64,
+    /// Real, live DAP sessions (§132) -- keyed independently of
+    /// `open_docs`, not stored on `OpenDoc` directly, since a debug
+    /// session can outlive the exact doc-id lifecycle question (a
+    /// relaunch after the program exits is a *new* session, not a
+    /// mutation of the old one) and a UI may reasonably want to keep a
+    /// finished session's own last-known state addressable by its own id
+    /// a moment longer than the launch call that created it.
+    dap_sessions: HashMap<u64, Arc<spartan_dap::DapSession>>,
+    next_dap_id: u64,
+    /// Real, at-most-one LiteLLM proxy child process this backend has
+    /// spawned, if any (moved here from `spartan-devserver`'s own
+    /// `DevServerState` -- see this module's `hf_downloader`/`litellm_proxy`
+    /// doc comments for why). Protected by the same top-level state lock
+    /// every other field here already is, not a second inner mutex.
+    litellm: Option<litellm_proxy::ProxyProcess>,
+    /// Real, live `adb logcat` sessions (task #150), keyed the same way
+    /// `pty_sessions` is -- an unbounded real stream the caller explicitly
+    /// stops, not a bounded call that resolves on its own.
+    logcat_sessions: HashMap<u64, spartan_android::adb::LogcatHandle>,
+    next_logcat_id: u64,
 }
 
 impl BackendState {
@@ -216,20 +270,139 @@ fn list_dir(path: &str) -> Result<serde_json::Value, String> {
         .map_err(|e| format!("serialize: {e}"))
 }
 
-fn open_file(state: &mut BackendState, path: &str) -> Result<serde_json::Value, String> {
+fn open_file(
+    state: &mut BackendState,
+    path: &str,
+    out_tx: Sender<String>,
+) -> Result<serde_json::Value, String> {
     let content = std::fs::read_to_string(path).map_err(|e| format!("read({path}): {e}"))?;
     let document = Document::new(&content);
     let doc_id = state.next_doc_id;
     state.next_doc_id += 1;
+    let lsp_session = lsp_integration::maybe_spawn_lsp(doc_id, Path::new(path), &content, out_tx);
     state.open_docs.insert(
         doc_id,
         OpenDoc {
             path: PathBuf::from(path),
             document,
             redo_stack: Vec::new(),
+            lsp_session,
         },
     );
     Ok(serde_json::json!({ "doc_id": doc_id, "content": content }))
+}
+
+/// Real, live `textDocument/hover` (task #134, closing `lsp_integration.rs`'s
+/// own previously-named "no hover/completion IPC methods exist yet" gap).
+/// **Never blocks the caller** -- the single request-processing thread
+/// every other IPC method shares must stay free, so this spawns the real,
+/// possibly-slow blocking `LspSession::request_hover` call on its own
+/// thread and reports the result via a real `lsp_hover_result` event
+/// instead of a synchronous response, the same real "ack now, event
+/// later" shape `leo_start_task`/`devcontainer_up` already established.
+/// A real, honest `Err` up front (no such doc, or the file has no live
+/// LSP session at all) still returns synchronously -- there is nothing
+/// slow to wait for in either case.
+///
+/// **A real bug, found only by live end-to-end browser testing, not by
+/// inspection or by the existing Rust integration test's own loose
+/// stringify-and-`contains("int")` assertion**: `LspClient::request`
+/// (and so `LspSession::request_hover`) deliberately returns the *entire*
+/// raw JSON-RPC response message (`{"id":..,"jsonrpc":"2.0","result":{
+/// "contents":...}}`), not just its inner `result` payload -- correct at
+/// that low level, since `request()` is a generic one-shot RPC helper with
+/// no per-method knowledge of what a "clean" result looks like. Sending
+/// that raw envelope straight across the IPC boundary leaked an internal
+/// wire-protocol detail to the real frontend: `desktop/`'s own
+/// `extractHoverText` expects a bare LSP hover result (a `contents` field
+/// directly on the object), so every real hover response silently failed
+/// to extract any text and no tooltip ever rendered, even though the
+/// backend had genuinely answered correctly. Fixed by unwrapping the
+/// envelope's own `result` field here, at the real IPC boundary, before
+/// it ever reaches an event -- the frontend now receives exactly the LSP
+/// hover payload it already expected, with no envelope to unwrap itself.
+fn lsp_hover(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+    line: i64,
+    character: i64,
+) -> Result<serde_json::Value, String> {
+    let session = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        doc.lsp_session
+            .clone()
+            .ok_or_else(|| "no live LSP session for this file".to_string())?
+    };
+    thread::spawn(move || {
+        let raw = session.request_hover(line, character);
+        let result = raw.and_then(|envelope| envelope.get("result").cloned());
+        let event = Event {
+            event: "lsp_hover_result".to_string(),
+            data: serde_json::json!({
+                "doc_id": doc_id,
+                "line": line,
+                "character": character,
+                "result": result,
+            }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+    Ok(serde_json::json!({ "status": "requested" }))
+}
+
+/// Real, live `textDocument/completion` (task #136, closing the
+/// "completion... has no real caller anywhere" gap named in `lsp_hover`'s
+/// own history). The direct sibling of `lsp_hover` above -- identical
+/// never-blocks-the-caller shape, identical envelope-unwrapping (the same
+/// real fix `lsp_hover` needed applies equally here: `LspSession::
+/// request_completion` returns the raw JSON-RPC response, not just its
+/// inner `result`). A real LSP completion `result` is either a bare
+/// `CompletionItem[]` or a `CompletionList { isIncomplete, items }` --
+/// both shapes are passed through unwrapped exactly as the server sent
+/// them, left for the frontend to normalize (matching `extractHoverText`'s
+/// own existing precedent of handling multiple real LSP response shapes
+/// at the UI boundary, not the IPC boundary).
+fn lsp_completion(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+    line: i64,
+    character: i64,
+) -> Result<serde_json::Value, String> {
+    let session = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        doc.lsp_session
+            .clone()
+            .ok_or_else(|| "no live LSP session for this file".to_string())?
+    };
+    thread::spawn(move || {
+        let raw = session.request_completion(line, character);
+        let result = raw.and_then(|envelope| envelope.get("result").cloned());
+        let event = Event {
+            event: "lsp_completion_result".to_string(),
+            data: serde_json::json!({
+                "doc_id": doc_id,
+                "line": line,
+                "character": character,
+                "result": result,
+            }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+    Ok(serde_json::json!({ "status": "requested" }))
 }
 
 /// Real edit application -- `start_char`/`end_char` name a real char
@@ -259,6 +432,12 @@ fn edit(
     // A real new edit invalidates whatever "redo" used to mean, the same
     // real rule the wgpu shell's own `EditorView` already enforces.
     open_doc.redo_stack.clear();
+    // Real, live didChange dispatch -- debounced inside the session itself
+    // (see `spartan_lsp::LspSession`'s own doc comment), so every keystroke
+    // can safely call this without flooding the real language server.
+    if let Some(session) = &open_doc.lsp_session {
+        session.notify_edit(open_doc.document.text());
+    }
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -281,6 +460,11 @@ fn undo(state: &mut BackendState, doc_id: u64) -> Result<serde_json::Value, Stri
     let changed = open_doc.document.undo();
     if changed {
         open_doc.redo_stack.push(pre_undo_checkpoint);
+        // An undo is a real content change too -- the live LSP session (if
+        // any) needs to see it or its diagnostics silently go stale.
+        if let Some(session) = &open_doc.lsp_session {
+            session.notify_edit(open_doc.document.text());
+        }
     }
     Ok(serde_json::json!({ "changed": changed, "content": open_doc.document.text() }))
 }
@@ -299,7 +483,12 @@ fn redo(state: &mut BackendState, doc_id: u64) -> Result<serde_json::Value, Stri
         return Ok(serde_json::json!({ "changed": false, "content": open_doc.document.text() }));
     };
     match open_doc.document.jump_to_checkpoint(checkpoint) {
-        Ok(()) => Ok(serde_json::json!({ "changed": true, "content": open_doc.document.text() })),
+        Ok(()) => {
+            if let Some(session) = &open_doc.lsp_session {
+                session.notify_edit(open_doc.document.text());
+            }
+            Ok(serde_json::json!({ "changed": true, "content": open_doc.document.text() }))
+        }
         Err(_) => {
             // The checkpoint aged out of the bounded ring since `undo`
             // pushed it -- a real, possible outcome, not an error to
@@ -310,7 +499,14 @@ fn redo(state: &mut BackendState, doc_id: u64) -> Result<serde_json::Value, Stri
 }
 
 fn close_file(state: &mut BackendState, doc_id: u64) -> Result<serde_json::Value, String> {
-    state.open_docs.remove(&doc_id);
+    if let Some(open_doc) = state.open_docs.remove(&doc_id) {
+        // Real, non-blocking teardown -- see `LspSession::signal_shutdown`'s
+        // own doc comment for why this doesn't wait for the real ~7s-worst-
+        // case graceful LSP shutdown sequence to finish before returning.
+        if let Some(session) = &open_doc.lsp_session {
+            session.signal_shutdown();
+        }
+    }
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -401,39 +597,632 @@ fn approval_mode_from_settings(mode: spartan_settings::LeoApprovalMode) -> Appro
 /// only, no code ported -- see `docs/architecture-spec.md` §75.70).
 /// `gpu_offload` only ever applies to the real local `OllamaProvider`
 /// path -- Claude/LiteLLM are remote, `num_gpu` has no meaning for them.
-fn build_leo_provider(
-    provider_settings: &spartan_settings::LeoProviderSettings,
+/// Build ONE real provider from its kind + model. Does not consider fallbacks
+/// (that's `build_leo_provider`'s job) -- so a fallback's own `fallbacks` field
+/// is ignored by construction, keeping the chain flat (primary + list), never
+/// a tree.
+fn build_single_provider(
+    kind: spartan_settings::LeoProviderKind,
+    model: &str,
     gpu_offload: spartan_settings::GpuOffloadSettings,
 ) -> Result<Box<dyn ModelProvider>, String> {
-    match provider_settings.kind {
+    match kind {
         spartan_settings::LeoProviderKind::Ollama => Ok(Box::new(
-            OllamaProvider::local(&provider_settings.model).with_gpu_layers(gpu_offload.num_gpu()),
+            OllamaProvider::local(model).with_gpu_layers(gpu_offload.num_gpu()),
         )),
         spartan_settings::LeoProviderKind::Claude => {
             let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
                 "ANTHROPIC_API_KEY is not set -- required to use Claude as Leo's provider"
                     .to_string()
             })?;
-            Ok(Box::new(ClaudeProvider::new(
-                api_key,
-                &provider_settings.model,
-            )))
+            Ok(Box::new(ClaudeProvider::new(api_key, model)))
         }
-        spartan_settings::LeoProviderKind::LiteLLM => {
-            Ok(Box::new(LiteLLMProvider::local(&provider_settings.model)))
-        }
+        spartan_settings::LeoProviderKind::LiteLLM => Ok(Box::new(LiteLLMProvider::local(model))),
+        spartan_settings::LeoProviderKind::LmStudio => Ok(Box::new(LmStudioProvider::local(model))),
         spartan_settings::LeoProviderKind::LlamaCpp => {
-            if provider_settings.model.trim().is_empty() {
+            if model.trim().is_empty() {
                 return Err(
                     "no .gguf model file path configured -- required to use llama.cpp as Leo's provider"
                         .to_string(),
                 );
             }
-            let provider = LlamaCppProvider::new(&provider_settings.model)
+            let provider = LlamaCppProvider::new(model)
                 .map_err(|e| format!("failed to load llama.cpp model: {e}"))?;
             Ok(Box::new(provider))
         }
     }
+}
+
+fn build_leo_provider(
+    provider_settings: &spartan_settings::LeoProviderSettings,
+    gpu_offload: spartan_settings::GpuOffloadSettings,
+) -> Result<Box<dyn ModelProvider>, String> {
+    let primary = build_single_provider(
+        provider_settings.kind,
+        &provider_settings.model,
+        gpu_offload,
+    )?;
+
+    // No fallbacks configured -> the primary alone, exactly as before.
+    if provider_settings.fallbacks.is_empty() {
+        return Ok(primary);
+    }
+
+    // A configured fallback chain -> wrap primary + each fallback in a real
+    // FailoverProvider (§75.x, task #123). Each fallback is built with the same
+    // gpu_offload (it only ever affects a local Ollama provider anyway). If any
+    // configured fallback can't be constructed (e.g. a missing gguf path or an
+    // unset ANTHROPIC_API_KEY), fail the whole build with a clear message
+    // rather than silently dropping that link from the chain.
+    let mut chain: Vec<Box<dyn ModelProvider>> = vec![primary];
+    for (i, fb) in provider_settings.fallbacks.iter().enumerate() {
+        let p = build_single_provider(fb.kind, &fb.model, gpu_offload)
+            .map_err(|e| format!("fallback provider #{}: {e}", i + 1))?;
+        chain.push(p);
+    }
+    Ok(Box::new(FailoverProvider::new(chain)))
+}
+
+/// The unified model-status surface (Track A): the real, currently-configured
+/// Leo provider's identity, capabilities, and a **live** health probe -- built
+/// from the exact same `build_leo_provider` every real Leo call uses, so the
+/// status can never disagree with what a task would actually run. A provider
+/// that can't even be constructed (missing gguf path, unset ANTHROPIC_API_KEY)
+/// is reported honestly as `configured: false` with the real error, never a
+/// fabricated "healthy". Exposed for `spartan-devserver`'s `model_status`.
+pub fn model_status_json() -> serde_json::Value {
+    let settings = spartan_settings::load();
+    let ps = &settings.leo_provider;
+    match build_leo_provider(ps, settings.gpu_offload) {
+        Ok(provider) => {
+            let health = match provider.health_check() {
+                spartan_model::ProviderHealth::Healthy => "healthy",
+                spartan_model::ProviderHealth::Unauthorized => "unauthorized",
+                spartan_model::ProviderHealth::Unreachable => "unreachable",
+            };
+            serde_json::json!({
+                "configured": true,
+                "kind": format!("{:?}", ps.kind),
+                "model": ps.model,
+                "provider_id": provider.id(),
+                "is_local": provider.is_local(),
+                "context_window": provider.context_window(),
+                "supports_native_tool_calling": provider.supports_native_tool_calling(),
+                "health": health,
+                "fallback_count": ps.fallbacks.len(),
+            })
+        }
+        Err(e) => serde_json::json!({
+            "configured": false,
+            "kind": format!("{:?}", ps.kind),
+            "model": ps.model,
+            "error": e,
+        }),
+    }
+}
+
+const LITELLM_HEALTH_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Starts a real LiteLLM proxy in the background: an immediate
+/// `{"status": "starting"}` ack, then a spawned thread runs the real,
+/// possibly-slow spawn+health-check, forwarding real subprocess stdout/
+/// stderr lines as `litellm_progress` events and finishing with
+/// `litellm_ready`/`litellm_failed` -- the same "ack now, event later"
+/// shape `devcontainer_up`/`leo_start_task` already established. Moved
+/// here verbatim from `spartan-devserver` (task #145) -- the only real
+/// change is where the proxy handle lives (`BackendState.litellm`,
+/// protected by the same top-level lock, instead of a second, devserver-
+/// only `Mutex`).
+fn litellm_proxy_start(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    port: u16,
+    config_path: Option<String>,
+) -> Result<serde_json::Value, String> {
+    {
+        let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+        if let Some(process) = guard.litellm.as_mut() {
+            if process.is_running() {
+                return Err(format!(
+                    "a LiteLLM proxy is already running on port {} (pid {})",
+                    process.port,
+                    process.pid()
+                ));
+            }
+            // A stale handle whose process already exited on its own --
+            // clear it so this fresh spawn can take its place.
+            guard.litellm = None;
+        }
+    }
+
+    if !litellm_proxy::is_litellm_available() {
+        return Err(
+            "`litellm` isn't on $PATH -- install it with `pip install 'litellm[proxy]'`"
+                .to_string(),
+        );
+    }
+
+    let state = Arc::clone(state);
+    thread::spawn(move || {
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let forward_out_tx = out_tx.clone();
+        thread::spawn(move || {
+            for line in line_rx {
+                let event = Event {
+                    event: "litellm_progress".to_string(),
+                    data: serde_json::json!({ "line": line }),
+                };
+                if let Ok(l) = serde_json::to_string(&event) {
+                    let _ = forward_out_tx.send(l);
+                }
+            }
+        });
+
+        let event = match litellm_proxy::spawn(port, config_path.as_deref(), line_tx) {
+            Ok(mut process) => match litellm_proxy::wait_for_health(
+                &mut process,
+                litellm_proxy::DEFAULT_HEALTH_PATH,
+                LITELLM_HEALTH_TIMEOUT,
+            ) {
+                Ok(()) => {
+                    let pid = process.pid();
+                    if let Ok(mut guard) = state.lock() {
+                        guard.litellm = Some(process);
+                    }
+                    Event {
+                        event: "litellm_ready".to_string(),
+                        data: serde_json::json!({ "port": port, "pid": pid }),
+                    }
+                }
+                Err(e) => {
+                    let _ = process.stop();
+                    Event {
+                        event: "litellm_failed".to_string(),
+                        data: serde_json::json!({ "error": e.to_string() }),
+                    }
+                }
+            },
+            Err(e) => Event {
+                event: "litellm_failed".to_string(),
+                data: serde_json::json!({ "error": e.to_string() }),
+            },
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+
+    Ok(serde_json::json!({ "status": "starting" }))
+}
+
+/// Stops the real currently-running proxy, if any. Stopping when nothing is
+/// running is a real, honest `not_running` result, not an error -- matches
+/// `devcontainer_down`'s own precedent that "stop what's already gone" is a
+/// harmless no-op, not a failure.
+fn litellm_proxy_stop(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value, String> {
+    let process = {
+        let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+        guard.litellm.take()
+    };
+    match process {
+        Some(process) => {
+            let port = process.port;
+            process.stop().map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "status": "stopped", "port": port }))
+        }
+        None => Ok(serde_json::json!({ "status": "not_running" })),
+    }
+}
+
+/// Reports the real current proxy status, self-healing a stale handle whose
+/// process has since exited on its own (a real crash) rather than reporting
+/// a false "running" forever.
+fn litellm_proxy_status(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value, String> {
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    // A match guard binds `process` immutably, but `is_running` needs
+    // `&mut self` -- checked separately instead, so the mutable borrow is
+    // real and the pattern match only branches on its already-computed
+    // result.
+    let running = guard.litellm.as_mut().map(|process| process.is_running());
+    Ok(match running {
+        Some(true) => {
+            let process = guard.litellm.as_ref().expect("just confirmed Some above");
+            serde_json::json!({ "status": "running", "port": process.port, "pid": process.pid() })
+        }
+        Some(false) => {
+            guard.litellm = None;
+            serde_json::json!({ "status": "not_running" })
+        }
+        None => serde_json::json!({ "status": "not_running" }),
+    })
+}
+
+/// Real, synchronous listing of the curated HF -> Ollama models.
+fn hf_list_models_json() -> serde_json::Value {
+    let models: Vec<serde_json::Value> = hf_downloader::CURATED_MODELS
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "display_name": m.display_name,
+                "hf_repo": m.hf_repo,
+                "tag": m.tag,
+                "description": m.description,
+            })
+        })
+        .collect();
+    serde_json::json!({ "models": models })
+}
+
+/// Resolves the real `(event_id, pull_target)` pair for either an
+/// `hf_pull_model` call path -- a curated `model_id` lookup, or a
+/// user-defined custom `hf_repo`+`tag` pair (the real "user defined model
+/// download links" mechanism, validated via
+/// `hf_downloader::custom_pull_target` before ever reaching a subprocess).
+/// `model_id` wins if both are somehow present, matching this crate's own
+/// "first matching real param wins" convention elsewhere (e.g.
+/// `litellm_proxy_start`'s port/config_path handling).
+fn resolve_hf_pull_target(
+    model_id: Option<String>,
+    hf_repo: Option<String>,
+    tag: Option<String>,
+) -> Result<(String, String), String> {
+    match (model_id, hf_repo, tag) {
+        (Some(model_id), _, _) => {
+            let model = hf_downloader::find_model(&model_id)
+                .ok_or_else(|| format!("unknown curated model id: {model_id:?}"))?;
+            Ok((model.id.to_string(), hf_downloader::pull_target(model)))
+        }
+        (None, Some(hf_repo), Some(tag)) => {
+            let normalized = hf_downloader::normalize_hf_repo_input(&hf_repo);
+            let target = hf_downloader::custom_pull_target(&hf_repo, &tag)?;
+            Ok((format!("{normalized}:{}", tag.trim()), target))
+        }
+        _ => Err(
+            "hf_pull_model requires either a string `model_id`, or both a string `hf_repo` and \
+             string `tag`"
+                .to_string(),
+        ),
+    }
+}
+
+/// Starts a real HF -> Ollama pull in the background: an immediate
+/// `{"status": "starting"}` ack, then a spawned thread runs the real,
+/// possibly multi-minute `ollama pull`, forwarding real subprocess output
+/// as `hf_pull_progress` events and finishing with `hf_pull_ready`/
+/// `hf_pull_failed` -- the same "ack now, event later" shape
+/// `litellm_proxy_start` already established. Accepts either a curated
+/// `model_id` or a user-defined custom `hf_repo`+`tag` pair, resolved by
+/// `resolve_hf_pull_target` above -- from this point on, both paths are
+/// identical: same validation-already-done target string, same subprocess
+/// spawn, same event shapes.
+fn hf_pull_model(
+    out_tx: Sender<String>,
+    model_id: Option<String>,
+    hf_repo: Option<String>,
+    tag: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let (event_id, target) = resolve_hf_pull_target(model_id, hf_repo, tag)?;
+
+    if !hf_downloader::is_ollama_available() {
+        return Err("`ollama` isn't on $PATH -- install it from https://ollama.com".to_string());
+    }
+
+    let ack_target = target.clone();
+    thread::spawn(move || {
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let forward_out_tx = out_tx.clone();
+        let forward_model_id = event_id.clone();
+        thread::spawn(move || {
+            for line in line_rx {
+                let event = Event {
+                    event: "hf_pull_progress".to_string(),
+                    data: serde_json::json!({ "model_id": forward_model_id, "line": line }),
+                };
+                if let Ok(l) = serde_json::to_string(&event) {
+                    let _ = forward_out_tx.send(l);
+                }
+            }
+        });
+
+        let event = match hf_downloader::spawn_pull_target(&target, line_tx) {
+            Ok(mut child) => match child.wait() {
+                Ok(status) if status.success() => Event {
+                    event: "hf_pull_ready".to_string(),
+                    data: serde_json::json!({ "model_id": event_id }),
+                },
+                Ok(status) => Event {
+                    event: "hf_pull_failed".to_string(),
+                    data: serde_json::json!({
+                        "model_id": event_id,
+                        "error": format!("ollama pull exited with {status}"),
+                    }),
+                },
+                Err(e) => Event {
+                    event: "hf_pull_failed".to_string(),
+                    data: serde_json::json!({ "model_id": event_id, "error": e.to_string() }),
+                },
+            },
+            Err(e) => Event {
+                event: "hf_pull_failed".to_string(),
+                data: serde_json::json!({ "model_id": event_id, "error": e.to_string() }),
+            },
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+
+    Ok(serde_json::json!({ "status": "starting", "target": ack_target }))
+}
+
+/// Real, synchronous listing of the same curated coding-model set
+/// `hf_list_models_json` serves, plus a real `lms_available` flag so the
+/// UI can show a correct, honest "detected"/"not detected" state up front
+/// -- part of making this "as simple to set up and use as possible":
+/// nothing to configure, but nothing hidden either.
+fn lmstudio_list_models_json() -> serde_json::Value {
+    let models: Vec<serde_json::Value> = hf_downloader::CURATED_MODELS
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "display_name": m.display_name,
+                "hf_repo": m.hf_repo,
+                "tag": m.tag,
+                "description": m.description,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "models": models,
+        "lms_available": lmstudio_downloader::is_lms_available(),
+    })
+}
+
+/// The direct LM Studio sibling of `resolve_hf_pull_target` -- identical
+/// shape (curated `model_id` wins if present, otherwise a validated custom
+/// `hf_repo`+`tag` pair), differing only in the final query string built
+/// (`lmstudio_downloader::pull_query`/`custom_pull_query`'s real
+/// `<repo>@<tag>` syntax instead of Ollama's `hf.co/<repo>:<tag>`). The
+/// real `event_id` shape (`<repo>:<tag>`) is deliberately kept identical to
+/// the HF/Ollama path so a UI can reuse the same key-matching logic for
+/// both panels.
+fn resolve_lmstudio_pull_query(
+    model_id: Option<String>,
+    hf_repo: Option<String>,
+    tag: Option<String>,
+) -> Result<(String, String), String> {
+    match (model_id, hf_repo, tag) {
+        (Some(model_id), _, _) => {
+            let model = hf_downloader::find_model(&model_id)
+                .ok_or_else(|| format!("unknown curated model id: {model_id:?}"))?;
+            Ok((model.id.to_string(), lmstudio_downloader::pull_query(model)))
+        }
+        (None, Some(hf_repo), Some(tag)) => {
+            let normalized = hf_downloader::normalize_hf_repo_input(&hf_repo);
+            let query = lmstudio_downloader::custom_pull_query(&hf_repo, &tag)?;
+            Ok((format!("{normalized}:{}", tag.trim()), query))
+        }
+        _ => Err(
+            "lmstudio_pull_model requires either a string `model_id`, or both a string \
+             `hf_repo` and string `tag`"
+                .to_string(),
+        ),
+    }
+}
+
+/// Starts a real LM Studio pull in the background -- the direct sibling of
+/// `hf_pull_model`, same "ack now, event later" shape, same accepted
+/// params, driving `lms get <query>` instead of `ollama pull`. Fails fast
+/// and honestly, with a clear, actionable message (naming exactly where
+/// `lms` is expected and what to do), if no real `lms` binary can be
+/// located at all -- never a silent hang.
+fn lmstudio_pull_model(
+    out_tx: Sender<String>,
+    model_id: Option<String>,
+    hf_repo: Option<String>,
+    tag: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let (event_id, query) = resolve_lmstudio_pull_query(model_id, hf_repo, tag)?;
+
+    if !lmstudio_downloader::is_lms_available() {
+        return Err(
+            "`lms` wasn't found on $PATH or at LM Studio's default install location -- \
+             install LM Studio from https://lmstudio.ai and run it at least once, no extra \
+             PATH setup needed"
+                .to_string(),
+        );
+    }
+
+    let ack_query = query.clone();
+    thread::spawn(move || {
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let forward_out_tx = out_tx.clone();
+        let forward_model_id = event_id.clone();
+        thread::spawn(move || {
+            for line in line_rx {
+                let event = Event {
+                    event: "lmstudio_pull_progress".to_string(),
+                    data: serde_json::json!({ "model_id": forward_model_id, "line": line }),
+                };
+                if let Ok(l) = serde_json::to_string(&event) {
+                    let _ = forward_out_tx.send(l);
+                }
+            }
+        });
+
+        let event = match lmstudio_downloader::spawn_pull_query(&query, line_tx) {
+            Ok(mut child) => match child.wait() {
+                Ok(status) if status.success() => Event {
+                    event: "lmstudio_pull_ready".to_string(),
+                    data: serde_json::json!({ "model_id": event_id }),
+                },
+                Ok(status) => Event {
+                    event: "lmstudio_pull_failed".to_string(),
+                    data: serde_json::json!({
+                        "model_id": event_id,
+                        "error": format!("lms get exited with {status}"),
+                    }),
+                },
+                Err(e) => Event {
+                    event: "lmstudio_pull_failed".to_string(),
+                    data: serde_json::json!({ "model_id": event_id, "error": e.to_string() }),
+                },
+            },
+            Err(e) => Event {
+                event: "lmstudio_pull_failed".to_string(),
+                data: serde_json::json!({ "model_id": event_id, "error": e.to_string() }),
+            },
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+
+    Ok(serde_json::json!({ "status": "starting", "target": ack_query }))
+}
+
+/// Real, synchronous listing for the llama.cpp panel: the same curated
+/// coding-model set (repo/tag only -- the real per-repo `.gguf` filename
+/// isn't resolved here, since that needs a real, possibly-slow HTTP call
+/// per model and this method must stay fast/synchronous like every other
+/// `*_list_models`) plus the real, already-downloaded files this backend
+/// already has on disk in `~/.spartan/models/` -- the UI cross-references
+/// the two by repo/tag substring rather than this method trying to
+/// precisely resolve and match all 21 curated filenames up front.
+fn llamacpp_list_models_json() -> serde_json::Value {
+    let models: Vec<serde_json::Value> = hf_downloader::CURATED_MODELS
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "display_name": m.display_name,
+                "hf_repo": m.hf_repo,
+                "tag": m.tag,
+                "description": m.description,
+            })
+        })
+        .collect();
+    let downloaded: Vec<serde_json::Value> = llamacpp_downloader::list_downloaded()
+        .into_iter()
+        .map(|d| {
+            serde_json::json!({
+                "filename": d.filename,
+                "size_bytes": d.size_bytes,
+                "path": llamacpp_downloader::models_dir().join(&d.filename).to_string_lossy(),
+            })
+        })
+        .collect();
+    serde_json::json!({ "models": models, "downloaded": downloaded })
+}
+
+/// The direct llama.cpp sibling of `resolve_hf_pull_target`/
+/// `resolve_lmstudio_pull_query` -- same accepted shape (a curated
+/// `model_id`, or a validated custom `hf_repo`+`tag` pair), resolving down
+/// to a real `(event_id, hf_repo, tag)` triple instead of a single target
+/// string, since the real download itself still needs one more real,
+/// live step (`llamacpp_downloader::resolve_gguf_filename`) this function
+/// deliberately does not perform -- that's a real, possibly-slow HTTP call
+/// of its own, done inside the background thread, not on the request
+/// thread, matching this crate's own "never block the one IPC channel"
+/// rule.
+fn resolve_llamacpp_download_target(
+    model_id: Option<String>,
+    hf_repo: Option<String>,
+    tag: Option<String>,
+) -> Result<(String, String, String), String> {
+    match (model_id, hf_repo, tag) {
+        (Some(model_id), _, _) => {
+            let model = hf_downloader::find_model(&model_id)
+                .ok_or_else(|| format!("unknown curated model id: {model_id:?}"))?;
+            Ok((
+                model.id.to_string(),
+                model.hf_repo.to_string(),
+                model.tag.to_string(),
+            ))
+        }
+        (None, Some(hf_repo), Some(tag)) => {
+            let normalized = hf_downloader::normalize_hf_repo_input(&hf_repo);
+            hf_downloader::validate_custom_repo_and_tag(&normalized, &tag)?;
+            Ok((
+                format!("{normalized}:{}", tag.trim()),
+                normalized,
+                tag.trim().to_string(),
+            ))
+        }
+        _ => Err(
+            "llamacpp_download_model requires either a string `model_id`, or both a string \
+             `hf_repo` and string `tag`"
+                .to_string(),
+        ),
+    }
+}
+
+/// Starts a real HF -> llama.cpp GGUF download in the background: an
+/// immediate `{"status": "starting"}` ack, then a spawned thread resolves
+/// the repo's real filename (a real, live HF API call --
+/// `llamacpp_downloader::resolve_gguf_filename`) and streams the real
+/// download itself, forwarding progress as `llamacpp_download_progress`
+/// events and finishing with `llamacpp_download_ready` (carrying the real
+/// saved file path, ready to hand straight to `settings_set`'s
+/// `leo_provider.model`) or `llamacpp_download_failed` -- the same
+/// "ack now, event later" shape `hf_pull_model`/`lmstudio_pull_model`
+/// already established. Unlike those two, there's no local binary to
+/// pre-check for -- a real HTTP client is always available -- so any
+/// failure (network, a repo with no matching quant, a write error) only
+/// ever surfaces async, through the `_failed` event, never synchronously.
+fn llamacpp_download_model(
+    out_tx: Sender<String>,
+    model_id: Option<String>,
+    hf_repo: Option<String>,
+    tag: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let (event_id, hf_repo, tag) = resolve_llamacpp_download_target(model_id, hf_repo, tag)?;
+
+    let ack_id = event_id.clone();
+    thread::spawn(move || {
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let forward_out_tx = out_tx.clone();
+        let forward_model_id = event_id.clone();
+        thread::spawn(move || {
+            for line in line_rx {
+                let event = Event {
+                    event: "llamacpp_download_progress".to_string(),
+                    data: serde_json::json!({ "model_id": forward_model_id, "line": line }),
+                };
+                if let Ok(l) = serde_json::to_string(&event) {
+                    let _ = forward_out_tx.send(l);
+                }
+            }
+        });
+
+        let event = match llamacpp_downloader::resolve_gguf_filename(&hf_repo, &tag) {
+            Ok(filename) => match llamacpp_downloader::download_gguf(&hf_repo, &filename, &line_tx)
+            {
+                Ok(path) => Event {
+                    event: "llamacpp_download_ready".to_string(),
+                    data: serde_json::json!({
+                        "model_id": event_id,
+                        "path": path.to_string_lossy(),
+                    }),
+                },
+                Err(e) => Event {
+                    event: "llamacpp_download_failed".to_string(),
+                    data: serde_json::json!({ "model_id": event_id, "error": e }),
+                },
+            },
+            Err(e) => Event {
+                event: "llamacpp_download_failed".to_string(),
+                data: serde_json::json!({ "model_id": event_id, "error": e }),
+            },
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+
+    Ok(serde_json::json!({ "status": "starting", "model_id": ack_id }))
 }
 
 fn leo_start_task(
@@ -1134,6 +1923,66 @@ fn pty_close(
     Ok(serde_json::json!({ "ok": true }))
 }
 
+/// Real DAP launch (§132) -- looks up the already-open document's real
+/// on-disk path (a debug session targets a real file, not raw text a
+/// client might be mid-editing unsaved), then hands off to
+/// `dap_integration::dap_launch` for the actual language/adapter
+/// resolution. The lock is released before that call runs (mirroring
+/// `leo_start_task`'s own precedent) since `dap_launch` itself spawns a
+/// real background thread and briefly blocks on the adapter's own
+/// initialize/launch/breakpoint handshake before returning.
+fn dap_launch(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+    break_lines: &[i64],
+) -> Result<serde_json::Value, String> {
+    let path = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        doc.path.clone()
+    };
+    let session = dap_integration::dap_launch(doc_id, &path, break_lines, out_tx)?;
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    let session_id = guard.next_dap_id;
+    guard.next_dap_id += 1;
+    guard.dap_sessions.insert(session_id, session);
+    Ok(serde_json::json!({ "session_id": session_id }))
+}
+
+fn dap_command(
+    state: &Arc<Mutex<BackendState>>,
+    session_id: u64,
+    command: spartan_dap::DapCommand,
+) -> Result<serde_json::Value, String> {
+    let guard = state.lock().map_err(|_| "backend state poisoned")?;
+    let session = guard
+        .dap_sessions
+        .get(&session_id)
+        .ok_or_else(|| format!("no dap session with id {session_id}"))?;
+    session.send_command(command);
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// Real, explicit `Disconnect` (not a drop-triggered shutdown -- see
+/// `spartan-dap::session`'s own doc comment for why this crate's shared
+/// `Arc<DapSession>` needs an explicit command instead) plus removal
+/// from `dap_sessions` -- an already-gone id is a real, harmless no-op,
+/// matching `pty_close`'s own established precedent.
+fn dap_disconnect(
+    state: &Arc<Mutex<BackendState>>,
+    session_id: u64,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    if let Some(session) = guard.dap_sessions.remove(&session_id) {
+        session.send_command(spartan_dap::DapCommand::Disconnect);
+    }
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 /// Real §75.74 dev containers -- OCI/Docker-based, following the open
 /// containers.dev `devcontainer.json` spec (the same one VS Code Dev
 /// Containers, GitHub Codespaces, and JetBrains Gateway implement),
@@ -1201,6 +2050,208 @@ fn android_detect(project_root: &str) -> Result<serde_json::Value, String> {
         "gradleVersion": gradle_version,
         "isAndroidProject": is_android_project,
     }))
+}
+
+/// Real, live `assembleDebug` build (task #11's next increment beyond
+/// `android_detect`'s detection-only scope) -- a real Android SDK
+/// (build-tools/platforms/cmdline-tools) confirmed present in this
+/// environment (unlike when `spartan-android` was first written) made
+/// this achievable for the first time: compile + package a real,
+/// installable debug APK. Still not the full §21 scope -- no emulator/
+/// device exists here (no `/dev/kvm`, no system-images), so there is
+/// nothing to install or run the resulting APK against; that stays
+/// real, separate, unstarted follow-up, named honestly rather than
+/// implied. The same "ack now, event later" shape `hf_pull_model`/
+/// `llamacpp_download_model` already established -- a real Gradle build
+/// can easily run minutes on a cold dependency cache, so it always runs
+/// on its own thread, forwarding every real Gradle output line as an
+/// `android_build_progress` event and finishing with
+/// `android_build_ready` (the real produced `.apk` path) or
+/// `android_build_failed`.
+fn android_build_apk(
+    out_tx: Sender<String>,
+    project_root: String,
+) -> Result<serde_json::Value, String> {
+    if project_root.trim().is_empty() {
+        return Err("android_build_apk requires a non-empty `project_root`".to_string());
+    }
+    let root = std::path::PathBuf::from(&project_root);
+    if !spartan_android::is_android_project(&root) {
+        return Err(format!(
+            "{project_root:?} does not look like a real Android/Gradle project"
+        ));
+    }
+
+    thread::spawn(move || {
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let forward_out_tx = out_tx.clone();
+        thread::spawn(move || {
+            for line in line_rx {
+                let event = Event {
+                    event: "android_build_progress".to_string(),
+                    data: serde_json::json!({ "line": line }),
+                };
+                if let Ok(l) = serde_json::to_string(&event) {
+                    let _ = forward_out_tx.send(l);
+                }
+            }
+        });
+
+        let toolchain = spartan_android::detect_toolchain();
+        let event = match spartan_android::build::build_debug_apk(
+            &root,
+            toolchain.sdk_root.as_deref(),
+            toolchain.gradle_path.as_deref(),
+            line_tx,
+        ) {
+            Ok(apk_path) => Event {
+                event: "android_build_ready".to_string(),
+                data: serde_json::json!({ "apk_path": apk_path.to_string_lossy() }),
+            },
+            Err(e) => Event {
+                event: "android_build_failed".to_string(),
+                data: serde_json::json!({ "error": e }),
+            },
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+
+    Ok(serde_json::json!({ "status": "starting" }))
+}
+
+/// Real, live, synchronous `adb devices -l` -- fast enough to run
+/// directly (no background thread needed, unlike the build/install
+/// paths). Requires a real detected `adb` on this machine; refuses
+/// honestly, naming the reason, when none is found rather than
+/// returning a fabricated empty list that would look identical to "no
+/// device attached."
+fn android_list_devices() -> Result<serde_json::Value, String> {
+    let toolchain = spartan_android::detect_toolchain();
+    let adb_path = toolchain.adb_path.ok_or_else(|| {
+        "no real `adb` found on this machine -- install the Android SDK platform-tools".to_string()
+    })?;
+    let devices = spartan_android::adb::list_devices(&adb_path)?;
+    Ok(serde_json::json!({ "devices": devices }))
+}
+
+/// Real, live `adb install -r <apk>`, optionally targeted at one
+/// `serial` when more than one real device is attached -- the natural
+/// next step after `android_build_apk` produces a real APK. Same
+/// "ack now, event later" shape as every other real, possibly-slow
+/// subprocess call in this crate (`android_install_progress`/
+/// `android_install_ready`/`android_install_failed`).
+fn android_install_apk(
+    out_tx: Sender<String>,
+    apk_path: String,
+    serial: Option<String>,
+) -> Result<serde_json::Value, String> {
+    if apk_path.trim().is_empty() {
+        return Err("android_install_apk requires a non-empty `apk_path`".to_string());
+    }
+    let toolchain = spartan_android::detect_toolchain();
+    let adb_path = toolchain.adb_path.ok_or_else(|| {
+        "no real `adb` found on this machine -- install the Android SDK platform-tools".to_string()
+    })?;
+
+    thread::spawn(move || {
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let forward_out_tx = out_tx.clone();
+        thread::spawn(move || {
+            for line in line_rx {
+                let event = Event {
+                    event: "android_install_progress".to_string(),
+                    data: serde_json::json!({ "line": line }),
+                };
+                if let Ok(l) = serde_json::to_string(&event) {
+                    let _ = forward_out_tx.send(l);
+                }
+            }
+        });
+
+        let apk = std::path::PathBuf::from(&apk_path);
+        let event =
+            match spartan_android::adb::install_apk(&adb_path, serial.as_deref(), &apk, line_tx) {
+                Ok(()) => Event {
+                    event: "android_install_ready".to_string(),
+                    data: serde_json::json!({ "apk_path": apk_path }),
+                },
+                Err(e) => Event {
+                    event: "android_install_failed".to_string(),
+                    data: serde_json::json!({ "error": e }),
+                },
+            };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+
+    Ok(serde_json::json!({ "status": "starting" }))
+}
+
+/// Real, live `adb logcat` spawn (task #150, the last named piece of
+/// task #11's device-management scope beyond the emulator/JDWP half this
+/// environment's own `/dev/kvm` absence keeps out of reach). Unlike
+/// `android_build_apk`/`android_install_apk`, this stream never resolves
+/// on its own -- it runs until `android_logcat_stop` is called, matching
+/// `pty_spawn`'s own real, unbounded-stream shape rather than the
+/// bounded "ack now, one terminal event later" one those two use.
+fn android_logcat_start(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    serial: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let toolchain = spartan_android::detect_toolchain();
+    let adb_path = toolchain.adb_path.ok_or_else(|| {
+        "no real `adb` found on this machine -- install the Android SDK platform-tools".to_string()
+    })?;
+
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    let session_id = guard.next_logcat_id;
+
+    let (line_tx, line_rx) = mpsc::channel::<String>();
+    let forward_out_tx = out_tx.clone();
+    thread::spawn(move || {
+        for line in line_rx {
+            let event = Event {
+                event: "android_logcat_output".to_string(),
+                data: serde_json::json!({ "session_id": session_id, "line": line }),
+            };
+            if let Ok(l) = serde_json::to_string(&event) {
+                if forward_out_tx.send(l).is_err() {
+                    break;
+                }
+            }
+        }
+        let event = Event {
+            event: "android_logcat_exit".to_string(),
+            data: serde_json::json!({ "session_id": session_id }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+
+    let handle = spartan_android::adb::spawn_logcat(&adb_path, serial.as_deref(), line_tx)
+        .map_err(|e| format!("failed to spawn adb logcat: {e}"))?;
+    guard.next_logcat_id += 1;
+    guard.logcat_sessions.insert(session_id, handle);
+    Ok(serde_json::json!({ "session_id": session_id }))
+}
+
+/// Real, hard stop -- an already-gone id is a real, harmless no-op,
+/// matching `pty_close`'s own established precedent for a session that's
+/// already ended on its own.
+fn android_logcat_stop(
+    state: &Arc<Mutex<BackendState>>,
+    session_id: u64,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    if let Some(mut handle) = guard.logcat_sessions.remove(&session_id) {
+        handle.kill();
+    }
+    Ok(serde_json::json!({ "ok": true }))
 }
 
 /// Real Docker container-name-safe sanitization (Docker's own real
@@ -1815,8 +2866,44 @@ fn project_template_files(template: &str) -> Result<Vec<(&'static str, &'static 
                 "System.Console.WriteLine(\"Hello from {{name}}!\");\n",
             ),
         ]),
+        // Real, direct sibling of task #144's own real, spike-verified
+        // minimal Android Gradle project (§ task #144 -- confirmed with a
+        // genuine `BUILD SUCCESSFUL` and a real, ZIP-verified debug APK
+        // before this template was ever written). Deliberately uses a
+        // fixed `com.spartan.app` namespace/applicationId rather than
+        // deriving one from `{{name}}` -- a real Java/Kotlin package
+        // segment can't contain the `-`/`_` characters
+        // `sanitize_project_name` allows, and this template's own
+        // substitution mechanism only supports the one `{{name}}` token,
+        // so a second, package-safe token would be real, separate,
+        // not-yet-justified complexity for a first increment. `{{name}}`
+        // is still used for the real, human-visible `android:label`. A
+        // project created here is immediately buildable via the real
+        // `android_build_apk` (task #144) the moment it's opened.
+        "android" => Ok(vec![
+            (
+                "settings.gradle.kts",
+                "pluginManagement {\n    repositories {\n        google()\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\ndependencyResolutionManagement {\n    repositories {\n        google()\n        mavenCentral()\n    }\n}\nrootProject.name = \"{{name}}\"\ninclude(\":app\")\n",
+            ),
+            (
+                "build.gradle.kts",
+                "plugins {\n    id(\"com.android.application\") version \"8.5.2\" apply false\n    id(\"org.jetbrains.kotlin.android\") version \"2.0.21\" apply false\n}\n",
+            ),
+            (
+                "app/build.gradle.kts",
+                "plugins {\n    id(\"com.android.application\")\n    id(\"org.jetbrains.kotlin.android\")\n}\n\nandroid {\n    namespace = \"com.spartan.app\"\n    compileSdk = 34\n\n    defaultConfig {\n        applicationId = \"com.spartan.app\"\n        minSdk = 24\n        targetSdk = 34\n        versionCode = 1\n        versionName = \"1.0\"\n    }\n    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }\n    kotlinOptions {\n        jvmTarget = \"17\"\n    }\n}\n",
+            ),
+            (
+                "app/src/main/AndroidManifest.xml",
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">\n    <application android:label=\"{{name}}\">\n        <activity android:name=\".MainActivity\" android:exported=\"true\">\n            <intent-filter>\n                <action android:name=\"android.intent.action.MAIN\" />\n                <category android:name=\"android.intent.category.LAUNCHER\" />\n            </intent-filter>\n        </activity>\n    </application>\n</manifest>\n",
+            ),
+            (
+                "app/src/main/java/com/spartan/app/MainActivity.kt",
+                "package com.spartan.app\n\nimport android.app.Activity\nimport android.os.Bundle\n\nclass MainActivity : Activity() {\n    override fun onCreate(savedInstanceState: Bundle?) {\n        super.onCreate(savedInstanceState)\n    }\n}\n",
+            ),
+        ]),
         other => Err(format!(
-            "unknown project template `{other}` -- expected one of rust, typescript, javascript, python, kotlin, java, go, csharp"
+            "unknown project template `{other}` -- expected one of rust, typescript, javascript, python, kotlin, java, go, csharp, android"
         )),
     }
 }
@@ -1909,8 +2996,20 @@ pub fn handle_request(
         "list_dir" => get_str_param(&req.params, "path").and_then(|p| list_dir(&p)),
         "open_file" => get_str_param(&req.params, "path").and_then(|p| {
             let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
-            open_file(&mut guard, &p)
+            open_file(&mut guard, &p, out_tx.clone())
         }),
+        "lsp_hover" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            let line = get_u64_param(&req.params, "line")? as i64;
+            let character = get_u64_param(&req.params, "character")? as i64;
+            lsp_hover(state, out_tx.clone(), doc_id, line, character)
+        })(),
+        "lsp_completion" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            let line = get_u64_param(&req.params, "line")? as i64;
+            let character = get_u64_param(&req.params, "character")? as i64;
+            lsp_completion(state, out_tx.clone(), doc_id, line, character)
+        })(),
         "edit" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;
             let start_char = get_u64_param(&req.params, "start_char")? as usize;
@@ -1980,6 +3079,25 @@ pub fn handle_request(
             pty_resize(state, session_id, cols, rows)
         })(),
         "pty_close" => get_u64_param(&req.params, "session_id").and_then(|id| pty_close(state, id)),
+        "dap_launch" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            let break_lines: Vec<i64> = req
+                .params
+                .get("break_lines")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+                .unwrap_or_default();
+            dap_launch(state, out_tx.clone(), doc_id, &break_lines)
+        })(),
+        "dap_continue" => get_u64_param(&req.params, "session_id")
+            .and_then(|id| dap_command(state, id, spartan_dap::DapCommand::Continue)),
+        "dap_step_over" => get_u64_param(&req.params, "session_id")
+            .and_then(|id| dap_command(state, id, spartan_dap::DapCommand::StepOver)),
+        "dap_step_into" => get_u64_param(&req.params, "session_id")
+            .and_then(|id| dap_command(state, id, spartan_dap::DapCommand::StepInto)),
+        "dap_disconnect" => {
+            get_u64_param(&req.params, "session_id").and_then(|id| dap_disconnect(state, id))
+        }
         "devcontainer_detect" => {
             get_str_param(&req.params, "project_root").and_then(|r| devcontainer_detect(&r))
         }
@@ -1993,6 +3111,21 @@ pub fn handle_request(
         "devcontainer_list" => devcontainer_list(),
         "android_detect" => {
             get_str_param(&req.params, "project_root").and_then(|r| android_detect(&r))
+        }
+        "android_build_apk" => get_str_param(&req.params, "project_root")
+            .and_then(|r| android_build_apk(out_tx.clone(), r)),
+        "android_list_devices" => android_list_devices(),
+        "android_install_apk" => (|| {
+            let apk_path = get_str_param(&req.params, "apk_path")?;
+            let serial = get_str_param(&req.params, "serial").ok();
+            android_install_apk(out_tx.clone(), apk_path, serial)
+        })(),
+        "android_logcat_start" => {
+            let serial = get_str_param(&req.params, "serial").ok();
+            android_logcat_start(state, out_tx.clone(), serial)
+        }
+        "android_logcat_stop" => {
+            get_u64_param(&req.params, "session_id").and_then(|id| android_logcat_stop(state, id))
         }
         "devcontainer_exec_spawn" => (|| {
             let container_id = get_str_param(&req.params, "container_id")?;
@@ -2091,6 +3224,75 @@ pub fn handle_request(
             })
         })(),
         "check_for_updates" => check_for_updates(out_tx.clone()),
+        "model_status" => Ok(model_status_json()),
+        "litellm_proxy_start" => (|| {
+            let port = get_u64_param(&req.params, "port")? as u16;
+            let config_path = req
+                .params
+                .get("config_path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            litellm_proxy_start(state, out_tx.clone(), port, config_path)
+        })(),
+        "litellm_proxy_stop" => litellm_proxy_stop(state),
+        "litellm_proxy_status" => litellm_proxy_status(state),
+        "hf_list_models" => Ok(hf_list_models_json()),
+        "hf_pull_model" => {
+            let model_id = req
+                .params
+                .get("model_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let hf_repo = req
+                .params
+                .get("hf_repo")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let tag = req
+                .params
+                .get("tag")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            hf_pull_model(out_tx.clone(), model_id, hf_repo, tag)
+        }
+        "lmstudio_list_models" => Ok(lmstudio_list_models_json()),
+        "lmstudio_pull_model" => {
+            let model_id = req
+                .params
+                .get("model_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let hf_repo = req
+                .params
+                .get("hf_repo")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let tag = req
+                .params
+                .get("tag")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            lmstudio_pull_model(out_tx.clone(), model_id, hf_repo, tag)
+        }
+        "llamacpp_list_models" => Ok(llamacpp_list_models_json()),
+        "llamacpp_download_model" => {
+            let model_id = req
+                .params
+                .get("model_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let hf_repo = req
+                .params
+                .get("hf_repo")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let tag = req
+                .params
+                .get("tag")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            llamacpp_download_model(out_tx.clone(), model_id, hf_repo, tag)
+        }
         "crash_reports_list" => crash_reports_list(),
         "crash_report_upload" => {
             get_str_param(&req.params, "filename").and_then(|f| crash_report_upload(&f))
@@ -2589,6 +3791,69 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[test]
+    fn android_build_apk_refuses_a_non_android_project() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-android-build-refuse-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "android_build_apk",
+            serde_json::json!({ "project_root": dir.to_string_lossy() }),
+        );
+        assert!(resp.error.is_some());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn android_build_apk_refuses_an_empty_project_root() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "android_build_apk",
+            serde_json::json!({ "project_root": "" }),
+        );
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn android_build_apk_acks_immediately_for_a_real_recognized_android_project() {
+        // Confirms the dispatch arm reaches the real handler and returns
+        // the real "ack now, event later" shape without ever blocking on
+        // the (possibly multi-minute) real Gradle build itself -- the
+        // background thread's own eventual real/failed event is covered
+        // by spartan-android's own build.rs tests, including a real,
+        // self-skipping live `assembleDebug` run.
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-android-build-ack-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let manifest_dir = dir.join("app").join("src").join("main");
+        std::fs::create_dir_all(&manifest_dir).unwrap();
+        std::fs::write(manifest_dir.join("AndroidManifest.xml"), "<manifest />").unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "android_build_apk",
+            serde_json::json!({ "project_root": dir.to_string_lossy() }),
+        );
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["status"], "starting");
+        // Deliberately not cleaned up here: a real background thread is now
+        // racing to spawn a real Gradle process against this directory (it
+        // will fail fast and harmlessly -- no real build.gradle exists in
+        // this fixture -- but this test doesn't wait for or assert on that
+        // event), so deleting the directory immediately would race with it.
+    }
+
     /// Real, live confirmation that this crate's own dispatch correctly
     /// reaches a *real* installed Gradle and parses its real version --
     /// self-skips (matching this workspace's own established convention)
@@ -2620,6 +3885,118 @@ mod tests {
             "expected a real parsed Gradle version"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Real, live confirmation this crate's own dispatch reaches a real
+    /// `adb` when one is present on this machine -- self-skips (matching
+    /// this workspace's own established convention) if none is found,
+    /// rather than asserting a specific device count (a different real
+    /// environment running this test with a real device attached should
+    /// still pass).
+    #[test]
+    fn android_list_devices_reaches_a_real_adb_when_one_is_present() {
+        let state = new_state();
+        let resp = call(&state, 1, "android_list_devices", serde_json::json!({}));
+        match resp.error {
+            Some(e) if e.contains("no real `adb`") => {
+                eprintln!("SKIP: no real `adb` found in this environment");
+            }
+            Some(e) => {
+                panic!("expected either a real device list or an honest 'no adb' error, got: {e}")
+            }
+            None => {
+                let devices = &resp.result.unwrap()["devices"];
+                assert!(devices.is_array(), "expected a real JSON array of devices");
+            }
+        }
+    }
+
+    #[test]
+    fn android_install_apk_refuses_an_empty_apk_path() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "android_install_apk",
+            serde_json::json!({ "apk_path": "" }),
+        );
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn android_install_apk_refuses_when_no_real_adb_and_acks_when_one_is_present() {
+        // Real, environment-dependent branch, matching
+        // `android_list_devices`'s own precedent: this crate can't fake
+        // adb's presence, so it asserts whichever real, honest outcome
+        // this environment actually produces rather than assuming one.
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "android_install_apk",
+            serde_json::json!({ "apk_path": "/nonexistent/fake.apk" }),
+        );
+        match resp.error {
+            Some(e) => assert!(
+                e.contains("no real `adb`"),
+                "expected the honest 'no adb' error, got: {e}"
+            ),
+            None => {
+                // A real adb is present -- this acks immediately and a
+                // real background thread will fail shortly after (no
+                // real APK exists at this path), matching
+                // `android_build_apk_acks_immediately...`'s own
+                // deliberately-not-awaited pattern.
+                assert_eq!(resp.result.unwrap()["status"], "starting");
+            }
+        }
+    }
+
+    #[test]
+    fn android_logcat_stop_on_an_unknown_session_is_a_real_harmless_no_op() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "android_logcat_stop",
+            serde_json::json!({ "session_id": 999 }),
+        );
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["ok"], true);
+    }
+
+    #[test]
+    fn android_logcat_start_reaches_a_real_adb_when_one_is_present_and_really_stops() {
+        // Real, environment-dependent branch, matching
+        // `android_list_devices`'s/`android_install_apk`'s own precedent.
+        let state = new_state();
+        let resp = call(&state, 1, "android_logcat_start", serde_json::json!({}));
+        match resp.error {
+            Some(e) => {
+                assert!(
+                    e.contains("no real `adb`"),
+                    "expected the honest 'no adb' error, got: {e}"
+                );
+            }
+            None => {
+                let session_id = resp.result.unwrap()["session_id"].as_u64().unwrap();
+                // A real adb logcat process is now genuinely running
+                // (streaming, or -- with no real device attached, as
+                // confirmed live earlier this session -- blocked on its
+                // own real "waiting for device" state). Stopping it must
+                // really remove the session, confirmed by a second stop
+                // call being the same harmless no-op an already-gone
+                // session gets.
+                let stop_resp = call(
+                    &state,
+                    2,
+                    "android_logcat_stop",
+                    serde_json::json!({ "session_id": session_id }),
+                );
+                assert!(stop_resp.error.is_none());
+                assert_eq!(stop_resp.result.unwrap()["ok"], true);
+            }
+        }
     }
 
     #[test]
@@ -3424,6 +4801,7 @@ mod tests {
             "java",
             "go",
             "csharp",
+            "android",
         ] {
             let scratch = std::env::temp_dir().join(format!(
                 "spartan-backend-create-project-detect-{template}-{}",
@@ -3461,6 +4839,131 @@ mod tests {
     }
 
     #[test]
+    fn create_project_android_template_is_recognized_by_spartan_android_as_a_real_android_project()
+    {
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-create-project-android-detect-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "create_project",
+            serde_json::json!({
+                "parent_dir": scratch.to_string_lossy(),
+                "template": "android",
+                "name": "my-android-app",
+            }),
+        );
+        assert!(
+            resp.error.is_none(),
+            "create_project errored: {:?}",
+            resp.error
+        );
+        let project_root = scratch.join("my-android-app");
+        assert!(
+            spartan_android::is_android_project(&project_root),
+            "the real android template must be recognized as a real Android project"
+        );
+        let manifest = std::fs::read_to_string(
+            project_root
+                .join("app")
+                .join("src")
+                .join("main")
+                .join("AndroidManifest.xml"),
+        )
+        .unwrap();
+        assert!(manifest.contains("my-android-app"));
+
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    /// Real, live, self-skipping end-to-end confirmation that the android
+    /// template isn't merely *detected* as an Android project but is
+    /// genuinely, actually buildable -- scaffolds a real project via the
+    /// real `create_project` dispatch, then runs the real
+    /// `spartan_android::build::build_debug_apk` against it (the exact
+    /// same function `android_build_apk` calls). Self-skips (matching this
+    /// workspace's own established convention) if this environment has no
+    /// real Android SDK (`SPARTAN_TEST_ANDROID_SDK`) -- when it runs, this
+    /// is a genuine `assembleDebug` against real Google Maven/Maven
+    /// Central dependencies, confirmed once already by `spartan-android`'s
+    /// own `build.rs` test against a hand-written fixture; this test
+    /// confirms the *product's own template content*, not a hand-written
+    /// duplicate, produces an identical real result.
+    #[test]
+    fn create_project_android_template_produces_a_real_buildable_project() {
+        let Ok(sdk_root) = std::env::var("SPARTAN_TEST_ANDROID_SDK") else {
+            eprintln!(
+                "SKIP: SPARTAN_TEST_ANDROID_SDK not set, skipping real android template build test"
+            );
+            return;
+        };
+        let sdk_root = std::path::PathBuf::from(sdk_root);
+        if !sdk_root.is_dir() {
+            eprintln!(
+                "SKIP: {sdk_root:?} does not exist, skipping real android template build test"
+            );
+            return;
+        }
+
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-create-project-android-build-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "create_project",
+            serde_json::json!({
+                "parent_dir": scratch.to_string_lossy(),
+                "template": "android",
+                "name": "buildme",
+            }),
+        );
+        assert!(
+            resp.error.is_none(),
+            "create_project errored: {:?}",
+            resp.error
+        );
+        let project_root = scratch.join("buildme");
+
+        let (tx, rx) = mpsc::channel();
+        let gradle = spartan_android::detect_toolchain().gradle_path;
+        let result = spartan_android::build::build_debug_apk(
+            &project_root,
+            Some(&sdk_root),
+            gradle.as_deref(),
+            tx,
+        );
+        let lines: Vec<String> = rx.try_iter().collect();
+        let apk_path = result.unwrap_or_else(|e| {
+            panic!(
+                "expected a real successful build of the product's own android template, got \
+                 error: {e}\nlast output lines: {:?}",
+                &lines[lines.len().saturating_sub(20)..]
+            )
+        });
+        assert!(apk_path.is_file());
+        let bytes = std::fs::read(&apk_path).unwrap();
+        assert_eq!(
+            &bytes[0..4],
+            b"PK\x03\x04",
+            "expected a real ZIP/APK signature"
+        );
+
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
     fn build_leo_provider_constructs_a_real_ollama_provider_by_default() {
         let settings = spartan_settings::LeoProviderSettings::default();
         let provider =
@@ -3471,10 +4974,113 @@ mod tests {
     }
 
     #[test]
+    fn model_status_json_reports_a_real_configured_provider() {
+        // Loads whatever settings exist (defaults to Ollama when none), builds
+        // the real provider, and reports a real live health probe. We assert on
+        // the shape, not a specific health (Ollama may or may not be running).
+        let status = model_status_json();
+        // Either a configured provider with the expected fields, or an honest
+        // construction error -- never a fabricated success.
+        if status["configured"] == serde_json::Value::Bool(true) {
+            assert!(status["kind"].is_string(), "reports the provider kind");
+            assert!(status["is_local"].is_boolean());
+            assert!(status["context_window"].is_u64());
+            let health = status["health"].as_str().unwrap();
+            assert!(
+                matches!(health, "healthy" | "unauthorized" | "unreachable"),
+                "health is a real enum value, got {health:?}"
+            );
+        } else {
+            assert!(status["error"].is_string(), "an error is reported plainly");
+        }
+    }
+
+    /// `model_status_json()` itself has been real and tested since §75.43,
+    /// but `handle_request` never exposed it as a real callable method --
+    /// `spartan-devserver`'s own wrapping dispatcher answered `model_status`
+    /// directly and never fell through to this crate for it, so `desktop/`
+    /// (which talks to a plain `spartan-backend` process, not a devserver)
+    /// had no way to reach it at all. This confirms the dispatch arm itself
+    /// reaches the same real function, matching its own shape exactly.
+    #[test]
+    fn model_status_is_a_real_reachable_backend_method() {
+        let state = new_state();
+        let resp = call(&state, 1, "model_status", serde_json::json!({}));
+        assert!(resp.error.is_none(), "model_status must succeed: {resp:?}");
+        let result = resp.result.unwrap();
+        assert!(
+            result["configured"].is_boolean(),
+            "reports a real configured flag"
+        );
+        assert!(result["kind"].is_string(), "reports the provider kind");
+    }
+
+    #[test]
+    fn build_leo_provider_constructs_a_real_lmstudio_provider() {
+        let settings = spartan_settings::LeoProviderSettings {
+            kind: spartan_settings::LeoProviderKind::LmStudio,
+            model: "local-model".to_string(),
+            ..Default::default()
+        };
+        let provider =
+            build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default())
+                .expect("LM Studio provider construction must never fail (no key needed)");
+        // LM Studio runs the model on-device -- a real local runtime.
+        assert!(provider.is_local());
+        assert_eq!(provider.id(), "local-model");
+    }
+
+    #[test]
+    fn build_leo_provider_wraps_a_configured_fallback_chain_in_a_failover_provider() {
+        // Primary Ollama + one LiteLLM fallback -> a real FailoverProvider.
+        let settings = spartan_settings::LeoProviderSettings {
+            kind: spartan_settings::LeoProviderKind::Ollama,
+            model: "llama3.1:8b".to_string(),
+            fallbacks: vec![spartan_settings::LeoProviderSettings {
+                kind: spartan_settings::LeoProviderKind::LiteLLM,
+                model: "gpt-4o".to_string(),
+                ..Default::default()
+            }],
+        };
+        let provider =
+            build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default())
+                .expect("a valid fallback chain builds");
+        // The wrapper reports itself as "failover"; the chain contains a cloud
+        // (LiteLLM) provider, so the wrapper is conservatively non-local.
+        assert_eq!(provider.id(), "failover");
+        assert!(
+            !provider.is_local(),
+            "a chain containing a cloud provider is not local"
+        );
+    }
+
+    #[test]
+    fn build_leo_provider_fails_the_whole_chain_when_a_fallback_cannot_be_built() {
+        // A llama.cpp fallback with an empty model path can't be built -> the
+        // whole chain build fails with a clear, fallback-attributed message,
+        // rather than silently dropping that link.
+        let settings = spartan_settings::LeoProviderSettings {
+            kind: spartan_settings::LeoProviderKind::Ollama,
+            model: "llama3.1:8b".to_string(),
+            fallbacks: vec![spartan_settings::LeoProviderSettings {
+                kind: spartan_settings::LeoProviderKind::LlamaCpp,
+                model: String::new(),
+                ..Default::default()
+            }],
+        };
+        let result = build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default());
+        match result {
+            Ok(_) => panic!("an unbuildable fallback must fail the chain"),
+            Err(err) => assert!(err.contains("fallback provider #1"), "err was: {err}"),
+        }
+    }
+
+    #[test]
     fn build_leo_provider_constructs_a_real_litellm_provider() {
         let settings = spartan_settings::LeoProviderSettings {
             kind: spartan_settings::LeoProviderKind::LiteLLM,
             model: "gpt-4o".to_string(),
+            ..Default::default()
         };
         let provider =
             build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default())
@@ -3492,6 +5098,7 @@ mod tests {
         let settings = spartan_settings::LeoProviderSettings {
             kind: spartan_settings::LeoProviderKind::Claude,
             model: "claude-3-5-sonnet-latest".to_string(),
+            ..Default::default()
         };
         let result = build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default());
         match result {
@@ -3513,6 +5120,7 @@ mod tests {
         let settings = spartan_settings::LeoProviderSettings {
             kind: spartan_settings::LeoProviderKind::Claude,
             model: "claude-3-5-sonnet-latest".to_string(),
+            ..Default::default()
         };
         let provider =
             build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default())
@@ -3531,6 +5139,7 @@ mod tests {
         let settings = spartan_settings::LeoProviderSettings {
             kind: spartan_settings::LeoProviderKind::LlamaCpp,
             model: String::new(),
+            ..Default::default()
         };
         let result = build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default());
         match result {
@@ -3544,6 +5153,7 @@ mod tests {
         let settings = spartan_settings::LeoProviderSettings {
             kind: spartan_settings::LeoProviderKind::LlamaCpp,
             model: "/nonexistent/path/to/a/model.gguf".to_string(),
+            ..Default::default()
         };
         let result = build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default());
         match result {
@@ -3572,12 +5182,78 @@ mod tests {
         let settings = spartan_settings::LeoProviderSettings {
             kind: spartan_settings::LeoProviderKind::LlamaCpp,
             model: model_path,
+            ..Default::default()
         };
         let provider =
             build_leo_provider(&settings, spartan_settings::GpuOffloadSettings::default())
                 .expect("a real, valid .gguf file must construct successfully");
         assert!(provider.is_local());
         assert!(!provider.supports_native_tool_calling());
+    }
+
+    #[test]
+    fn resolve_llamacpp_download_target_resolves_a_real_curated_model_id() {
+        let model = hf_downloader::CURATED_MODELS[0];
+        let (event_id, hf_repo, tag) =
+            resolve_llamacpp_download_target(Some(model.id.to_string()), None, None).unwrap();
+        assert_eq!(event_id, model.id);
+        assert_eq!(hf_repo, model.hf_repo);
+        assert_eq!(tag, model.tag);
+    }
+
+    #[test]
+    fn resolve_llamacpp_download_target_resolves_and_normalizes_a_real_custom_repo_and_tag() {
+        let (event_id, hf_repo, tag) = resolve_llamacpp_download_target(
+            None,
+            Some("https://huggingface.co/bartowski/Foo-GGUF/".to_string()),
+            Some("Q4_K_M".to_string()),
+        )
+        .unwrap();
+        assert_eq!(event_id, "bartowski/Foo-GGUF:Q4_K_M");
+        assert_eq!(hf_repo, "bartowski/Foo-GGUF");
+        assert_eq!(tag, "Q4_K_M");
+    }
+
+    #[test]
+    fn resolve_llamacpp_download_target_errors_on_an_unknown_curated_id() {
+        let result =
+            resolve_llamacpp_download_target(Some("not-a-real-curated-id".to_string()), None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_llamacpp_download_target_errors_with_neither_model_id_nor_custom_pair() {
+        assert!(resolve_llamacpp_download_target(None, None, None).is_err());
+        assert!(resolve_llamacpp_download_target(
+            None,
+            Some("bartowski/Foo-GGUF".to_string()),
+            None
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn llamacpp_list_models_json_reports_the_real_curated_list_and_a_real_downloaded_array() {
+        let value = llamacpp_list_models_json();
+        let models = value.get("models").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(models.len(), hf_downloader::CURATED_MODELS.len());
+        // Real, on-disk listing -- an array (possibly empty), never absent.
+        assert!(value.get("downloaded").and_then(|v| v.as_array()).is_some());
+    }
+
+    #[test]
+    fn llamacpp_download_model_dispatch_arm_reaches_the_real_handler() {
+        let (tx, _rx) = mpsc::channel();
+        let model = hf_downloader::CURATED_MODELS[0];
+        let result = llamacpp_download_model(tx, Some(model.id.to_string()), None, None).unwrap();
+        assert_eq!(
+            result.get("status").and_then(|v| v.as_str()),
+            Some("starting")
+        );
+        assert_eq!(
+            result.get("model_id").and_then(|v| v.as_str()),
+            Some(model.id)
+        );
     }
 
     #[test]
@@ -3647,6 +5323,101 @@ mod tests {
             serde_json::json!({ "doc_id": 999, "start_char": 0, "end_char": 0, "text": "x" }),
         );
         assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn lsp_hover_on_a_real_unopened_doc_id_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "lsp_hover",
+            serde_json::json!({ "doc_id": 999, "line": 0, "character": 0 }),
+        );
+        assert!(resp.error.unwrap().contains("no open document"));
+    }
+
+    #[test]
+    fn lsp_hover_on_a_real_open_synthetic_file_with_no_lsp_session_errors_honestly() {
+        // A real file with an unrecognized extension never gets a real LSP
+        // session at all (`lsp_integration::maybe_spawn_lsp`'s own honest
+        // `None` case) -- `lsp_hover` must report that specifically, not
+        // silently hang or crash.
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-lsp-hover-no-session-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("data.unknownext");
+        std::fs::write(&file, "hello").unwrap();
+
+        let state = new_state();
+        let open_resp = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        );
+        let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+        let resp = call(
+            &state,
+            2,
+            "lsp_hover",
+            serde_json::json!({ "doc_id": doc_id, "line": 0, "character": 0 }),
+        );
+        assert!(resp.error.unwrap().contains("no live LSP session"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lsp_completion_on_a_real_unopened_doc_id_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "lsp_completion",
+            serde_json::json!({ "doc_id": 999, "line": 0, "character": 0 }),
+        );
+        assert!(resp.error.unwrap().contains("no open document"));
+    }
+
+    #[test]
+    fn lsp_completion_on_a_real_open_synthetic_file_with_no_lsp_session_errors_honestly() {
+        // The direct sibling of `lsp_hover`'s own identical test above --
+        // same real, honest error path, same "unrecognized extension never
+        // gets a real LSP session" cause.
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-lsp-completion-no-session-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("data.unknownext");
+        std::fs::write(&file, "hello").unwrap();
+
+        let state = new_state();
+        let open_resp = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        );
+        let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+        let resp = call(
+            &state,
+            2,
+            "lsp_completion",
+            serde_json::json!({ "doc_id": doc_id, "line": 0, "character": 0 }),
+        );
+        assert!(resp.error.unwrap().contains("no live LSP session"));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

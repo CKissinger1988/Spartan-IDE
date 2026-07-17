@@ -115,6 +115,18 @@ impl LlamaCppProvider {
         n_ctx: NonZeroU32,
     ) -> Result<Self, ProviderError> {
         let model_path = model_path.into();
+        // Guard the common "no such file" case ourselves: llama-cpp-2's
+        // `load_from_file` `assert!`-panics on a missing path instead of
+        // returning an error, which would defeat the graceful `.map_err`
+        // below (and take down the whole process). Check first so a missing
+        // .gguf is a real, catchable `ProviderError`, matching this
+        // constructor's documented "surfaces it immediately as a real error"
+        // contract.
+        if !model_path.exists() {
+            return Err(ProviderError::Local(format!(
+                "model file does not exist: {model_path:?}"
+            )));
+        }
         let backend = shared_backend();
         let model_params = LlamaModelParams::default();
         let model = LlamaModel::load_from_file(backend, &model_path, &model_params)

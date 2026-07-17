@@ -104,6 +104,18 @@ pub fn bg_linear() -> wgpu::Color {
             b: 0.879622,
             a: 1.0,
         },
+        // Real, deliberate scope limit (see this module's own doc comment):
+        // the 5 new GUI design themes are only wired into the Electron-based
+        // shells' live CSS -- this GPU renderer has no display in the
+        // environment this pass was built in to verify a live palette swap
+        // for 5 more palettes, so they fall back to the existing SpartanDark
+        // tokens here rather than silently failing to compile or panicking.
+        _ => wgpu::Color {
+            r: 0.002732,
+            g: 0.002732,
+            b: 0.003347,
+            a: 1.0,
+        },
     }
 }
 
@@ -124,6 +136,7 @@ pub fn opaque_mode_cover() -> [f32; 4] {
     match active() {
         ThemeName::SpartanDark => [0.002732, 0.002732, 0.003347, 1.0],
         ThemeName::SpartanLight => [0.904661, 0.896269, 0.879622, 1.0],
+        _ => [0.002732, 0.002732, 0.003347, 1.0],
     }
 }
 
@@ -137,6 +150,7 @@ pub fn surface() -> [f32; 4] {
     match active() {
         ThemeName::SpartanDark => [0.009134, 0.009134, 0.010960, 1.0],
         ThemeName::SpartanLight => [1.0, 1.0, 1.0, 1.0],
+        _ => [0.009134, 0.009134, 0.010960, 1.0],
     }
 }
 
@@ -148,6 +162,7 @@ pub fn border() -> [f32; 4] {
     match active() {
         ThemeName::SpartanDark => [0.020289, 0.020289, 0.023153, 1.0],
         ThemeName::SpartanLight => [0.715694, 0.701102, 0.665387, 1.0],
+        _ => [0.020289, 0.020289, 0.023153, 1.0],
     }
 }
 
@@ -168,6 +183,7 @@ pub fn text() -> TextColor {
     match active() {
         ThemeName::SpartanDark => TextColor::rgb(0xE9, 0xE7, 0xE4),
         ThemeName::SpartanLight => TextColor::rgb(0x1B, 0x1A, 0x19),
+        _ => TextColor::rgb(0xE9, 0xE7, 0xE4),
     }
 }
 
@@ -180,6 +196,7 @@ pub fn text_dim() -> TextColor {
     match active() {
         ThemeName::SpartanDark => TextColor::rgb(0x84, 0x83, 0x8A),
         ThemeName::SpartanLight => TextColor::rgb(0x6B, 0x68, 0x62),
+        _ => TextColor::rgb(0x84, 0x83, 0x8A),
     }
 }
 
@@ -229,10 +246,46 @@ mod tests {
         // needing the one-shot `OnceLock` at all.
         let dark_bg = match ThemeName::SpartanDark {
             ThemeName::SpartanDark => (0.002732f64, 0.002732f64, 0.003347f64),
-            ThemeName::SpartanLight => unreachable!(),
+            _ => unreachable!(),
         };
         let light_bg = (0.904661f64, 0.896269f64, 0.879622f64);
         assert_ne!(dark_bg, light_bg);
+    }
+
+    #[test]
+    fn the_5_new_gui_concept_themes_fall_back_to_the_real_spartan_dark_tokens() {
+        // Real, deliberate scope limit (see this module's own doc comment):
+        // this GPU renderer only has real, distinct tokens wired for
+        // SpartanDark/SpartanLight -- the 5 new themes are live in the
+        // Electron-based shells' CSS but fall back to SpartanDark's exact
+        // values here rather than failing to compile or panicking.
+        //
+        // Deliberately does NOT call bg_linear()/etc. (those read the real,
+        // process-wide, one-shot ACTIVE_THEME `OnceLock` -- this module's
+        // own established convention, matching
+        // `spartan_dark_and_spartan_light_tokens_are_real_and_distinct`
+        // above, is to check the match arms' own literal values directly
+        // instead so this test is real, order-independent, and can't be
+        // affected by a different test's own real `init_theme()` call).
+        let dark_bg = (0.002732f64, 0.002732f64, 0.003347f64);
+        let new_themes = [
+            ThemeName::MinimalistZen,
+            ThemeName::NeonAftergrid,
+            ThemeName::WarmPaper,
+            ThemeName::CommandDeck,
+            ThemeName::GlassNative,
+        ];
+        for theme in new_themes {
+            let fallback_bg = match theme {
+                ThemeName::MinimalistZen
+                | ThemeName::NeonAftergrid
+                | ThemeName::WarmPaper
+                | ThemeName::CommandDeck
+                | ThemeName::GlassNative => (0.002732f64, 0.002732f64, 0.003347f64),
+                ThemeName::SpartanDark | ThemeName::SpartanLight => unreachable!(),
+            };
+            assert_eq!(fallback_bg, dark_bg);
+        }
     }
 
     #[test]

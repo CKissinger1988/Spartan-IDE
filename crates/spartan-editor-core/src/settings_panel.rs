@@ -148,17 +148,27 @@ impl SettingsPanelState {
         };
     }
 
-    /// Real §75.93 theme toggle (`Theme` row only) -- only two real
-    /// variants exist (`spartan_settings::ThemeName`), so Left/Right/
-    /// Space/Enter all just flip between them; no "Auto" concept the way
-    /// GPU layers has one.
+    /// Real theme toggle (`Theme` row only), extended from 2 to 7 real
+    /// variants by the "make all GUI designs user changeable" pass.
+    /// Left/Right/Space/Enter all call this same, single-direction cycle
+    /// (this crate's own `main.rs` calls it identically for both arrow
+    /// keys -- no delta is threaded through) -- a real, deliberate, minor
+    /// UX simplification over a true bidirectional cycle, since a 7-stop
+    /// forward-only wrap is still a small, fast cycle to reach every
+    /// theme; a true Left-goes-back UX is real, separate, unstarted
+    /// follow-up if wanted.
     pub fn cycle_theme(&mut self) {
         if self.selected != SettingsRow::Theme {
             return;
         }
         self.settings.appearance.theme = match self.settings.appearance.theme {
             ThemeName::SpartanDark => ThemeName::SpartanLight,
-            ThemeName::SpartanLight => ThemeName::SpartanDark,
+            ThemeName::SpartanLight => ThemeName::MinimalistZen,
+            ThemeName::MinimalistZen => ThemeName::NeonAftergrid,
+            ThemeName::NeonAftergrid => ThemeName::WarmPaper,
+            ThemeName::WarmPaper => ThemeName::CommandDeck,
+            ThemeName::CommandDeck => ThemeName::GlassNative,
+            ThemeName::GlassNative => ThemeName::SpartanDark,
         };
     }
 
@@ -249,6 +259,11 @@ fn theme_text(theme: ThemeName) -> &'static str {
     match theme {
         ThemeName::SpartanDark => "Spartan Dark",
         ThemeName::SpartanLight => "Spartan Light",
+        ThemeName::MinimalistZen => "Minimalist Zen",
+        ThemeName::NeonAftergrid => "Neon Aftergrid",
+        ThemeName::WarmPaper => "Warm Paper",
+        ThemeName::CommandDeck => "Command Deck",
+        ThemeName::GlassNative => "Glass Native",
     }
 }
 
@@ -410,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn cycle_theme_only_affects_the_theme_row_and_toggles_both_ways() {
+    fn cycle_theme_only_affects_the_theme_row_and_visits_all_7_real_variants_before_wrapping() {
         let mut state =
             SettingsPanelState::opened_with(Settings::default(), "test-renderer".to_string());
         assert_eq!(state.settings.appearance.theme, ThemeName::SpartanDark);
@@ -424,10 +439,20 @@ mod tests {
         state.move_selection_down();
         state.move_selection_down();
         assert_eq!(state.selected, SettingsRow::Theme);
-        state.cycle_theme();
-        assert_eq!(state.settings.appearance.theme, ThemeName::SpartanLight);
-        state.cycle_theme();
-        assert_eq!(state.settings.appearance.theme, ThemeName::SpartanDark);
+
+        let expected = [
+            ThemeName::SpartanLight,
+            ThemeName::MinimalistZen,
+            ThemeName::NeonAftergrid,
+            ThemeName::WarmPaper,
+            ThemeName::CommandDeck,
+            ThemeName::GlassNative,
+            ThemeName::SpartanDark,
+        ];
+        for want in expected {
+            state.cycle_theme();
+            assert_eq!(state.settings.appearance.theme, want);
+        }
     }
 
     #[test]
@@ -530,6 +555,28 @@ mod tests {
         let text = build_panel_text(&state);
         assert!(text.contains("Spartan Dark"));
         assert!(text.contains("(bundled JetBrains Mono)"));
+    }
+
+    #[test]
+    fn theme_text_gives_a_distinct_real_label_for_all_7_variants() {
+        let all = [
+            ThemeName::SpartanDark,
+            ThemeName::SpartanLight,
+            ThemeName::MinimalistZen,
+            ThemeName::NeonAftergrid,
+            ThemeName::WarmPaper,
+            ThemeName::CommandDeck,
+            ThemeName::GlassNative,
+        ];
+        let labels: Vec<&str> = all.iter().map(|t| theme_text(*t)).collect();
+        for i in 0..labels.len() {
+            for j in (i + 1)..labels.len() {
+                assert_ne!(
+                    labels[i], labels[j],
+                    "every real theme label must be distinct"
+                );
+            }
+        }
     }
 
     #[test]

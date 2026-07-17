@@ -113,13 +113,59 @@
   min-height: 0;
 }
 
+/* Real DAP debug panel wrapper (task #133) -- stacks the debug toolbar
+ * above `.content-area`, mirroring `desktop/src/app.css`'s own
+ * `.editor-and-debug` exactly. */
+.editor-and-debug {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .file-tree-panel {
   width: 220px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
+  /* Track C: glassmorphic "hologram" treatment, matching desktop/'s Leo
+     panel -- a translucent surface with a real backdrop blur over the
+     app's body gradient, replacing the flat opaque fill. */
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  backdrop-filter: blur(10px) saturate(1.1);
+  -webkit-backdrop-filter: blur(10px) saturate(1.1);
   border-right: 1px solid var(--border);
+  box-shadow: 1px 0 0 rgba(var(--accent-rgb), 0.18);
+}
+
+/* Track C: status-reactive backend-connection indicator (ties into
+   backendClient.ts). A small glowing dot + label whose color reflects the
+   real connection state -- green when connected to a devserver, dim when
+   client-only. Semantic status hues, not the brand accent. */
+.status-backend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.status-backend::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+.status-backend[data-status="connected"] {
+  color: rgb(var(--status-ok-rgb));
+}
+.status-backend[data-status="connected"]::before {
+  background: rgb(var(--status-ok-rgb));
+  box-shadow: 0 0 6px rgba(var(--status-ok-rgb), 0.7);
+}
+.status-backend[data-status="connecting"]::before {
+  background: rgb(var(--status-active-rgb));
+  animation: hud-status-pulse 1.4s ease-in-out infinite;
+  --status-glow-rgb: var(--status-active-rgb);
 }
 
 .file-tree {
@@ -127,6 +173,148 @@
   overflow-y: auto;
   flex: 1;
   min-height: 0;
+}
+
+/* Real Git panel (§75.65's own desktop/ source, ported verbatim below for
+   git-panel-*), plus the Files/Git sidebar toggle that switches between it
+   and the File System Access-backed FileTree -- copied verbatim from
+   desktop/src/app.css so both shells share one visual language. */
+.sidebar-toggle-row {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.sidebar-toggle-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 0;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color var(--transition-fast);
+}
+
+.sidebar-toggle-btn:hover {
+  color: var(--text);
+}
+
+.sidebar-toggle-active {
+  color: var(--accent);
+  box-shadow:
+    inset 0 -2px 0 var(--accent),
+    inset 0 -2px 6px rgba(var(--accent-rgb), 0.3);
+}
+
+.git-panel {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.git-panel-empty {
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 8px;
+}
+
+.git-branch {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  padding: 2px 0 6px;
+}
+
+.git-commit-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px;
+  resize: vertical;
+  min-height: 44px;
+}
+
+.git-commit-input:focus {
+  outline: 1px solid var(--accent);
+}
+
+.git-commit-button {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 5px 0;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition:
+    background var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.git-commit-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.git-commit-button:not(:disabled):hover {
+  background: var(--accent-hover);
+  box-shadow: var(--glow-accent);
+}
+
+.git-section-label {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 4px;
+}
+
+.git-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.git-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.git-row:hover {
+  background: var(--accent-hover);
+}
+
+.git-status-glyph {
+  width: 12px;
+  color: var(--accent);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.git-row-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.git-conflict-marker {
+  color: #e05a4a;
+  font-weight: bold;
 }
 
 .tree-row {
@@ -168,6 +356,76 @@
 .editor-root {
   display: flex;
   height: 100%;
+  position: relative;
+}
+
+/* Real LSP hover tooltip (task #135, the web/ half of task #134's own
+ * desktop-then-web follow-up), byte-identical to desktop/'s own copy. */
+.editor-hover-tooltip {
+  position: fixed;
+  z-index: 50;
+  max-width: 480px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  pointer-events: none;
+}
+
+/* Real LSP completion dropdown (task #136), byte-identical to
+ * desktop/'s own copy. */
+.editor-completion-list {
+  position: fixed;
+  z-index: 51;
+  min-width: 220px;
+  max-width: 420px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-size: 12px;
+}
+
+.editor-completion-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 10px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.editor-completion-item-active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.editor-completion-item-empty {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.editor-completion-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-completion-detail {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
 }
 
 .editor-gutter {
@@ -182,6 +440,175 @@
   flex-shrink: 0;
   border-right: 1px solid var(--border);
   user-select: none;
+}
+
+/* Real LSP diagnostics (BackendEditor.tsx, mirroring desktop/'s own
+ * gutter treatment verbatim) -- one real block per line so each row can
+ * carry its own severity-tinted background + a real hover tooltip. */
+.editor-gutter-line {
+  padding-right: 2px;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.editor-gutter-line-error {
+  background: rgba(var(--status-critical-rgb), 0.16);
+  color: rgb(var(--status-critical-rgb));
+  box-shadow: inset 2px 0 0 rgb(var(--status-critical-rgb));
+}
+
+.editor-gutter-line-warning {
+  background: rgba(var(--status-warning-rgb), 0.14);
+  color: rgb(var(--status-warning-rgb));
+  box-shadow: inset 2px 0 0 rgb(var(--status-warning-rgb));
+}
+
+.editor-gutter-line-info,
+.editor-gutter-line-hint,
+.editor-gutter-line-diagnostic {
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Real DAP breakpoint gutter (task #133, mirroring desktop/'s own
+ * treatment verbatim) -- one small dot per line, filled only for lines
+ * with an active breakpoint; the whole row is clickable to toggle. */
+.editor-gutter-breakpoint-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+  border: 1px solid var(--text-dim);
+  cursor: pointer;
+}
+
+.editor-gutter-breakpoint-dot-active {
+  background: rgb(var(--status-critical-rgb));
+  border-color: rgb(var(--status-critical-rgb));
+  box-shadow: 0 0 4px rgba(var(--status-critical-rgb), 0.7);
+}
+
+/* Real "currently stopped here" DAP indicator -- gold (the semantic
+ * "active" status hue, §75.93), distinct from the red breakpoint dot and
+ * every LSP severity color above. */
+.editor-gutter-line-stopped {
+  background: rgba(var(--hud-rgb), 0.18);
+  box-shadow: inset 2px 0 0 rgb(var(--hud-rgb));
+}
+
+/* Real DAP debug toolbar (task #133, mirroring desktop/'s own styling
+ * verbatim) -- a compact inline bar above the editor. */
+.debug-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.debug-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.debug-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.debug-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.debug-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.debug-btn-primary {
+  border-color: rgb(var(--status-ok-rgb));
+  color: rgb(var(--status-ok-rgb));
+}
+
+.debug-btn-stop {
+  border-color: rgb(var(--status-critical-rgb));
+  color: rgb(var(--status-critical-rgb));
+}
+
+.debug-status {
+  color: var(--text-dim);
+  margin-left: 4px;
+}
+
+.debug-status-stopped {
+  color: rgb(var(--hud-rgb));
+}
+
+.debug-status-error,
+.debug-status-build_failed {
+  color: rgb(var(--status-critical-rgb));
+}
+
+.debug-variables {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-left: 2px;
+}
+
+.debug-variable-name {
+  color: var(--accent);
+}
+
+.debug-variable-eq {
+  color: var(--text-dim);
+}
+
+.debug-variable-value {
+  color: var(--text);
+}
+
+.logcat-panel {
+  max-height: 220px;
+}
+
+.logcat-close {
+  margin-left: auto;
+}
+
+.logcat-body {
+  overflow-y: auto;
+  max-height: 180px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.logcat-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-dim);
+}
+
+.logcat-empty {
+  color: var(--text-dim);
+  opacity: 0.6;
 }
 
 .editor-text-wrap {
@@ -256,6 +683,46 @@
   color: var(--text-dim);
   font-size: 11px;
   flex-shrink: 0;
+}
+
+/* Real, live LSP diagnostic summary for the active backend-mode file. */
+.status-lsp-summary {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+}
+
+.status-lsp-errors {
+  color: rgb(var(--status-critical-rgb));
+}
+
+.status-lsp-warnings {
+  color: rgb(var(--status-warning-rgb));
+}
+
+.status-lsp-clean {
+  color: rgb(var(--status-ok-rgb));
+}
+
+/* Real, clickable "Build APK" status-bar badge (task #146) -- byte-
+ * identical rule to desktop/'s own copy. */
+.status-android-badge {
+  margin-left: 10px;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+.status-android-badge:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.status-android-badge:disabled {
+  cursor: default;
+  opacity: 0.7;
 }
 
 /* Real, hand-written highlight.js token theme (matching desktop/'s own

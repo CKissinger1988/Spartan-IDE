@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { applyReduceMotion } from "../reduceMotion";
-import { applyTheme, type ThemeName } from "../applyTheme";
+import { applyTheme, THEME_LABELS, type ThemeName } from "../applyTheme";
 import { applyFontFamily } from "../applyFontFamily";
 import pkg from "../../package.json";
 
@@ -11,7 +11,7 @@ interface GpuOffloadSettings {
 
 type LeoApprovalMode = "ManualEveryStep" | "AutoApproveSafe";
 
-type LeoProviderKind = "Ollama" | "Claude" | "LiteLLM" | "LlamaCpp";
+type LeoProviderKind = "Ollama" | "Claude" | "LiteLLM" | "LlamaCpp" | "LmStudio";
 
 interface LeoProviderSettings {
   kind: LeoProviderKind;
@@ -63,7 +63,10 @@ const DEFAULT_MODEL_FOR_KIND: Record<LeoProviderKind, string> = {
   Ollama: "llama3.1:8b",
   Claude: "claude-3-5-sonnet-latest",
   LiteLLM: "gpt-4o",
-  // Real, deliberate empty default -- unlike the other three providers'
+  // LM Studio serves whichever model it has loaded; this is a placeholder the
+  // user replaces with their loaded model's id (or leaves as a reminder).
+  LmStudio: "local-model",
+  // Real, deliberate empty default -- unlike the other providers'
   // real, valid model-name defaults, there is no universal real .gguf
   // path this could point at; the user must Browse to (or type) a real
   // local file.
@@ -88,6 +91,22 @@ type UpdateCheckDisplay =
   | { kind: "checking" }
   | { kind: "ready"; result: UpdateCheckResult }
   | { kind: "failed"; error: string };
+
+/** Real shape of `model_status_json()` (`crates/spartan-backend`) -- either
+ * a configured provider (with a real live health probe) or an honest
+ * construction error, never a fabricated success. */
+interface ModelStatusResult {
+  configured: boolean;
+  kind: string;
+  model?: string;
+  provider_id?: string;
+  is_local?: boolean;
+  context_window?: number;
+  supports_native_tool_calling?: boolean;
+  health?: string;
+  fallback_count?: number;
+  error?: string;
+}
 
 function shortCommit(commit: string): string {
   return commit.slice(0, 7);
@@ -150,6 +169,8 @@ export default function SettingsScreen(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckDisplay>({ kind: "not_checked" });
+  const [modelStatus, setModelStatus] = useState<ModelStatusResult | null>(null);
+  const [modelStatusChecking, setModelStatusChecking] = useState(false);
   const [crashReports, setCrashReports] = useState<CrashReportEntry[]>([]);
   const [crashReportsError, setCrashReportsError] = useState<string | null>(null);
   const [uploadStatus, setUploadStatus] = useState<Record<string, UploadStatus>>({});
@@ -198,6 +219,19 @@ export default function SettingsScreen(): React.ReactElement {
     window.spartan.call("check_for_updates", {}).catch((e: Error) => {
       setUpdateCheck({ kind: "failed", error: e.message });
     });
+  }, []);
+
+  // Real, synchronous (unlike check_for_updates above) -- model_status_json
+  // itself performs the live health probe before returning, so there's no
+  // async event to subscribe to, matching this method's own real backend
+  // shape.
+  const checkModelStatus = useCallback(() => {
+    setModelStatusChecking(true);
+    window.spartan
+      .call("model_status", {})
+      .then((result) => setModelStatus(result as ModelStatusResult))
+      .catch((e: Error) => setModelStatus({ configured: false, kind: "?", error: e.message }))
+      .finally(() => setModelStatusChecking(false));
   }, []);
 
   const save = useCallback(
@@ -376,8 +410,11 @@ export default function SettingsScreen(): React.ReactElement {
             })
           }
         >
-          <option value="SpartanDark">Spartan Dark</option>
-          <option value="SpartanLight">Spartan Light</option>
+          {(Object.keys(THEME_LABELS) as ThemeName[]).map((name) => (
+            <option key={name} value={name}>
+              {THEME_LABELS[name]}
+            </option>
+          ))}
         </select>
       </div>
       <div className="settings-row">
@@ -477,6 +514,7 @@ export default function SettingsScreen(): React.ReactElement {
           <option value="Ollama">Ollama (local)</option>
           <option value="Claude">Claude (Anthropic API)</option>
           <option value="LiteLLM">LiteLLM (local proxy → cloud backends)</option>
+          <option value="LmStudio">LM Studio (local server)</option>
           <option value="LlamaCpp">llama.cpp (local, in-process GGUF)</option>
         </select>
       </div>
@@ -530,6 +568,20 @@ export default function SettingsScreen(): React.ReactElement {
         too, via grammar-constrained sampling: the model's output is structurally forced to match
         the tool schema, so Leo's plan/execute loop works fully through it, not just free-text
         completion.
+      </div>
+      <div className="settings-row">
+        <button className="settings-button mono" disabled={modelStatusChecking} onClick={checkModelStatus}>
+          {modelStatusChecking ? "Checking…" : "Check Status"}
+        </button>
+        <span className="settings-update-status mono">
+          {modelStatus === null
+            ? "not checked yet"
+            : modelStatus.configured
+              ? `${modelStatus.kind} (${modelStatus.model}) — ${modelStatus.health}${
+                  modelStatus.is_local ? ", local" : ""
+                }`
+              : `not configured: ${modelStatus.error}`}
+        </span>
       </div>
 
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>

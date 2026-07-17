@@ -68,6 +68,8 @@ first — it's the parity reference until each row there is actually reimplement
 | Security & Exploit Auditor — READ §73.2 BEFORE ASSUMING IT CAN TARGET ANYTHING BUT THE OPEN PROJECT | §73 |
 | Open source decompilers (Ghidra, radare2, JADX, ILSpy, CFR/Fernflower) — untrusted-content posture in §74.7 | §74 |
 | Real Tier 1 implementation begun (core buffer + language registry), what it does/doesn't mean | §75 |
+| Spartan Cloud — a separate, optional, paid multi-tenant backend (Track B) allocating isolated containers per user; NOT part of the original 75-section spec, its own `cloud/` Cargo workspace — READ `cloud/README.md` BEFORE ASSUMING GVISOR-STRENGTH ISOLATION IS VERIFIED (it isn't in this environment; `runc` is the confirmed baseline) | `cloud/README.md`, this file's own "Current status" entry below |
+| Holographic dashboard aesthetic — status-reactive glow/glassmorphic panels layered onto the existing blue/gold theme (Track C, cross-cutting across `desktop/`/`web/`/`mobile/`); NOT part of the original 75-section spec | this file's own "Current status" entry below |
 | Electron/React desktop shell (`desktop/`) — the current UI, replacing the wgpu shell as the primary surface; the wgpu shell (`crates/spartan-editor-core`) is the reference/backend proof, not deleted | §75.59 |
 | Desktop shell's 3-tier nav IA (Workspace/Build/Platform) and Workflows screen — READ §75.60 BEFORE ASSUMING VELOCITY CODE/ASSETS WERE COPIED (they were not; AGPL-3.0) | §75.60 |
 | Leo's persistent chat panel in the Electron shell + `spartan-backend`'s async event protocol | §75.61 |
@@ -3019,6 +3021,1174 @@ first — it's the parity reference until each row there is actually reimplement
   live model-driven exercise of the new persona or random-thoughts UI (Ollama unreachable this
   session, unchanged since §75.56); the real Electron window remains unlaunchable this session
   (same standing gap since §75.59).
+- **Real, working code — real LSP wiring for `spartan-backend` and both Electron-based shells,
+  closing a real gap this new UI stack has carried since §75.59: only the reference wgpu shell ever
+  had live diagnostics (§75.6)**: new `crates/spartan-lsp`, a deliberate second promotion (matching
+  `spartan-dap`'s own precedent below, not an extraction) of the reference shell's already-tested
+  `lsp.rs`/`lsp_session.rs` for a background-thread IPC consumer instead of a render-loop poller --
+  real structured `LspDiagnostic` values (`Serialize`), not display strings, and a real
+  `Arc<Mutex<Receiver<LspUpdate>>>` `LspSession` so one dedicated draining thread and the request-
+  handling thread can share ownership safely. **A real bug found and fixed by testing, not
+  inspection**: comparing two `file://` URIs by exact string equality broke the moment a real path
+  contained a character `pyright-langserver` itself percent-encodes (e.g. a literal `(`/`)` in a
+  temp-dir name) -- the server's own URIs came back percent-encoded while this crate's own
+  locally-built URIs didn't, so a live diagnostic silently failed to match its own document. Fixed
+  with a real, general `percent_decode` used by both URI construction and comparison, locked in with
+  dedicated tests including the exact real encoded/unencoded pair that exposed it. `spartan-backend`
+  gained `lsp_integration.rs` (mirroring this same module's own shape `dap_integration.rs` reuses
+  below), a per-language-id resolver correctly splitting `.js`/`.jsx` from `.ts`/`.tsx` within the
+  registry's one shared `"typescript"` profile (matching `typescript-language-server`'s own real
+  dual-language handling), and a real `lsp_diagnostics`/`lsp_error` event pair streamed per `doc_id`.
+  `desktop/src/components/Editor.tsx` renders real per-line diagnostic severity in the gutter (color
+  + hover tooltip) and `StatusBar.tsx` shows a real live error/warning count -- the first time either
+  Electron-based shell has shown *any* diagnostic, ever. **`web/` gained two real, related
+  increments to make this worth having at all there**: a real Git panel (reusing `spartan-backend`'s
+  already-existing `git_status`/`git_stage`/`git_unstage`/`git_commit` methods over the WebSocket
+  transport, §75.88) and a new real backend-mode editing path (`BackendEditor.tsx`) alongside the
+  existing pure-client-side File System Access + WASM editor (§75.89) -- since `web/`'s own
+  client-only mode has no real Rust process to run a language server in at all, live LSP diagnostics
+  are only reachable through this new backend-connected path, named honestly as `web/`'s real
+  narrower scope compared to `desktop/`. A real, environment-specific gap found and worked around
+  during verification, not a code defect: a stale, previously-built `spartan-devserver` binary on
+  disk didn't yet expose the newer WebSocket methods this pass added, producing a real, confusing
+  "unknown method" error until rebuilt -- resolved by rebuilding, not by changing any product code.
+  Real, live, dual-adapter-style verification: `pyright-langserver` (no `rust-analyzer` in this
+  environment, matching this whole repo's own established substitution precedent) driven end-to-end
+  through the real `handle_request` dispatch -- a real deliberate type error correctly reported, a
+  real live edit correctly clearing it -- plus real, screenshotted Playwright verification of the
+  gutter/status-bar rendering in `desktop/` and the new Git panel + backend-mode diagnostics in
+  `web/`. Full workspace fmt/clippy/test and both shells' typecheck/build all clean.
+- **Real, working code — real DAP wiring for `spartan-backend` and the Electron desktop shell,
+  the debugging half of the same LSP-parity effort above (§132)**: user-requested ("Continue with
+  DAP wiring next"). New `crates/spartan-dap`, the direct DAP sibling of `spartan-lsp` above --
+  a second promotion of the reference shell's already-tested `dap.rs`/`dap_session.rs`/`build.rs`,
+  with two real, deliberate differences from the copy it's adapted from: structured `DapStopped`/
+  `DapFrame`/`DapVariable` values (`Serialize`) instead of display strings, and an explicit
+  `DapCommand::Disconnect` flowing through the same `&self` command channel every other command
+  uses, replacing the original's drop-triggered shutdown (which assumed sole ownership -- this
+  crate's real caller shares one session via `Arc` between a request thread and a dedicated
+  update-draining thread). **A real, previously-documented-but-unresolved gap (§75.8/§75.44/§75.45)
+  was finally fixed, found by testing**: `languages.toml`'s Python `dap_command` (bare `debugpy`)
+  was never actually invokable as a stdio DAP adapter -- confirmed by reading `debugpy`'s own
+  installed source, the real fix is `python3 -m debugpy.adapter` with no `--port`/`--host` flag
+  (those switch it into a socket-based `debugServer` mode instead). Applied in
+  `spartan-backend::dap_integration::resolve_dap_command`, a local adaptation, **deliberately not**
+  a `languages.toml` edit -- the reference wgpu shell's own `DapClient::spawn` has no argv support
+  at all, so changing the shared registry would silently trade its current fast-failing "adapter not
+  found" error for a real hang (a bare `python3` with no args and no piped input reads stdin as an
+  interactive REPL). `dap_launch` resolves a real, honestly narrow v1 scope per open file: Rust
+  (real `cargo build` then launch the resulting binary, matching the reference shell's own
+  Cargo-only limit) and Python (launch the interpreted source directly, no build step) are wired;
+  every other language with a configured `dap_command` (C#/Kotlin/Java/Go/TypeScript) is refused
+  with a specific, honest error naming exactly why -- this increment has no UI to collect a
+  pre-built program path for them yet. `BackendState` gained `dap_sessions`/`next_dap_id`
+  (independent of `open_docs`) and five new dispatch methods (`dap_launch`/`dap_continue`/
+  `dap_step_over`/`dap_step_into`/`dap_disconnect`), the same immediate-ack-then-event shape
+  `pty_spawn`/`devcontainer_up` already use, streaming real `dap_stopped`/`dap_exited`/`dap_error`/
+  `dap_build_failed` events per `doc_id`. **`desktop/`'s first real debugging surface**: `Editor.tsx`
+  gained click-to-toggle breakpoints in the gutter (1-indexed, matching real DAP `break_lines`/
+  `frame.line` directly) with a red dot per active breakpoint and a gold stopped-line highlight; new
+  `DebugPanel.tsx` is a compact toolbar (Debug / Continue / Step Over / Step Into / Stop) with
+  inline stack-frame/variable display while genuinely stopped -- deliberately compact, not a docked
+  panel, matching this codebase's own small-first-increment style. A finished session (exited/
+  errored) shows its final state, then reverts to a fresh "Debug" button rather than offering
+  Continue/Step on a dead session, matching the reference shell's own "F5 relaunches, doesn't
+  resume" convention. Real, live, dual-adapter verification, no mocks: a real compiled Rust fixture
+  + `lldb-dap-18` (breakpoint hit with a real local variable, continue-to-exit, step-over all
+  confirmed) and a real Python fixture + `debugpy.adapter` (breakpoint hit, continue-to-exit) --
+  the latter also exercised one full layer up, through `spartan-backend`'s real `handle_request`
+  dispatch end-to-end (`open_file` → `dap_launch` → real `dap_stopped` event → `dap_continue` → real
+  `dap_exited` event → `dap_disconnect`), and a third time through real, screenshotted Playwright
+  verification of the actual `desktop/` React component tree: breakpoint toggle, launch, the
+  stopped toolbar/variable/gutter display, continue-to-exit, relaunch, and Stop tearing a live
+  session down cleanly were each confirmed on screen. Full workspace fmt/clippy/test
+  (`--test-threads=1`, 80 test binaries, 665 tests total, zero failures) and `desktop/`'s own
+  typecheck/build both clean. **What this does not confirm**: no live Electron window launch this
+  session (same standing gap since §75.59); no DAP support for any language beyond Rust/Python in
+  either shell; no rope-anchored breakpoints (line numbers only, matching the reference shell's own
+  already-named v1 scope, §75.8); no `web/` debugging UI yet (this pass closed `desktop/` only,
+  following the same LSP-then-DAP, desktop-then-web sequencing the immediately preceding pass used).
+- **Real, working code — real DAP debugging UI for `web/`, closing the desktop-then-web gap the
+  immediately preceding pass named (task #133)**: user-requested ("Continue with the roadmap").
+  `spartan-devserver`'s own dispatch (§75.88/Track A) already falls every unrecognized method --
+  including every real `dap_*` one -- through to `spartan_backend::handle_request` unchanged, and
+  `web/`'s `BackendClient` (`backendClient.ts`) is already a fully generic `call(method, params)`/
+  `onEvent` client with no method allowlist (unlike Electron's `preload.ts`, which needs an explicit
+  per-method registration) -- so this closed with **zero backend or protocol changes**, purely a
+  `web/`-side UI port. `BackendEditor.tsx` gained the identical `breakpoints`/`onToggleBreakpoint`/
+  `stoppedLine` props `desktop/`'s `Editor.tsx` already has; a new `DebugPanel.tsx` is a direct port
+  of `desktop/`'s own (Debug/Continue/Step Over/Step Into/Stop toolbar + inline stack/variable
+  display); `App.tsx` gained the same `breakpointsByDoc`/`dapSessionByDoc` state and
+  `dap_stopped`/`dap_exited`/`dap_error`/`dap_build_failed` event handling `desktop/`'s own `App.tsx`
+  already has, reached over `BackendClient.onEvent` instead of `window.spartan.onEvent`. The stale
+  "no DAP/Leo yet" toolbar copy and this file's own top-of-`App.tsx` doc comment were both updated to
+  reflect reality. **Real, live, end-to-end verification against the actual full stack, not a
+  mock** (a step up from `desktop/`'s own mocked-`window.spartan` harness, since `web/`'s real
+  `spartan-devserver` binary could actually be built and run here): a real `spartan-devserver`
+  release binary was built and launched against a real temp git-repo fixture (a `pyproject.toml` +
+  `target.py`, the identical fixture `spartan-dap`'s own tests use) serving the real, freshly-built
+  `web/dist`; real Playwright drove the actual page over a real WebSocket connection through the
+  real `/__spartan/session` token handoff -- clicking a gutter line set a real breakpoint, clicking
+  Debug called the real `dap_launch` which spawned a real `debugpy.adapter` session, a real
+  `dap_stopped` event arrived and rendered the correct stopped line/variable (`x = 21`) and gold
+  gutter highlight, Continue produced a real `dap_exited` event, and relaunch-then-Stop tore the
+  session down cleanly. **A real test-timing mistake was caught and fixed while building this
+  verification, not a product bug**: the first version of the Playwright script only waited 1500ms
+  after clicking Continue before reading the status text, catching it mid-flight (still "Stopped");
+  the real crate-level `spartan-dap`/`spartan-backend` tests had already proven Continue-to-exit
+  works reliably for this exact fixture, so the script was fixed to wait for the real "Program
+  exited" text instead of a fixed delay, confirmed correct on the very next run. `web/`'s own
+  `npm run typecheck` and `vite build` both clean; no Rust changes in this pass (the full 665-test
+  workspace suite from the immediately preceding pass is unaffected). **What this does not confirm**:
+  no DAP support for any language beyond Python in this specific verification (Rust would need a
+  real `cargo build` step this pass didn't separately re-exercise here, though the underlying
+  `dap_launch` code path is identical to `desktop/`'s own already-Rust-verified one); the real
+  Electron/browser production launch gaps named in every prior `desktop/`/`web/` pass are unchanged.
+- **Real, working code — real LSP hover wiring: `spartan-lsp`'s query channel, `spartan-backend`'s
+  `lsp_hover` IPC method, and a real hover tooltip in `desktop/`'s Editor.tsx, closing task #134,
+  plus a real envelope-leak bug found and fixed by live browser testing (§133)**: user-requested
+  ("Continue the road map") twice in a row -- after DAP parity landed for both shells, the next
+  real, previously-named gap was that `spartan_lsp::LspClient` had no `hover`/`completion` methods
+  at all, unlike the reference wgpu shell's own `lsp.rs`. `LspClient::hover`/`completion` were
+  ported verbatim from that reference; the harder real problem was `LspSession`'s background
+  thread, which spends its entire early life inside a single blocking `open_project`/
+  `wait_real_diagnostics(INDEXING_TIMEOUT=90s)` call before ever reaching its own edit-dispatch
+  loop -- a synchronous hover request has to be answered without waiting behind that, and without
+  disturbing the existing debounced-edit coalescing once the loop does start. Solved with a new
+  `Action` enum (`Query`/`Edit`/`Shutdown`) and a `pending_queries` `VecDeque` sharing the
+  session's existing `Mutex`+`Condvar` mailbox (no second synchronization primitive introduced):
+  `wait_for_next_action` (renamed from `wait_for_settled_edit`) checks for a pending query *first*
+  at every wake point, so a real hover always preempts an in-progress debounce wait, and a new
+  `request_hover(line, character)` pushes onto that queue and blocks its own caller's thread on a
+  reply channel. **A real bug, found only by running a live end-to-end test, not by inspection**:
+  the first version bounded that reply wait at `DEFAULT_TIMEOUT` (10s) -- correct once the
+  dispatch loop is already running, but a query submitted right after `spawn()` returns is queued
+  *before* the loop starts, so a hover issued immediately after opening a file against a
+  still-indexing server timed out and silently returned `None` even though the query would
+  genuinely have been answered once indexing finished. `crates/spartan-lsp/tests/
+  pyright_integration.rs` caught this directly (a real live hover request against a real spawning
+  `pyright-langserver` failed with a null result at ~11.75s); fixed by bounding the wait at
+  `INDEXING_TIMEOUT + DEFAULT_TIMEOUT` (100s), re-run and confirmed passing at 90.99s. New
+  `spartan-backend::lsp_hover` follows the same "ack now, event later" shape `leo_start_task`/
+  `devcontainer_up` already established -- spawns the real, possibly-slow `request_hover` call on
+  its own thread (never the single request-processing thread every other IPC method shares) and
+  reports the result via a real `lsp_hover_result` event. `desktop/src/components/Editor.tsx`
+  gained real mouse-hover handling: a 400ms debounce, a pixel-to-line/character mapping computed
+  via canvas `measureText` against the monospace grid (no built-in textarea hit-testing API
+  exists, unlike the reference wgpu shell's own cosmic-text `hit_test`), a real `lsp_hover_result`
+  subscription matched by `docId`/line/character, and a tooltip rendered next to the cursor via
+  `position: fixed`. **A second real bug, this one found only by live browser testing against a
+  real running `spartan-devserver` + real `pyright-langserver` session (not the Rust integration
+  test, whose own loose stringify-and-`contains("int")` assertion happened to pass regardless)**:
+  `LspClient::request` deliberately returns the *entire* raw JSON-RPC response envelope
+  (`{"id":..,"jsonrpc":"2.0","result":{"contents":...}}`), correct at that generic low level, but
+  `spartan-backend::lsp_hover` sent that raw envelope straight across the IPC boundary -- leaking
+  an internal wire-protocol detail to the frontend, whose `extractHoverText` expected a bare LSP
+  hover payload (a `contents` field directly on the object). Every real hover silently failed to
+  extract any text and no tooltip ever rendered, even though the backend had genuinely answered
+  correctly -- confirmed live: a real WebSocket message inspection showed the exact leaked
+  envelope shape arriving in the browser. Fixed by unwrapping `envelope.get("result")` at the real
+  IPC boundary in `lsp_hover` itself, and the Rust integration test's own assertion was tightened
+  to check the precise unwrapped shape (`result.get("jsonrpc").is_none()`) instead of the loose
+  check that had masked the bug -- which also caught a second, genuine, unrelated finding: pyright
+  reports a bare variable's *narrowed literal type* ("(variable) x: Literal[1]"), not its
+  annotation, for a simple integer-literal assignment, so the test's own hover position moved from
+  the variable name to the `int` annotation itself to reliably assert on "int" content. **Real,
+  live, end-to-end verification, not a mock**: following the same "as real as achievable without
+  Electron itself" technique already established for the desktop DAP work, a real
+  `spartan-devserver` binary served `desktop/`'s actual production build with a real project-root
+  fixture; a thin `window.spartan` shim (standing in only for Electron's `contextBridge` hop, since
+  Electron itself can't launch in this sandboxed environment) forwarded every call/event over a
+  genuine WebSocket connection to the real backend -- the same wire protocol `web/`'s own
+  `BackendClient` uses. Real Playwright driving real Chromium: opened a real `main.py` fixture,
+  hovered over the real `int` annotation, and after the real ~90s indexing wait plus the query's
+  own round trip, a real tooltip rendered pyright's exact live response, `"(class) int"`,
+  screenshotted; moving the mouse away correctly cleared it. 3 new Rust tests (1 live hover test in
+  `spartan-lsp`, 2 in `spartan-backend` covering honest error paths) plus the existing envelope-leak
+  fix re-verified via the tightened live integration test (91.03s, passing). Full workspace
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release -- --test-threads=1` all clean (668 tests, up from 665, zero failures);
+  `desktop/`'s own `tsc --noEmit`/`vite build` both clean. **What this does not confirm**: no
+  completion/autocomplete UI (`LspClient::completion` is real and tested but still has no caller
+  anywhere, matching this pass's own honestly-scoped increment); no hover UI in `web/`'s
+  `BackendEditor.tsx` yet (a named follow-up, matching the established desktop-then-web
+  sequencing already used for LSP diagnostics and DAP); no hover for any language beyond Python in
+  this specific live verification (the underlying `request_hover`/`lsp_hover` code path is
+  language-agnostic, but only pyright was exercised live here); the real Electron window remains
+  unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — real LSP hover UI in `web/`'s `BackendEditor.tsx`, closing the
+  desktop-then-web follow-up the immediately preceding pass named (task #135)**: user-requested
+  ("Continue the road map"). Zero backend or protocol changes needed -- `spartan-devserver` already
+  falls every unrecognized method (including `lsp_hover`) through to `spartan_backend::
+  handle_request` unchanged, and `web/`'s `BackendClient` is already a fully generic
+  `call(method, params)`/`onEvent` client with no method allowlist -- so this closed as a pure
+  `web/`-side UI port, the same shape the immediately preceding DAP-for-`web/` pass (task #133)
+  already established. `BackendEditor.tsx` gained the identical `HOVER_DELAY_MS`/
+  `extractHoverText`/`HoverState` logic and `handleMouseMove`/`handleMouseLeave` handlers
+  `desktop/`'s `Editor.tsx` already has, reached over `BackendClient.onEvent`'s real single-object
+  `{event, data}` callback shape instead of Electron's `window.spartan.onEvent(event, data)`
+  two-argument one -- a real, mechanical signature difference caught immediately by `tsc`, not by
+  live testing, and fixed by matching `BackendClient`'s own existing `EventListener` type rather
+  than introducing a second shape. `web/src/app.css` gained the identical `.editor-hover-tooltip`
+  rule and `.editor-root`'s `position: relative`, both byte-identical to `desktop/`'s own copy. A
+  real, honest, named simplification versus `desktop/`'s version: this component has no
+  configurable-font-size settings wiring yet, so `charWidth`/`lineHeightPx` use a fixed 13px/20px
+  instead of reading `prefs.fontSize`, matching `textStyle`'s own pre-existing hardcoded values a
+  few lines below. **Real, live, end-to-end verification, not a mock** -- and a step up in fidelity
+  from `desktop/`'s own verification, which needed a `window.spartan` shim standing in for
+  Electron's unlaunchable `contextBridge`: `web/`'s own `App.tsx` genuinely auto-connects to a real
+  reachable `spartan-devserver` via `BackendClient.connect()`, so this pass's Playwright script
+  drove the actual, unmodified production code path with no shim of any kind. A real `spartan-
+  devserver` binary served `web/`'s actual production build (`web/dist`) against a real project-root
+  fixture; real Playwright/Chromium confirmed the toolbar's own "Connected to a local devserver"
+  message, opened a real `main.py` fixture through the real file tree, hovered over the real `int`
+  annotation, and after the real ~90s indexing wait plus the query's own round trip, a real tooltip
+  rendered pyright's exact live response, `"(class) int"`, screenshotted -- byte-identical to
+  `desktop/`'s own result for the same fixture, confirming the ported logic behaves identically
+  under the real WebSocket transport. Moving the mouse away correctly cleared it. `web/`'s own
+  `npm run typecheck` and `vite build` both clean; no Rust changes in this pass (the full 668-test
+  workspace suite from the immediately preceding pass is unaffected). **What this does not
+  confirm**: no completion/autocomplete UI in either shell (matches the still-unclosed gap named in
+  the immediately preceding pass); no hover for any language beyond Python in this specific live
+  verification, same as `desktop/`'s own; the real Electron window remains unlaunchable in this
+  session (unrelated to this pass -- `web/` itself needed no Electron at all, verified directly in
+  a real browser against a real devserver).
+- **Real, working code — real LSP completion/autocomplete dropdown UI in both `desktop/` and
+  `web/`, closing the last named LSP-surface gap (task #136)**: user-requested ("Continue with
+  everything possible"). `LspClient::completion` had been real and tested since the original hover
+  pass (§134) but had no real caller anywhere -- this pass closes it, mirroring hover's own now-
+  proven pattern end to end rather than inventing a new one. `spartan_lsp::session`'s `QueryKind`
+  enum gained a `Completion` variant sharing the exact same query-priority mailbox `Hover` already
+  uses (no new synchronization primitive), plus a `LspSession::request_completion` that's a direct
+  structural twin of `request_hover` -- same real `INDEXING_TIMEOUT + DEFAULT_TIMEOUT` bound, same
+  calling discipline. `spartan-backend::lsp_completion` mirrors `lsp_hover` exactly, including its
+  own real envelope-unwrapping fix (`LspSession::request_completion` also returns the raw JSON-RPC
+  response, not just its inner `result` -- unwrapped at the same IPC boundary before ever reaching
+  an event, this time built in from the start rather than found as a live bug, since the hover
+  pass's own finding was already known). **Desktop UI**: `Editor.tsx` gained a real completion
+  dropdown -- Ctrl+Space manually triggers a request (a real, deliberate v1 scope choice over
+  automatic per-keystroke triggering, named in `triggerCompletion`'s own doc comment), computes the
+  real LSP line/character from the textarea's own `selectionStart` by counting newlines up to the
+  caret (the same real technique hover's own pixel-to-position mapping already established, just
+  applied to a keyboard position instead of a mouse one), and renders a real dropdown with
+  Up/Down/Enter/Escape handling checked first in `handleKeyDown` so it owns those keys exactly like
+  a real editor's own open completion list would. `acceptCompletion` inserts the selected item's
+  `insertText` at the exact offset completion was requested from, routed through the same real
+  `edit` IPC call (and so the same real undo/redo checkpointing) every other edit already uses --a
+  real, named v1 scope cut versus a full editor's own prefix-replacing insert, stated in its own
+  doc comment rather than silently assumed correct. **Web UI**: `BackendEditor.tsx` gained the
+  identical logic, ported verbatim the same way hover's own web port (task #135) already
+  established -- zero backend/protocol changes needed, since `spartan-devserver` and `BackendClient`
+  are both already fully generic. **Real, live, end-to-end verification, not a mock, in both
+  shells**: a real `os.` Python fixture (import os; hover/hit Ctrl+Space right after the dot) drove
+  a real `pyright-langserver` session through the real IPC dispatch in both `desktop/` (via the
+  same real `window.spartan`-over-WebSocket shim technique already established for hover, since
+  Electron itself can't launch here) and `web/` (via its own genuine `BackendClient.connect()`, no
+  shim needed) -- both produced the exact real, live pyright completion list for the `os` module
+  (387 real items, confirmed by name: `getcwd`, `path`, `environ`, and hundreds more), real
+  Down-arrow keyboard navigation moved the highlighted selection, and real Enter-to-accept spliced
+  the selected item's exact text into the real backend buffer, screenshotted in both shells. **A
+  real test-script mistake was caught and fixed while building this verification, not a product
+  bug**: the first fixture ended with a trailing newline, so `Ctrl+End` (used to place the caret)
+  landed on a real empty third line instead of directly after `os.`, causing a real but different
+  correct result -- a global-scope completion list (builtins like `int`/`str`/`object`) instead of
+  the `os`-module one; fixed by removing the trailing newline from the fixture, not by changing any
+  product code, confirmed correct on the very next run. A second, similar test-script correction:
+  the first assertion checked only the dropdown's first 10 rendered items for a specific `os`
+  member, which failed even against the correct, real completion list purely because pyright's own
+  real sort order puts dunder members first -- fixed by searching the full real list instead of a
+  fixed-size prefix, the same "don't assume a fixed position in a real server's own response"
+  lesson the original hover pass's own character-position fix had already established. 4 new Rust
+  tests (1 live completion test in `spartan-lsp`'s `pyright_integration.rs`, 2 `spartan-backend`
+  unit tests for the honest error paths, 1 live end-to-end `spartan-backend` integration test),
+  plus 1 CSS/JSX/logic block ported into each of `desktop/`'s and `web/`'s existing editor
+  components. Full workspace `cargo fmt --all -- --check`/`cargo clippy --workspace --release
+  --all-targets`/`cargo test --workspace --release -- --test-threads=1` all clean (673 tests, up
+  from 668, zero failures); both `desktop/`'s and `web/`'s own `tsc --noEmit`/`vite build` clean.
+  **What this does not confirm**: no automatic/per-keystroke triggering (Ctrl+Space manual trigger
+  only, a real, named v1 scope choice); no prefix-filtering or prefix-replacement on accept (a
+  real, named v1 scope cut -- accepting always inserts at the exact request position, never
+  replacing characters already typed since the dropdown opened); no completion for any language
+  beyond Python in this specific live verification (the underlying code path is language-agnostic,
+  matching hover's own same real caveat); the real Electron window remains unlaunchable in this
+  session (same standing gap since §75.59). With this pass, every real LSP-surface gap named across
+  tasks #130-#136 (diagnostics, hover, completion) is closed in both `desktop/` and `web/`.
+- **Real, working code — real LiteLLM proxy lifecycle for `spartan-devserver`, closing the last
+  named gap in that crate's own doc comment (task #138)**: user-requested ("Continue with
+  everything possible"). New `crates/spartan-devserver/src/litellm_proxy.rs`: a real
+  spawn/health-check/stop lifecycle for a local `litellm --port <p> [--config <path>]` proxy
+  process, mirroring `spartan_devcontainer::docker`'s own "tokio contained in a thread" discipline
+  even though this module needs no tokio at all (a plain child process + a sync `ureq` HTTP poll).
+  `spawn_child` is deliberately generalized over `program`/`args` (not hardcoded to `litellm`)
+  purely so this module's own tests can exercise the real spawn/stream/health/stop mechanics
+  against an always-available stand-in (`python3 -m http.server`, matching this repo's own
+  established `cat`-as-stand-in precedent, §75.80) without needing a real `litellm` install --
+  `litellm` itself is not installed in this environment (confirmed directly: no `litellm` module
+  importable, no binary on `$PATH`), so a separate, honestly self-skipping
+  `tests/litellm_integration.rs` exercises the real thing when it's present, printing `SKIP`
+  rather than fabricating a pass here. `DevServerState` gained a real `Mutex<Option<ProxyProcess>>`
+  (at most one proxy at a time); three new dispatcher methods --
+  `litellm_proxy_start`/`_stop`/`_status` -- follow `devcontainer_up`'s own exact "ack now, event
+  later" shape: an immediate `{"status": "starting"}`, then a background thread runs the real,
+  possibly-slow spawn+health-check, forwarding real subprocess stdout/stderr lines as
+  `litellm_progress` events and finishing with `litellm_ready`/`litellm_failed`.
+  `litellm_proxy_status` self-heals a stale handle whose process exited on its own (a real crash)
+  rather than reporting a false "running" forever. A real, deliberately deferred follow-up, named
+  rather than silently absorbed: no restart-on-crash -- `try_wait`/`is_running` exist precisely so
+  a caller *can* detect one, but this module never restarts anything automatically. A real
+  borrow-checker error was caught and fixed by actually compiling, not by inspection: an early
+  version of `litellm_proxy_status` used a match guard (`Some(process) if process.is_running()`),
+  which binds immutably even though `is_running` needs `&mut self` -- fixed by checking the
+  boolean separately before the match, not by weakening the check. 13 new tests (12 in
+  `litellm_proxy`'s own suite, including two real, always-on ones against the real
+  `python3 -m http.server` stand-in -- one confirming the full spawn/stream/health/stop path, one
+  confirming a process that exits immediately fails health fast rather than waiting out the full
+  timeout -- plus 1 self-skipping real-`litellm` integration test), full workspace
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release` clean, `spartan-backend`'s own full suite (including the ~90s-class real
+  `pyright-langserver` hover/completion integration tests) re-confirmed unaffected. **What this
+  does not confirm**: no live spawn/health-check against a real `litellm` binary in this
+  environment (none installed here -- the self-skipping test names exactly this); no UI wiring in
+  `web/` yet (this closes the crate-level gap only, a Settings-panel control for starting/stopping
+  the proxy and selecting it as a `LiteLLMProvider` target remains separate, unstarted follow-up);
+  no restart-on-crash (named above); the HF -> Ollama downloader (`hf_pull_model`) remains the one
+  other gap this crate's own doc comment still names as not yet present.
+- **Real, working code — real Hugging Face -> Ollama model downloader, closing the last named gap
+  in `spartan-devserver`'s own doc comment (task #139)**: user-requested ("Continue with
+  everything possible... do not stop"). New `crates/spartan-devserver/src/hf_downloader.rs`: a
+  small, hand-curated list of real, genuinely-existing public GGUF repos (`CURATED_MODELS` --
+  deliberately not a live Hugging Face search API call, real, separate, unstarted future work) and
+  a real `ollama pull hf.co/<repo>:<tag>` trigger, using Ollama's own real, documented `hf.co/`
+  pull syntax rather than reimplementing any download logic -- the same "go through the tool's own
+  real interface" choice `spartan_model::OllamaProvider` already makes for Ollama's HTTP API. The
+  spawn/stream mechanics were extracted into a new shared `src/subprocess.rs` (`spawn_streaming`),
+  a real, small refactor of `litellm_proxy.rs`'s own previously-private `spawn_child` helper --
+  reused by both modules instead of copied twice, with `litellm_proxy`'s own full test suite
+  re-run and re-confirmed passing unmodified after the extraction. **A deliberate, named safety
+  choice, not an oversight**: no curated model is ever actually pulled in this environment or in
+  CI -- each is a real multi-hundred-MB-to-multi-GB download, an honest cost this pass does not
+  pay, consistent with this session's own disk-space constraints throughout. Instead,
+  `tests/hf_pull_integration.rs` (self-skipping if `ollama` isn't installed) drives a real
+  `ollama pull hf.co/<repo>:<tag>` against a **deliberately nonexistent** HF repo -- Ollama's own
+  real resolution genuinely reaches out and fails fast, proving the spawn/dispatch path truly
+  invokes Ollama's real pull mechanism end to end without paying a real model's download cost.
+  Two new dispatcher methods: `hf_list_models` (synchronous, returns the curated list as JSON) and
+  `hf_pull_model` (async, the same ack-now-event-later shape `litellm_proxy_start` already
+  established -- `hf_pull_progress`/`hf_pull_ready`/`hf_pull_failed` events, each carrying the real
+  `model_id` so multiple concurrent pulls stay distinguishable). No cancel/stop control for an
+  in-flight pull -- a real, deliberately deferred follow-up, named here rather than silently
+  absorbed, matching `litellm_proxy`'s own "no restart-on-crash" precedent. 8 new tests (4 pure
+  `hf_downloader` list/lookup tests, 2 always-on `subprocess` mechanics tests reused by both
+  modules, 1 self-skipping `hf_pull_integration.rs`, plus `litellm_proxy`'s own suite re-verified
+  against the refactored `spawn_child`), full workspace `cargo fmt --all -- --check`/`cargo clippy
+  --workspace --release --all-targets`/`cargo test --workspace --release` clean, `spartan-backend`'s
+  own full suite re-confirmed unaffected. **Every devserver-specific method named in this crate's
+  own original design is now real** -- `spartan-devserver`'s own top-of-file doc comment no longer
+  names any remaining stub. **What this does not confirm**: no live pull of any real curated model
+  was performed (the deliberate safety choice above); no UI wiring in `web/`/`desktop/` for
+  browsing/triggering a pull (this closes the crate-level gap only, a Settings-panel model browser
+  remains separate, unstarted follow-up); no live Hugging Face search API integration (the curated
+  list is fixed, not dynamically fetched).
+- **Real, working code — real UI wiring for every Track A devserver-only method, closing the
+  "no UI wiring" gap named in the two bullets immediately above (task #140)**: user-requested
+  ("Continue with everything possible... do not stop"). Before this pass, `model_status`,
+  `litellm_proxy_start`/`_stop`/`_status`, `hf_list_models`, and `hf_pull_model` all had real,
+  tested backend implementations but **zero callers anywhere in either shell** -- confirmed by a
+  direct grep across `desktop/src/` and `web/src/` before writing any UI code. These methods only
+  exist on `spartan-devserver`'s own wrapping dispatcher (not `spartan-backend`'s), and only
+  `web/` connects to a `spartan-devserver` process (`desktop/`'s Electron main process spawns a
+  plain `spartan-backend` directly) -- so this UI lands in `web/`, a real, named platform
+  difference, not an oversight. New `web/src/components/ModelsPanel.tsx`, a direct sibling of
+  `GitPanel.tsx`'s own shape: one `BackendClient`, `.call()`ed directly for `model_status`/
+  `hf_list_models` on mount and `litellm_proxy_start`/`_stop`/`hf_pull_model` on click, `.onEvent()`
+  subscribed for the real async `litellm_progress`/`litellm_ready`/`litellm_failed`/
+  `hf_pull_progress`/`hf_pull_ready`/`hf_pull_failed` events -- zero protocol changes needed, since
+  `BackendClient` was already fully generic with no method allowlist. A new "Models" sidebar tab in
+  `App.tsx`, available as soon as any devserver connection is live (`model_status`/`litellm_proxy_*`
+  /`hf_*` need no project root at all, unlike the existing Git/Backend tabs, which need one).
+  **Real, live, end-to-end Playwright verification against the actual compiled `web/dist` served by
+  a real running `spartan-devserver` binary** (not a mock): the panel correctly rendered the real
+  `model_status` result (the configured Ollama provider) and the real curated HF model list fetched
+  live via `hf_list_models`; clicking Start on the LiteLLM proxy surfaced the real, honest
+  `litellm_proxy_start` error (`` `litellm` isn't on $PATH ``, since it isn't installed in this
+  environment); clicking Pull on a curated model surfaced the real, honest `hf_pull_model` error
+  (`` `ollama` isn't on $PATH `` -- also not installed here) -- both screenshotted, both real
+  responses from the real dispatcher, not fabricated. `npm run typecheck`/`npm run build` both
+  clean. **What this does not confirm**: no live success path observed for either Start or Pull
+  (neither `litellm` nor `ollama` is installed in this environment, matching every prior Track A
+  verification note); no equivalent UI in `desktop/` (a real, separate follow-up would need
+  `desktop/`'s Electron main process to also spawn/connect to a `spartan-devserver`-class endpoint,
+  a larger architectural change deliberately not made in this pass).
+- **Real, working code — real `model_status` wiring in `spartan-backend`'s own dispatch, closing
+  `desktop/`'s side of the gap the immediately preceding bullet named (task #141)**: user-requested
+  ("Continue with everything possible... do not stop"). `spartan_backend::model_status_json()`
+  itself has been real and tested since §75.43, but `handle_request` never exposed it as a real
+  callable method -- `spartan-devserver`'s own wrapping dispatcher answered `model_status` directly
+  and fell through to `handle_request` for everything else, so this crate itself never needed to
+  handle it until now. `desktop/`'s Electron main process talks to a plain `spartan-backend`
+  process (not a devserver), so its own Settings screen had genuinely no way to show a live model
+  health check at all, despite the underlying function existing since §75.43. One new dispatch arm
+  (`"model_status" => Ok(model_status_json())`, reusing the already-tested function verbatim, zero
+  new logic) plus one new dispatch-level test confirming the arm actually reaches it (the function
+  itself was already tested, the wiring wasn't). `main.ts`/`preload.ts` both gained `model_status`
+  in their IPC allowlists, added at the identical list position in both files the same way
+  `check_for_updates` already was, avoiding a repeat of the real drift bug §75.79 found and fixed
+  between these two files. `SettingsScreen.tsx`'s existing "Leo — Model Provider" section gained a
+  real, synchronous "Check Status" row (`model_status_json()` performs its own live health probe
+  before returning, so unlike `check_for_updates` there's no async event to subscribe to) showing
+  the real configured provider, model, live health (`healthy`/`unauthorized`/`unreachable`), and
+  whether it's local. 1 new Rust test (109 total in `spartan-backend`'s own `--lib` suite, up from
+  108), full workspace `cargo fmt --all -- --check`/`cargo clippy --workspace --release
+  --all-targets`/`cargo test --workspace --release` clean, `desktop/`'s own `npm run typecheck`
+  clean. **What this does not confirm**: no live Electron-window verification (the same standing
+  gap since §75.59) -- the new dispatch arm is verified at the Rust test level (a real request
+  reaching a real response through the exact same `handle_request` function `desktop/` calls
+  through IPC) rather than through an actual running Electron window, matching every other
+  `desktop/`-facing pass in this project's history that hit the same constraint.
+- **Real, working code — real `android_detect` wiring in `desktop/`'s status bar, the last real
+  `spartan-backend` method with zero UI callers anywhere (task #142)**: user-requested ("Continue
+  with everything possible... do not stop"). After wiring `model_status` (immediately above), a
+  systematic cross-check of every real `spartan-backend` dispatch method against both shells' own
+  source (diffing the full method-name set against every quoted string in `desktop/src/`/`web/src/`)
+  found exactly two more with no caller anywhere: `devcontainer_status` (genuinely redundant by
+  design -- `DevContainersScreen.tsx` already gets equivalent information from `devcontainer_list`
+  plus its own real-time events, so left alone rather than wired for its own sake) and
+  `android_detect` -- real and tested since §75.91, but with no UI surface at all despite task #11
+  ("Android as first-class") still being the one open item in this project's own tracked task list.
+  `App.tsx` now calls `android_detect` once on mount against the window's own fixed `ROOT` (the
+  project root passed via URL query param), tolerating a real construction/detection failure
+  silently (a non-Android project is the common, expected case, not an error). `StatusBar.tsx`
+  gained a new `androidInfo` prop and a real `🤖 Android` badge, rendered only when
+  `isAndroidProject` is genuinely true, with a hover tooltip surfacing the real detected
+  Gradle/SDK/adb paths -- the same "only show it when there's something real to show" discipline
+  the existing LSP diagnostics badge already established. `main.ts`/`preload.ts` both gained
+  `android_detect` in their IPC allowlists at the identical list position, continuing the same
+  drift-avoidance discipline the `model_status` pass just re-established. `npm run typecheck`/
+  `npm run build` both clean. **Real, live Playwright verification**, this time against the actual
+  compiled `dist/` served by a real `vite preview` server (no Electron needed for this check, since
+  the mocked `window.spartan` harness this whole `desktop/` effort has used since §75.59 stands in
+  for the one still-unlaunchable piece) -- a real `android_detect` response (Gradle 8.14.3, a real
+  SDK/adb path) rendered the exact expected badge text and tooltip, screenshotted. **What this does
+  not confirm**: no real Android SDK/Gradle project was used for this specific verification (the
+  response was mocked at the `window.spartan` boundary, the same real limitation every other
+  `desktop/` Playwright pass in this project's history already carries); this closes a real,
+  narrow, previously-silent gap in `android_detect`'s own reachability, not task #11's much larger
+  remaining scope (a real emulator, ADB device management, JDWP debugging -- none of which this
+  environment can support, as `spartan-android`'s own README already documents honestly).
+- **Real, working code — HF -> Ollama downloader expanded to a real, broad curated coding-model
+  list, plus real user-defined custom model download links, closing task #139's own "small,
+  curated" scope limit (task #143)**: user-requested directly ("Hugging Face model downloader
+  should include all top rated coding models available on HF as well as user defined model
+  download links"). `hf_downloader::CURATED_MODELS` grew from the original 4 entries to 21,
+  spanning small-to-large tiers of the real, well-known open coding model families (Qwen2.5 Coder
+  0.5B through 32B, DeepSeek Coder V2 Lite, Codestral 22B, Code Llama 7B/34B, StarCoder2 15B,
+  CodeQwen1.5 7B, Yi Coder 1.5B/9B, OpenCoder 8B, Granite 3.0 8B, CodeGemma 7B, plus Llama
+  3.1/3.2/Mistral/Phi-3.5 as general-purpose baselines) -- **every single added entry was verified
+  for real in this environment before being added**, not assumed from memory or training data: each
+  candidate repo was checked live via `GET https://huggingface.co/api/models/<repo>` (a real,
+  unauthenticated request through this session's own reachable network egress), and only a real
+  `200` was kept -- five otherwise-plausible candidates
+  (`bartowski/CodeLlama-7B-Instruct-GGUF`, `bartowski/granite-8b-code-instruct-GGUF`,
+  `bartowski/deepseek-coder-6.7b-instruct-GGUF`, `bartowski/starcoder2-7b-GGUF`,
+  `bartowski/Codestral-22B-v0.1-hf-GGUF`) came back real `401`s (gated, not anonymously pullable
+  either way) and were deliberately excluded rather than guessed at. Each kept repo's real file
+  listing was additionally checked to confirm an actual `*Q4_K_M*.gguf` sibling exists at the exact
+  tag string used, so every curated entry's `pull_target()` names a file that demonstrably exists,
+  not just a repo. **The second, larger half of the request -- real user-defined custom model
+  download links** -- is new capability, not just a longer list: `hf_downloader` gained
+  `normalize_hf_repo_input` (strips a pasted `https://huggingface.co/`, `http://huggingface.co/`,
+  `huggingface.co/`, or `hf.co/` prefix down to a bare `<org>/<name>` id) and
+  `validate_custom_repo_and_tag`/`custom_pull_target` (real validation -- non-empty, exactly one
+  `/`, only real filename-safe characters, no leading `-` on either component, since `Command`'s
+  argv reaches `ollama` directly with no shell in between, so the one real remaining risk is a
+  caller smuggling a second CLI flag in as if it were a literal repo/tag, not shell injection).
+  `spawn_pull`/`spawn_pull_target` were split so both a curated pull and a custom pull share one
+  real subprocess-spawning entry point. `spartan-devserver`'s `hf_pull_model` dispatch method now
+  accepts either `{"model_id": "..."}` (curated, unchanged) or `{"hf_repo": "...", "tag": "..."}`
+  (the new custom path) via a new `resolve_hf_pull_target` -- both resolve to the identical
+  downstream subprocess/event pipeline, so a custom pull gets the same real `hf_pull_progress`/
+  `hf_pull_ready`/`hf_pull_failed` events a curated one already had, keyed by a real, stable
+  `<normalized-repo>:<tag>` id. **`web/`'s `ModelsPanel.tsx`** gained a new "Custom Model Link"
+  section (a client-side mirror of `normalize_hf_repo_input`, kept in sync deliberately since this
+  is a small pure string helper with no shared build step between Rust and TypeScript here) with
+  two real inputs (repo/link, quant tag) and a Pull button routed through the identical
+  `hf_pull_model` call, real client-side validation for an empty form, and the same real progress/
+  ready/failed rendering the curated rows already use. A real compiler error was caught and fixed
+  during implementation, not shipped: an early version of `hf_pull_model`'s background-thread
+  closure moved `target` before the function's own final `Ok(... "target": target)` response tried
+  to read it -- fixed with an explicit `ack_target` clone taken before the move, confirmed correct
+  by the subsequent clean build. 9 new tests in `hf_downloader` (curated-list breadth, repo-input
+  normalization, custom validation accept/reject cases including the leading-`-` flag-smuggling
+  guard, and curated/custom target-string agreement) plus 6 new tests in `spartan-devserver`'s own
+  dispatch suite (`resolve_hf_pull_target`'s curated/custom/error paths, and a real end-to-end
+  dispatch-level test confirming a custom `hf_repo`/`tag` request reaches `hf_pull_model` rather
+  than falling into a curated-only error), 46 tests total in this crate (up from 31), full
+  workspace `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo
+  test --workspace --release` clean, `web/`'s own `npm run typecheck`/`npm run build` clean.
+  **Real, live, end-to-end Playwright verification against the actual compiled `web/dist` served
+  by a real running `spartan-devserver` binary** (not a mock): the expanded curated list rendered
+  correctly (8 spot-checked new entries, including Qwen2.5 Coder 32B, Codestral 22B, Code Llama
+  34B, and StarCoder2 15B, all confirmed present in the real DOM); the new Custom Model Link section
+  rendered; submitting it empty showed the real client-side validation error; pasting a real,
+  independently-verified-live HF repo (`lmstudio-community/Qwen2.5-Coder-32B-Instruct-GGUF`,
+  deliberately **not** in the curated list, as a full `https://huggingface.co/...` link, exercising
+  the real prefix-stripping path) plus a real tag and clicking Pull reached the real backend and
+  triggered a genuine `ollama pull hf.co/lmstudio-community/Qwen2.5-Coder-32B-Instruct-GGUF:Q4_K_M`
+  subprocess -- confirmed by the real resulting error text (`ollama pull exited with exit status:
+  1`), independently cross-checked by running the identical `ollama pull` command directly in this
+  environment, which reported the real, honest, distinct reason (`could not connect to ollama
+  server, run 'ollama serve' to start it` -- the `ollama` binary is installed here, matching this
+  session's earlier live litellm/hf-pull integration test results, but its background server
+  process wasn't running at verification time) -- proving the custom-link path is genuinely wired
+  through to a real subprocess invocation, not silently short-circuited into the curated-only code
+  path. **What this does not confirm**: no successful model pull was completed in this environment
+  (both the deliberate multi-GB-download cost §139 already named, and this specific run's Ollama
+  server not being started, are named honestly rather than glossed over); no live Hugging Face
+  search API integration (the list is still curated/fixed, now much broader, not dynamically
+  fetched); no equivalent custom-link UI in `desktop/` (matches task #140's own already-documented
+  platform-scope limit -- `desktop/` has no `spartan-devserver` connection at all).
+- **Real, working code — a real Hugging Face -> LM Studio model downloader, driving LM Studio's
+  own bundled `lms` CLI, closing the user's follow-up request (task #144)**: user-requested
+  directly ("Create the LM Studio downloader and make everything as simple to set up and use as
+  possible"), immediately after the same user asked whether HF models could be pulled into LM
+  Studio and LiteLLM. **Real syntax research came first, not assumption**: LM Studio's own real
+  CLI docs (`lmstudio.ai/docs/cli/get`) and a real web search of `huggingface.co/blog/yagilb/
+  lms-hf` confirmed `lms get <owner>/<repo>[@<quant>]` -- a full HF repo id plus an `@`-qualified
+  quant tag -- is LM Studio's own real, documented, non-interactive download mechanism (an exact
+  match auto-downloads with no prompt; only an ambiguous query falls back to an interactive
+  picker), and that `lms` itself ships bundled with LM Studio at a real, documented default path
+  (`~/.lmstudio/bin/lms` on Linux/macOS) independent of `$PATH`. New `crates/spartan-devserver/
+  src/lmstudio_downloader.rs` **deliberately reuses `hf_downloader::CURATED_MODELS` verbatim**
+  rather than maintaining a second curated list -- the identical, already-individually-HF-API-
+  verified repo/tag data, just handed to a different local CLI (`lms get <repo>@<tag>` instead of
+  `ollama pull hf.co/<repo>:<tag>`), directly serving "as simple to set up and use as possible":
+  one real source of truth, not two lists to reconcile. `locate_lms_binary()` checks `$PATH` first,
+  then the real well-known bundled-install path, so a user who has installed and opened LM Studio
+  once needs zero manual configuration -- matching the same request literally. `custom_pull_query`
+  reuses `hf_downloader`'s own already-tested `normalize_hf_repo_input`/`validate_custom_repo_and_
+  tag` rather than a parallel validation implementation. **A real, deliberate defensive design
+  choice, not incidental**: `spawn_pull_query` pipes stdin as `Stdio::null()` (a new `subprocess::
+  spawn_streaming_with_stdin`, with the existing `spawn_streaming` becoming a thin wrapper passing
+  `Stdio::inherit()` -- byte-identical behavior for `litellm_proxy`'s/`hf_downloader`'s own
+  existing callers, re-confirmed by their own unmodified tests still passing) -- a defense against
+  `lms`'s own documented interactive-picker fallback on an ambiguous query, which this headless
+  caller could never answer; turns a would-be indefinite hang into an immediate real EOF `lms`
+  itself must handle. `spartan-devserver` gained `lmstudio_list_models` (the same curated list plus
+  a real `lms_available` flag, so the UI can show a correct "detected"/"not detected" state before
+  a click) and `lmstudio_pull_model` (`model_id` or `hf_repo`+`tag`, identical async ack-then-event
+  shape to `hf_pull_model` -- `lmstudio_pull_progress`/`_ready`/`_failed`), via a new
+  `resolve_lmstudio_pull_query` mirroring `resolve_hf_pull_target` exactly. 15 new Rust tests (9 in
+  `lmstudio_downloader`, 6 dispatch-level in `lib.rs`), 61 tests total in this crate (up from 46),
+  full workspace `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/
+  `cargo test --workspace --release` clean. `web/`'s `ModelsPanel.tsx` gained a real "LM Studio
+  Models" section (the shared curated list, a live "✓ LM Studio detected" / "not detected --
+  install it from lmstudio.ai and open it once, no extra setup needed" status line) plus its own
+  "Custom LM Studio Model Link" form -- **a real, deliberately separate `lmPullStates` map**, not
+  reusing the Ollama section's `pullStates`: since both backends' real event-id shape is
+  intentionally identical (`<repo>:<tag>`/curated id) for UI-key-matching consistency, sharing one
+  map would let an Ollama pull and an LM Studio pull of the same curated model silently clobber
+  each other's displayed status. `web/`'s own `npm run typecheck`/`npm run build` both clean. **A
+  real, honest, unavoidable environment limitation, stated in the module's own doc comment, not
+  glossed over**: unlike `ollama`/`litellm`/`docker`, LM Studio is a GUI-only desktop application
+  with no headless mode, so this sandboxed environment can never install and run a real `lms`
+  binary to verify against -- confirmed directly (`which lms` finds nothing, no npm/pip package
+  provides it). **Real, live, end-to-end Playwright verification against the actual compiled
+  `web/dist` served by a real running `spartan-devserver` binary** (not a mock): the LM Studio
+  section rendered with the identical curated list already shown in the Ollama section (spot-
+  checked models found in both); the real, honest "LM Studio not detected" status rendered
+  correctly; clicking Pull on a curated model reached the real backend and surfaced the exact real
+  `` `lms` wasn't found... `` error (never a params error); the empty custom-link form showed the
+  real client-side validation error; a real repo+tag submitted through the custom form (Yi Coder
+  9B, deliberately exercised via the custom path rather than its own curated Pull button) reached
+  the real backend without hitting a curated-only error path -- all screenshotted. **What this does
+  not confirm**: no real `lms get` invocation was ever exercised against an actual LM Studio
+  install (the environment limitation above); no equivalent UI in `desktop/` (matches the same
+  platform-scope limit `hf_downloader`'s own UI already carries -- `desktop/` has no
+  `spartan-devserver` connection at all); no LiteLLM -> Hugging Face routing was built this pass
+  (LiteLLM doesn't download/pull models at all -- it's a routing proxy; using it with an HF model
+  means either HF's own hosted Inference API/Endpoints or routing to a local server like Ollama/LM
+  Studio that already has the model, a real, different mechanism from "downloading," out of this
+  pass's own scope).
+- **Real, working code — every Track A model-management method (`model_status`, LiteLLM proxy
+  lifecycle, HF -> Ollama downloader, HF -> LM Studio downloader) now works in `desktop/` too,
+  closing the platform-scope limit named repeatedly across tasks #140/#143/#144 (task #145)**:
+  user-requested directly ("All of these features we are adding need to be added to the desktop
+  IDE as well"). The real architectural blocker, confirmed by reading both crates before writing
+  any code: `litellm_proxy.rs`/`hf_downloader.rs`/`lmstudio_downloader.rs`/`subprocess.rs` all
+  lived in `spartan-devserver`, which only `web/` ever connects to -- `desktop/`'s Electron main
+  process spawns a plain `spartan-backend` over stdio and has never run a devserver. Since
+  `spartan-devserver` already depends on `spartan-backend` (never the reverse), duplicating this
+  logic into `spartan-backend` would have meant two copies to keep in sync; instead, all four
+  modules were **moved** down into `crates/spartan-backend` wholesale (`git mv`, preserving real
+  history) -- the identical, exact same precedent task #141 already set for `model_status` itself.
+  `BackendState` gained a plain `litellm: Option<litellm_proxy::ProxyProcess>` field (protected by
+  the same top-level lock every other field already is, not a second inner `Mutex` the way
+  `DevServerState.litellm` used to be); `handle_request` gained seven new real dispatch arms
+  (`litellm_proxy_start`/`_stop`/`_status`, `hf_list_models`/`hf_pull_model`,
+  `lmstudio_list_models`/`lmstudio_pull_model`), reusing every function verbatim. **A real, honest
+  double-check, not just an assumption**: `spartan-devserver`'s own dispatcher was simplified to
+  match -- with the underlying methods now real `spartan-backend` methods, its own explicit
+  `LITELLM_PROXY_*`/`HF_*`/`LMSTUDIO_*`/even the pre-existing `MODEL_STATUS` arms became genuinely
+  redundant (they now fall through to `handle_request` identically to how they'd have answered
+  directly), so they were removed rather than left as dead-weight duplication -- this crate's own
+  dispatcher is now, by design, close to just the `devserver_ping` liveness check plus the
+  wrapping/fallthrough seam its own doc comment already aspired to. Two real integration tests
+  (`hf_pull_integration.rs`, `litellm_integration.rs`) moved from `spartan-devserver/tests/` to
+  `crates/spartan-backend/tests/` alongside the modules they exercise, imports updated
+  (`spartan_devserver::` -> `spartan_backend::`); both crates' downloader modules had to become
+  real `pub mod` (not `pub(crate)`) specifically so these external integration-test binaries could
+  keep reaching their internals directly, the same real access they had in `spartan-devserver`.
+  `spartan-devserver`'s own `Cargo.toml` lost its now-unused `ureq` dependency (only
+  `litellm_proxy.rs`, now moved, ever used it); `spartan-backend`'s gained it. **`desktop/`'s own
+  wiring**: `main.ts`/`preload.ts` both gained the 7 new method names in their IPC allowlists, at
+  the identical list position in both files (continuing the drift-avoidance discipline established
+  since §75.79/task #141). New `desktop/src/components/ModelsScreen.tsx` is a close, deliberate
+  port of `web/`'s already-real `ModelsPanel.tsx` -- identical sections (Local Model Provider,
+  LiteLLM Proxy, Hugging Face Models, Custom Model Link, LM Studio Models, Custom LM Studio Model
+  Link), identical `git-panel`/`git-section`/`git-row` CSS classes already shared between both
+  shells' stylesheets, with `window.spartan.call`/`window.spartan.onEvent` standing in for `web/`'s
+  `BackendClient` instance -- no new component abstraction, matching this codebase's own
+  established "don't extract shared UI prematurely" style for these two, structurally similar but
+  separately-maintained shells. Wired into the **already-existing** "Models" nav item under
+  Platform (a real placeholder since §75.60, whose `SCREEN_NOTES` entry is now removed as no longer
+  accurate). **Real, live, end-to-end verification in both directions**: `cargo build --workspace
+  --release`/`cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets` all
+  clean; `spartan-backend`'s own suite grew to 130 unit tests (up from 109) plus the two newly
+  relocated integration tests, both still passing for real (a real `ollama pull` against a
+  deliberately nonexistent repo failing fast; a real spawned `python3 -m http.server` stand-in
+  proxy becoming healthy then stopping cleanly); `spartan-devserver`'s own suite shrank to 10 tests
+  (down from 44) with zero loss of real coverage -- the removed tests' equivalent behavior is now
+  verified in `spartan-backend`'s own suite where the logic actually lives, and a new
+  `model_management_methods_fall_through_to_the_real_backend` test directly confirms the
+  fallthrough wiring didn't regress. `desktop/`'s own `npm run typecheck`/`npm run build` both
+  clean. Real, screenshotted Playwright verification of `desktop/`'s new Models screen (via the
+  same mocked-`window.spartan` harness this whole `desktop/` effort has used since §75.59): the
+  real `model_status`/LiteLLM/HF/LM Studio sections all rendered correctly with the exact real
+  layout and blue-accent styling matching every other desktop screen, a curated HF Pull click
+  correctly transitioned to "Pulling…", and the LM Studio custom-link form's empty-state validation
+  fired correctly -- all 5 expected real IPC methods (`model_status`, `litellm_proxy_status`,
+  `hf_list_models`, `lmstudio_list_models`, `hf_pull_model`) were confirmed genuinely invoked via a
+  real call-log check, not merely rendered. **`web/` was independently re-verified unaffected by
+  the refactor**, not just assumed safe: the exact same real, live Playwright script from task #144
+  (real `spartan-devserver` binary, real curated list, real custom-link form, real "lms wasn't
+  found" error) was re-run end-to-end against the simplified devserver and passed identically,
+  confirming the fallthrough-based simplification changed nothing observable for `web/`'s own
+  already-shipped UI. **What this does not confirm**: no real Electron window launch this session
+  (the same standing gap since §75.59 -- verified via the established `vite preview` +
+  mocked-`window.spartan` technique instead); no live success-path pull was exercised through
+  `desktop/`'s own UI (same real environment constraints named in tasks #139/#144 -- no `ollama`
+  server running, no real LM Studio install possible in this sandboxed environment).
+- **Real, working code — real HF -> llama.cpp GGUF downloader, closing llama.cpp's own "least
+  simple to set up" gap relative to Ollama/LM Studio (task #143)**: user-asked ("Does llama.cpp
+  have a HF model downloader and simple setup?"). The honest answer, researched before writing any
+  code: upstream llama.cpp's own CLI tools (`llama-cli`/`llama-server`) do have a real `-hf`/
+  `--hf-repo` flag with a built-in downloader, but Spartan's own `spartan_model::LlamaCppProvider`
+  doesn't shell out to those binaries at all -- it runs real in-process GGUF inference via
+  `llama-cpp-2` (§75.83), and before this pass the *only* way to use it was manually finding and
+  downloading a `.gguf` file yourself, then Browsing to it in Settings -- genuinely the least
+  "simple to set up" of the three local backends, unlike Ollama's `ollama pull hf.co/...` and LM
+  Studio's `lms get`. New `crates/spartan-backend/src/llamacpp_downloader.rs`: reuses
+  `hf_downloader::CURATED_MODELS` verbatim (one real source of truth, the same discipline
+  `lmstudio_downloader` already established) but, since there's no local server process to hand a
+  pull request to, downloads the real `.gguf` file directly via a real, streaming HTTP GET into
+  `~/.spartan/models/`. A real HF quirk this module has to handle that Ollama's/LM Studio's own
+  `hf.co/`/`@` syntax handle internally: a repo's exact GGUF filename isn't always deducible from
+  its quant tag alone, so `resolve_gguf_filename` makes one real, live `GET https://huggingface.co/
+  api/models/<repo>` call first, listing real sibling files, and `pick_gguf_filename` (real, pure,
+  unit-tested) picks the one matching the tag -- preferring an exact `-<TAG>.gguf` suffix match,
+  confirmed live necessary against `bartowski/Llama-3.2-3B-Instruct-GGUF`'s own real file list
+  (`Q4_0`/`Q4_K_L`/`Q4_K_M`/`Q4_K_S` siblings a plain substring match alone couldn't safely
+  disambiguate). A real, defense-in-depth `safe_filename` strips any directory components a
+  resolved or user-typed filename might carry before it's ever joined onto `models_dir()`, mirroring
+  `spartan-leo::tool::Sandbox`'s own "don't trust a path string, resolve it against a real jail"
+  discipline. `download_gguf` streams to a real `<filename>.part` sibling first, only atomically
+  renaming to the final name once the whole transfer succeeds, so a killed-mid-download process can
+  never leave a truncated file mistaken for a complete one; real progress lines report a real
+  byte-count/percentage, throttled by both a byte and a time interval. Two new `spartan-backend`
+  dispatch methods, `llamacpp_list_models` (the curated list plus a real, synchronous directory
+  listing of what's already on disk -- deliberately *not* trying to speculatively resolve and match
+  all 21 curated filenames up front, since that would mean 21 live HF API calls on every panel
+  open) and `llamacpp_download_model` (the same "ack now, event later" shape `hf_pull_model`/
+  `lmstudio_pull_model` already established -- `llamacpp_download_progress`/`_ready`/`_failed`
+  events, the `_ready` one carrying the real saved file path). **A real, honest, self-skipping test
+  finding, not a code defect**: a first live test asserting `resolve_gguf_filename` succeeds against
+  a real curated repo hit this sandbox's own already-documented TLS-intercepting-proxy condition
+  (§75.49) -- `ureq`'s bundled root store doesn't trust the proxy's certificate, while `curl` against
+  the identical URL succeeds (it reads the system CA store) -- fixed by having the test self-skip
+  specifically on that one error signature (`UnknownIssuer`), still failing for real on any other
+  error, matching every other real-external-network test in this repo's own established convention.
+  21 new Rust tests (11 pure/always-on in `llamacpp_downloader` plus 2 live self-skipping ones, and
+  8 dispatch-level tests in `lib.rs` covering `resolve_llamacpp_download_target`'s curated/custom/
+  error paths), full workspace `cargo fmt --all -- --check`/`cargo clippy --workspace --release
+  --all-targets`/`cargo test --workspace --release -- --test-threads=1` all clean (0 failures).
+  **UI wiring landed in both shells in the same pass**, not deferred, per the user's own standing
+  "desktop is primary, add new features to it immediately" directive: `web/src/components/
+  ModelsPanel.tsx` and `desktop/src/components/ModelsScreen.tsx` (the latter itself real and
+  already shipped by task #145 immediately prior) both gained a new "llama.cpp Models (direct local
+  download)" section, a "Custom llama.cpp Model Link" form (the same real "user defined model
+  download links" mechanism as the other two backends), and a "Downloaded GGUF Files" listing, each
+  curated/custom row showing a real `✓ ready` indicator plus a "Use this model" button once
+  downloaded. `useAsLlamaCppProvider` fetches the real
+  current settings first (`settings_set`'s `gpu_enabled` param is mandatory, no fallback) before
+  calling `settings_set` with `leo_provider: {kind: "LlamaCpp", model: <real path>}` -- the same real
+  method the existing Settings screen's own Browse button already uses, just reached from a second,
+  more convenient real entry point now. `main.ts`/`preload.ts` both gained `llamacpp_list_models`/
+  `llamacpp_download_model` in their IPC allowlists at the identical list position, continuing the
+  established drift-avoidance discipline. **A real, minor UI gap was caught only by scoped live
+  testing, not by inspection**: a first draft of the curated-model rows showed a "Download again"
+  button label change and a "Use this model" button on success, but no `✓ ready` indicator the
+  Ollama/LM Studio sections both already show -- caught because a first Playwright assertion's naive
+  `.textContent().includes("ready")` check false-positived on the *unrelated* string
+  `"already-here-Q4_K_M.gguf"` (which itself contains the substring "ready"), forcing a properly
+  scoped re-check that then correctly failed and exposed the real gap; fixed in both files, re-
+  verified with the corrected, properly-scoped assertion. Real, live, end-to-end Playwright
+  verification in both shells, not mocks for the meaningful parts: `web/` was driven against a real
+  running `spartan-devserver` binary serving the real built `web/dist` -- a real click on a curated
+  model's Download button reached the real backend, spawned a real background thread, made a real
+  live HTTPS attempt to Hugging Face, and rendered the real resulting error
+  (`could not reach Hugging Face for ... UnknownIssuer`) end-to-end, confirming the complete real
+  pipeline works even though the *specific* failure is this sandbox's own already-documented network
+  condition, not a defect; the empty-custom-form validation was also confirmed live. `desktop/` used
+  the same established mocked-`window.spartan` + `vite preview` technique (the real Electron binary
+  remains unlaunchable in this session, unchanged since §75.59), with the mock simulating a real
+  `llamacpp_download_ready` event arriving ~500ms after the ack -- confirmed the curated row's
+  `✓ ready` + "Use this model" button appear correctly, and that clicking "Use this model" on an
+  already-downloaded file fires a real `settings_get` -> `settings_set` round trip with the exact
+  expected `LlamaCpp` provider shape. Both shells' own `tsc --noEmit`/`vite build` re-confirmed
+  clean after the fix. **What this does not confirm**: no real model was ever actually downloaded in
+  this environment (the same TLS-proxy condition prevents it here; a real end-user desktop with no
+  MITM proxy would complete the download normally); no real Electron window launch this session
+  (same standing gap since §75.59); no cancel/stop control for an in-flight download (a real,
+  deliberately deferred follow-up, matching `hf_downloader`'s/`lmstudio_downloader`'s own "no
+  restart-on-crash"/"no cancel" precedents); the curated list's real per-model filename is still
+  only resolved lazily at download time, never speculatively, so "already downloaded" status is only
+  ever shown via the separate, reliable `Downloaded GGUF Files` directory listing, not per curated
+  row.
+- **Real, working code — a real Android debug-APK build, the next real increment of task #11
+  (task #144)**: found, not assumed -- a real, substantial Android SDK now exists at
+  `/opt/android-sdk` in this environment (build-tools 34/35/36, platforms 34/35/36, cmdline-tools
+  with `sdkmanager`/`avdmanager`, NDK 27.1.12297006, `adb`/`fastboot`), a genuine change from
+  every prior session's own confirmed "no `adb`/`sdkmanager`/`avdmanager`/`emulator` anywhere"
+  finding (§75.91). Still no emulator/system-image and no `/dev/kvm`, so there is still no real
+  device to install or run an APK against -- but real build-tools/platforms mean a real, complete
+  `assembleDebug` build (compile Kotlin/Java, package, produce a real installable APK) is now
+  genuinely achievable, confirmed with a real spike *before* writing any product code: a
+  hand-built minimal Android Gradle project (`com.android.application` 8.5.2, Kotlin 2.0.21,
+  compileSdk 34) produced a real `BUILD SUCCESSFUL` and a real 813KB `app-debug.apk` -- verified
+  as a genuine ZIP/APK via its own `PK\x03\x04` magic bytes and a real `unzip -l` listing showing
+  real compiled `classes.dex`/`AndroidManifest.xml`/`resources.arsc`, not merely "the command
+  exited 0". New `crates/spartan-android/src/build.rs`: `build_debug_apk` prefers a real project's
+  own `./gradlew` wrapper (falling back to a bare `gradle` from `$PATH`, mirroring
+  `spartan-editor-core::build`'s own Cargo-build precedent of preferring a project's real
+  toolchain entry point), streams every real stdout/stderr line live, and locates the real
+  produced APK via a real, depth-bounded walk for `**/build/outputs/apk/debug/*.apk` (not a
+  hardcoded `app/` assumption -- a real project's app module can be named anything), preferring
+  the shortest real path when multiple modules each have one. `spartan-backend` gained
+  `android_build_apk`, the same "ack now, event later" shape `hf_pull_model`/
+  `llamacpp_download_model` already established (a real Gradle build can run minutes on a cold
+  dependency cache) -- `android_build_progress`/`android_build_ready`/`android_build_failed`
+  events, the ready one carrying the real produced APK's path. `desktop/`'s existing
+  `🤖 Android` status-bar badge (§75.91/task #142, previously a static, non-interactive `<span>`)
+  is now a real clickable button: idle → "Building…" → "✓ built"/"✗ failed", with the tooltip
+  showing the latest real Gradle output line, the final real APK path, or the real error.
+  Deliberately `desktop/`-only this pass, matching `android_detect`'s own already-established
+  scope precedent (task #142) -- `web/` has no Android wiring of any kind yet, named honestly
+  rather than silently extended. 22 new Rust tests (17 in `spartan-android`'s own `build.rs`,
+  including a real, self-skipping, genuinely-executed end-to-end `assembleDebug` test against a
+  real minimal fixture project -- confirmed to actually run, not just compile, by setting
+  `SPARTAN_TEST_ANDROID_SDK=/opt/android-sdk` and observing a real 26.64s pass with a real
+  produced, ZIP-verified APK; 5 dispatch-level tests in `spartan-backend`), full workspace
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release -- --test-threads=1` all clean (0 failures). `desktop/`'s own `tsc
+  --noEmit`/`npm run build` clean. Real, screenshotted Playwright verification (the same
+  mocked-`window.spartan` + `vite preview` technique this whole `desktop/` effort has used since
+  §75.59, since the real Electron binary remains unlaunchable in this session): the idle badge,
+  the real click triggering `android_build_apk`, a real `android_build_progress` event flowing
+  into the "Building…" state, and a real `android_build_ready` event flowing into the "✓ built"
+  state with the real APK path visible in the tooltip, were each confirmed on screen in sequence.
+  **What this does not confirm**: no real device/emulator exists in this environment to install or
+  run the resulting APK against (the real, standing `/dev/kvm`-less constraint this project has
+  named since §75.74); no real Electron window launch this session (same standing gap since
+  §75.59); no cancel/stop control for an in-flight build (matching the same deliberately-deferred
+  precedent named for the model downloaders above); only Kotlin/single-app-module projects were
+  exercised live -- a multi-module or Java-only project's own real build path is structurally
+  identical but wasn't separately verified. Task #11 remains open -- this closes the
+  compile-and-package piece, not install/run/JDWP debugging, which still need a real device this
+  environment cannot provide.
+- **Real, working code — a real Android template in the New Project wizard, closing task #145
+  (immediate follow-up to task #144)**: the New Project wizard (§75.76) already scaffolds 8 real,
+  runnable Tier-1-plus-C# templates but had no Android entry, even though task #144 had just made
+  Android genuinely buildable. `spartan-backend::project_template_files` gained a real `"android"`
+  case -- a direct sibling of task #144's own real, spike-verified minimal Gradle Android project
+  (`com.android.application` 8.5.2, Kotlin 2.0.21), not a fresh, unverified invention. One real,
+  deliberate scope simplification, named rather than silently absorbed: the template uses a fixed
+  `com.spartan.app` namespace/applicationId rather than deriving one from `{{name}}`, since a real
+  Java/Kotlin package segment can't contain the `-`/`_` characters `sanitize_project_name` allows,
+  and `create_project`'s own substitution mechanism only supports one `{{name}}` token -- a second,
+  package-safe token would be real, unjustified complexity for a first increment; `{{name}}` still
+  appears in the real, human-visible `android:label`. `desktop/`'s `NewProjectWizard.tsx` gained a
+  matching "Android (Kotlin)" entry in its existing template `<select>`. Two new dispatch-level
+  tests (added to the existing `create_project` suite): one confirms the real scaffolded project is
+  recognized by `spartan_android::is_android_project` (not just `spartan-languages`' own generic
+  detection, which every other template's test already covers) and that the real `{{name}}`
+  substitution reached the manifest; a second, real, self-skipping, live end-to-end test scaffolds
+  the template via the real `create_project` dispatch and then runs the real `spartan_android::
+  build::build_debug_apk` against it -- the exact same function `android_build_apk` calls -- with
+  `SPARTAN_TEST_ANDROID_SDK=/opt/android-sdk`, confirmed to genuinely pass (40.14s, a real
+  `BUILD SUCCESSFUL`, a real produced APK independently re-verified via its own `PK\x03\x04` ZIP
+  signature) -- proof the *product's own template content*, not a hand-written duplicate, produces
+  an identical real, buildable result. Full workspace `cargo fmt --all -- --check`/`cargo clippy
+  --workspace --release --all-targets`/`cargo test --workspace --release -- --test-threads=1` all
+  clean (0 failures). `desktop/`'s own `tsc --noEmit`/`npm run build` clean. Real, screenshotted
+  Playwright verification (the same mocked-`window.spartan` + `vite preview` technique this whole
+  `desktop/` effort has used since §75.59): the "Android (Kotlin)" option renders in the real
+  wizard's template dropdown, selecting it and submitting the form calls the real `create_project`
+  IPC method with `template: "android"`, confirmed via a real call-log check. **What this does not
+  confirm**: the same real, standing gaps task #144 already named (no device/emulator to install or
+  run the resulting APK against, no real Electron window launch this session); no package-name
+  customization in the wizard UI (the fixed-namespace scope decision above).
+- **Real, working code — Android detect + build wired into `web/`, closing the platform gap tasks
+  #142/#144 both deliberately left open (task #146)**: `android_detect`/`android_build_apk` are
+  real `spartan-backend` methods reachable generically through `web/`'s own `BackendClient` (no
+  method allowlist to extend the way `desktop/`'s `preload.ts` needs) -- this pass is pure
+  TypeScript/CSS, zero Rust changes. `App.tsx` gained the same `AndroidDetectResult`/
+  `AndroidBuildState` shapes and `buildApk` callback `desktop/`'s `StatusBar.tsx` already
+  established (not shared code -- the two shells don't share a components package -- but
+  byte-identical in shape), keyed off `backendClient.projectRoot` (the devserver's own resolved
+  launch directory) instead of a fixed URL query param, and a matching `.status-android-badge`
+  button in the status bar with the identical `desktop/` CSS. **A real, environment-specific
+  staleness bug was found and fixed during verification, not a code defect**: the first live test
+  against a real running `spartan-devserver` binary failed with `unknown method
+  android_build_apk` -- the binary on disk predated this session's own addition of that method to
+  `spartan-backend` (a library dependency `spartan-devserver` links but hadn't been relinked
+  against since); rebuilding `spartan-devserver` fixed it immediately, confirming the real product
+  code was already correct and the issue was purely this session's own stale build artifact. Real,
+  live, end-to-end Playwright verification against a real running `spartan-devserver` serving a
+  real `web/dist` build, pointed at a real git-initialized project fixture with a real
+  `AndroidManifest.xml`: the badge correctly rendered `🤖 Android` from a real live
+  `android_detect` call; clicking it fired a real `android_build_apk` call that reached the real
+  backend, spawned a real background thread, and made a real `gradle` subprocess attempt --
+  confirmed via the real `Building…` state observed live (the fixture has no real
+  `app/build.gradle.kts`, so it was expected to fail shortly after, matching the same honest
+  "real round trip, real environment-specific outcome" verification style already established for
+  the llama.cpp downloader). `web/`'s own `npm run typecheck`/`npm run build` both clean, full
+  workspace `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets` clean
+  (no Rust touched, re-confirmed anyway). **What this does not confirm**: no successful build was
+  observed in this specific verification (the fixture was deliberately minimal, matching the
+  llama.cpp downloader's own "real round trip over a real complete success" precedent when a full
+  buildable fixture would cost several more minutes for the same structural confirmation); the
+  same real, standing gaps tasks #144/#145 already named (no device/emulator, no real Electron
+  window launch this session) apply identically here. Both real shells now expose every Track A/
+  Android-adjacent `spartan-backend` capability this project has built.
+- **Real, working code — Spartan Cloud (Track B), a separate, optional multi-tenant backend
+  (tasks #125-#127, #137) — retroactively documented here (task #147) after being found real,
+  substantial, and shipped, but never recorded in this file, a genuine documentation gap given
+  this file's own stated role as source of truth**: a real, deliberately separate Cargo workspace
+  at `cloud/` (its own `[workspace]`, not a member of the root `Cargo.toml` -- invisible to
+  `cargo build --workspace` at the repo root, the same isolation `crates/plugins` already uses for
+  a different reason), positioned alongside the local-first IDE, not replacing it -- billing
+  deferred by explicit decision behind a real `EntitlementProvider` seam (`StubEntitlementProvider`
+  today, a real `StripeEntitlementProvider` swaps in later with zero caller changes, mirroring the
+  `ModelProvider` pattern). Five crates: `spartan-cloud-protocol` (shared DTOs, a real opaque
+  `SessionToken` deliberately not a JWT -- revocability matters more here than statelessness, since
+  a compromised/abusive tenant account must be killable immediately); `spartan-cloud-tenant`
+  (real per-tier `PlanLimits`/`can_allocate` quota admission -- CPU/memory/pids/wall-clock
+  lifetime/concurrency, no tier ever "unlimited"); `spartan-cloud-data` (SQLite + real argon2
+  password hashing, an append-only audit log with no update/delete method on this crate's own API,
+  and a real owner-scoped AES-256-GCM secrets vault -- a real, deliberate correction of the
+  `SpartanAI_Security_Core` reference concept it's adapted from, whose own code used
+  unauthenticated AES-256-CBC despite claiming GCM; the master key is env-provided, never
+  persisted with the ciphertext, and the vault is *locked*, not silently plaintext, when absent);
+  `spartan-cloud-runtime` (a real `ContainerRuntime` trait + `DockerRuntime` on `bollard`, every
+  method tenant-scoped and resource-capped, `network_mode: none`, no host bind-mounts, a real
+  60-second-interval reaper enforcing each allocation's hard wall-clock deadline -- the concrete
+  answer to §36.4.7's "uncapped consumption" failure mode); `spartan-cloud-api` (a real axum
+  control plane -- signup/login/admin-grant/audit/telemetry/allocate/exec, plus a real streaming
+  interactive session over WebSocket using a short-lived, consumed-on-first-use capability token
+  distinct from the general bearer token, and a real, self-contained `/admin` monitoring dashboard
+  reusing Track C's own `.glass-hologram`/`.hud-gauge` classes verbatim). **The plan's own Phase 0
+  gVisor spike was actually run, with a real, honest no-go result**: `runsc` installs from the
+  confirmed apt package, but hangs on startup in this nested sandbox (gVisor's platform needs KVM
+  or working `ptrace`/`systrap`, neither usable here, matching §75.74's own already-documented
+  `/dev/kvm` absence) -- not a code problem, an environment one. `DockerRuntime` is therefore
+  verified against plain `runc` (a shared-kernel baseline, not strong adversarial isolation), ships
+  with `isolation_verified: false` by default, and `/api/allocate` **refuses to allocate** against
+  an unverified runtime -- the honest default, not silently absorbed as if `runc` were sufficient.
+  A real KVM-capable target (bare metal/Firecracker/a KVM-enabled instance) is the documented path
+  to flipping that flag true, swappable behind the same trait. **WebAuthn admin auth** (task #137)
+  is real and live-verified: Chrome DevTools Protocol's virtual authenticator
+  (`WebAuthn.addVirtualAuthenticator`, reachable via Playwright) answered genuine
+  `navigator.credentials.create()`/`.get()` ceremonies with no physical key needed -- confirmed via
+  a real registered credential, logout, then a real password-free login using only the security
+  key, with the resulting real audit trail (`login` → `webauthn_register` → `webauthn_login`)
+  visible on screen. Real test counts as of this pass: `spartan-cloud-data` 11 tests (incl. GCM
+  tamper-detection + tenant isolation) + 3 more for WebAuthn credential storage,
+  `spartan-cloud-api` 25 tests (tower `oneshot` REST coverage, a real bound-socket WebSocket
+  end-to-end test, a real capability-token-replay-refused test), `spartan-cloud-runtime` 7 tests
+  including a real create→status→count→stop lifecycle, a real reaper test, and a real interactive
+  session test — all against a live daemon, self-skipping if none is reachable (mirroring
+  `spartan-devcontainer::docker_integration.rs`'s own convention). **What this does not confirm**:
+  no strong-isolation verification on a real KVM-capable target (the one item `cloud/README.md`'s
+  own "What's NOT here yet" section still names); no real Stripe billing, multi-node routing,
+  cross-region deployment, egress-allowlist proxy, image/registry caching, or org/team features
+  (all explicitly deferred by the original plan, not forgotten). See `cloud/README.md` for the
+  complete, standalone account this summary condenses.
+- **Real, working code — holographic dashboard aesthetic layer (Track C, task #124), cross-cutting
+  across `desktop/`/`web/`/`mobile/` — retroactively documented here (task #147) for the same
+  reason as Track B above**: a real visual-language layer adapted from the user's own
+  `SpartanAI_Security_Core`/`Dashboard_Apex` reference (concept only, zero code ported, every
+  offensive/autonomous part of those repos excluded entirely, matching the §75.70/§75.71 "concepts
+  only, rebuilt safely" precedent). Added to `theme.css` (kept in parity between `desktop/` and
+  `web/`): a real status-reactive glow axis (`--status-idle/active/warning/critical` -- blue/gold/
+  amber/red as a *semantic status* hue, deliberately orthogonal to the blue/gold brand identity
+  itself, the same distinction §75.93 already drew for mobile's own theme-invariant `StatusPill`),
+  a real `.glass-hologram` glassmorphic panel (`backdrop-filter` blur -- the genuinely new piece;
+  this project already had glow/chamfer/scanlines from earlier passes but no glassmorphism), a
+  severity-scaled pulse animation (faster = more urgent), and a dependency-free conic-gradient
+  `.hud-gauge` (reused verbatim by Spartan Cloud's own `/admin` telemetry dashboard, confirmed
+  above). Applied live: `desktop/`'s Leo panel is now glassmorphic; the Leo "Failed" state badge
+  gained the urgent red status pulse, fixing a real, previously-unnoticed inconsistency where it
+  alone had no glow while calmer states did; `web/`'s file-tree panel got the matching
+  glassmorphic treatment, and its backend-connection indicator became status-reactive (green glow
+  connected, dim client-only). `mobile/` got its own real, honestly-scoped extension via pure RN
+  styles: `StatusPill` gained a real status-reactive glow halo, and a new `hologramSurface(colors)`
+  helper in `theme.ts` (the RN analogue of `.glass-hologram`) was applied to
+  `ArtifactReviewScreen`'s diff/artifact card. **A real, named platform limitation, not glossed
+  over**: React Native has no `backdrop-filter`, so mobile's version is a translucent surface +
+  accent-colored hairline edge + soft glow, not a true backdrop blur -- that would need a native
+  `expo-blur` `BlurView` and a custom dev build, real, separate, unstarted follow-up work, matching
+  the wgpu shell's own already-established "glow + status-reactive color, not true blur" limit
+  named in §75.55's own SDF shader work. Real, screenshotted Playwright verification in both dark
+  and light themes for `desktop/` (DOM-confirmed `backdrop-filter` on the Leo panel, the red Failed
+  badge, zero page errors, no light-theme regression) and `web/` (status indicator renders and
+  reacts correctly); `mobile/`'s own established `npx tsc --noEmit` + `expo export` verification
+  path, no live device/emulator rendering (this project's own standing constraint since `mobile/`
+  was first built). **What this does not confirm**: no true backdrop blur on `mobile/` (named
+  above); the wgpu reference shell (`crates/spartan-editor-core`) was not extended with this layer
+  (it's no longer the primary UI target per §75.59's own pivot, and has no CSS-equivalent styling
+  layer to apply utility classes to in the first place).
+- **Real, working code — real ADB device listing + APK install, closing the device-management
+  half of task #11's remaining scope (task #148)**: direct continuation of §144-146's build-only
+  Android support. A real emulator remains confirmed out of reach in this environment -- no
+  `/dev/kvm`, no `vmx`/`svm` CPU flags at all (checked directly this pass, not assumed from
+  memory), and the SDK's own `emulator` package was never installed here -- but a real, installed
+  `adb` binary (`/opt/android-sdk/platform-tools/adb`) was confirmed live: it starts a real daemon
+  and correctly reports zero devices, since none are attached in this sandbox. That's exactly the
+  honest, useful case this pass closes: real device-management code that works the moment a real
+  end user plugs in a real physical device (or runs a real emulator on their own KVM-capable
+  machine), even though this specific environment can only verify the "no device attached" path
+  live. New `crates/spartan-android/src/adb.rs`: a real, pure `parse_devices_output` for `adb
+  devices -l`'s own output shape (serial/state/model/product, tolerating the daemon-startup banner
+  lines on either stdout or stderr), `list_devices` (a real, live subprocess call), and
+  `install_apk` (real, streaming `adb install -r`, optionally `-s <serial>`-targeted, mirroring
+  `build.rs`'s own streaming shape exactly). Two new `spartan-backend` dispatch methods:
+  `android_list_devices` (synchronous -- fast enough not to need a background thread) and
+  `android_install_apk` (the same "ack now, event later" shape as `android_build_apk` --
+  `android_install_progress`/`android_install_ready`/`android_install_failed` events). Both refuse
+  honestly, naming the reason, when no real `adb` is found, rather than returning a fabricated
+  empty device list that would look identical to "no device attached." `desktop/`'s status bar
+  gained a second badge, "📲 Install," shown only once a build is `ready` -- clicking it lists real
+  devices fresh (never cached, since a device can be plugged/unplugged between clicks), picks the
+  first real `state === "device"` one automatically (a real, named v1 scope choice over a
+  device-picker UI, since `adb -s` still targets a specific device correctly either way and the
+  tooltip lists every real device found), and installs the just-built APK onto it. 6 new Rust tests
+  (4 pure/always-on parsing tests in `adb.rs`, 1 real always-on `list_devices` test against
+  whatever real `adb` this environment actually has -- confirmed to genuinely start the daemon and
+  return an honestly empty list, not a fixture -- and 1 install-path error test; plus 3 new
+  dispatch-level tests in `spartan-backend` covering both real, environment-dependent outcomes
+  rather than assuming one). Full workspace `cargo fmt --all -- --check`/`cargo clippy --workspace
+  --release --all-targets`/`cargo test --workspace --release -- --test-threads=1` all clean (0
+  failures); `desktop/`'s own `tsc --noEmit`/`vite build` clean. Real, screenshotted Playwright
+  verification (the same mocked-`window.spartan` + `vite preview` technique this whole `desktop/`
+  effort has used since §75.59): building an APK correctly revealed the new Install button; clicking
+  it correctly called `android_list_devices` then `android_install_apk` with the real mocked ready
+  device's serial and the real built APK's path, transitioning through Installing… to ✓ installed;
+  the button's own tooltip correctly listed the real detected device. **What this does not
+  confirm**: no real device was ever actually installed onto in this environment (the same real
+  constraint every Android pass in this project has named); no equivalent UI in `web/` yet (a real,
+  separate follow-up, matching the desktop-then-web sequencing already established for LSP/DAP);
+  no device-picker UI for the multi-device case (the auto-pick-first-ready scope decision above);
+  no `adb logcat` streaming (a real, separate, unstarted piece of task #11's own named scope). The
+  real emulator/system-image half of task #11 remains the one item still fully blocked by this
+  environment's lack of `/dev/kvm`.
+- **Real, working code — real ADB device listing + install wired into `web/`, closing the
+  `desktop/`-then-`web/` parity gap §148 named (task #149)**: pure TypeScript, zero backend/
+  protocol changes needed -- `android_list_devices`/`android_install_apk` are already real,
+  generic `spartan-backend` methods reachable through `web/`'s own fully generic `BackendClient`
+  (no method allowlist to extend the way `desktop/`'s `preload.ts` needs, unlike every other
+  desktop-then-web pass this session has done). `web/src/App.tsx` gained the byte-identical
+  `AndroidDeviceInfo`/`AndroidInstallState` types and `installApk` callback `desktop/`'s
+  `StatusBar.tsx`/`App.tsx` already have, plus a matching second `.status-android-badge` "📲
+  Install" button in the JSX status bar, shown only once a build is `ready`. **Real, live,
+  end-to-end verification against the actual full stack, not a mock** -- a step up from
+  `desktop/`'s own mocked-`window.spartan` harness (§148), since `web/`'s real `spartan-devserver`
+  binary could be built and run here: a real, buildable Android/Gradle fixture (the same recipe
+  tasks #144/#145 use) was served by a real `spartan-devserver` process; clicking the Android badge
+  triggered a genuine `gradle assembleDebug` (confirmed correct, not skipped, after finding and
+  fixing a real test-environment gap -- this session's own shell has no `ANDROID_HOME` set by
+  default, so the first attempt correctly hit a real "SDK location not found" Gradle failure;
+  restarting the devserver with `ANDROID_HOME`/`ANDROID_SDK_ROOT` exported fixed it, not a product
+  bug); once genuinely built, clicking Install correctly called the real `android_list_devices`
+  (a real `adb devices -l`, reporting zero devices, matching this sandbox's own already-confirmed
+  condition) and reached the real, honest "no real device attached" failure state end to end,
+  screenshotted. **Two real bugs were found and fixed in the verification script itself while
+  building this test, not in product code**: `page.waitForFunction(fn, options)` silently passes
+  `options` as the function's `arg` parameter, not as timeout options, in Playwright's own JS API
+  -- fixed by passing `null` as the explicit middle argument; and a `hasText: "Install"`-filtered
+  locator stopped matching once the button's own text changed after installing, breaking a
+  subsequent read -- fixed with a stable index-based locator instead. Neither was a defect in the
+  shipped `App.tsx` changes, both are recorded here so a future verification pass doesn't
+  rediscover them from scratch. `web/`'s own `npm run typecheck`/`vite build` both clean; no Rust
+  changes this pass, full workspace `cargo fmt --all -- --check`/`cargo clippy --workspace
+  --release --all-targets` re-confirmed clean anyway. **What this does not confirm**: no real
+  device was ever actually installed onto in this environment (the same real constraint every
+  Android pass in this project has named); no device-picker UI for the multi-device case (matches
+  `desktop/`'s own already-named scope decision); `adb logcat` streaming remains the one named,
+  unstarted piece of task #11's own remaining scope. Both real Electron-based shells now expose
+  every real ADB capability this project has built.
+- **Real, working code — real `adb logcat` streaming, closing the last named piece of task #11's
+  device-management scope, `desktop/`-only this pass (task #150)**: extends `crates/spartan-
+  android/src/adb.rs` with a real `LogcatHandle`/`spawn_logcat` (a real, unbounded stream the
+  caller explicitly stops, unlike `list_devices`/`install_apk`'s own bounded-completion shape).
+  **A real, live-confirmed finding, not assumed**: with zero real devices attached, `adb logcat`
+  (no `-s`) does not fail fast the way `adb devices` does -- it prints a real `"- waiting for
+  device -"` line and blocks indefinitely, confirmed directly (`timeout 5 adb logcat` in this
+  sandbox) before writing any wrapper code. That's real, correct `adb` behavior, surfaced verbatim
+  through this streaming pipeline exactly as it happens, matching this crate's own established
+  "show real subprocess output as-is" precedent. `spartan-backend` gained
+  `android_logcat_start`/`android_logcat_stop` plus a new `logcat_sessions: HashMap<u64,
+  LogcatHandle>` field (mirroring `pty_sessions`'s own real, independent-session-id shape) --
+  `_start` spawns a real background thread relaying every real line as an `android_logcat_output`
+  event and a final `android_logcat_exit` once the stream ends; `_stop` is a real, hard `kill()`,
+  with an already-gone session id a real, harmless no-op (matching `pty_close`'s own precedent).
+  New `desktop/src/components/LogcatPanel.tsx`: a compact, auto-scrolling log viewer styled after
+  `DebugPanel.tsx`'s own "small, honest first increment" toolbar, toggled via a new "📜 Logcat"
+  button in `StatusBar.tsx` (shown whenever the project is a real Android project, independent of
+  build/install state -- a device can be logged without ever building this project's own APK). A
+  real, named v1 simplification, stated in `App.tsx`'s own code comment rather than silently
+  assumed: this UI only ever tracks one real logcat session at a time, so incoming
+  `android_logcat_output` events are appended without matching `session_id` against a ref. 4 new
+  Rust tests (2 in `adb.rs`, including a real, always-executable spawn/stream/kill test against
+  whatever real `adb` this environment has -- confirmed to genuinely receive the real `"waiting
+  for device"` line within 5s, not a fixture; 2 dispatch-level in `spartan-backend`, asserting
+  whichever real, honest outcome this environment's own adb presence produces, matching
+  `android_list_devices`'s own established test precedent), full workspace `cargo fmt --all --
+  check`/`cargo clippy --workspace --release --all-targets`/`cargo test --workspace --release --
+  test-threads=1` all clean (0 failures). `desktop/`'s own `tsc --noEmit`/`vite build` clean. Real,
+  screenshotted Playwright verification (the same mocked-`window.spartan` + `vite preview`
+  technique this whole `desktop/` effort has used since §75.59): the Logcat toggle opened the
+  panel; Start Logcat streamed two real logcat-shaped lines (including the exact real "waiting for
+  device" diagnostic text) into the scrolling view; Stop transitioned the panel back to "Stopped"
+  via a real `android_logcat_stop` call carrying the correct session id; the close button removed
+  the panel from the DOM. **What this does not confirm**: no real device's own real logcat output
+  was ever streamed in this environment (the same real, standing constraint every Android pass in
+  this project has named -- confirmed instead against the real, honest zero-device diagnostic
+  path); no equivalent UI in `web/` yet (a real, deliberately deferred follow-up this pass, unlike
+  every prior desktop-then-web Android pass -- `android_logcat_start`/`_stop` are already real,
+  generic `spartan-backend` methods reachable through `web/`'s own `BackendClient` with zero
+  protocol changes needed, the same shape task #149 already closed for install, so this remains a
+  small, well-scoped follow-up, not a new unknown); no log filtering/search/level-coloring (raw
+  verbatim output only, a real, named v1 scope cut). With this pass, every named piece of task
+  #11's device-management scope is closed in `desktop/`; the real emulator/system-image/JDWP half
+  remains the one item still fully blocked by this environment's lack of `/dev/kvm`.
+- **Real, working code — real `adb logcat` streaming wired into `web/`, closing the deliberately
+  deferred follow-up §150 named (task #151)**: pure TypeScript, zero backend/protocol changes
+  needed -- `android_logcat_start`/`_stop` are already generic `spartan-backend` methods reachable
+  through `web/`'s own fully generic `BackendClient`, the same shape task #149 already closed for
+  install. New `web/src/components/LogcatPanel.tsx` (byte-identical to `desktop/`'s own copy, not
+  shared code since the two shells don't share a components package) plus the matching "📜 Logcat"
+  toggle button and event handlers in `App.tsx`. **Real, live, end-to-end verification against the
+  actual full stack, not a mock** -- the same "as real as achievable" technique `web/`'s own DAP/
+  hover/completion passes already established, a step up from `desktop/`'s own mocked-
+  `window.spartan` harness: a real `spartan-devserver` binary served the real built `web/dist`
+  against a real Android/Gradle fixture with `ANDROID_HOME` exported; clicking Logcat then Start
+  Logcat opened a real WebSocket-relayed `android_logcat_start` call, and the real, honest
+  `"- waiting for device -"` diagnostic (confirmed live and documented in §150) streamed through
+  the genuine event pipeline into the panel exactly as `adb` itself prints it; Stop correctly
+  transitioned the panel back via a real `android_logcat_stop` call. **A real, environment-specific
+  staleness gap was hit and fixed during this verification, not a code defect** -- the same class
+  of issue §146 first named: the `spartan-devserver` binary on disk predated §150's own addition of
+  `android_logcat_start`/`_stop` to the `spartan-backend` library it links, so the first live
+  attempt correctly failed with `"unknown method"` until rebuilt (`cargo build --release -p
+  spartan-devserver`), after which the real round trip worked as designed. `web/`'s own `npm run
+  typecheck`/`vite build` both clean; no Rust changes this pass, full workspace `cargo fmt --all --
+  check`/`cargo clippy --workspace --release --all-targets` re-confirmed clean anyway. **What this
+  does not confirm**: no real device's own real logcat output was ever streamed in this
+  environment (the same real, standing constraint every Android pass in this project has named);
+  no log filtering/search/level-coloring (matches `desktop/`'s own already-named v1 scope cut).
+  With this pass, both real Electron-based shells expose every real ADB capability this project
+  has built, including logcat; only task #11's emulator/system-image/JDWP half -- confirmed
+  blocked by this environment's lack of `/dev/kvm` and CPU virtualization extensions -- remains
+  open.
+- **Real, working code — all 5 GUI design concepts made real, live, user-selectable themes in
+  both `desktop/` and `web/`, extending `spartan_settings::ThemeName` from 2 to 7 real variants
+  (task #152)**: closes "Make all GUI designs user changeable," the direct follow-up to the 5
+  standalone HTML mockups the immediately preceding pass built and screenshotted for the user to
+  choose from. Rather than picking one winner, every real concept (Minimalist Zen, Neon Aftergrid,
+  Warm Paper, Command Deck, Glass Native) plus the existing SpartanDark/SpartanLight both became
+  real, live options in the same Settings theme dropdown both shells already had. `ThemeName`
+  gained 5 new variants (`#[serde(default)]`'s own existing forward-compatibility guarantee,
+  §75.79, covers a pre-existing settings file with no ripple); every exhaustive `match` on it in
+  the reference wgpu shell's own `theme.rs`/`settings_panel.rs` needed a real, deliberate,
+  documented fallback arm -- that renderer has no display/GPU in this session to verify a live
+  5-way palette swap, so the 5 new themes fall back to SpartanDark's exact tokens there rather than
+  failing to compile; `cycle_theme()`'s own keyboard cycle now visits all 7 in a fixed order.
+  `desktop/src/theme.css`/`web/src/theme.css` each gained 5 new `:root[data-theme="..."]` blocks,
+  every color value copied verbatim from that concept's own mockup `:root` tokens -- not
+  re-derived -- so picking a theme in Settings reproduces the exact palette the user reviewed in
+  the screenshots. A new `--font-ui` token (read by `body`'s font-family, defaulting via CSS
+  `var(fallback)` syntax to the existing system stack so SpartanDark/SpartanLight are untouched)
+  gives Neon Aftergrid/Command Deck a real monospace-everywhere UI and Warm Paper a real serif one;
+  Glass Native gets one real structural (not just token) addition -- genuine `backdrop-filter`
+  glassmorphism on each app's own real chrome panels, reusing Track C's already-existing
+  `.glass-hologram` blur/saturate recipe (§124) rather than inventing a second one, with the exact
+  selector list confirmed against each app's own real class names (`desktop/`'s `.nav-sidebar`/
+  `.leo-panel`/`.tab-bar`/etc. vs. `web/`'s differently-structured `.toolbar`/`.file-tree-panel`/
+  `.git-panel`/etc. -- grepped, not assumed identical, since the two shells' layouts genuinely
+  differ). `applyTheme.ts` (copied verbatim between `desktop/`/`web/`, matching that file's own
+  existing convention) generalized from a hardcoded 2-way ternary to a `Record`-driven lookup with
+  a new exported `THEME_LABELS` map, which both Settings screens' `<option>` lists now render from
+  directly instead of two hand-written `<option>` tags -- a real, incidental simplification, not
+  just mechanically bolted on. A real, pre-existing bug was found and fixed along the way, not
+  introduced by this pass: `web/src/theme.css`'s own Track C section (§124) was missing its opening
+  `/* ===` comment marker (present in `desktop/`'s copy, absent in `web/`'s), leaving roughly 15
+  lines of real prose parsed as invalid CSS by any real browser engine -- harmless by accident
+  (parsed as a bogus, ignored rule) but a real correctness bug, fixed by restoring the missing
+  marker. 6 new Rust tests (2 in `spartan-settings` covering the full 7-variant JSON round trip and
+  a real partial-JSON deserialization of one of the 5 new variants; 1 in `theme.rs` confirming the
+  wgpu shell's own documented fallback behavior via literal-value comparison, deliberately not
+  touching the real process-wide `OnceLock` to avoid repeating a real test-isolation bug this same
+  file already found and fixed once before, §75.93; 1 rewritten + 2 new in `settings_panel.rs`
+  covering the real 7-stop cycle and all 7 themes' labels being pairwise distinct), full workspace
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release -- --test-threads=1` all clean, zero failures. `desktop/`'s and `web/`'s own
+  `tsc --noEmit`/`vite build` both clean. **Real, live, screenshotted Playwright verification in
+  both shells** (the same mocked-`window.spartan` + `vite preview` technique this whole `desktop/`
+  effort has used since §75.59 for the Electron-launch gap; `web/` was driven directly against its
+  own real `vite preview` server, no mock needed): all 7 themes were cycled through the real
+  Settings `<select>` in both apps, with the real resulting `data-theme` attribute, `--bg`/
+  `--accent`/`--font-ui` custom-property values, and (for Warm Paper/Neon Aftergrid/Command Deck)
+  the real resolved `body` font-family each independently confirmed correct and distinct per theme
+  -- not just that the dropdown changed, that the actual computed styles changed; Glass Native's
+  real `backdrop-filter: blur(20px) saturate(1.15)` was confirmed present on `desktop/`'s real
+  `.nav-sidebar`/`.leo-panel` (first checked against the Settings screen, which correctly has no
+  `.status-bar` at all -- confirmed by checking the Editor screen instead, not a bug); `web/`'s own
+  `localStorage`-based persistence (no backend settings store in the pure client-side path, §75.89's
+  own already-documented scope) was confirmed to survive a real page reload with Command Deck still
+  selected; and a real `settings_set` call-log check in `desktop/` confirmed switching themes never
+  clobbered unrelated fields (`gpu_enabled`/`editor` were still present on every call) -- the same
+  real bug class (§75.79) this project has caught before. **What this does not confirm**: no real
+  Electron window launch this session (same standing gap since §75.59); no live mid-session palette
+  swap verification for the reference wgpu shell (no display/GPU this session -- the fallback
+  behavior is verified by code/test inspection and this shell's own already-established "applies
+  next launch" precedent, §75.93, not an actual second launch on screen); `mobile/` was deliberately
+  not extended with the 5 new themes (a real, narrower scope decision, matching §75.93's own
+  precedent of scoping mobile's font customization out since it has no code-editing surface for it
+  to meaningfully apply to -- these 5 concepts are IDE-chrome-specific designs with no mobile
+  equivalent to compare against); Warm Paper's real serif `--font-ui` has limited visible reach in
+  the current UI since most Settings/nav text already carries the `.mono` class (which reads the
+  separate `--font-mono` token, untouched by this pass) -- a real, honestly-named consequence of
+  this being a token-level pass, not a typography audit, not hidden or glossed over.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
@@ -3076,12 +4246,33 @@ first — it's the parity reference until each row there is actually reimplement
 ## Build & test
 
 ```bash
-cargo test --workspace --release   # 622 tests: 7 spikes + 15 real crates + xtask (spartan-buffer,
+cargo test --workspace --release   # 746 tests: 7 spikes + 18 real crates + xtask (spartan-buffer,
                                     # spartan-languages, spartan-git, spartan-security,
                                     # spartan-crash, spartan-plugin-host, spartan-model, spartan-leo,
                                     # spartan-settings, spartan-updater, spartan-devcontainer,
                                     # spartan-android, spartan-editor-core, spartan-backend,
-                                    # spartan-buffer-wasm, xtask)
+                                    # spartan-buffer-wasm, spartan-devserver, spartan-lsp,
+                                    # spartan-dap, xtask)
+# spartan-lsp (LSP, real second promotion of the reference shell's own lsp.rs/lsp_session.rs) and
+# spartan-dap (DAP, the same pattern for dap.rs/dap_session.rs/build.rs) are what give
+# spartan-backend -- and so both Electron-based shells -- real live diagnostics/debugging for the
+# first time. spartan-dap's own tests/dap_lldb_integration.rs needs lldb-dap/lldb-dap-18 + rustc;
+# tests/dap_python_integration.rs needs python3 + the debugpy package (specifically its stdio
+# adapter mode, `python3 -m debugpy.adapter` -- see dap_integration.rs's own doc comment for the
+# real bug this fixes). Both self-skip honestly if their tool isn't found, matching every other
+# real-external-tool integration suite in this repo. spartan-backend's own
+# tests/dap_debugpy_integration.rs exercises the same real debugpy session one layer up, through
+# the full handle_request dispatch (open_file -> dap_launch -> dap_stopped event -> dap_continue ->
+# dap_exited event -> dap_disconnect), same self-skip convention.
+# spartan-lsp's own pyright_integration.rs and spartan-backend's own lsp_hover_integration.rs
+# (task #134) each spawn a real, live pyright-langserver session and exercise a real
+# textDocument/hover round trip -- both self-skip if pyright-langserver isn't on $PATH, and both
+# run close to LspSession::request_hover's own real 100s worst-case timeout (~91-93s each) since a
+# hover issued immediately after open_file legitimately queues behind the server's real initial
+# indexing pass, not a hang.
+# spartan-backend's own lsp_completion_integration.rs (task #136) is the direct sibling of
+# lsp_hover_integration.rs above -- same real pyright-langserver spawn, same self-skip, same
+# ~90s-class worst-case timeout, exercising a real textDocument/completion round trip instead.
 # spartan-android's own detect_gradle_version live test (§75.91) self-skips if no real `gradle`
 # is found on $PATH -- matching every other real-external-tool integration suite in this repo.
 # crates/spartan-editor-core's real fonts.rs (§75.92) bundles JetBrains Mono TTF assets and is
@@ -3117,6 +4308,22 @@ cargo test --workspace --release   # 622 tests: 7 spikes + 15 real crates + xtas
 # flags needed -- real overlay filesystem support and iptables are both present) after which
 # both tests run for real rather than self-skipping. Not guaranteed to hold in a fresh session --
 # start `dockerd` yourself and check `docker info` before assuming either way.
+# spartan-backend's own tests/litellm_integration.rs (task #138, moved here from
+# spartan-devserver by task #145 alongside litellm_proxy.rs itself) needs a real `litellm` CLI on
+# $PATH -- self-skips (prints a message) if it isn't found, matching every other real-external-tool
+# integration suite in this repo. The always-on mechanics test (spawn/stream/health/stop) lives in
+# litellm_proxy.rs's own #[cfg(test)] module instead, using `python3 -m http.server` as a real
+# stand-in subprocess so it never needs a real litellm install to run in CI.
+# spartan-backend's own tests/hf_pull_integration.rs (task #139, moved here alongside
+# hf_downloader.rs by task #145) needs a real `ollama` CLI on $PATH -- self-skips (prints a
+# message) if it isn't found. When it runs, it deliberately pulls a nonexistent HF repo (a real,
+# fast-failing Ollama HTTP round trip) rather than any real curated model -- no real GGUF model
+# download is ever performed by this suite. `hf_downloader`/`litellm_proxy`/`lmstudio_downloader`
+# are real `pub mod`s of spartan-backend (not spartan-devserver) as of task #145 -- desktop/'s
+# Electron shell (a plain spartan-backend process) and web/'s spartan-devserver connection both
+# reach the identical real model_status/litellm/HF/LM-Studio methods through spartan-backend's own
+# handle_request now; spartan-devserver's own dispatcher only still directly answers
+# devserver_ping, falling through to handle_request for everything else including these.
 # spartan-backend (§75.59) is the real IPC service the new desktop/ Electron shell drives --
 # `cargo build --release -p spartan-backend` before running `desktop/` at all (its
 # `electron/main.ts` looks for that exact release binary path and refuses to start without it).

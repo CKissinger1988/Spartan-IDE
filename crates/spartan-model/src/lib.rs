@@ -4,16 +4,20 @@
 //! to this workspace's established blocking-I/O-on-a-thread convention.
 
 pub mod claude;
+pub mod failover;
 pub mod fallback;
 pub mod litellm;
 pub mod llamacpp;
+pub mod lmstudio;
 pub mod ollama;
 pub mod provider;
 
 pub use claude::ClaudeProvider;
+pub use failover::{FailoverProvider, UsageStats, UsageTracker};
 pub use fallback::{FallbackParser, ParseEvent};
 pub use litellm::LiteLLMProvider;
 pub use llamacpp::LlamaCppProvider;
+pub use lmstudio::LmStudioProvider;
 pub use ollama::OllamaProvider;
 pub use provider::{
     CompletionRequest, Delta, Message, ModelProvider, ProviderError, ProviderHealth, Role,

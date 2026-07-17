@@ -97,6 +97,127 @@
   --hud-rgb: 156, 122, 29;
 }
 
+/*
+ * Real "make all GUI designs user changeable" pass -- copied verbatim from
+ * `desktop/src/theme.css`'s own identical block (one shared source of
+ * truth for color tokens, matching this file's own existing "copied
+ * verbatim from desktop/" convention). See that file's own doc comment for
+ * the full account of where these values come from (the 5 standalone GUI
+ * mockups) and what `--font-ui` is for.
+ */
+
+:root[data-theme="minimalist-zen"] {
+  --bg: #fafaf8;
+  --surface: #ffffff;
+  --surface-raised: #f2f2ee;
+  --border: #edede8;
+  --border-bright: #deded6;
+  --text: #1c1c1a;
+  --text-dim: #8a8a82;
+  --accent: #2e6fe0;
+  --accent-dim: rgba(46, 111, 224, 0.1);
+  --accent-hover: rgba(46, 111, 224, 0.06);
+  --accent-rgb: 46, 111, 224;
+
+  --hud: #b08d57;
+  --hud-dim: rgba(176, 141, 87, 0.14);
+  --hud-rgb: 176, 141, 87;
+}
+
+:root[data-theme="neon-aftergrid"] {
+  --bg: #06060a;
+  --surface: #0c0d14;
+  --surface-raised: #101220;
+  --border: #22243a;
+  --border-bright: #383b5c;
+  --text: #d8e4f5;
+  --text-dim: #6e7a99;
+  --accent: #3ef0ff;
+  --accent-dim: rgba(62, 240, 255, 0.12);
+  --accent-hover: rgba(62, 240, 255, 0.08);
+  --accent-rgb: 62, 240, 255;
+
+  --hud: #ff3dd8;
+  --hud-dim: rgba(255, 61, 216, 0.12);
+  --hud-rgb: 255, 61, 216;
+
+  --font-ui: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
+}
+
+:root[data-theme="warm-paper"] {
+  --bg: #f5efe3;
+  --surface: #fffdf8;
+  --surface-raised: #fbf3e4;
+  --border: #e7dcc7;
+  --border-bright: #d2c4a8;
+  --text: #2c2620;
+  --text-dim: #8c8070;
+  --accent: #c1622b;
+  --accent-dim: rgba(193, 98, 43, 0.12);
+  --accent-hover: rgba(193, 98, 43, 0.08);
+  --accent-rgb: 193, 98, 43;
+
+  --hud: #5e7a4e;
+  --hud-dim: rgba(94, 122, 78, 0.14);
+  --hud-rgb: 94, 122, 78;
+
+  --font-ui: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+}
+
+:root[data-theme="command-deck"] {
+  --bg: #12151c;
+  --surface: #171b24;
+  --surface-raised: #1d212c;
+  --border: #2a2f3d;
+  --border-bright: #3b4155;
+  --text: #c7d0e0;
+  --text-dim: #6e7789;
+  --accent: #5b9cf6;
+  --accent-dim: rgba(91, 156, 246, 0.12);
+  --accent-hover: rgba(91, 156, 246, 0.08);
+  --accent-rgb: 91, 156, 246;
+
+  --hud: #d8aa4e;
+  --hud-dim: rgba(216, 170, 78, 0.14);
+  --hud-rgb: 216, 170, 78;
+
+  --font-ui: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
+}
+
+:root[data-theme="glass-native"] {
+  --bg: #edf0f7;
+  --surface: rgba(255, 255, 255, 0.55);
+  --surface-raised: rgba(255, 255, 255, 0.72);
+  --border: rgba(36, 38, 46, 0.08);
+  --border-bright: rgba(36, 38, 46, 0.16);
+  --text: #24262e;
+  --text-dim: #6b6e7a;
+  --accent: #3d7eff;
+  --accent-dim: rgba(61, 126, 255, 0.14);
+  --accent-hover: rgba(61, 126, 255, 0.08);
+  --accent-rgb: 61, 126, 255;
+
+  --hud: #c9972f;
+  --hud-dim: rgba(201, 151, 47, 0.14);
+  --hud-rgb: 201, 151, 47;
+
+  --font-ui: -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+}
+
+/* Glass Native's one real structural (not just token) override -- real
+   class names for *this* app (web/'s own layout differs from desktop/'s),
+   confirmed by grepping web/src/components before writing this selector
+   list, not assumed from desktop/'s own equivalent. */
+:root[data-theme="glass-native"] .toolbar,
+:root[data-theme="glass-native"] .file-tree-panel,
+:root[data-theme="glass-native"] .git-panel,
+:root[data-theme="glass-native"] .status-bar,
+:root[data-theme="glass-native"] .debug-panel,
+:root[data-theme="glass-native"] .logcat-panel {
+  backdrop-filter: blur(20px) saturate(1.15);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -122,7 +243,7 @@ body {
     ),
     var(--bg);
   color: var(--text);
-  font-family: -apple-system, "Segoe UI", "Inter", sans-serif;
+  font-family: var(--font-ui, -apple-system, "Segoe UI", "Inter", sans-serif);
   font-size: 13px;
   overflow: hidden;
   user-select: none;
@@ -224,4 +345,106 @@ body {
   background-size: 300% 100%;
   animation: sf-scan 6s linear infinite;
   pointer-events: none;
+}
+
+/* ===================================================================
+ * Track C -- Holographic status-reactive layer.
+ *
+ * Concept adapted (safely, rebuilt fresh, NO code ported) from the
+ * threat-level-reactive dashboard in the user's own SpartanAI_Security_
+ * Core / Dashboard_Apex -- the offensive/autonomous parts of those repos
+ * were excluded entirely; only this defensive visual language was taken.
+ *
+ * Two deliberate design decisions, matching this project's own precedent:
+ *  1. The brand accent stays blue/gold (§75.95). These "status" hues
+ *     (idle/active/warning/critical) are a *semantic status* axis,
+ *     orthogonal to brand -- exactly the distinction §75.93 already drew
+ *     for mobile's theme-invariant StatusPill. Blue = idle/normal,
+ *     gold = active/working, amber = attention, red = critical, green = ok.
+ *  2. Pulse *speed* scales with severity (the dashboard's own signature
+ *     behavior): calmer for normal, faster/more urgent for critical.
+ * =================================================================== */
+
+:root {
+  --status-idle-rgb: var(--accent-rgb); /* blue */
+  --status-active-rgb: var(--hud-rgb); /* gold */
+  --status-warning-rgb: 245, 158, 11; /* amber */
+  --status-critical-rgb: 239, 68, 68; /* red */
+  --status-ok-rgb: 74, 222, 128; /* green */
+}
+
+/* Glassmorphic "hologram" panel -- a translucent surface with a real
+   backdrop blur (the genuinely-new piece: this project already had glow +
+   chamfer + scanlines, but no backdrop-filter glassmorphism). The
+   translucent background is required for the blur behind it to show. */
+.glass-hologram {
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  backdrop-filter: blur(10px) saturate(1.1);
+  -webkit-backdrop-filter: blur(10px) saturate(1.1);
+  box-shadow: inset 0 0 12px rgba(255, 255, 255, 0.02);
+}
+
+/* Status-reactive pulsing edge-glow. A caller sets --status-glow-rgb and
+   --pulse-speed (via a status modifier or inline); this animates a soft
+   border glow between calm and bright at that cadence. */
+@keyframes hud-status-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 4px rgba(var(--status-glow-rgb, var(--accent-rgb)), 0.35);
+  }
+  50% {
+    box-shadow: 0 0 15px rgba(var(--status-glow-rgb, var(--accent-rgb)), 0.62);
+  }
+}
+
+.hud-pulse-edge {
+  animation: hud-status-pulse var(--pulse-speed, 2.4s) ease-in-out infinite;
+}
+
+/* Convenience status modifiers -- set the glow color + a severity-scaled
+   pulse speed. Applied to any element also carrying .hud-pulse-edge. */
+.hud-status-idle {
+  --status-glow-rgb: var(--status-idle-rgb);
+  --pulse-speed: 3s;
+}
+.hud-status-active {
+  --status-glow-rgb: var(--status-active-rgb);
+  --pulse-speed: 1.8s;
+}
+.hud-status-warning {
+  --status-glow-rgb: var(--status-warning-rgb);
+  --pulse-speed: 1.3s;
+}
+.hud-status-critical {
+  --status-glow-rgb: var(--status-critical-rgb);
+  --pulse-speed: 0.9s;
+}
+
+/* Circular status gauge -- a real conic-gradient meter driven by a
+   --gauge-pct (0-100) custom property, in the current status color. A
+   lightweight, dependency-free take on the dashboard's SVG stroke-dasharray
+   gauges, reusable for Spartan Cloud's tenant-monitoring view (Track B). */
+.hud-gauge {
+  --gauge-pct: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: conic-gradient(
+    rgba(var(--status-glow-rgb, var(--accent-rgb)), 0.9) calc(var(--gauge-pct) * 1%),
+    rgba(255, 255, 255, 0.06) 0
+  );
+  display: grid;
+  place-items: center;
+  position: relative;
+}
+.hud-gauge::after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: var(--surface);
+}
+.hud-gauge > * {
+  position: relative;
+  z-index: 1;
 }

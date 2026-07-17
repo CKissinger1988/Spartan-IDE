@@ -5,10 +5,13 @@ interface Template {
   label: string;
 }
 
-/** Real Tier 1 templates (§35.4's original six plus C#, §75.51) --
- * matches `spartan-languages`' own real registry ids exactly, and each
- * one's real backend scaffold (`spartan-backend::project_template_files`)
- * is confirmed, by test, to be detectable by that same registry. */
+/** Real Tier 1 templates (§35.4's original six plus C#, §75.51, plus
+ * Android, task #145) -- matches `spartan-languages`' own real registry
+ * ids exactly, and each one's real backend scaffold
+ * (`spartan-backend::project_template_files`) is confirmed, by test, to
+ * be detectable by that same registry. The `android` template is
+ * additionally confirmed real-buildable end-to-end (a genuine
+ * `gradle assembleDebug` producing a real APK) -- see task #144/#145. */
 const TEMPLATES: Template[] = [
   { id: "rust", label: "Rust (Cargo)" },
   { id: "typescript", label: "TypeScript" },
@@ -18,6 +21,7 @@ const TEMPLATES: Template[] = [
   { id: "java", label: "Java (Maven)" },
   { id: "go", label: "Go" },
   { id: "csharp", label: "C# (.NET)" },
+  { id: "android", label: "Android (Kotlin)" },
 ];
 
 interface NewProjectWizardProps {

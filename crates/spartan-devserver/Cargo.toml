@@ -1,0 +1,26 @@
+[package]
+name = "spartan-devserver"
+version = "0.1.0"
+edition = "2021"
+
+# The local AI devserver (Track A). Wraps -- never reimplements --
+# `spartan-backend`: it reuses that crate's real request dispatch
+# (`handle_request`) for every existing method (including, since task #145,
+# the LiteLLM proxy lifecycle and both HF-backed model downloaders, moved
+# down into spartan-backend itself so desktop/'s Electron shell gets them
+# too) and its real, single-sourced WebSocket transport (`ws_transport`,
+# generic over <S, D>), adding only `devserver_ping` on top via a wrapping
+# dispatcher that falls through to `handle_request` for everything else.
+
+[dependencies]
+spartan-backend = { path = "../spartan-backend" }
+serde_json = "1"
+# Sync, tokio-free minimal HTTP server for serving the web/ client and the
+# same-origin /__spartan/session token handoff -- matches this crate's
+# sync-I/O convention (no async runtime pulled in for one static server).
+tiny_http = "0.12"
+
+[dev-dependencies]
+# Test-only: a real WebSocket client to drive the real transport
+# end-to-end, matching spartan-backend's own pinned tungstenite version.
+tungstenite = "0.30"

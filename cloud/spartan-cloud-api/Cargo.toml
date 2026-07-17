@@ -1,0 +1,55 @@
+[package]
+name = "spartan-cloud-api"
+version = "0.1.0"
+edition = "2021"
+
+# The Spartan Cloud control-plane HTTP server (axum). Ties the protocol,
+# tenant (domain), and data (persistence) crates into a real REST API:
+# signup/login, an authenticated `/me`, an admin-only entitlement toggle,
+# and an allocation-admission endpoint that runs the real entitlement +
+# quota checks. Container allocation itself returns an honest
+# "runtime not yet connected" until `spartan-cloud-runtime` lands (gated on
+# the gVisor spike) -- this crate does NOT fake container lifecycle.
+#
+# axum/tokio (async) is natural for an HTTP server and is fully contained in
+# this cloud/ workspace -- it never touches the main workspace's sync
+# convention.
+
+[[bin]]
+name = "spartan-cloud-api"
+path = "src/main.rs"
+
+[dependencies]
+spartan-cloud-protocol = { path = "../spartan-cloud-protocol" }
+spartan-cloud-tenant = { path = "../spartan-cloud-tenant" }
+spartan-cloud-data = { path = "../spartan-cloud-data" }
+spartan-cloud-runtime = { path = "../spartan-cloud-runtime" }
+# "ws": the per-container interactive exec session is a real axum WebSocket
+# upgrade -- not in axum's default feature set, so named explicitly.
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Real WebAuthn admin auth (a defensive concept adapted from
+# SpartanAI_Security_Core, rebuilt safely -- see cloud/README.md's own
+# "What's NOT here yet" list, now being closed). The in-progress
+# registration/authentication *ceremony state* (the server's own challenge +
+# policy) is kept server-side in an in-memory map keyed by a real opaque
+# nonce, the exact same pattern this file's own `exec_capabilities` already
+# established for the exec-session capability token -- so no "danger" state-
+# serialization feature is needed; the ceremony state never leaves the server.
+webauthn-rs = "0.5"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+# Test-only: the real-allocate integration test pings the local Docker daemon
+# directly to self-skip when absent (same convention as spartan-cloud-runtime).
+bollard = "0.18"
+# Test-only: a real WS client to drive the exec session end-to-end over an
+# actual bound socket (a WS upgrade needs a real HTTP/1.1 connection, unlike
+# the plain REST tests' `tower::ServiceExt::oneshot`). Version pinned to match
+# axum 0.7.9's own internal `tokio-tungstenite` dependency exactly.
+tokio-tungstenite = "0.24"
+# Test-only: driving tokio-tungstenite's WebSocketStream (.next()/.send()).
+# axum's own WebSocket type needs no such import (plain inherent methods).
+futures-util = "0.3"

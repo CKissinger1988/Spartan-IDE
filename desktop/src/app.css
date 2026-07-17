@@ -168,6 +168,17 @@
   display: flex;
 }
 
+/* Real DAP debug panel wrapper (§132) -- stacks the debug toolbar above
+ * the existing `.content-area`, taking over what used to be `.editor-
+ * body`'s second direct flex child so the DebugPanel and the editor
+ * share the same remaining column width/height. */
+.editor-and-debug {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .file-tree-panel {
   width: 220px;
   background: var(--surface);
@@ -500,6 +511,81 @@
 .editor-root {
   display: flex;
   height: 100%;
+  position: relative;
+}
+
+/* Real LSP hover tooltip (task #134) -- `position: fixed` + real
+ * viewport-relative coordinates from the triggering mouse event, so it
+ * renders correctly next to the cursor regardless of scroll position.
+ * `pointer-events: none` so it never itself intercepts the next
+ * mousemove/click that would otherwise dismiss or reposition it. */
+.editor-hover-tooltip {
+  position: fixed;
+  z-index: 50;
+  max-width: 480px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  pointer-events: none;
+}
+
+/* Real LSP completion dropdown (task #136) -- `position: fixed` + real
+ * viewport-relative coordinates from the caret position (not the mouse,
+ * since this is keyboard-triggered). Unlike the hover tooltip, this one
+ * *does* accept pointer events (click-to-select an item). */
+.editor-completion-list {
+  position: fixed;
+  z-index: 51;
+  min-width: 220px;
+  max-width: 420px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-size: 12px;
+}
+
+.editor-completion-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 10px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.editor-completion-item-active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.editor-completion-item-empty {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.editor-completion-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-completion-detail {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
 }
 
 .editor-gutter {
@@ -514,6 +600,69 @@
   flex-shrink: 0;
   border-right: 1px solid var(--border);
   user-select: none;
+}
+
+/* Real LSP diagnostics (spartan-backend's own lsp_diagnostics events,
+ * wired here for the first time) -- one real block per line (replacing
+ * the previous single newline-joined text blob) so each row can carry
+ * its own severity-tinted background + a real hover tooltip listing the
+ * diagnostic message(s) on that line. Line-height/font-size are
+ * inherited from `.editor-gutter`'s own inline `textStyle`, not
+ * redeclared per row. */
+.editor-gutter-line {
+  padding-right: 2px;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.editor-gutter-line-error {
+  background: rgba(var(--status-critical-rgb), 0.16);
+  color: rgb(var(--status-critical-rgb));
+  box-shadow: inset 2px 0 0 rgb(var(--status-critical-rgb));
+}
+
+.editor-gutter-line-warning {
+  background: rgba(var(--status-warning-rgb), 0.14);
+  color: rgb(var(--status-warning-rgb));
+  box-shadow: inset 2px 0 0 rgb(var(--status-warning-rgb));
+}
+
+.editor-gutter-line-info,
+.editor-gutter-line-hint,
+.editor-gutter-line-diagnostic {
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Real DAP breakpoint gutter (§132) -- one small dot per line, filled
+ * only for lines with an active breakpoint; the whole line is clickable
+ * to toggle (see `Editor.tsx`'s `onClick={() => onToggleBreakpoint?.(n)}`
+ * on the same row). */
+.editor-gutter-breakpoint-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+  border: 1px solid var(--text-dim);
+  cursor: pointer;
+}
+
+.editor-gutter-breakpoint-dot-active {
+  background: rgb(var(--status-critical-rgb));
+  border-color: rgb(var(--status-critical-rgb));
+  box-shadow: 0 0 4px rgba(var(--status-critical-rgb), 0.7);
+}
+
+/* Real "currently stopped here" DAP indicator -- gold (the semantic
+ * "active" status hue, §75.93), distinct from the red breakpoint dot and
+ * from every LSP severity color above so the three concepts never read
+ * as the same thing on one gutter row. */
+.editor-gutter-line-stopped {
+  background: rgba(var(--hud-rgb), 0.18);
+  box-shadow: inset 2px 0 0 rgb(var(--hud-rgb));
 }
 
 /* Real syntax highlighting overlay (§75.62/§75.63) -- the highlight
@@ -584,13 +733,174 @@
   flex-shrink: 0;
 }
 
+/* Real DAP debug toolbar (§132) -- a compact inline bar above the
+ * editor, matching this codebase's own "small, honest first increment"
+ * style rather than a docked panel redesign. */
+.debug-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.debug-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.debug-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.debug-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.debug-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.debug-btn-primary {
+  border-color: rgb(var(--status-ok-rgb));
+  color: rgb(var(--status-ok-rgb));
+}
+
+.debug-btn-stop {
+  border-color: rgb(var(--status-critical-rgb));
+  color: rgb(var(--status-critical-rgb));
+}
+
+.debug-status {
+  color: var(--text-dim);
+  margin-left: 4px;
+}
+
+.debug-status-stopped {
+  color: rgb(var(--hud-rgb));
+}
+
+.debug-status-error,
+.debug-status-build_failed {
+  color: rgb(var(--status-critical-rgb));
+}
+
+.debug-variables {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-left: 2px;
+}
+
+.debug-variable-name {
+  color: var(--accent);
+}
+
+.debug-variable-eq {
+  color: var(--text-dim);
+}
+
+.debug-variable-value {
+  color: var(--text);
+}
+
+.logcat-panel {
+  max-height: 220px;
+}
+
+.logcat-close {
+  margin-left: auto;
+}
+
+.logcat-body {
+  overflow-y: auto;
+  max-height: 180px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.logcat-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-dim);
+}
+
+.logcat-empty {
+  color: var(--text-dim);
+  opacity: 0.6;
+}
+
+/* Real, live LSP diagnostic summary for the active file (backend
+ * lsp_diagnostics events, wired here for the first time). */
+.status-lsp-summary {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+}
+
+.status-lsp-errors {
+  color: rgb(var(--status-critical-rgb));
+}
+
+.status-lsp-warnings {
+  color: rgb(var(--status-warning-rgb));
+}
+
+.status-lsp-clean {
+  color: rgb(var(--status-ok-rgb));
+}
+
+/* Real android_detect badge (§75.91's own real detection logic, no UI
+ * caller anywhere until now) -- only ever rendered for a real detected
+ * Android/Gradle project. */
+.status-android-badge {
+  margin-left: 10px;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+.status-android-badge:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.status-android-badge:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
 /* Real, persistent Leo chat panel (§75.61) -- docked on the right,
  * visible regardless of which nav screen is active, closing a direct
  * user objection to Leo being missing from the new Electron shell. */
 .leo-panel {
   width: 300px;
-  background: var(--surface);
+  /* Track C: glassmorphic "hologram" treatment -- a translucent surface
+     with a real backdrop blur over the app's body gradient, replacing the
+     flat opaque fill. The blue left-edge glow reads as a live HUD panel. */
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  backdrop-filter: blur(10px) saturate(1.1);
+  -webkit-backdrop-filter: blur(10px) saturate(1.1);
   border-left: 1px solid var(--border);
+  box-shadow: -1px 0 0 rgba(var(--accent-rgb), 0.2);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -647,6 +957,12 @@
   color: #f87171;
   background: rgba(248, 113, 113, 0.12);
   border-color: rgba(248, 113, 113, 0.35);
+  /* Track C: severity-reactive glow -- a failure is critical, so it gets
+     the fastest, red status pulse (previously it alone had no glow at all
+     while the calmer states did -- a real inconsistency, fixed here). */
+  --status-glow-rgb: var(--status-critical-rgb);
+  --pulse-speed: 0.9s;
+  animation: hud-status-pulse 0.9s ease-in-out infinite;
 }
 
 .leo-state-executing,

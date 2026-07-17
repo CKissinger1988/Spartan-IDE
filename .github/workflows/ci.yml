@@ -217,3 +217,40 @@ jobs:
       - name: Test
         working-directory: spikes/git-browser-spike
         run: npm test
+
+  cloud:
+    name: cloud/ (Spartan Cloud domain crates)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          # cloud/ is its own separate Cargo workspace (not a root member),
+          # so it has its own target dir -- key the cache to it.
+          workspaces: cloud
+
+      - name: cargo fmt --check
+        working-directory: cloud
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        working-directory: cloud
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        working-directory: cloud
+        # --test-threads=1: the runtime crate's real-daemon tests share one
+        # Docker daemon and the reaper's sweep is global (it stops every
+        # managed container past its deadline), so a concurrent lifecycle test
+        # and a reaper test can collide on teardown -- serialize them, matching
+        # this repo's own convention for real-external-resource test suites.
+        # GitHub's Linux runners provide a real Docker daemon, so these tests
+        # run for real here rather than self-skipping.
+        run: cargo test -- --test-threads=1

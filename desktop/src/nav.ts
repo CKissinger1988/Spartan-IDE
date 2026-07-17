@@ -92,8 +92,6 @@ export const SCREEN_NOTES: Partial<Record<ScreenId, string>> = {
   hooks: "Not yet designed for this shell.",
   mcp: "Not yet designed for this shell.",
   routing: "Depends on Sessions/Agents existing first to have real routing decisions to visualize.",
-  models:
-    "Real ModelProvider trait, OllamaProvider, ClaudeProvider, and LiteLLMProvider already exist in spartan-model. Not yet exposed via spartan-backend's IPC protocol or this shell's UI.",
   plugins: "Real WASM plugin host (spartan-plugin-host) exists. Not yet exposed to this shell.",
   marketplace: "Not yet designed for this shell.",
 };

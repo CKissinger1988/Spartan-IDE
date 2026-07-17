@@ -2,11 +2,11 @@
 
 Real, first-increment browser IDE for Spartan, built around the same **hybrid**
 architecture decision the user made explicitly (§75.85, §75.86): editing/
-buffer logic works standalone client-side in the browser, with LSP/DAP/Leo/git
-activating only when a local `spartan-backend` instance is reachable over its
-real WebSocket transport (§75.88). **This increment ships only the pure
-client-side half.** See "What's not built yet" below for the honest account
-of what's deferred and why.
+buffer logic works standalone client-side in the browser, with backend
+capabilities activating only when a local `spartan-devserver` instance is
+reachable over its real WebSocket transport (§75.88). **Git is real and wired
+when a devserver is connected; LSP/DAP/Leo are not yet.** See "What's not
+built yet" below for the honest account of what's deferred and why.
 
 Inspired by vscode.dev's *concepts* only — a browser-based editor working
 directly against real local files via a native browser API, no server round
@@ -90,21 +90,66 @@ forked/vendored either) — see the root `CLAUDE.md`.
 
 ## What's not built yet (named honestly, not silently missing)
 
-- **No LSP, no DAP, no Leo, no git.** `spartan-backend`'s real WebSocket
-  transport (§75.88) exists, is production code, and is tested (10 real
-  tests, including token/Origin auth enforcement and real shared-state
-  behavior across two simultaneous connections) — but this app doesn't
-  connect to it yet. Its own doc comment names an explicit, unresolved
-  design question this increment deliberately did not guess at: how a
-  browser tab legitimately learns the per-process auth token and which
-  Origin to expect, without either weakening the real defense-in-depth auth
-  the user explicitly chose (token + Origin allowlist, both — see
-  `crates/spartan-backend/src/ws_transport.rs`) or requiring a manual
-  copy-paste step that would make this feel broken rather than integrated.
-- **Single file open at a time.** No tabs, no multi-file model — a real,
-  narrow first-increment scope, the same kind of deliberate v1 cut this
-  project's own history already applies elsewhere (e.g. `gui-builder`'s own
-  real v1 scope, §75.38).
+- **Git is now real and wired; LSP, DAP, and Leo are not.** A later
+  increment (Track A, `crates/spartan-devserver`) answered the
+  token-delivery design question this section used to name as unresolved:
+  the devserver serves this app's own static files, so a same-origin
+  `fetch("/__spartan/session")` (see `backendClient.ts`) safely hands a
+  connected page the live WebSocket token + Origin, and a further increment
+  extended that same handoff to advertise the devserver's own real,
+  canonicalized `--project-root:` as `projectRoot` — the piece that was
+  still missing even after the transport question was solved, since
+  `spartan-backend`'s `git_status`/`open_file`/Leo methods all need a real
+  absolute filesystem path, and the File System Access API deliberately
+  never exposes one for a folder picked via `showDirectoryPicker()` (a
+  real, permanent browser security property, not an oversight). When a
+  devserver is connected and advertises a project root, `App.tsx` shows a
+  real Files/Git sidebar toggle and `components/GitPanel.tsx` — a direct
+  port of `desktop/src/components/GitPanel.tsx` (§75.65) onto
+  `BackendClient.call` — drives real `git_status`/`git_stage`/
+  `git_unstage`/`git_commit` against that root. Real, live-verified:
+  starting `spartan-devserver --project-root:<a real temp git repo>` and
+  driving the served app with Playwright staged a real modified file,
+  committed it, and the resulting commit was independently confirmed via
+  `git log`/`git show` run directly against the repo on disk.
+- **LSP is now real and wired here too, via a second, backend-mode editing
+  path.** `spartan-backend`'s own `open_file`/`edit`/`undo`/`redo` spawn/
+  drive a real language-server session and stream `lsp_diagnostics`/
+  `lsp_error` events (closing a gap that had existed in *both*
+  Electron-based shells since the pivot away from the wgpu reference
+  shell) — `desktop/`'s Editor already rendered this live since its own
+  file-open/edit path always went through the backend's IPC methods
+  unconditionally, but this app's original editing path (File System
+  Access + WASM) has no `doc_id` for that wiring to key off of. Closed by
+  adding a real, independent second path: `components/BackendFileTree.tsx`
+  (a direct port of `desktop/src/components/FileTree.tsx` onto
+  `BackendClient.call`, rooted at the devserver's own project root) and
+  `components/BackendEditor.tsx` (a direct port of `desktop/src/
+  components/Editor.tsx`, same real edit/undo/redo/save/diagnostics
+  wiring, reached over the WebSocket transport instead of Electron IPC).
+  A third sidebar tab, "Backend", appears alongside Files/Git once a
+  devserver with a known project root is connected; `App.tsx` tracks
+  whichever of the two editing paths was opened most recently as one
+  discriminated `activeContent` slot rather than two independent "current
+  file" states. Real, live-verified against a real running devserver +
+  `pyright-langserver`: opened a real file with a real deliberate type
+  error via the Backend tab, confirmed the real diagnostic rendered in the
+  gutter (screenshotted) matching `desktop/`'s own treatment exactly, typed
+  a real live fix through the actual textarea, and confirmed the
+  diagnostic genuinely cleared. DAP and Leo remain unwired in every shell.
+- **The two editing paths are independent, not unified.** A real, named
+  consequence, not an oversight: the folder opened via "Open Folder…"
+  (File System Access) and the devserver's own project root
+  (`--project-root:`) can be different directories — nothing in this app
+  verifies they match, and `activeContent` only ever holds one open file
+  at a time regardless of which path opened it last. In the common case
+  (the devserver is launched from the same project the user opens), the
+  two happen to agree, but this app makes no attempt to enforce or check
+  that.
+- **Single file open at a time, across both paths combined.** No tabs, no
+  multi-file model — a real, narrow first-increment scope, the same kind
+  of deliberate v1 cut this project's own history already applies
+  elsewhere (e.g. `gui-builder`'s own real v1 scope, §75.38).
 - **Chromium-only.** The File System Access API is not implemented in
   Firefox or Safari. This is a real, permanent platform limit, not a bug —
   the app detects this and shows an honest message instead of failing
@@ -124,6 +169,20 @@ forked/vendored either) — see the root `CLAUDE.md`.
 - `src/components/FileTree.tsx`, `src/components/Editor.tsx` — real UI,
   adapted from `desktop/src/components/`'s own equivalents, swapping IPC
   calls for direct File System Access API / WASM calls.
+- `src/backendClient.ts` — the real `BackendClient`: session handoff +
+  WebSocket connection to a local `spartan-devserver`, exposing its
+  advertised `projectRoot` alongside the usual `call`/`onEvent` surface.
+- `src/components/GitPanel.tsx` — real Source Control panel, a direct port
+  of `desktop/src/components/GitPanel.tsx` onto `BackendClient.call`, shown
+  only once a devserver connection advertises a real project root.
+- `src/components/BackendFileTree.tsx`, `src/components/BackendEditor.tsx`
+  — the real backend-mode editing path, direct ports of `desktop/src/
+  components/FileTree.tsx`/`Editor.tsx` onto `BackendClient.call`, shown
+  under a "Backend" sidebar tab alongside Files/Git once a devserver
+  connection advertises a real project root. This is what makes real,
+  live LSP diagnostics (`lsp_diagnostics`/`lsp_error` events) usable in
+  this app -- the File System Access + WASM path (`FileTree.tsx`/
+  `Editor.tsx`) has no `doc_id` for that wiring to key off of.
 - `src/App.tsx` — top-level shell; its own doc comment names the same scope
   cuts as this file, kept in sync.
 - `src/syntax.ts`, `src/theme.css` — copied verbatim from `desktop/src/` (one

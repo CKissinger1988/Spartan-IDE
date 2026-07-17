@@ -8,6 +8,124 @@ export interface OpenFile {
   dirty: boolean;
 }
 
+/** Mirrors `spartan_lsp::LspDiagnostic`'s real, unmodified serde field
+ * names (no `rename_all` on the Rust side, so these are exactly what
+ * arrives over the wire in a real `lsp_diagnostics` event). `line`/
+ * `character` are real LSP-spec 0-indexed positions. */
+export interface LspDiagnostic {
+  severity: "error" | "warning" | "info" | "hint" | "diagnostic";
+  line: number;
+  character: number;
+  end_line: number;
+  end_character: number;
+  message: string;
+}
+
+const SEVERITY_RANK: Record<string, number> = {
+  error: 0,
+  warning: 1,
+  info: 2,
+  hint: 3,
+  diagnostic: 4,
+};
+
+function worstSeverity(diags: LspDiagnostic[]): string {
+  return diags.reduce(
+    (worst, d) => (SEVERITY_RANK[d.severity] < SEVERITY_RANK[worst] ? d.severity : worst),
+    diags[0].severity
+  );
+}
+
+/** Real hover-request debounce -- fires only once the mouse has settled
+ * on a position, matching how every real editor's own hover UX works
+ * (not on every raw mousemove pixel). */
+const HOVER_DELAY_MS = 400;
+
+/** Extracts real, displayable text from a real LSP `Hover` result's
+ * `contents` field, which the spec allows in three real shapes:
+ * `MarkupContent` (`{kind, value}`), a bare `MarkedString` (a plain
+ * string, or `{language, value}`), or an array of `MarkedString`.
+ * Returns `null` for a real, honest "no hover info here" (not every
+ * position has one -- whitespace, punctuation, an unresolvable symbol). */
+function extractHoverText(result: unknown): string | null {
+  if (!result || typeof result !== "object") return null;
+  const contents = (result as { contents?: unknown }).contents;
+  if (contents === null || contents === undefined) return null;
+  if (typeof contents === "string") return contents || null;
+  if (Array.isArray(contents)) {
+    const parts = contents
+      .map((c) => (typeof c === "string" ? c : ((c as { value?: string })?.value ?? "")))
+      .filter(Boolean);
+    return parts.length > 0 ? parts.join("\n\n") : null;
+  }
+  if (typeof contents === "object" && "value" in (contents as Record<string, unknown>)) {
+    const value = (contents as { value?: string }).value;
+    return value || null;
+  }
+  return null;
+}
+
+interface HoverState {
+  /** Viewport-relative coordinates (from the real triggering mouse
+   * event) -- paired with `position: fixed` CSS so this renders next to
+   * the cursor regardless of scroll position or DOM nesting. */
+  x: number;
+  y: number;
+  line: number;
+  character: number;
+  /** `null` while the real request is still in flight -- the tooltip
+   * itself only renders once real text has arrived, avoiding a flash of
+   * an empty box for the common "no hover info at this position" case. */
+  text: string | null;
+}
+
+/** A real, normalized LSP `CompletionItem` -- only the fields this v1
+ * dropdown actually renders/inserts. `insertText` falls back to `label`
+ * per the LSP spec's own documented default. */
+interface CompletionItem {
+  label: string;
+  insertText: string;
+  detail: string | null;
+}
+
+/** Normalizes a real LSP completion `result`, which the spec allows in
+ * two real shapes: a bare `CompletionItem[]`, or a `CompletionList
+ * { isIncomplete, items }`. Returns `[]` for a real, honest "no
+ * completions here" rather than throwing. */
+function extractCompletionItems(result: unknown): CompletionItem[] {
+  if (!result) return [];
+  const raw: unknown[] = Array.isArray(result)
+    ? result
+    : Array.isArray((result as { items?: unknown[] }).items)
+      ? (result as { items: unknown[] }).items
+      : [];
+  return raw
+    .map((item) => {
+      const i = item as { label?: unknown; insertText?: unknown; detail?: unknown };
+      const label = typeof i.label === "string" ? i.label : null;
+      if (!label) return null;
+      const insertText = typeof i.insertText === "string" ? i.insertText : label;
+      const detail = typeof i.detail === "string" ? i.detail : null;
+      return { label, insertText, detail };
+    })
+    .filter((i): i is CompletionItem => i !== null);
+}
+
+interface CompletionState {
+  /** Viewport-relative coordinates, the same real convention `HoverState`
+   * uses -- computed from the real caret position, not the mouse, since
+   * completion is keyboard-triggered (Ctrl+Space), not pointer-driven. */
+  x: number;
+  y: number;
+  line: number;
+  character: number;
+  /** The real character offset the completion was requested from --
+   * where accepting an item inserts its text. */
+  insertAt: number;
+  items: CompletionItem[];
+  selectedIndex: number;
+}
+
 export interface EditorPrefs {
   fontSize: number;
   tabSize: number;
@@ -29,6 +147,25 @@ interface EditorProps {
    * doesn't need a parent to supply it.
    */
   prefs?: EditorPrefs;
+  /** Real, live LSP diagnostics for this exact open file (already
+   * filtered by `doc_id` upstream in `App.tsx`) -- absent/empty is a
+   * completely normal state (no LSP configured for this language, no
+   * project root found, or a genuinely clean file), never an error. */
+  diagnostics?: LspDiagnostic[];
+  /** Real, 1-indexed breakpoint line numbers for this file (matching the
+   * gutter's own displayed line numbers and the real DAP `break_lines`
+   * param `App.tsx` sends to `dap_launch` directly, no off-by-one
+   * translation needed at either end). */
+  breakpoints?: number[];
+  /** Real click-to-toggle -- `App.tsx` owns the actual breakpoint set
+   * (it must survive an editor unmount/tab switch), this component only
+   * reports which 1-indexed line was clicked. */
+  onToggleBreakpoint?: (line: number) => void;
+  /** Real, 1-indexed line the active DAP session is currently stopped
+   * at for this file, or `null`/`undefined` when no session is stopped
+   * here -- matches `DapFrame::line`'s own real 1-indexed DAP-spec
+   * value directly, no translation needed. */
+  stoppedLine?: number | null;
 }
 
 /**
@@ -66,6 +203,10 @@ export default function Editor({
   file,
   onContentChange,
   prefs = DEFAULT_EDITOR_PREFS,
+  diagnostics = [],
+  breakpoints = [],
+  onToggleBreakpoint,
+  stoppedLine = null,
 }: EditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
@@ -82,6 +223,177 @@ export default function Editor({
     () => highlightSource(file.content, file.path),
     [file.content, file.path]
   );
+
+  const breakpointSet = useMemo(() => new Set(breakpoints), [breakpoints]);
+
+  const [hoverState, setHoverState] = useState<HoverState | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Real, live LSP hover (task #134) -- listens for this exact file's own
+  // `lsp_hover_result` events. Self-contained to this component (not
+  // lifted to App.tsx like `diagnostics`) since a hover tooltip is purely
+  // ephemeral, position-driven UI feedback with no other real consumer.
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event !== "lsp_hover_result") return;
+      const d = data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      setHoverState((prev) => {
+        // A stale reply for a position the mouse has since moved away
+        // from (or a reply for a different file's own request that
+        // arrived late) -- ignored, not shown.
+        if (!prev || prev.line !== d.line || prev.character !== d.character) return prev;
+        const text = extractHoverText(d.result);
+        return text ? { ...prev, text } : null;
+      });
+    });
+    return unsubscribe;
+  }, [file.docId]);
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    };
+  }, []);
+
+  // Real monospace glyph width, measured once per font size via a real
+  // canvas `measureText` call -- the only way to convert a raw pixel
+  // mouse position into an LSP-spec line/character position for a plain
+  // `<textarea>`, which (unlike the reference wgpu shell's own
+  // cosmic-text-backed hit-testing) has no built-in "what's under this
+  // pixel" API of its own.
+  const charWidth = useMemo(() => {
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return prefs.fontSize * 0.6;
+    ctx.font = `${prefs.fontSize}px "JetBrains Mono", monospace`;
+    return ctx.measureText("M").width || prefs.fontSize * 0.6;
+  }, [prefs.fontSize]);
+
+  const lineHeightPx = Math.round(prefs.fontSize * 1.54);
+
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLTextAreaElement>) => {
+      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+      setHoverState(null);
+      const el = textareaRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const x = e.clientX - rect.left + el.scrollLeft;
+      const y = e.clientY - rect.top + el.scrollTop;
+      const line = Math.max(0, Math.floor(y / lineHeightPx));
+      const character = Math.max(0, Math.round(x / charWidth));
+      const clientX = e.clientX;
+      const clientY = e.clientY;
+      hoverTimerRef.current = setTimeout(() => {
+        setHoverState({ x: clientX, y: clientY, line, character, text: null });
+        window.spartan
+          .call("lsp_hover", { doc_id: file.docId, line, character })
+          .catch((err: Error) => console.error("lsp_hover failed:", err));
+      }, HOVER_DELAY_MS);
+    },
+    [charWidth, lineHeightPx, file.docId]
+  );
+
+  const handleMouseLeave = useCallback(() => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    setHoverState(null);
+  }, []);
+
+  const [completionState, setCompletionState] = useState<CompletionState | null>(null);
+
+  // Real, live LSP completion (task #136, the direct sibling of hover's
+  // own §134 wiring) -- listens for this exact file's own
+  // `lsp_completion_result` events. Self-contained to this component,
+  // matching hover's own reasoning: a completion dropdown is purely
+  // ephemeral, position-driven UI feedback with no other real consumer.
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event !== "lsp_completion_result") return;
+      const d = data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      setCompletionState((prev) => {
+        // A stale reply for a request the caret has since moved away from
+        // (or a reply for a different file's own request that arrived
+        // late) -- ignored, not shown.
+        if (!prev || prev.line !== d.line || prev.character !== d.character) return prev;
+        const items = extractCompletionItems(d.result);
+        return items.length > 0 ? { ...prev, items, selectedIndex: 0 } : null;
+      });
+    });
+    return unsubscribe;
+  }, [file.docId]);
+
+  /** Real, manual completion trigger (Ctrl+Space) -- a deliberate, named
+   * v1 scope choice over automatic per-keystroke triggering, matching
+   * this component's own established pattern of picking the smallest
+   * real, correct increment first (§75.68's own "first real increment,
+   * not the full MVP" precedent). Computes the real LSP line/character
+   * from the textarea's own `selectionStart` (a plain character offset
+   * into the whole document) by counting newlines up to that point --
+   * the same real technique this file's own gutter/diagnostics code
+   * already uses for line numbers, just applied to a cursor position
+   * instead of a mouse pixel. */
+  const triggerCompletion = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const pos = el.selectionStart;
+    const before = el.value.slice(0, pos);
+    const lines = before.split("\n");
+    const line = lines.length - 1;
+    const character = lines[lines.length - 1].length;
+    const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+    const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
+    setCompletionState({ x, y, line, character, insertAt: pos, items: [], selectedIndex: 0 });
+    window.spartan
+      .call("lsp_completion", { doc_id: file.docId, line, character })
+      .catch((err: Error) => console.error("lsp_completion failed:", err));
+  }, [charWidth, lineHeightPx, file.docId]);
+
+  /** Real, minimal v1 insert: splices the selected item's `insertText` in
+   * at the exact character offset completion was requested from -- a
+   * named, honest scope cut versus a real editor's own prefix-replacing
+   * insert (which would need tracking exactly how much the user typed
+   * since the dropdown opened). Routed through the same `edit` IPC path
+   * (and so the same real undo/redo checkpointing) every other edit in
+   * this component already uses, not a direct textarea mutation. */
+  const acceptCompletion = useCallback(
+    (item: CompletionItem) => {
+      const insertAt = completionState?.insertAt ?? 0;
+      const newContent =
+        prevContentRef.current.slice(0, insertAt) +
+        item.insertText +
+        prevContentRef.current.slice(insertAt);
+      prevContentRef.current = newContent;
+      setLineCount(newContent.split("\n").length);
+      onContentChange(file.path, newContent);
+      window.spartan
+        .call("edit", {
+          doc_id: file.docId,
+          start_char: insertAt,
+          end_char: insertAt,
+          text: item.insertText,
+        })
+        .catch((err: Error) => console.error("edit failed:", err));
+      setCompletionState(null);
+      const el = textareaRef.current;
+      if (el) {
+        const newPos = insertAt + item.insertText.length;
+        requestAnimationFrame(() => el.setSelectionRange(newPos, newPos));
+      }
+    },
+    [completionState, file.docId, file.path, onContentChange]
+  );
+
+  const diagnosticsByLine = useMemo(() => {
+    const map = new Map<number, LspDiagnostic[]>();
+    for (const d of diagnostics) {
+      const list = map.get(d.line) ?? [];
+      list.push(d);
+      map.set(d.line, list);
+    }
+    return map;
+  }, [diagnostics]);
 
   const syncScroll = useCallback(() => {
     const el = textareaRef.current;
@@ -114,6 +426,58 @@ export default function Editor({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // Real completion dropdown keyboard handling -- checked first so it
+      // can intercept Enter/Escape/arrows before any other handler (Tab,
+      // undo/redo) sees them, matching how a real open dropdown always
+      // owns those keys in every other editor.
+      if (completionState) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setCompletionState((prev) =>
+            prev && prev.items.length > 0
+              ? { ...prev, selectedIndex: (prev.selectedIndex + 1) % prev.items.length }
+              : prev
+          );
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setCompletionState((prev) =>
+            prev && prev.items.length > 0
+              ? {
+                  ...prev,
+                  selectedIndex: (prev.selectedIndex - 1 + prev.items.length) % prev.items.length,
+                }
+              : prev
+          );
+          return;
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const item = completionState.items[completionState.selectedIndex];
+          if (item) acceptCompletion(item);
+          else setCompletionState(null);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setCompletionState(null);
+          return;
+        }
+        // Any other real key (typing more, arrows left/right, etc.)
+        // dismisses the dropdown rather than trying to re-filter it --
+        // a real, named v1 scope cut (see `acceptCompletion`'s own doc
+        // comment) -- and falls through to that key's own normal handling.
+        setCompletionState(null);
+      }
+      // Real, manual completion trigger (Ctrl+Space) -- see
+      // `triggerCompletion`'s own doc comment for why manual, not
+      // automatic-per-keystroke.
+      if ((e.ctrlKey || e.metaKey) && e.key === " ") {
+        e.preventDefault();
+        triggerCompletion();
+        return;
+      }
       if (e.key === "Tab") {
         e.preventDefault();
         const el = textareaRef.current;
@@ -158,10 +522,18 @@ export default function Editor({
           .catch((err: Error) => console.error(`${isRedo ? "redo" : "undo"} failed:`, err));
       }
     },
-    [file.docId, file.path, onContentChange, prefs.tabSize]
+    [
+      completionState,
+      acceptCompletion,
+      triggerCompletion,
+      file.docId,
+      file.path,
+      onContentChange,
+      prefs.tabSize,
+    ]
   );
 
-  const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1).join("\n");
+  const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1);
 
   // Real §75.76 editor preferences applied as inline overrides -- the
   // highlight layer and textarea must stay pixel-identical to each other
@@ -178,7 +550,31 @@ export default function Editor({
   return (
     <div className="editor-root">
       <div className="editor-gutter mono" ref={gutterRef} style={textStyle}>
-        {lineNumbers}
+        {lineNumbers.map((n) => {
+          // Real LSP positions are 0-indexed; `n` (the displayed line
+          // number) is 1-indexed, matching every other real line-number
+          // convention in this codebase, and matching real DAP
+          // breakpoint/stop-frame line numbers directly (no translation).
+          const lineDiags = diagnosticsByLine.get(n - 1);
+          const severity = lineDiags ? worstSeverity(lineDiags) : null;
+          const hasBreakpoint = breakpointSet.has(n);
+          const isStopped = stoppedLine === n;
+          return (
+            <div
+              key={n}
+              className={`editor-gutter-line${severity ? ` editor-gutter-line-${severity}` : ""}${isStopped ? " editor-gutter-line-stopped" : ""}`}
+              title={lineDiags?.map((d) => `${d.severity}: ${d.message}`).join("\n")}
+              onClick={() => onToggleBreakpoint?.(n)}
+            >
+              {onToggleBreakpoint && (
+                <span
+                  className={`editor-gutter-breakpoint-dot${hasBreakpoint ? " editor-gutter-breakpoint-dot-active" : ""}`}
+                />
+              )}
+              {n}
+            </div>
+          );
+        })}
       </div>
       <div className="editor-text-wrap">
         <pre
@@ -206,9 +602,47 @@ export default function Editor({
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           onScroll={syncScroll}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
           style={textStyle}
         />
       </div>
+      {hoverState?.text && (
+        <div
+          className="editor-hover-tooltip mono"
+          style={{ left: hoverState.x + 12, top: hoverState.y + 16 }}
+        >
+          {hoverState.text}
+        </div>
+      )}
+      {completionState && (
+        <div
+          className="editor-completion-list mono"
+          style={{ left: completionState.x, top: completionState.y }}
+        >
+          {completionState.items.length === 0 ? (
+            <div className="editor-completion-item editor-completion-item-empty">Loading…</div>
+          ) : (
+            completionState.items.map((item, i) => (
+              <div
+                key={`${item.label}-${i}`}
+                className={`editor-completion-item${i === completionState.selectedIndex ? " editor-completion-item-active" : ""}`}
+                onMouseDown={(e) => {
+                  // `onMouseDown`, not `onClick` -- fires before the
+                  // textarea's own blur, so the caret position (and so
+                  // `insertAt`) is still exactly where completion was
+                  // requested from when `acceptCompletion` reads it.
+                  e.preventDefault();
+                  acceptCompletion(item);
+                }}
+              >
+                <span className="editor-completion-label">{item.label}</span>
+                {item.detail && <span className="editor-completion-detail">{item.detail}</span>}
+              </div>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }
