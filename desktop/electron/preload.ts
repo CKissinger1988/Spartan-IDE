@@ -18,6 +18,7 @@ const ALLOWED_METHODS = new Set([
   "close_file",
   "lsp_hover",
   "lsp_completion",
+  "lsp_definition",
   "leo_status",
   "leo_start_task",
   "leo_approve_plan",

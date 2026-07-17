@@ -290,6 +290,7 @@ impl LspClient {
                     "textDocument": {
                         "hover": {"contentFormat": ["plaintext", "markdown"]},
                         "completion": {"completionItem": {"snippetSupport": false}},
+                        "definition": {"linkSupport": false},
                         "publishDiagnostics": {},
                     }
                 },
@@ -358,6 +359,23 @@ impl LspClient {
     pub fn completion(&mut self, file_uri: &str, line: i64, character: i64) -> Option<Value> {
         self.request(
             "textDocument/completion",
+            Some(json!({
+                "textDocument": {"uri": file_uri},
+                "position": {"line": line, "character": character},
+            })),
+            DEFAULT_TIMEOUT,
+        )
+    }
+
+    /// Real `textDocument/definition` -- the third real query method
+    /// following `hover`/`completion`'s exact shape. A real LSP `definition`
+    /// response is `Location | Location[] | LocationLink[] | null`; that
+    /// shape is passed through unparsed here, same division of
+    /// responsibility `hover`/`completion` already establish (this crate's
+    /// job is the wire request, not response normalization).
+    pub fn definition(&mut self, file_uri: &str, line: i64, character: i64) -> Option<Value> {
+        self.request(
+            "textDocument/definition",
             Some(json!({
                 "textDocument": {"uri": file_uri},
                 "position": {"line": line, "character": character},

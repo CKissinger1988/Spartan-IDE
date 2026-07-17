@@ -432,6 +432,28 @@ export default function App(): React.ReactElement {
   const activeBackendDocId =
     activeContent?.kind === "backend" ? activeContent.file.docId : null;
 
+  // Real go-to-definition cross-file jump target (task #165, the web/ half
+  // of task #164's own desktop-then-web follow-up), ported verbatim from
+  // `desktop/`'s own identical `pendingJump` state -- see that file's own
+  // doc comment for the full real reasoning.
+  const [pendingJump, setPendingJump] = useState<{
+    path: string;
+    line: number;
+    character: number;
+  } | null>(null);
+
+  const handleJumpToDefinition = useCallback(
+    async (path: string, line: number, character: number) => {
+      try {
+        await openBackendFile(path);
+        setPendingJump({ path, line, character });
+      } catch (err) {
+        console.error("go-to-definition: failed to open the real target file:", err);
+      }
+    },
+    [openBackendFile]
+  );
+
   const toggleBreakpoint = useCallback(
     (line: number) => {
       if (activeBackendDocId === null) return;
@@ -650,6 +672,11 @@ export default function App(): React.ReactElement {
                     ? (dapSessionByDoc[activeContent.file.docId]?.stopped?.frame?.line ?? null)
                     : null
                 }
+                onJumpToDefinition={handleJumpToDefinition}
+                pendingJump={
+                  pendingJump && pendingJump.path === activeContent.file.path ? pendingJump : null
+                }
+                onJumpApplied={() => setPendingJump(null)}
               />
             )}
             {!error && !activeContent && (

@@ -65,6 +65,57 @@ function extractHoverText(result: unknown): string | null {
   return null;
 }
 
+/** Decodes a real `file://` URI (as a real LSP `definition` response's
+ * `uri`/`targetUri` carries) back into a local filesystem path, tolerant
+ * of percent-escaping and a Windows drive-letter URI shape
+ * (`file:///C:/...`) -- the same real decoding job `spartan-lsp`'s own
+ * `path_to_file_uri`/`percent_decode` do on the Rust side, mirrored here
+ * since a real LSP response arrives at this UI boundary still URI-shaped. */
+function fileUriToPath(uri: string): string {
+  let path = uri.replace(/^file:\/\//, "");
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // A malformed escape -- fall back to the raw (still usable) string
+    // rather than throwing away a real jump target over a cosmetic issue.
+  }
+  if (/^\/[a-zA-Z]:\//.test(path)) path = path.slice(1);
+  return path;
+}
+
+interface DefinitionTarget {
+  path: string;
+  line: number;
+  character: number;
+}
+
+/** A real LSP `definition` result is `Location | Location[] | LocationLink[]
+ * | null` -- normalizes whichever real shape a server sends into the first
+ * entry's jump target. `Location` carries `uri`/`range`; `LocationLink`
+ * carries `targetUri`/`targetSelectionRange` (preferred, since it's the
+ * precise symbol-name span) or `targetRange` as a fallback. Returns `null`
+ * for a real, honest "no definition resolvable here" (an unbound name, a
+ * keyword, whitespace) -- not every position has one. */
+function extractDefinitionTarget(result: unknown): DefinitionTarget | null {
+  if (!result) return null;
+  const entry = Array.isArray(result) ? result[0] : result;
+  if (!entry || typeof entry !== "object") return null;
+  const e = entry as {
+    uri?: unknown;
+    targetUri?: unknown;
+    range?: { start?: { line?: unknown; character?: unknown } };
+    targetRange?: { start?: { line?: unknown; character?: unknown } };
+    targetSelectionRange?: { start?: { line?: unknown; character?: unknown } };
+  };
+  const uri = e.targetUri ?? e.uri;
+  if (typeof uri !== "string") return null;
+  const range = e.targetSelectionRange ?? e.targetRange ?? e.range;
+  const line = range?.start?.line;
+  const character = range?.start?.character;
+  if (typeof line !== "number" || typeof character !== "number") return null;
+  return { path: fileUriToPath(uri), line, character };
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -173,6 +224,22 @@ interface EditorProps {
    * here -- matches `DapFrame::line`'s own real 1-indexed DAP-spec
    * value directly, no translation needed. */
   stoppedLine?: number | null;
+  /** Real go-to-definition (Ctrl+Click), the third real LSP query method
+   * after hover/completion. Called only when the real resolved definition
+   * lands in a *different* file than this one -- opening a file and
+   * managing the tab set is `App.tsx`'s job, not this component's (the
+   * same division of responsibility `onToggleBreakpoint` already
+   * establishes for breakpoint state). A same-file jump is handled
+   * entirely locally, with no parent involvement needed. */
+  onJumpToDefinition?: (path: string, line: number, character: number) => void;
+  /** A real, pending cross-file jump `App.tsx` has already opened this
+   * exact file for (`pendingJump.path === file.path`, filtered upstream)
+   * -- applied via `setSelectionRange`/`scrollTop` on the next render this
+   * file's own content is available, then reported back via
+   * `onJumpApplied` so `App.tsx` clears it (a real jump is a one-shot
+   * action, not a persistent prop). */
+  pendingJump?: { line: number; character: number } | null;
+  onJumpApplied?: () => void;
 }
 
 /**
@@ -214,6 +281,9 @@ export default function Editor({
   breakpoints = [],
   onToggleBreakpoint,
   stoppedLine = null,
+  onJumpToDefinition,
+  pendingJump = null,
+  onJumpApplied,
 }: EditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
@@ -420,6 +490,89 @@ export default function Editor({
       }
     },
     [completionState, file.docId, file.path, onContentChange]
+  );
+
+  /** Converts a real 0-indexed LSP line/character into a real absolute
+   * char offset into the current buffer, then moves the native caret
+   * there and scrolls it roughly into view -- the shared landing logic
+   * both a same-file jump and a cross-file jump (once `App.tsx` has
+   * opened the target and re-rendered this component with it as
+   * `file`) use. */
+  const jumpToLocalPosition = useCallback(
+    (line: number, character: number) => {
+      const el = textareaRef.current;
+      if (!el) return;
+      const lines = prevContentRef.current.split("\n");
+      let offset = 0;
+      for (let i = 0; i < line && i < lines.length; i++) {
+        offset += lines[i].length + 1; // +1 for the real newline this split consumed
+      }
+      offset += Math.min(character, lines[line]?.length ?? 0);
+      el.focus();
+      el.setSelectionRange(offset, offset);
+      el.scrollTop = Math.max(0, line * lineHeightPx - el.clientHeight / 2);
+    },
+    [lineHeightPx]
+  );
+
+  // Real go-to-definition (Ctrl+Click) -- a request the click handler below
+  // fires is tracked here (a ref, not state: nothing renders while it's in
+  // flight, unlike hover/completion) so a stale reply for a position the
+  // user has since clicked elsewhere from is ignored rather than jumping
+  // to the wrong place.
+  const pendingDefinitionRef = useRef<{ line: number; character: number } | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event !== "lsp_definition_result") return;
+      const d = data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      const pending = pendingDefinitionRef.current;
+      if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+      pendingDefinitionRef.current = null;
+      const target = extractDefinitionTarget(d.result);
+      // A real, honest "no definition resolvable here" -- silent, matching
+      // how every real editor's own Ctrl+Click behaves at an unbound
+      // position rather than surfacing an error for a completely normal
+      // case.
+      if (!target) return;
+      if (target.path === file.path) {
+        jumpToLocalPosition(target.line, target.character);
+      } else {
+        onJumpToDefinition?.(target.path, target.line, target.character);
+      }
+    });
+    return unsubscribe;
+  }, [file.docId, file.path, jumpToLocalPosition, onJumpToDefinition]);
+
+  // A real cross-file jump lands here: `App.tsx` has already opened the
+  // target file and re-rendered this component with it as `file` (filtered
+  // upstream so `pendingJump` is only ever non-null once `file.path`
+  // already matches), so `prevContentRef.current` (synced from `file.content`
+  // by the effect above, which runs first in declaration order) is already
+  // the real target content by the time this runs.
+  useEffect(() => {
+    if (!pendingJump) return;
+    jumpToLocalPosition(pendingJump.line, pendingJump.character);
+    onJumpApplied?.();
+  }, [pendingJump, jumpToLocalPosition, onJumpApplied]);
+
+  const handleDefinitionClick = useCallback(
+    (e: React.MouseEvent<HTMLTextAreaElement>) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const el = textareaRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const x = e.clientX - rect.left + el.scrollLeft;
+      const y = e.clientY - rect.top + el.scrollTop;
+      const line = Math.max(0, Math.floor(y / lineHeightPx));
+      const character = Math.max(0, Math.round(x / charWidth));
+      pendingDefinitionRef.current = { line, character };
+      window.spartan
+        .call("lsp_definition", { doc_id: file.docId, line, character })
+        .catch((err: Error) => console.error("lsp_definition failed:", err));
+    },
+    [charWidth, lineHeightPx, file.docId]
   );
 
   const diagnosticsByLine = useMemo(() => {
@@ -671,6 +824,7 @@ export default function Editor({
           onScroll={syncScroll}
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
+          onClick={handleDefinitionClick}
           style={textStyle}
         />
       </div>

@@ -70,6 +70,52 @@ function extractHoverText(result: unknown): string | null {
   return null;
 }
 
+/** Decodes a real `file://` URI back into a local filesystem path,
+ * ported verbatim from `desktop/src/components/Editor.tsx`'s own
+ * `fileUriToPath` -- see that file's own doc comment for the full real
+ * reasoning. Duplicated rather than imported, matching this file's own
+ * established precedent above. */
+function fileUriToPath(uri: string): string {
+  let path = uri.replace(/^file:\/\//, "");
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // A malformed escape -- fall back to the raw (still usable) string
+    // rather than throwing away a real jump target over a cosmetic issue.
+  }
+  if (/^\/[a-zA-Z]:\//.test(path)) path = path.slice(1);
+  return path;
+}
+
+interface DefinitionTarget {
+  path: string;
+  line: number;
+  character: number;
+}
+
+/** Normalizes a real LSP `definition` result, ported verbatim from
+ * `desktop/`'s own `extractDefinitionTarget` -- see that file's own doc
+ * comment for the full real reasoning. */
+function extractDefinitionTarget(result: unknown): DefinitionTarget | null {
+  if (!result) return null;
+  const entry = Array.isArray(result) ? result[0] : result;
+  if (!entry || typeof entry !== "object") return null;
+  const e = entry as {
+    uri?: unknown;
+    targetUri?: unknown;
+    range?: { start?: { line?: unknown; character?: unknown } };
+    targetRange?: { start?: { line?: unknown; character?: unknown } };
+    targetSelectionRange?: { start?: { line?: unknown; character?: unknown } };
+  };
+  const uri = e.targetUri ?? e.uri;
+  if (typeof uri !== "string") return null;
+  const range = e.targetSelectionRange ?? e.targetRange ?? e.range;
+  const line = range?.start?.line;
+  const character = range?.start?.character;
+  if (typeof line !== "number" || typeof character !== "number") return null;
+  return { path: fileUriToPath(uri), line, character };
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -147,6 +193,12 @@ interface BackendEditorProps {
   /** Real, 1-indexed line the active DAP session is currently stopped
    * at for this file, or `null`/`undefined` when nothing is stopped. */
   stoppedLine?: number | null;
+  /** Real go-to-definition (Ctrl+Click), ported verbatim from
+   * `desktop/src/components/Editor.tsx`'s own identical props -- see that
+   * file's own doc comments for the full real reasoning. */
+  onJumpToDefinition?: (path: string, line: number, character: number) => void;
+  pendingJump?: { line: number; character: number } | null;
+  onJumpApplied?: () => void;
 }
 
 /**
@@ -174,6 +226,9 @@ export default function BackendEditor({
   breakpoints = [],
   onToggleBreakpoint,
   stoppedLine = null,
+  onJumpToDefinition,
+  pendingJump = null,
+  onJumpApplied,
 }: BackendEditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
@@ -377,6 +432,75 @@ export default function BackendEditor({
     [client, completionState, file.docId, file.path, onContentChange]
   );
 
+  /** Real jump-landing logic, ported verbatim from `desktop/`'s own
+   * `jumpToLocalPosition` -- see that file's own doc comment for the full
+   * real reasoning. */
+  const jumpToLocalPosition = useCallback(
+    (line: number, character: number) => {
+      const el = textareaRef.current;
+      if (!el) return;
+      const lines = prevContentRef.current.split("\n");
+      let offset = 0;
+      for (let i = 0; i < line && i < lines.length; i++) {
+        offset += lines[i].length + 1;
+      }
+      offset += Math.min(character, lines[line]?.length ?? 0);
+      el.focus();
+      el.setSelectionRange(offset, offset);
+      el.scrollTop = Math.max(0, line * lineHeightPx - el.clientHeight / 2);
+    },
+    [lineHeightPx]
+  );
+
+  // Real go-to-definition (Ctrl+Click, task #165, the web/ half of task
+  // #164's own desktop-then-web follow-up) -- ported verbatim from
+  // `desktop/`'s own identical wiring, reached over `client.onEvent`
+  // instead of `window.spartan.onEvent`.
+  const pendingDefinitionRef = useRef<{ line: number; character: number } | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = client.onEvent((e) => {
+      if (e.event !== "lsp_definition_result") return;
+      const d = e.data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      const pending = pendingDefinitionRef.current;
+      if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+      pendingDefinitionRef.current = null;
+      const target = extractDefinitionTarget(d.result);
+      if (!target) return;
+      if (target.path === file.path) {
+        jumpToLocalPosition(target.line, target.character);
+      } else {
+        onJumpToDefinition?.(target.path, target.line, target.character);
+      }
+    });
+    return unsubscribe;
+  }, [client, file.docId, file.path, jumpToLocalPosition, onJumpToDefinition]);
+
+  useEffect(() => {
+    if (!pendingJump) return;
+    jumpToLocalPosition(pendingJump.line, pendingJump.character);
+    onJumpApplied?.();
+  }, [pendingJump, jumpToLocalPosition, onJumpApplied]);
+
+  const handleDefinitionClick = useCallback(
+    (e: React.MouseEvent<HTMLTextAreaElement>) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const el = textareaRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const x = e.clientX - rect.left + el.scrollLeft;
+      const y = e.clientY - rect.top + el.scrollTop;
+      const line = Math.max(0, Math.floor(y / lineHeightPx));
+      const character = Math.max(0, Math.round(x / charWidth));
+      pendingDefinitionRef.current = { line, character };
+      client
+        .call("lsp_definition", { doc_id: file.docId, line, character })
+        .catch((err: Error) => console.error("lsp_definition failed:", err));
+    },
+    [client, charWidth, lineHeightPx, file.docId]
+  );
+
   const syncScroll = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -564,6 +688,7 @@ export default function BackendEditor({
           onScroll={syncScroll}
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
+          onClick={handleDefinitionClick}
           style={textStyle}
         />
       </div>

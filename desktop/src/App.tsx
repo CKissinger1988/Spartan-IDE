@@ -56,6 +56,17 @@ export default function App(): React.ReactElement {
   // real default if this hasn't resolved yet (e.g. a file opened via a
   // deep link before the very first paint).
   const [editorPrefs, setEditorPrefs] = useState<EditorPrefs>(DEFAULT_EDITOR_PREFS);
+  // Real go-to-definition cross-file jump target (task #164) -- set once a
+  // real LSP definition result resolves to a *different* file than the one
+  // currently open; `openFile` (below) opens/activates it, then this is
+  // handed to `Editor.tsx` as `pendingJump`, filtered to only the file it
+  // actually targets, so the newly-active file's own effect can land the
+  // real cursor position once its content is available.
+  const [pendingJump, setPendingJump] = useState<{
+    path: string;
+    line: number;
+    character: number;
+  } | null>(null);
   // Real, live LSP diagnostics (§75.6-class backend wiring, closing the
   // desktop/+web/ gap that shell has carried since the Electron pivot),
   // keyed by `doc_id` so switching tabs doesn't lose another open file's
@@ -320,6 +331,22 @@ export default function App(): React.ReactElement {
     [files]
   );
 
+  /** Real cross-file go-to-definition landing: opens (or activates, via
+   * `openFile`'s own existing dedup) the real target file, then hands the
+   * real jump position down once that file is active -- `Editor.tsx`'s own
+   * `pendingJump` effect applies it and reports back via `onJumpApplied`. */
+  const handleJumpToDefinition = useCallback(
+    async (path: string, line: number, character: number) => {
+      try {
+        await openFile(path);
+        setPendingJump({ path, line, character });
+      } catch (err) {
+        console.error("go-to-definition: failed to open the real target file:", err);
+      }
+    },
+    [openFile]
+  );
+
   const handleContentChange = useCallback((path: string, content: string, saved = false) => {
     setFiles((prev) =>
       prev.map((f) => (f.path === path ? { ...f, content, dirty: saved ? false : true } : f))
@@ -512,6 +539,11 @@ export default function App(): React.ReactElement {
                           ? (dapSessionByDoc[activeFile.docId]?.stopped?.frame?.line ?? null)
                           : null
                       }
+                      onJumpToDefinition={handleJumpToDefinition}
+                      pendingJump={
+                        pendingJump && pendingJump.path === activeFile.path ? pendingJump : null
+                      }
+                      onJumpApplied={() => setPendingJump(null)}
                     />
                   ) : (
                     <div className="empty-state mono">Open a file from the sidebar to start editing.</div>
