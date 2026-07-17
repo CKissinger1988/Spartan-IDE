@@ -380,6 +380,31 @@
   pointer-events: none;
 }
 
+/* Real LSP signature help tooltip (task #170, the web/ half of task #169's
+ * own desktop-then-web follow-up), byte-identical to desktop/'s own copy. */
+.editor-signature-help-tooltip {
+  position: fixed;
+  z-index: 50;
+  max-width: 480px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.editor-signature-help-active-param {
+  color: var(--accent);
+  font-weight: 700;
+}
+
 /* Real LSP completion dropdown (task #136), byte-identical to
  * desktop/'s own copy. */
 .editor-completion-list {

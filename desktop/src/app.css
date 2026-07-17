@@ -538,6 +538,34 @@
   pointer-events: none;
 }
 
+/* Real LSP signature help tooltip (task #169) -- same real `position:
+ * fixed`/`pointer-events: none` shape as `.editor-hover-tooltip` above
+ * (this is also purely ephemeral, position-driven feedback), styled as a
+ * single-line pill rather than a wrapping box since a real function
+ * signature is usually one line. */
+.editor-signature-help-tooltip {
+  position: fixed;
+  z-index: 50;
+  max-width: 480px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.editor-signature-help-active-param {
+  color: var(--accent);
+  font-weight: 700;
+}
+
 /* Real LSP completion dropdown (task #136) -- `position: fixed` + real
  * viewport-relative coordinates from the caret position (not the mouse,
  * since this is keyboard-triggered). Unlike the hover tooltip, this one

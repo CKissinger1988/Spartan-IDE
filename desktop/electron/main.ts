@@ -135,6 +135,7 @@ app.whenReady().then(() => {
     "lsp_hover",
     "lsp_completion",
     "lsp_definition",
+    "lsp_signature_help",
     "leo_status",
     "leo_start_task",
     "leo_approve_plan",

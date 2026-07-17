@@ -291,6 +291,7 @@ impl LspClient {
                         "hover": {"contentFormat": ["plaintext", "markdown"]},
                         "completion": {"completionItem": {"snippetSupport": false}},
                         "definition": {"linkSupport": false},
+                        "signatureHelp": {"signatureInformation": {"parameterInformation": {"labelOffsetSupport": false}}},
                         "publishDiagnostics": {},
                     }
                 },
@@ -376,6 +377,23 @@ impl LspClient {
     pub fn definition(&mut self, file_uri: &str, line: i64, character: i64) -> Option<Value> {
         self.request(
             "textDocument/definition",
+            Some(json!({
+                "textDocument": {"uri": file_uri},
+                "position": {"line": line, "character": character},
+            })),
+            DEFAULT_TIMEOUT,
+        )
+    }
+
+    /// Real `textDocument/signatureHelp` -- the fourth real query method
+    /// following `hover`/`completion`/`definition`'s exact shape. A real
+    /// LSP `SignatureHelp` response (`{signatures, activeSignature,
+    /// activeParameter}` or `null`) is passed through unparsed, same
+    /// division of responsibility every other query method here already
+    /// establishes.
+    pub fn signature_help(&mut self, file_uri: &str, line: i64, character: i64) -> Option<Value> {
+        self.request(
+            "textDocument/signatureHelp",
             Some(json!({
                 "textDocument": {"uri": file_uri},
                 "position": {"line": line, "character": character},

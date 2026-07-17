@@ -116,6 +116,66 @@ function extractDefinitionTarget(result: unknown): DefinitionTarget | null {
   return { path: fileUriToPath(uri), line, character };
 }
 
+/** A real, normalized LSP `SignatureHelp` target, ported verbatim from
+ * `desktop/`'s own `SignatureHelpTarget` -- see that file's own doc
+ * comment for the full real reasoning. */
+interface SignatureHelpTarget {
+  label: string;
+  activeParameterLabel: string | null;
+}
+
+function extractSignatureHelp(result: unknown): SignatureHelpTarget | null {
+  if (!result || typeof result !== "object") return null;
+  const r = result as { signatures?: unknown; activeSignature?: unknown; activeParameter?: unknown };
+  const signatures = Array.isArray(r.signatures) ? r.signatures : [];
+  if (signatures.length === 0) return null;
+  const activeSigIndex =
+    typeof r.activeSignature === "number" && r.activeSignature < signatures.length
+      ? r.activeSignature
+      : 0;
+  const sig = signatures[activeSigIndex] as
+    | { label?: unknown; activeParameter?: unknown; parameters?: unknown }
+    | undefined;
+  const label = typeof sig?.label === "string" ? sig.label : null;
+  if (!label) return null;
+  const activeParamIndex =
+    typeof sig?.activeParameter === "number"
+      ? sig.activeParameter
+      : typeof r.activeParameter === "number"
+        ? r.activeParameter
+        : null;
+  let activeParameterLabel: string | null = null;
+  if (activeParamIndex !== null && Array.isArray(sig?.parameters)) {
+    const param = sig.parameters[activeParamIndex] as { label?: unknown } | undefined;
+    if (param && typeof param.label === "string") activeParameterLabel = param.label;
+  }
+  return { label, activeParameterLabel };
+}
+
+/** Ported verbatim from `desktop/`'s own `renderSignatureLabel`. */
+function renderSignatureLabel(target: SignatureHelpTarget): React.ReactNode {
+  const { label, activeParameterLabel } = target;
+  if (!activeParameterLabel) return label;
+  const idx = label.indexOf(activeParameterLabel);
+  if (idx === -1) return label;
+  return (
+    <>
+      {label.slice(0, idx)}
+      <span className="editor-signature-help-active-param">
+        {label.slice(idx, idx + activeParameterLabel.length)}
+      </span>
+      {label.slice(idx + activeParameterLabel.length)}
+    </>
+  );
+}
+
+/** Ported verbatim from `desktop/`'s own `offsetToLineChar`. */
+function offsetToLineChar(content: string, offset: number): { line: number; character: number } {
+  const before = content.slice(0, offset);
+  const lines = before.split("\n");
+  return { line: lines.length - 1, character: lines[lines.length - 1].length };
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -356,6 +416,32 @@ export default function BackendEditor({
     return unsubscribe;
   }, [client, file.docId]);
 
+  const [signatureHelpState, setSignatureHelpState] = useState<{
+    x: number;
+    y: number;
+    line: number;
+    character: number;
+    target: SignatureHelpTarget | null;
+  } | null>(null);
+
+  // Real, live LSP signature help (task #170, the web/ half of task #169's
+  // own desktop-then-web follow-up) -- ported verbatim from `desktop/`'s
+  // own identical wiring, reached over `client.onEvent` instead of
+  // `window.spartan.onEvent`.
+  useEffect(() => {
+    const unsubscribe = client.onEvent((e) => {
+      if (e.event !== "lsp_signature_help_result") return;
+      const d = e.data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      setSignatureHelpState((prev) => {
+        if (!prev || prev.line !== d.line || prev.character !== d.character) return prev;
+        const target = extractSignatureHelp(d.result);
+        return target ? { ...prev, target } : null;
+      });
+    });
+    return unsubscribe;
+  }, [client, file.docId]);
+
   /** Real, manual completion trigger (Ctrl+Space), ported verbatim from
    * `desktop/`'s own `triggerCompletion` -- see that file's own doc
    * comment for the full real reasoning behind manual-trigger v1 scope. */
@@ -521,8 +607,27 @@ export default function BackendEditor({
       client
         .call("edit", { doc_id: file.docId, start_char: 0, end_char: oldLength, text: newContent })
         .catch((err: Error) => console.error("edit failed:", err));
+
+      // Real signature-help auto-trigger, ported verbatim from `desktop/`'s
+      // own identical wiring -- see that file's own doc comment for the
+      // full real reasoning.
+      const el = e.target;
+      const pos = el.selectionStart;
+      const justTyped = pos > 0 ? newContent[pos - 1] : "";
+      if (justTyped === "(" || justTyped === ",") {
+        const { line, character } = offsetToLineChar(newContent, pos);
+        const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+        const y =
+          el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
+        setSignatureHelpState({ x, y, line, character, target: null });
+        client
+          .call("lsp_signature_help", { doc_id: file.docId, line, character })
+          .catch((err: Error) => console.error("lsp_signature_help failed:", err));
+      } else if (justTyped === ")") {
+        setSignatureHelpState(null);
+      }
     },
-    [client, file.docId, file.path, onContentChange]
+    [client, charWidth, lineHeightPx, file.docId, file.path, onContentChange]
   );
 
   const handleKeyDown = useCallback(
@@ -585,6 +690,12 @@ export default function BackendEditor({
           setCompletionState(null);
         }
       }
+      // Real signature-help dismissal (Escape), ported verbatim from
+      // `desktop/`'s own identical branch -- only reached when the
+      // completion dropdown didn't already consume this Escape above.
+      if (e.key === "Escape" && signatureHelpState) {
+        setSignatureHelpState(null);
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === " ") {
         e.preventDefault();
         triggerCompletion();
@@ -631,6 +742,7 @@ export default function BackendEditor({
       filteredCompletionItems,
       acceptCompletion,
       triggerCompletion,
+      signatureHelpState,
       client,
       file.docId,
       file.path,
@@ -698,6 +810,14 @@ export default function BackendEditor({
           style={{ left: hoverState.x + 12, top: hoverState.y + 16 }}
         >
           {hoverState.text}
+        </div>
+      )}
+      {signatureHelpState?.target && (
+        <div
+          className="editor-signature-help-tooltip mono"
+          style={{ left: signatureHelpState.x, top: signatureHelpState.y }}
+        >
+          {renderSignatureLabel(signatureHelpState.target)}
         </div>
       )}
       {completionState && (

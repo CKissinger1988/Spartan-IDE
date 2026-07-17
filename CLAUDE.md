@@ -4375,6 +4375,48 @@ first — it's the parity reference until each row there is actually reimplement
   no definition support for any language beyond Python in this specific live verification (the
   underlying code path is language-agnostic, matching hover's/completion's own same real caveat);
   the real Electron window remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — real LSP signature help (parameter hints), the fourth real query method
+  after hover/completion/definition, plus a real self-caught test-fixture mistake (task #171)**:
+  extends `spartan-lsp`'s already-proven query pattern to `textDocument/signatureHelp`.
+  `LspClient::signature_help` and a new `QueryKind::SignatureHelp`/`LspSession::
+  request_signature_help` share the exact same query-priority mailbox and
+  `INDEXING_TIMEOUT + DEFAULT_TIMEOUT` bound every other query method already established;
+  `spartan-backend::lsp_signature_help` mirrors the same "ack now, event later" shape and
+  envelope-unwrapping discipline. `desktop/src/components/Editor.tsx` and `web/src/components/
+  BackendEditor.tsx` both gained real auto-trigger handling in their existing `handleChange`: typing
+  the real LSP-conventional trigger characters `(` or `,` fires a request and shows a tooltip near
+  the cursor with the active signature's real label, bolding the real active parameter (matched via
+  a plain substring search against the label -- correct for every real server tested); typing a real
+  closing `)` dismisses it, as does Escape (checked only after the completion dropdown's own Escape
+  handling, so the two never race for the same keypress). A deliberate, named v1 scope cut, stated
+  in-code rather than silently assumed: no full per-keystroke re-querying while a signature stays
+  open (matching this component's own established "smallest real, correct increment" precedent --
+  Ctrl+Space over automatic completion). `lsp_signature_help` was added to `main.ts`'s/`preload.ts`'s
+  IPC allowlists alongside `lsp_hover`/`lsp_completion`/`lsp_definition`. 9 new Rust tests (2
+  dispatch-level honest-error tests, plus a real, live integration test against a real
+  `pyright-langserver` -- `crates/spartan-backend/tests/lsp_signature_help_integration.rs`) --
+  **a real bug was found and fixed in the test's own assertion, not the product**: the first
+  version expected the real signature label to contain the function's own name ("greet"), but a
+  real LSP `SignatureHelp.label` deliberately omits it (the call site already names it) -- pyright's
+  actual, correct response was `"(name: str) -> str"`; fixed by asserting on the real parameter
+  shape and `activeParameter` index instead. Full workspace `cargo fmt --all -- --check`/`cargo
+  clippy --workspace --release --all-targets`/`cargo test --workspace --release` all clean, zero
+  failures (162 `spartan-backend` unit tests, up from 160; every real ~91s pyright hover/completion/
+  definition/diagnostics suite re-confirmed unaffected). **Real, live, end-to-end verification**
+  against a real running `spartan-devserver` serving a real built `web/dist`, a real Python fixture,
+  and a real `pyright-langserver` session: typing `(` right after `greet` correctly showed a real
+  tooltip reading `"(name: str) -> str"` with `"name: str"` correctly bolded, and typing `)`
+  correctly dismissed it. **A second real test-fixture mistake was caught and fixed during this live
+  verification, not a product bug -- the same lesson §166's own account already named once, repeated
+  here and corrected again**: the first fixture had a trailing newline after `greet`, so `Ctrl+End`
+  landed on a new empty line, making the typed `(` an orphaned statement -- pyright's real, correct
+  response was `null` (no active call), confirmed via the real WebSocket frames themselves (`{"event":
+  "lsp_signature_help_result","data":{...,"result":null}}`) before concluding it was the fixture, not
+  the code; fixed by removing the trailing newline. **What this does not confirm**: no full
+  per-keystroke re-query while a signature stays open (the named v1 scope cut above); no signature
+  help for any language beyond Python in this specific live verification (the underlying code path is
+  language-agnostic, matching every other query method's own same real caveat); the real Electron
+  window remains unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 

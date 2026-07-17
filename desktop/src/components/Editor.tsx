@@ -116,6 +116,84 @@ function extractDefinitionTarget(result: unknown): DefinitionTarget | null {
   return { path: fileUriToPath(uri), line, character };
 }
 
+/** A real, normalized LSP `SignatureHelp` target -- only the fields this
+ * v1 tooltip actually renders. `activeParameterLabel` is `null` whenever
+ * the active parameter can't be resolved (no `activeParameter` index sent,
+ * or that parameter's own `label` isn't a plain string -- the LSP spec
+ * also allows a `[number, number]` offset-range label, deliberately not
+ * handled here, a real, named v1 scope cut). */
+interface SignatureHelpTarget {
+  label: string;
+  activeParameterLabel: string | null;
+}
+
+/** Normalizes a real LSP `signatureHelp` result
+ * (`{signatures, activeSignature, activeParameter}` or `null`). Returns
+ * `null` for a real, honest "no active call here" -- not every cursor
+ * position is inside a function call. */
+function extractSignatureHelp(result: unknown): SignatureHelpTarget | null {
+  if (!result || typeof result !== "object") return null;
+  const r = result as { signatures?: unknown; activeSignature?: unknown; activeParameter?: unknown };
+  const signatures = Array.isArray(r.signatures) ? r.signatures : [];
+  if (signatures.length === 0) return null;
+  const activeSigIndex =
+    typeof r.activeSignature === "number" && r.activeSignature < signatures.length
+      ? r.activeSignature
+      : 0;
+  const sig = signatures[activeSigIndex] as
+    | { label?: unknown; activeParameter?: unknown; parameters?: unknown }
+    | undefined;
+  const label = typeof sig?.label === "string" ? sig.label : null;
+  if (!label) return null;
+  // `activeParameter` is preferentially per-signature (LSP 3.16+), falling
+  // back to the real top-level field older servers still send.
+  const activeParamIndex =
+    typeof sig?.activeParameter === "number"
+      ? sig.activeParameter
+      : typeof r.activeParameter === "number"
+        ? r.activeParameter
+        : null;
+  let activeParameterLabel: string | null = null;
+  if (activeParamIndex !== null && Array.isArray(sig?.parameters)) {
+    const param = sig.parameters[activeParamIndex] as { label?: unknown } | undefined;
+    if (param && typeof param.label === "string") activeParameterLabel = param.label;
+  }
+  return { label, activeParameterLabel };
+}
+
+/** Renders a real signature label with its real active parameter bolded
+ * (via a plain substring match against the label -- correct as long as
+ * the parameter's own label text appears verbatim in the full signature,
+ * true for every real language server this component has been tested
+ * against). Falls back to the plain label when no active parameter was
+ * resolved or it can't be located inside the label text. */
+function renderSignatureLabel(target: SignatureHelpTarget): React.ReactNode {
+  const { label, activeParameterLabel } = target;
+  if (!activeParameterLabel) return label;
+  const idx = label.indexOf(activeParameterLabel);
+  if (idx === -1) return label;
+  return (
+    <>
+      {label.slice(0, idx)}
+      <span className="editor-signature-help-active-param">
+        {label.slice(idx, idx + activeParameterLabel.length)}
+      </span>
+      {label.slice(idx + activeParameterLabel.length)}
+    </>
+  );
+}
+
+/** Converts a real absolute char offset into a real 0-indexed LSP
+ * line/character pair -- the inverse of the offset math
+ * `jumpToLocalPosition` already does, needed here since signature help
+ * triggers off the textarea's own post-edit `selectionStart` (a plain
+ * offset), not a mouse pixel or an already-known line/character. */
+function offsetToLineChar(content: string, offset: number): { line: number; character: number } {
+  const before = content.slice(0, offset);
+  const lines = before.split("\n");
+  return { line: lines.length - 1, character: lines[lines.length - 1].length };
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -401,6 +479,34 @@ export default function Editor({
     return unsubscribe;
   }, [file.docId]);
 
+  const [signatureHelpState, setSignatureHelpState] = useState<{
+    x: number;
+    y: number;
+    line: number;
+    character: number;
+    target: SignatureHelpTarget | null;
+  } | null>(null);
+
+  // Real, live LSP signature help (task #169, the fourth real query method
+  // after hover/completion/definition) -- listens for this exact file's
+  // own `lsp_signature_help_result` events. Self-contained to this
+  // component, matching hover's own reasoning: a signature-help tooltip is
+  // purely ephemeral, position-driven UI feedback with no other real
+  // consumer.
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event !== "lsp_signature_help_result") return;
+      const d = data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      setSignatureHelpState((prev) => {
+        if (!prev || prev.line !== d.line || prev.character !== d.character) return prev;
+        const target = extractSignatureHelp(d.result);
+        return target ? { ...prev, target } : null;
+      });
+    });
+    return unsubscribe;
+  }, [file.docId]);
+
   /** Real, manual completion trigger (Ctrl+Space) -- a deliberate, named
    * v1 scope choice over automatic per-keystroke triggering, matching
    * this component's own established pattern of picking the smallest
@@ -610,8 +716,31 @@ export default function Editor({
           text: newContent,
         })
         .catch((err: Error) => console.error("edit failed:", err));
+
+      // Real signature-help auto-trigger -- fires on the real
+      // LSP-conventional trigger characters "(" (open a call) and ","
+      // (advance to the next argument), dismisses on a real closing ")".
+      // A deliberate, named v1 scope choice over full per-keystroke
+      // re-querying while a signature stays open, matching this
+      // component's own established "smallest real, correct increment"
+      // precedent (Ctrl+Space over fully-automatic completion).
+      const el = e.target;
+      const pos = el.selectionStart;
+      const justTyped = pos > 0 ? newContent[pos - 1] : "";
+      if (justTyped === "(" || justTyped === ",") {
+        const { line, character } = offsetToLineChar(newContent, pos);
+        const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+        const y =
+          el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
+        setSignatureHelpState({ x, y, line, character, target: null });
+        window.spartan
+          .call("lsp_signature_help", { doc_id: file.docId, line, character })
+          .catch((err: Error) => console.error("lsp_signature_help failed:", err));
+      } else if (justTyped === ")") {
+        setSignatureHelpState(null);
+      }
     },
-    [file.docId, file.path, onContentChange]
+    [charWidth, lineHeightPx, file.docId, file.path, onContentChange]
   );
 
   const handleKeyDown = useCallback(
@@ -689,6 +818,13 @@ export default function Editor({
           setCompletionState(null);
         }
       }
+      // Real signature-help dismissal (Escape) -- only reached when the
+      // completion dropdown didn't already consume this Escape above (its
+      // own branch `return`s), so the two never race for the same
+      // keypress.
+      if (e.key === "Escape" && signatureHelpState) {
+        setSignatureHelpState(null);
+      }
       // Real, manual completion trigger (Ctrl+Space) -- see
       // `triggerCompletion`'s own doc comment for why manual, not
       // automatic-per-keystroke.
@@ -746,6 +882,7 @@ export default function Editor({
       filteredCompletionItems,
       acceptCompletion,
       triggerCompletion,
+      signatureHelpState,
       file.docId,
       file.path,
       onContentChange,
@@ -834,6 +971,14 @@ export default function Editor({
           style={{ left: hoverState.x + 12, top: hoverState.y + 16 }}
         >
           {hoverState.text}
+        </div>
+      )}
+      {signatureHelpState?.target && (
+        <div
+          className="editor-signature-help-tooltip mono"
+          style={{ left: signatureHelpState.x, top: signatureHelpState.y }}
+        >
+          {renderSignatureLabel(signatureHelpState.target)}
         </div>
       )}
       {completionState && (
