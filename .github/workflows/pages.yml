@@ -52,6 +52,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Node (for rendering README.md -> docs.html)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Resolve the Release run to pull artifacts from
         # A real `workflow_run` trigger already carries the exact
         # triggering run's id. A manual `workflow_dispatch` has no such
@@ -95,6 +100,10 @@ jobs:
           set -e
           mkdir -p _site/app _site/downloads
           cp -r site/. _site/
+          # docs-template.html is a build input for the render step below,
+          # not a real page of its own -- don't ship the raw, unrendered
+          # template with its literal {{README_BODY}} placeholder still in it.
+          rm -f _site/docs-template.html
 
           unzip -q artifacts/web-package/*.zip -d _site/app
 
@@ -113,6 +122,30 @@ jobs:
 
           echo "Real files staged for /downloads/:"
           ls -la _site/downloads/
+
+      - name: Render README.md into a live documentation page
+        # The real project README, rendered server-side at deploy time (via
+        # the `marked` npm package, installed into a throwaway scratch dir
+        # so it never touches this repo's own package.json/lockfiles) and
+        # spliced into site/docs-template.html's {{README_BODY}} placeholder.
+        # This is the single source of truth for that content -- nothing
+        # here is a hand-maintained duplicate of the real README.md, so the
+        # published page can't silently drift from what's actually checked
+        # into the (private) source repository.
+        run: |
+          set -e
+          RENDER_DIR=$(mktemp -d)
+          (cd "$RENDER_DIR" && npm install --no-save marked >/dev/null 2>&1)
+          node -e "
+            const { marked } = require('$RENDER_DIR/node_modules/marked');
+            const fs = require('fs');
+            const md = fs.readFileSync('README.md', 'utf8');
+            const body = marked.parse(md);
+            const template = fs.readFileSync('site/docs-template.html', 'utf8');
+            const out = template.replace('{{README_BODY}}', body);
+            fs.writeFileSync('_site/docs.html', out);
+          "
+          echo "Rendered README.md -> _site/docs.html ($(wc -c < _site/docs.html) bytes)"
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

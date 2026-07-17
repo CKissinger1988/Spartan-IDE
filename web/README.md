@@ -1,12 +1,17 @@
 # Spartan Web (vscode.dev-inspired browser IDE)
 
-Real, first-increment browser IDE for Spartan, built around the same **hybrid**
-architecture decision the user made explicitly (§75.85, §75.86): editing/
-buffer logic works standalone client-side in the browser, with backend
-capabilities activating only when a local `spartan-devserver` instance is
-reachable over its real WebSocket transport (§75.88). **Git is real and wired
-when a devserver is connected; LSP/DAP/Leo are not yet.** See "What's not
-built yet" below for the honest account of what's deferred and why.
+Real, browser IDE for Spartan, built around the same **hybrid** architecture
+decision the user made explicitly (§75.85, §75.86): editing/buffer logic
+works standalone client-side in the browser (File System Access + WASM, no
+backend needed), with a second, independent backend-mode editing path
+activating whenever a local `spartan-devserver` instance is reachable over
+its real WebSocket transport (§75.88). **When a devserver is connected: Git,
+real LSP diagnostics/hover/autocomplete, real DAP breakpoint/step debugging,
+and real Android device/build/logcat tooling are all real and wired here —
+the one capability still missing versus the desktop shell is a Leo chat UI
+in this app specifically** (Leo's own backend methods are reachable, this
+app just has no chat panel calling them yet). See "What's not built yet"
+below for the honest, current account.
 
 Inspired by vscode.dev's *concepts* only — a browser-based editor working
 directly against real local files via a native browser API, no server round
@@ -90,8 +95,14 @@ forked/vendored either) — see the root `CLAUDE.md`.
 
 ## What's not built yet (named honestly, not silently missing)
 
-- **Git is now real and wired; LSP, DAP, and Leo are not.** A later
-  increment (Track A, `crates/spartan-devserver`) answered the
+- **Git, LSP (diagnostics/hover/completion), DAP, and Android tooling are all
+  real and wired here now; Leo's own chat UI is the one real gap left in
+  this app specifically** (desktop/ has had a real, persistent Leo chat
+  panel since §75.61 — this section used to say the opposite, before those
+  later increments landed; kept the original account below since it's still
+  the real story of *how* the backend-mode path came to exist, just
+  corrected where it went stale). A later increment (Track A,
+  `crates/spartan-devserver`) answered the
   token-delivery design question this section used to name as unresolved:
   the devserver serves this app's own static files, so a same-origin
   `fetch("/__spartan/session")` (see `backendClient.ts`) safely hands a
@@ -136,7 +147,44 @@ forked/vendored either) — see the root `CLAUDE.md`.
   error via the Backend tab, confirmed the real diagnostic rendered in the
   gutter (screenshotted) matching `desktop/`'s own treatment exactly, typed
   a real live fix through the actual textarea, and confirmed the
-  diagnostic genuinely cleared. DAP and Leo remain unwired in every shell.
+  diagnostic genuinely cleared.
+- **Real LSP hover and autocomplete were added in later increments, ported
+  the same way.** `BackendEditor.tsx` gained the identical hover-tooltip
+  (mouse-hold, pixel-to-line/character mapping) and Ctrl+Space completion
+  dropdown logic `desktop/`'s own `Editor.tsx` already had, reached over
+  the same `BackendClient` with zero backend/protocol changes needed (both
+  methods were already generic `spartan-backend` methods). Real, live-
+  verified against a real running devserver + `pyright-langserver`, same
+  technique as the diagnostics verification above.
+- **Real DAP (breakpoint/step debugging) was added too, in the same
+  desktop-then-web sequencing.** Click-to-toggle gutter breakpoints and a
+  compact `DebugPanel.tsx` (Debug/Continue/Step Over/Step Into/Stop, inline
+  stack-frame/variable display) — a direct port of `desktop/`'s own
+  `DebugPanel.tsx` — reached over the identical generic `BackendClient`
+  call surface, no protocol changes needed. Real, live, end-to-end
+  verified: a real Python fixture + a real `debugpy.adapter` session hit a
+  breakpoint, rendered the correct stopped line/variable, and continued to
+  a real exit, all through the actual compiled `web/dist` served by a real
+  running `spartan-devserver` binary — no mock, unlike `desktop/`'s own
+  verification (which needs a mocked `window.spartan` since the real
+  Electron binary can't launch in this project's own sandboxed sessions;
+  `web/` needs no such mock at all).
+- **Real Android device/build/logcat tooling was added too.** A status-bar
+  badge mirrors `desktop/`'s own: detects an Android/Gradle project, runs a
+  real `gradle assembleDebug` build with streamed progress, lists real
+  `adb` devices, installs the built APK, and streams real `adb logcat`
+  output — all through the same generic `BackendClient` call surface (zero
+  protocol changes needed for any of it, since every method is already a
+  generic `spartan-backend` dispatch method). Real, live, end-to-end
+  verified against a real Android/Gradle fixture and this environment's
+  own real (if device-less) `adb`/`gradle` installs.
+- **Leo's own chat UI is the one real capability gap left in this app.**
+  Every `leo_*` method Leo's execute/verify loop needs is already a real,
+  generic `spartan-backend` dispatch method reachable through
+  `BackendClient` with zero protocol changes required — the same shape
+  every other backend-mode feature above was closed with. No component
+  calls them from this app yet; that remains real, deliberately deferred,
+  unstarted follow-up work, not a design limitation.
 - **The two editing paths are independent, not unified.** A real, named
   consequence, not an oversight: the folder opened via "Open Folder…"
   (File System Access) and the devserver's own project root
