@@ -4011,6 +4011,41 @@ first — it's the parity reference until each row there is actually reimplement
   no `adb logcat` streaming (a real, separate, unstarted piece of task #11's own named scope). The
   real emulator/system-image half of task #11 remains the one item still fully blocked by this
   environment's lack of `/dev/kvm`.
+- **Real, working code — real ADB device listing + install wired into `web/`, closing the
+  `desktop/`-then-`web/` parity gap §148 named (task #149)**: pure TypeScript, zero backend/
+  protocol changes needed -- `android_list_devices`/`android_install_apk` are already real,
+  generic `spartan-backend` methods reachable through `web/`'s own fully generic `BackendClient`
+  (no method allowlist to extend the way `desktop/`'s `preload.ts` needs, unlike every other
+  desktop-then-web pass this session has done). `web/src/App.tsx` gained the byte-identical
+  `AndroidDeviceInfo`/`AndroidInstallState` types and `installApk` callback `desktop/`'s
+  `StatusBar.tsx`/`App.tsx` already have, plus a matching second `.status-android-badge` "📲
+  Install" button in the JSX status bar, shown only once a build is `ready`. **Real, live,
+  end-to-end verification against the actual full stack, not a mock** -- a step up from
+  `desktop/`'s own mocked-`window.spartan` harness (§148), since `web/`'s real `spartan-devserver`
+  binary could be built and run here: a real, buildable Android/Gradle fixture (the same recipe
+  tasks #144/#145 use) was served by a real `spartan-devserver` process; clicking the Android badge
+  triggered a genuine `gradle assembleDebug` (confirmed correct, not skipped, after finding and
+  fixing a real test-environment gap -- this session's own shell has no `ANDROID_HOME` set by
+  default, so the first attempt correctly hit a real "SDK location not found" Gradle failure;
+  restarting the devserver with `ANDROID_HOME`/`ANDROID_SDK_ROOT` exported fixed it, not a product
+  bug); once genuinely built, clicking Install correctly called the real `android_list_devices`
+  (a real `adb devices -l`, reporting zero devices, matching this sandbox's own already-confirmed
+  condition) and reached the real, honest "no real device attached" failure state end to end,
+  screenshotted. **Two real bugs were found and fixed in the verification script itself while
+  building this test, not in product code**: `page.waitForFunction(fn, options)` silently passes
+  `options` as the function's `arg` parameter, not as timeout options, in Playwright's own JS API
+  -- fixed by passing `null` as the explicit middle argument; and a `hasText: "Install"`-filtered
+  locator stopped matching once the button's own text changed after installing, breaking a
+  subsequent read -- fixed with a stable index-based locator instead. Neither was a defect in the
+  shipped `App.tsx` changes, both are recorded here so a future verification pass doesn't
+  rediscover them from scratch. `web/`'s own `npm run typecheck`/`vite build` both clean; no Rust
+  changes this pass, full workspace `cargo fmt --all -- --check`/`cargo clippy --workspace
+  --release --all-targets` re-confirmed clean anyway. **What this does not confirm**: no real
+  device was ever actually installed onto in this environment (the same real constraint every
+  Android pass in this project has named); no device-picker UI for the multi-device case (matches
+  `desktop/`'s own already-named scope decision); `adb logcat` streaming remains the one named,
+  unstarted piece of task #11's own remaining scope. Both real Electron-based shells now expose
+  every real ADB capability this project has built.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

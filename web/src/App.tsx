@@ -43,6 +43,24 @@ type AndroidBuildState =
   | { phase: "ready"; apkPath: string }
   | { phase: "failed"; error: string };
 
+/** Real shape of one entry from `android_list_devices`'s own real
+ * `adb devices -l` parse (task #148) -- byte-identical to desktop/'s own
+ * `StatusBar.tsx` copy. */
+interface AndroidDeviceInfo {
+  serial: string;
+  state: string;
+  model: string | null;
+  product: string | null;
+}
+
+/** Real client-side state for the "Install APK" action (task #148) --
+ * byte-identical to desktop/'s own `StatusBar.tsx` copy. */
+type AndroidInstallState =
+  | { phase: "idle" }
+  | { phase: "installing"; lastLine?: string }
+  | { phase: "ready" }
+  | { phase: "failed"; error: string };
+
 // Real §75.93 theme/font persistence -- this app has no `spartan-backend`
 // settings store to round-trip through (§75.89's own named scope: no
 // LSP/DAP/Leo/git connectivity yet), so a real, local `localStorage` key
@@ -125,6 +143,16 @@ export default function App(): React.ReactElement {
   // preload.ts needed.
   const [androidInfo, setAndroidInfo] = useState<AndroidDetectResult | null>(null);
   const [androidBuild, setAndroidBuild] = useState<AndroidBuildState | undefined>(undefined);
+  // Real device-list + install state (task #148/#149), the web/ sibling of
+  // desktop/'s own `StatusBar.tsx` wiring -- fetched fresh on every
+  // Install click, never cached (a real device can be plugged/unplugged
+  // between clicks).
+  const [androidDevices, setAndroidDevices] = useState<AndroidDeviceInfo[] | undefined>(
+    undefined
+  );
+  const [androidInstall, setAndroidInstall] = useState<AndroidInstallState | undefined>(
+    undefined
+  );
 
   // Optional backend upgrade: when this page is served by a real
   // spartan-devserver (§75.88 + the /__spartan/session handoff), connect to
@@ -177,10 +205,39 @@ export default function App(): React.ReactElement {
     const projectRoot = backendClient?.projectRoot;
     if (!backendClient || !projectRoot) return;
     setAndroidBuild({ phase: "building" });
+    setAndroidInstall(undefined);
+    setAndroidDevices(undefined);
     backendClient.call("android_build_apk", { project_root: projectRoot }).catch((e: Error) => {
       setAndroidBuild({ phase: "failed", error: e.message });
     });
   }, [backendClient]);
+
+  // Real "list, then install onto whichever real device is ready" flow
+  // (task #148/#149) -- mirrors desktop/'s own `installApk` callback
+  // exactly, just reached through `BackendClient` instead of
+  // `window.spartan`.
+  const installApk = useCallback(() => {
+    if (!backendClient || androidBuild?.phase !== "ready") return;
+    const apkPath = androidBuild.apkPath;
+    setAndroidInstall({ phase: "installing" });
+    backendClient
+      .call("android_list_devices", {})
+      .then((result) => {
+        const devices = (result as { devices: AndroidDeviceInfo[] }).devices;
+        setAndroidDevices(devices);
+        const target = devices.find((d) => d.state === "device");
+        if (!target && devices.length === 0) {
+          throw new Error("no real device attached (adb devices -l reported none)");
+        }
+        return backendClient.call("android_install_apk", {
+          apk_path: apkPath,
+          ...(target ? { serial: target.serial } : {}),
+        });
+      })
+      .catch((e: Error) => {
+        setAndroidInstall({ phase: "failed", error: e.message });
+      });
+  }, [backendClient, androidBuild]);
 
   // Real, live LSP diagnostics stream -- the same real lsp_diagnostics/
   // lsp_error events desktop/'s App.tsx subscribes to via window.spartan.
@@ -239,6 +296,16 @@ export default function App(): React.ReactElement {
       } else if (e.event === "android_build_failed") {
         const { error } = e.data as { error: string };
         setAndroidBuild({ phase: "failed", error });
+      } else if (e.event === "android_install_progress") {
+        const { line } = e.data as { line: string };
+        setAndroidInstall((prev) =>
+          prev?.phase === "installing" ? { phase: "installing", lastLine: line } : prev
+        );
+      } else if (e.event === "android_install_ready") {
+        setAndroidInstall({ phase: "ready" });
+      } else if (e.event === "android_install_failed") {
+        const { error } = e.data as { error: string };
+        setAndroidInstall({ phase: "failed", error });
       }
     });
   }, [backendClient]);
@@ -620,6 +687,38 @@ export default function App(): React.ReactElement {
                 : androidBuild?.phase === "failed"
                   ? "🤖 ✗ failed"
                   : "🤖 Android"}
+          </button>
+        )}
+        {androidBuild?.phase === "ready" && (
+          <button
+            className="status-android-badge"
+            type="button"
+            disabled={androidInstall?.phase === "installing"}
+            onClick={installApk}
+            title={
+              (androidDevices === undefined
+                ? "Click to list real attached devices and install the built APK."
+                : androidDevices.length === 0
+                  ? "No real device attached (adb devices -l reported none)."
+                  : `Devices: ${androidDevices
+                      .map((d) => `${d.serial} (${d.state}${d.model ? `, ${d.model}` : ""})`)
+                      .join(", ")}`) +
+              (androidInstall?.phase === "installing" && androidInstall.lastLine
+                ? `\n${androidInstall.lastLine}`
+                : androidInstall?.phase === "ready"
+                  ? "\nInstalled."
+                  : androidInstall?.phase === "failed"
+                    ? `\n${androidInstall.error}`
+                    : "")
+            }
+          >
+            {androidInstall?.phase === "installing"
+              ? "📲 Installing…"
+              : androidInstall?.phase === "ready"
+                ? "📲 ✓ installed"
+                : androidInstall?.phase === "failed"
+                  ? "📲 ✗ failed"
+                  : "📲 Install"}
           </button>
         )}
       </div>
