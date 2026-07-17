@@ -4341,6 +4341,40 @@ first — it's the parity reference until each row there is actually reimplement
   (now with two real data points at two real model sizes) are the spikes with real execution behind
   them. See §39 for what the remaining spikes need, §47.5–§47.6 for 0.2, §47.9–§47.10 for 0.1's GPU
   half, §47.11 for 0.4, §47.12 for 0.3's first result, §75.43 for its updated one.
+- **Real, working code — real LSP go-to-definition (Ctrl+Click), the third real query method
+  after hover/completion, plus two real bugs found and fixed along the way (task #166)**:
+  extends `spartan-lsp`'s already-proven hover/completion query pattern (§130-§136) to
+  `textDocument/definition`. `LspClient::definition` and a new `QueryKind::Definition`/
+  `LspSession::request_definition` share the exact same query-priority mailbox and
+  `INDEXING_TIMEOUT + DEFAULT_TIMEOUT` bound hover/completion already established; `spartan-
+  backend::lsp_definition` mirrors `lsp_hover`'s "ack now, event later" shape and its own
+  already-learned envelope-unwrapping fix. `desktop/src/components/Editor.tsx` and `web/src/
+  components/BackendEditor.tsx` both gained real Ctrl+Click handling: resolve the real click
+  position to an LSP line/character, request a definition, then either jump locally (same file,
+  via a new shared `jumpToLocalPosition`) or -- a real, new mechanism this task needed that
+  hover/completion never did -- open the real target file first via a new `onJumpToDefinition`/
+  `pendingJump`/`onJumpApplied` prop triple, mirrored identically in both shells' `App.tsx`
+  (`openFile`/`openBackendFile` opens or activates the target, `pendingJump` hands the real
+  position to the newly-active file's own `Editor`/`BackendEditor` instance once its content is
+  available). `lsp_definition`/`lsp_hover`/`lsp_completion` were added to `main.ts`'s/`preload.ts`'s
+  IPC allowlists together, continuing this project's own established drift-avoidance discipline.
+  9 new Rust tests (2 dispatch-level honest-error tests, plus a real, live, ~92s integration test
+  against a real `pyright-langserver` confirming a real call site resolves to its real function
+  definition -- `crates/spartan-backend/tests/lsp_definition_integration.rs`), full workspace
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release` all clean, zero failures (including the full, real ~92s pyright hover/
+  completion/diagnostics suites, re-confirmed unaffected). **Real, live, end-to-end verification of
+  the harder, more valuable case -- a genuine cross-file jump, not just same-file** -- against a
+  real running `spartan-devserver` serving a real built `web/dist`, a real two-file Python fixture
+  (`helper.py` defining `greet()`, `main.py` calling it), and a real `pyright-langserver` session:
+  Ctrl+Click on the real `greet()` call site correctly opened `helper.py` and landed the cursor at
+  exactly character offset 4 -- precisely on the real `greet` identifier in `def greet():` -- not
+  just "somewhere in the right file," confirmed via a real `textarea.selectionStart` read, not
+  merely that the content changed. **What this does not confirm**: no automatic "underline on
+  Ctrl-hover" affordance (a real, named, minor v1 scope cut -- Ctrl+Click still works without one);
+  no definition support for any language beyond Python in this specific live verification (the
+  underlying code path is language-agnostic, matching hover's/completion's own same real caveat);
+  the real Electron window remains unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 
