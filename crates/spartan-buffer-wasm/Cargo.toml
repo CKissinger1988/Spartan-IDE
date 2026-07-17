@@ -2,6 +2,7 @@
 name = "spartan-buffer-wasm"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Real wasm-bindgen wrapper around spartan-buffer::Document, promoted from spikes/wasm-buffer-spike (§75.85) for its first real consumer: web/'s client-side editing core (§75.89, task #81)."
 
 [lib]

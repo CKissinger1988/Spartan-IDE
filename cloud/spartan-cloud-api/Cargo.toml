@@ -2,6 +2,7 @@
 name = "spartan-cloud-api"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 # The Spartan Cloud control-plane HTTP server (axum). Ties the protocol,
 # tenant (domain), and data (persistence) crates into a real REST API:

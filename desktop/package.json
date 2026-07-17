@@ -2,7 +2,7 @@
   "name": "spartan-desktop",
   "version": "0.2.0-beta.1",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "description": "Spartan IDE desktop shell -- real Electron + React frontend driving the existing Rust core (spartan-buffer, tree-sitter, LSP/DAP, Leo, spartan-git) over a local IPC service. See CLAUDE.md/docs/architecture-spec.md for why this exists alongside crates/spartan-editor-core (the original wgpu-native shell, kept as the backend proof-of-concept and reference).",
   "homepage": "https://github.com/CKissinger1988/Spartan-IDE",
   "author": {

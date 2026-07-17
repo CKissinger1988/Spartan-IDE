@@ -2,6 +2,7 @@
 name = "spartan-cloud-tenant"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 # Pure multi-tenancy domain logic: users, opaque sessions, plan quotas, and
 # the entitlement seam for deferred billing. Deliberately free of HTTP, DB,

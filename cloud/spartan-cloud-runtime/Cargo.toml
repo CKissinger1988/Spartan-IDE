@@ -2,6 +2,7 @@
 name = "spartan-cloud-runtime"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 # The container-isolation layer: a `ContainerRuntime` trait + a real Docker
 # driver (bollard) that applies per-tenant resource caps and selects the OCI

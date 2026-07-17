@@ -2,6 +2,7 @@
 name = "spartan-devserver"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 # The local AI devserver (Track A). Wraps -- never reimplements --
 # `spartan-backend`: it reuses that crate's real request dispatch

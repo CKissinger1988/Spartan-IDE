@@ -36,3 +36,6 @@ members = [
 # crate in this workspace; folding them in here would make a plain `cargo
 # build --workspace` try (and fail) to compile them for the host target.
 exclude = ["crates/plugins"]
+
+[workspace.package]
+license = "Apache-2.0"

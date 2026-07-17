@@ -10,3 +10,6 @@ members = [
 # WASM Component-Model guest crates targeting `wasm32-wasip1`, built via
 # `cargo component build`, an entirely different toolchain/output shape
 # than every native crate in the main workspace.
+
+[workspace.package]
+license = "Apache-2.0"

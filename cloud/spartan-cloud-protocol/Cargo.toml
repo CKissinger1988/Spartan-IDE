@@ -2,6 +2,7 @@
 name = "spartan-cloud-protocol"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 # Shared, serializable DTOs for Spartan Cloud's control plane -- the wire
 # vocabulary the (future) axum API and any client speak. Pure data + serde,

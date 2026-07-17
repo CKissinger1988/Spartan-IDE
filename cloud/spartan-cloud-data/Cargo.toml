@@ -2,6 +2,7 @@
 name = "spartan-cloud-data"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 # The persistence layer for Spartan Cloud's control plane. SQLite for the
 # MVP (embedded, zero infra to stand up or test -- `rusqlite` with the

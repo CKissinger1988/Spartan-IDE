@@ -1,8 +1,7 @@
 # Spartan IDE
 
-**Proprietary — all rights reserved.** © 2026 CKissinger1988. This repository is
-private; this README documents the real, internal state of the project for authorized
-readers. See [License](#license).
+**Open source under the Apache License, Version 2.0.** © 2026 CKissinger1988. See
+[License](#license).
 
 **A from-scratch, agent-first desktop IDE.** A real Electron + React frontend
 (`desktop/`) drives a real Rust core — a hand-built rope buffer, tree-sitter syntax
@@ -58,11 +57,14 @@ embedded with full captions in `desktop/README.md` and `web/README.md`.
 
 ## Beta downloads & live documentation
 
-The project's own GitHub Pages site is the real, public entry point for anyone without
-repository access — this repository stays private and proprietary, so the site never
-serves a source file of any kind. It exists precisely because a public GitHub Release
-page on a private repo would 404/login-wall for anyone outside the org — real installer
-binaries are served directly from the Pages site's own static `/downloads/` path instead.
+The project's own GitHub Pages site is the real, public entry point for beta downloads.
+It exists precisely because a public GitHub Release page on a private repo would
+404/login-wall for anyone outside the org — real installer binaries are served directly
+from the Pages site's own static `/downloads/` path instead, regardless of whether the
+repository itself is public or private. As of this pass the source is Apache-2.0
+licensed, but the GitHub repository's own visibility setting is a separate, real toggle
+in Settings that only the account owner can flip — not something any tool available in
+this session can change; it remains private until that one manual step happens.
 
 The site includes:
 
@@ -352,8 +354,8 @@ spikes/                      Real, tested Tier 0 Rust spikes + npm-based web-pre
 mobile/                      Spartan Mobile IDE — real Expo/React Native companion app
 cloud/                       Spartan Cloud — separate, optional multi-tenant backend;
                               its own Cargo workspace, not part of the root one
-site/                        Real GitHub Pages source (proprietary-safe: no source links,
-                              installers served directly, README rendered at deploy time)
+site/                        Real GitHub Pages source (no source links, installers served
+                              directly, README rendered at deploy time)
 prototypes/                  Reference-only React UI mockups, not wired to anything
 legacy/agent-deck-console/   Prior product, preserved for feature-parity reference (§55)
 .github/workflows/           CI — fmt/clippy/test for Rust, typecheck/build/test for every
@@ -361,7 +363,7 @@ legacy/agent-deck-console/   Prior product, preserved for feature-parity referen
                               spikes/tree-sitter-wasm-spike, spikes/git-browser-spike),
                               plus tag-triggered release.yml (installers) and pages.yml
                               (the public Pages site, including this README rendered live)
-LICENSE                      Proprietary, all rights reserved
+LICENSE                      Apache License, Version 2.0
 Cargo.toml / Cargo.lock      Rust workspace (spikes/ + crates/, excluding crates/plugins/,
                               mobile/, and cloud/, which are separate toolchains/workspaces)
 ```
@@ -376,13 +378,15 @@ Cargo.toml / Cargo.lock      Rust workspace (spikes/ + crates/, excluding crates
    they exist because of documented, named failures in comparable tools, not
    hypothetically.
 
-This repository is private. There is no external contribution process — this section
-describes how to orient as an authorized internal contributor, not how to submit an
-outside pull request.
+The GitHub repository itself is still marked private as of this pass (a separate,
+real Settings toggle from the license below — see the "Beta downloads" section above);
+until it's switched to public, this section describes how to orient as an authorized
+contributor rather than how to submit an outside pull request against a repo you can't
+yet see.
 
 ## License
 
-**Proprietary — all rights reserved.** Copyright (c) 2026 CKissinger1988. See
-[`LICENSE`](LICENSE). No portion of this source code is published or licensed for
-external use; the GitHub Pages site distributes compiled installers and this rendered
-README only, never source files.
+Licensed under the **Apache License, Version 2.0**. Copyright (c) 2026 CKissinger1988.
+See [`LICENSE`](LICENSE) for the full text. Every real crate and npm package in this
+workspace (`crates/`, `desktop/`, `web/`, `gui-builder/`, `mobile/`, `cloud/`) carries
+the same license.

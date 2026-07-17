@@ -102,7 +102,7 @@ header {
   color: var(--hud);
   background: var(--hud-dim);
 }
-.badge-proprietary {
+.badge-license {
   border-color: var(--border-bright);
   color: var(--text-dim);
   background: var(--surface);

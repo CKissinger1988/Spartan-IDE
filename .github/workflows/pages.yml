@@ -1,21 +1,25 @@
 name: Pages
 
-# Real GitHub Pages deployment: a hand-written, proprietary-safe static
-# landing/downloads page (`site/`) at the root, a live build of `web/` (the
-# client-side File System Access + WASM browser IDE, §75.89) served under
-# `/app/`, and real installer binaries served directly from this Pages
-# site under `/downloads/` -- NOT linked out to GitHub Releases.
+# Real GitHub Pages deployment: a hand-written static landing/downloads
+# page (`site/`) at the root, a live build of `web/` (the client-side File
+# System Access + WASM browser IDE, §75.89) served under `/app/`, and real
+# installer binaries served directly from this Pages site under
+# `/downloads/` -- NOT linked out to GitHub Releases.
 #
-# That last point is load-bearing, not stylistic: this repository is
-# private and proprietary by explicit instruction, and GitHub Release
-# assets on a private repo require the visitor to already have repo
-# access -- a public download page linking `github.com/.../releases/...`
-# would 404/login-wall for anyone outside the org. Hosting the real
-# built binaries as static files on the Pages site itself sidesteps that
-# entirely: the *source* stays private (this workflow never publishes any
-# source file, only compiled artifacts), while the compiled installers
-# remain genuinely downloadable by whoever this Pages site's own access
-# is granted to.
+# That last point is load-bearing, not stylistic: the project's own source
+# is Apache-2.0 licensed, but the GitHub *repository* itself remains
+# private as of this workflow's own current state (a separate, real
+# Settings toggle from the license, still pending a manual flip only the
+# account owner can make) -- and GitHub Release assets on a private repo
+# require the visitor to already have repo access, so a public download
+# page linking `github.com/.../releases/...` would 404/login-wall for
+# anyone outside the org. Hosting the real built binaries as static files
+# on the Pages site itself sidesteps that regardless of the repo's own
+# visibility: the compiled installers remain genuinely downloadable by
+# whoever this Pages site's own access is granted to, independent of
+# whether someone can also see the source. This workflow still never
+# publishes any source file, only compiled artifacts, matching its own
+# name (this is a downloads page, not a source mirror).
 #
 # Triggered by the "Release" workflow's own completion (not by every push
 # to `main`) -- since the real, downloadable installers only exist once a

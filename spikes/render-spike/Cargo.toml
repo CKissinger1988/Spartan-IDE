@@ -2,6 +2,7 @@
 name = "render-spike"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 spartan-buffer = { path = "../../crates/spartan-buffer" }

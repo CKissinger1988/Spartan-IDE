@@ -4288,6 +4288,55 @@ first — it's the parity reference until each row there is actually reimplement
   independently hand-verified installs; no code signing of any kind on any platform (an explicit,
   named, unresolved gap on this pass too -- a real signing identity for each platform is real,
   separate, unstarted future work).
+- **Real, working code — the entire project relicensed to Apache License, Version 2.0, replacing
+  the prior proprietary/all-rights-reserved terms (task #177)**: direct, explicit user instruction
+  ("Make the entire IDE project open source under Apache 2.0 license"). Root `LICENSE` was fully
+  rewritten to the complete, verbatim Apache 2.0 text (all 9 numbered sections plus the Appendix
+  boilerplate), with `Copyright 2026 CKissinger1988` — the user's own real GitHub handle, not a
+  fabricated name, per this session's own already-established, explicitly corrected rule (never
+  guess or invent the user's real personal name; use the account handle instead). Every real Cargo
+  workspace in this repository now declares the license via `[workspace.package] license =
+  "Apache-2.0"` plus `license.workspace = true` on each of its 32 member crates — the root
+  workspace (26 members), `crates/plugins/Cargo.toml` (2 members, its own separate workspace
+  since §5/task #10), and `cloud/Cargo.toml` (5 members, Track B's own separate workspace) all
+  three updated, not just the root; every real npm package (`desktop/`, `web/`, `gui-builder/`,
+  `mobile/` — the last of which previously had no `license` field of any kind) changed from
+  `"UNLICENSED"`/absent to `"Apache-2.0"`. `README.md`, `site/index.html`, `site/docs-template.html`,
+  `site/style.css` (`.badge-proprietary` renamed `.badge-license`), `.github/workflows/pages.yml`'s
+  own doc comment, and `.github/workflows/release.yml`'s release-notes body were all updated to
+  reflect the real license change, replacing every "proprietary"/"all rights reserved"/
+  "confidential" reference with accurate Apache 2.0 language. A real, deliberate, honestly-reported
+  limit stated plainly rather than glossed over: **the GitHub repository's own visibility remains
+  private** — this is a separate, real Settings toggle only the account owner can flip, confirmed
+  via a live `search_repositories` check (`"private": true`) and via an exhaustive `ToolSearch` for
+  any repository-visibility-changing tool among this session's available GitHub MCP tools (none
+  exists) — the same "no tool can do this, here's the one manual step" resolution this project's
+  own history already reached once before for GitHub Pages enablement. The Pages site's own
+  direct-binary-hosting architecture (§154/§155's `/downloads/` mechanism, bypassing GitHub Release
+  asset access entirely) remains necessary and unchanged regardless of this license change, since
+  it specifically exists to route around the *private-repo* Release-asset-access problem, not a
+  licensing one — `pages.yml`'s own doc comment was updated to state this distinction accurately
+  rather than conflate the two. A real, self-caught TOML structural mistake was found and fixed
+  before any build was attempted: a first edit to the root `Cargo.toml` placed `members = [...]`
+  underneath a new `[workspace.package]` table instead of the bare `[workspace]` table it actually
+  belongs to — caught by reading the file back immediately after the edit, fixed with a full
+  rewrite restoring the correct structure, and independently re-verified via `python3 -c "import
+  tomllib; ..."` confirming all 26 members and the correct license value. All three real Cargo
+  workspaces (root, `crates/plugins`, `cloud`) were independently re-verified via `cargo metadata
+  --no-deps` after every `license.workspace = true` insertion; all four `package.json` files were
+  independently re-verified as valid JSON. `docs/architecture-spec.md`'s own historical §75.72
+  entry (which documents the original proprietary-LICENSE decision) was deliberately left
+  unedited, consistent with this project's own "don't rewrite history, only append" discipline for
+  that file, and consistent with this project's own established recent practice of logging all
+  real work past §75.95 in CLAUDE.md rather than extending that file's own `§75.x` numbering
+  further. Real, executed verification: `cargo fmt --all -- --check` clean; `cargo clippy
+  --workspace --release --all-targets` clean (zero new warnings); `cargo build --workspace
+  --release` succeeds with no new errors; the full `cargo test --workspace --release --
+  test-threads=1` suite re-run in full — 758 tests, zero failures, confirming the license-metadata
+  changes introduced no regression anywhere in the workspace. **What this does not confirm**: the
+  real GitHub repository visibility toggle itself (the one remaining manual step named above,
+  outside any available tool's reach); no independent legal review of the Apache 2.0 text beyond
+  using its real, standard, unmodified upstream wording.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

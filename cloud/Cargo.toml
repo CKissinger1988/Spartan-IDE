@@ -26,3 +26,6 @@ members = [
     "spartan-cloud-runtime",
     "spartan-cloud-api",
 ]
+
+[workspace.package]
+license = "Apache-2.0"

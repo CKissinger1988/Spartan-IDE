@@ -2,6 +2,7 @@
 name = "spartan-git"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }

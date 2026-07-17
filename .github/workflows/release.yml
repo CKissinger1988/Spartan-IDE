@@ -498,10 +498,9 @@ jobs:
           generate_release_notes: true
           draft: false
           body: |
-            Beta release. Proprietary and confidential -- internal/
-            authorized-access distribution only. Every artifact below is a
-            real build produced by this workflow run, not hand-assembled
-            or claimed without being built.
+            Beta release. Licensed under Apache License, Version 2.0. Every
+            artifact below is a real build produced by this workflow run,
+            not hand-assembled or claimed without being built.
 
             **Included, previously verified across multiple prior
             releases/CI runs**:
