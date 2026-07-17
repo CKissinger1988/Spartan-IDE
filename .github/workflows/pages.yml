@@ -148,7 +148,23 @@ jobs:
           echo "Rendered README.md -> _site/docs.html ($(wc -c < _site/docs.html) bytes)"
 
       - name: Setup Pages
+        # `enablement: true` lets this action actually turn Pages on for
+        # this repo via the real GitHub API (the workflow's own
+        # `pages: write` permission covers it) instead of only ever
+        # configuring an *already-enabled* site -- found necessary only by
+        # running this workflow for real: `configure-pages@v5` defaults to
+        # `enablement: false` and failed with a real "Get Pages site
+        # failed... Not Found" the first two times this ran, since Pages
+        # had never actually been switched on for this repository at all
+        # (a real, separate, one-time repo-settings toggle, not a
+        # workflow bug). If this repo's own plan genuinely can't have
+        # Pages enabled at all (the private-repo restriction already
+        # documented elsewhere in this workflow's own history), this step
+        # will still fail, now with a clearer, plan-specific error instead
+        # of a generic "Not Found."
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
