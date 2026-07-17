@@ -390,6 +390,31 @@ enum Action {
     Shutdown,
 }
 
+/// A real query must never be answered against stale, pre-edit document
+/// content -- found only by live testing (not by inspection): a
+/// completion request that raced ahead of a just-typed edit still sitting
+/// in `latest_text` got dispatched to the server *before* that edit's own
+/// `did_change_full` had ever been sent, so pyright correctly (and
+/// unhelpfully) answered against the document state it still actually
+/// had. If a query is waiting and there's a real, not-yet-sent edit,
+/// flushes that edit first (returned as `Action::Edit`, no debounce
+/// delay), leaving the query still queued for the very next call --
+/// preserving this mailbox's own real "a query preempts someone else's
+/// debounce window" property (it still never waits out the *full*
+/// coalescing window), just correctness-safe now. Returns `None` (a
+/// cheap, near-free check) when no query is pending, leaving the normal
+/// debounce-wait/coalescing logic below completely untouched for the
+/// common pure-typing case.
+fn take_edit_before_query(guard: &mut MailboxState) -> Option<Action> {
+    if guard.pending_queries.is_empty() {
+        return None;
+    }
+    if let Some(text) = guard.latest_text.take() {
+        return Some(Action::Edit(text));
+    }
+    guard.pending_queries.pop_front().map(Action::Query)
+}
+
 /// Blocks until a real query is pending (answered immediately, ahead of
 /// any edit -- a hover request shouldn't wait out someone else's debounce
 /// window) or an edit has been sitting in the mailbox for a full
@@ -399,8 +424,8 @@ enum Action {
 fn wait_for_next_action(mailbox: &Mailbox, debounce: Duration) -> Action {
     let mut guard = mailbox.state.lock().unwrap();
     loop {
-        if let Some(query) = guard.pending_queries.pop_front() {
-            return Action::Query(query);
+        if let Some(action) = take_edit_before_query(&mut guard) {
+            return action;
         }
         // Wait for a first edit (or shutdown, or a query) to arrive.
         loop {
@@ -412,20 +437,22 @@ fn wait_for_next_action(mailbox: &Mailbox, debounce: Duration) -> Action {
             }
             guard = mailbox.cvar.wait(guard).unwrap();
         }
-        if let Some(query) = guard.pending_queries.pop_front() {
-            return Action::Query(query);
+        if let Some(action) = take_edit_before_query(&mut guard) {
+            return action;
         }
         // An edit is pending. Wait out the debounce window; if a newer
         // edit bumps the version during that wait, loop and wait again --
-        // but a query arriving during the wait still wins immediately.
+        // but a query arriving during the wait still wins immediately
+        // (via `take_edit_before_query`'s own flush-first correctness
+        // guard, not a raw, potentially-stale immediate answer).
         let version_before = guard.version;
         let (g, timeout_result) = mailbox.cvar.wait_timeout(guard, debounce).unwrap();
         guard = g;
         if guard.shutdown {
             return Action::Shutdown;
         }
-        if let Some(query) = guard.pending_queries.pop_front() {
-            return Action::Query(query);
+        if let Some(action) = take_edit_before_query(&mut guard) {
+            return action;
         }
         if timeout_result.timed_out() && guard.version == version_before {
             if let Some(text) = guard.latest_text.take() {
@@ -435,5 +462,117 @@ fn wait_for_next_action(mailbox: &Mailbox, debounce: Duration) -> Action {
         // Either spuriously woken with no new version (loop re-checks the
         // same wait), or a genuinely newer edit arrived -- either way,
         // re-enter the outer wait with the now-current state.
+    }
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+
+    fn push_hover_query(mailbox: &Mailbox) -> Receiver<Option<serde_json::Value>> {
+        let (reply, rx) = mpsc::channel();
+        mailbox
+            .state
+            .lock()
+            .unwrap()
+            .pending_queries
+            .push_back(PendingQuery {
+                kind: QueryKind::Hover {
+                    line: 0,
+                    character: 0,
+                },
+                reply,
+            });
+        rx
+    }
+
+    /// The real regression case this fix closes, found only by live
+    /// testing: a query queued behind a real, not-yet-sent edit must not
+    /// be answered before that edit is flushed, or it would resolve
+    /// against stale, pre-edit document content.
+    #[test]
+    fn a_pending_edit_is_flushed_before_a_pending_query_is_answered() {
+        let mailbox = Mailbox {
+            state: Mutex::new(MailboxState {
+                latest_text: Some("fresh text".to_string()),
+                version: 1,
+                shutdown: false,
+                pending_queries: VecDeque::new(),
+            }),
+            cvar: Condvar::new(),
+        };
+        let _rx = push_hover_query(&mailbox);
+
+        let mut guard = mailbox.state.lock().unwrap();
+        let first = take_edit_before_query(&mut guard).expect("an action must be returned");
+        match first {
+            Action::Edit(text) => assert_eq!(text, "fresh text"),
+            Action::Query(_) => panic!("the unflushed edit must be returned before the query"),
+            Action::Shutdown => panic!("not a shutdown scenario"),
+        }
+        // The query itself must survive untouched, ready for the very
+        // next call now that the document is up to date.
+        assert_eq!(guard.pending_queries.len(), 1);
+        assert!(guard.latest_text.is_none());
+
+        let second = take_edit_before_query(&mut guard).expect("the query must now be answered");
+        match second {
+            Action::Query(q) => {
+                assert!(matches!(q.kind, QueryKind::Hover { .. }));
+            }
+            other => panic!(
+                "expected the queued query on the second call, got a different action: {}",
+                match other {
+                    Action::Edit(_) => "Edit",
+                    Action::Shutdown => "Shutdown",
+                    Action::Query(_) => unreachable!(),
+                }
+            ),
+        }
+        assert!(guard.pending_queries.is_empty());
+    }
+
+    /// A query with no pending edit at all answers immediately, exactly as
+    /// before this fix -- the common, already-correct case must stay
+    /// byte-identical.
+    #[test]
+    fn a_pending_query_with_no_unflushed_edit_answers_immediately() {
+        let mailbox = Mailbox {
+            state: Mutex::new(MailboxState {
+                latest_text: None,
+                version: 0,
+                shutdown: false,
+                pending_queries: VecDeque::new(),
+            }),
+            cvar: Condvar::new(),
+        };
+        let _rx = push_hover_query(&mailbox);
+        let mut guard = mailbox.state.lock().unwrap();
+        match take_edit_before_query(&mut guard) {
+            Some(Action::Query(_)) => {}
+            Some(Action::Edit(_)) => panic!("expected an immediate query answer, got an Edit"),
+            Some(Action::Shutdown) => panic!("expected an immediate query answer, got Shutdown"),
+            None => panic!("expected an immediate query answer, got None"),
+        }
+    }
+
+    /// No query pending at all -- must be a cheap, real no-op, leaving the
+    /// normal debounce-wait/coalescing logic completely untouched.
+    #[test]
+    fn no_pending_query_returns_none_even_with_an_unflushed_edit() {
+        let mailbox = Mailbox {
+            state: Mutex::new(MailboxState {
+                latest_text: Some("still typing".to_string()),
+                version: 1,
+                shutdown: false,
+                pending_queries: VecDeque::new(),
+            }),
+            cvar: Condvar::new(),
+        };
+        let mut guard = mailbox.state.lock().unwrap();
+        assert!(take_edit_before_query(&mut guard).is_none());
+        // Untouched -- still there for the real debounce-wait path to
+        // pick up normally.
+        assert_eq!(guard.latest_text.as_deref(), Some("still typing"));
     }
 }
