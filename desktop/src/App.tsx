@@ -3,7 +3,12 @@ import Sidebar from "./components/Sidebar";
 import FileTree from "./components/FileTree";
 import GitPanel from "./components/GitPanel";
 import TabBar from "./components/TabBar";
-import StatusBar, { type AndroidDetectResult, type AndroidBuildState } from "./components/StatusBar";
+import StatusBar, {
+  type AndroidDetectResult,
+  type AndroidBuildState,
+  type AndroidDeviceInfo,
+  type AndroidInstallState,
+} from "./components/StatusBar";
 import Editor, {
   type EditorPrefs,
   DEFAULT_EDITOR_PREFS,
@@ -72,6 +77,18 @@ export default function App(): React.ReactElement {
   // phase, matching `StatusBar`'s own "no prop means no extra state" style
   // elsewhere.
   const [androidBuild, setAndroidBuild] = useState<AndroidBuildState | undefined>(undefined);
+  // Real device-list + install state for task #148's next increment beyond
+  // the build-only support above -- `androidDevices` is `undefined` until
+  // the first `android_list_devices` call resolves (never fetched
+  // proactively; only once a build is ready and the user clicks Install,
+  // matching this component's own "don't call a real subprocess the user
+  // hasn't asked for yet" convention).
+  const [androidDevices, setAndroidDevices] = useState<AndroidDeviceInfo[] | undefined>(
+    undefined
+  );
+  const [androidInstall, setAndroidInstall] = useState<AndroidInstallState | undefined>(
+    undefined
+  );
 
   // Real, one-shot on mount (ROOT is fixed for this window's lifetime, set
   // via the URL query param) -- android_detect has been real and tested
@@ -90,10 +107,43 @@ export default function App(): React.ReactElement {
   // dependency cache, so this never blocks the click itself.
   const buildApk = useCallback(() => {
     setAndroidBuild({ phase: "building" });
+    setAndroidInstall(undefined);
+    setAndroidDevices(undefined);
     window.spartan.call("android_build_apk", { project_root: ROOT }).catch((e: Error) => {
       setAndroidBuild({ phase: "failed", error: e.message });
     });
   }, []);
+
+  // Real "list, then install onto whichever real device is ready" flow
+  // (task #148) -- lists first every click (not cached) since a real
+  // device can be plugged/unplugged, or authorized, between clicks.
+  // With zero or one ready device this is fully automatic; with more
+  // than one, this deliberately picks the first ready one rather than
+  // adding a device-picker UI in this first increment -- `adb -s` still
+  // targets it correctly, and the tooltip lists every real device found
+  // either way.
+  const installApk = useCallback(() => {
+    if (androidBuild?.phase !== "ready") return;
+    const apkPath = androidBuild.apkPath;
+    setAndroidInstall({ phase: "installing" });
+    window.spartan
+      .call("android_list_devices", {})
+      .then((result) => {
+        const devices = (result as { devices: AndroidDeviceInfo[] }).devices;
+        setAndroidDevices(devices);
+        const target = devices.find((d) => d.state === "device");
+        if (!target && devices.length === 0) {
+          throw new Error("no real device attached (adb devices -l reported none)");
+        }
+        return window.spartan.call("android_install_apk", {
+          apk_path: apkPath,
+          ...(target ? { serial: target.serial } : {}),
+        });
+      })
+      .catch((e: Error) => {
+        setAndroidInstall({ phase: "failed", error: e.message });
+      });
+  }, [androidBuild]);
 
   useEffect(() => {
     const unsubscribe = window.spartan.onEvent((event, data) => {
@@ -151,6 +201,16 @@ export default function App(): React.ReactElement {
       } else if (event === "android_build_failed") {
         const { error } = data as { error: string };
         setAndroidBuild({ phase: "failed", error });
+      } else if (event === "android_install_progress") {
+        const { line } = data as { line: string };
+        setAndroidInstall((prev) =>
+          prev?.phase === "installing" ? { phase: "installing", lastLine: line } : prev
+        );
+      } else if (event === "android_install_ready") {
+        setAndroidInstall({ phase: "ready" });
+      } else if (event === "android_install_failed") {
+        const { error } = data as { error: string };
+        setAndroidInstall({ phase: "failed", error });
       }
     });
     return unsubscribe;
@@ -419,6 +479,9 @@ export default function App(): React.ReactElement {
               androidInfo={androidInfo}
               androidBuild={androidBuild}
               onBuildApk={buildApk}
+              androidDevices={androidDevices}
+              androidInstall={androidInstall}
+              onInstallApk={installApk}
             />
           </>
         ) : (

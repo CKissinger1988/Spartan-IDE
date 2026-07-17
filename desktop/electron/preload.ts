@@ -49,6 +49,8 @@ const ALLOWED_METHODS = new Set([
   "model_status",
   "android_detect",
   "android_build_apk",
+  "android_list_devices",
+  "android_install_apk",
   "litellm_proxy_start",
   "litellm_proxy_stop",
   "litellm_proxy_status",

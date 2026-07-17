@@ -2116,6 +2116,75 @@ fn android_build_apk(
     Ok(serde_json::json!({ "status": "starting" }))
 }
 
+/// Real, live, synchronous `adb devices -l` -- fast enough to run
+/// directly (no background thread needed, unlike the build/install
+/// paths). Requires a real detected `adb` on this machine; refuses
+/// honestly, naming the reason, when none is found rather than
+/// returning a fabricated empty list that would look identical to "no
+/// device attached."
+fn android_list_devices() -> Result<serde_json::Value, String> {
+    let toolchain = spartan_android::detect_toolchain();
+    let adb_path = toolchain.adb_path.ok_or_else(|| {
+        "no real `adb` found on this machine -- install the Android SDK platform-tools".to_string()
+    })?;
+    let devices = spartan_android::adb::list_devices(&adb_path)?;
+    Ok(serde_json::json!({ "devices": devices }))
+}
+
+/// Real, live `adb install -r <apk>`, optionally targeted at one
+/// `serial` when more than one real device is attached -- the natural
+/// next step after `android_build_apk` produces a real APK. Same
+/// "ack now, event later" shape as every other real, possibly-slow
+/// subprocess call in this crate (`android_install_progress`/
+/// `android_install_ready`/`android_install_failed`).
+fn android_install_apk(
+    out_tx: Sender<String>,
+    apk_path: String,
+    serial: Option<String>,
+) -> Result<serde_json::Value, String> {
+    if apk_path.trim().is_empty() {
+        return Err("android_install_apk requires a non-empty `apk_path`".to_string());
+    }
+    let toolchain = spartan_android::detect_toolchain();
+    let adb_path = toolchain.adb_path.ok_or_else(|| {
+        "no real `adb` found on this machine -- install the Android SDK platform-tools".to_string()
+    })?;
+
+    thread::spawn(move || {
+        let (line_tx, line_rx) = mpsc::channel::<String>();
+        let forward_out_tx = out_tx.clone();
+        thread::spawn(move || {
+            for line in line_rx {
+                let event = Event {
+                    event: "android_install_progress".to_string(),
+                    data: serde_json::json!({ "line": line }),
+                };
+                if let Ok(l) = serde_json::to_string(&event) {
+                    let _ = forward_out_tx.send(l);
+                }
+            }
+        });
+
+        let apk = std::path::PathBuf::from(&apk_path);
+        let event =
+            match spartan_android::adb::install_apk(&adb_path, serial.as_deref(), &apk, line_tx) {
+                Ok(()) => Event {
+                    event: "android_install_ready".to_string(),
+                    data: serde_json::json!({ "apk_path": apk_path }),
+                },
+                Err(e) => Event {
+                    event: "android_install_failed".to_string(),
+                    data: serde_json::json!({ "error": e }),
+                },
+            };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+
+    Ok(serde_json::json!({ "status": "starting" }))
+}
+
 /// Real Docker container-name-safe sanitization (Docker's own real
 /// charset is `[a-zA-Z0-9][a-zA-Z0-9_.-]+`) -- deterministic per project
 /// path, so re-running "up" against the same project reuses the same
@@ -2976,6 +3045,12 @@ pub fn handle_request(
         }
         "android_build_apk" => get_str_param(&req.params, "project_root")
             .and_then(|r| android_build_apk(out_tx.clone(), r)),
+        "android_list_devices" => android_list_devices(),
+        "android_install_apk" => (|| {
+            let apk_path = get_str_param(&req.params, "apk_path")?;
+            let serial = get_str_param(&req.params, "serial").ok();
+            android_install_apk(out_tx.clone(), apk_path, serial)
+        })(),
         "devcontainer_exec_spawn" => (|| {
             let container_id = get_str_param(&req.params, "container_id")?;
             let cols = get_u64_param(&req.params, "cols")? as u16;
@@ -3734,6 +3809,71 @@ mod tests {
             "expected a real parsed Gradle version"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Real, live confirmation this crate's own dispatch reaches a real
+    /// `adb` when one is present on this machine -- self-skips (matching
+    /// this workspace's own established convention) if none is found,
+    /// rather than asserting a specific device count (a different real
+    /// environment running this test with a real device attached should
+    /// still pass).
+    #[test]
+    fn android_list_devices_reaches_a_real_adb_when_one_is_present() {
+        let state = new_state();
+        let resp = call(&state, 1, "android_list_devices", serde_json::json!({}));
+        match resp.error {
+            Some(e) if e.contains("no real `adb`") => {
+                eprintln!("SKIP: no real `adb` found in this environment");
+            }
+            Some(e) => {
+                panic!("expected either a real device list or an honest 'no adb' error, got: {e}")
+            }
+            None => {
+                let devices = &resp.result.unwrap()["devices"];
+                assert!(devices.is_array(), "expected a real JSON array of devices");
+            }
+        }
+    }
+
+    #[test]
+    fn android_install_apk_refuses_an_empty_apk_path() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "android_install_apk",
+            serde_json::json!({ "apk_path": "" }),
+        );
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn android_install_apk_refuses_when_no_real_adb_and_acks_when_one_is_present() {
+        // Real, environment-dependent branch, matching
+        // `android_list_devices`'s own precedent: this crate can't fake
+        // adb's presence, so it asserts whichever real, honest outcome
+        // this environment actually produces rather than assuming one.
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "android_install_apk",
+            serde_json::json!({ "apk_path": "/nonexistent/fake.apk" }),
+        );
+        match resp.error {
+            Some(e) => assert!(
+                e.contains("no real `adb`"),
+                "expected the honest 'no adb' error, got: {e}"
+            ),
+            None => {
+                // A real adb is present -- this acks immediately and a
+                // real background thread will fail shortly after (no
+                // real APK exists at this path), matching
+                // `android_build_apk_acks_immediately...`'s own
+                // deliberately-not-awaited pattern.
+                assert_eq!(resp.result.unwrap()["status"], "starting");
+            }
+        }
     }
 
     #[test]

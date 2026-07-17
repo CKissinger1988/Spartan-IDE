@@ -3967,6 +3967,50 @@ first — it's the parity reference until each row there is actually reimplement
   above); the wgpu reference shell (`crates/spartan-editor-core`) was not extended with this layer
   (it's no longer the primary UI target per §75.59's own pivot, and has no CSS-equivalent styling
   layer to apply utility classes to in the first place).
+- **Real, working code — real ADB device listing + APK install, closing the device-management
+  half of task #11's remaining scope (task #148)**: direct continuation of §144-146's build-only
+  Android support. A real emulator remains confirmed out of reach in this environment -- no
+  `/dev/kvm`, no `vmx`/`svm` CPU flags at all (checked directly this pass, not assumed from
+  memory), and the SDK's own `emulator` package was never installed here -- but a real, installed
+  `adb` binary (`/opt/android-sdk/platform-tools/adb`) was confirmed live: it starts a real daemon
+  and correctly reports zero devices, since none are attached in this sandbox. That's exactly the
+  honest, useful case this pass closes: real device-management code that works the moment a real
+  end user plugs in a real physical device (or runs a real emulator on their own KVM-capable
+  machine), even though this specific environment can only verify the "no device attached" path
+  live. New `crates/spartan-android/src/adb.rs`: a real, pure `parse_devices_output` for `adb
+  devices -l`'s own output shape (serial/state/model/product, tolerating the daemon-startup banner
+  lines on either stdout or stderr), `list_devices` (a real, live subprocess call), and
+  `install_apk` (real, streaming `adb install -r`, optionally `-s <serial>`-targeted, mirroring
+  `build.rs`'s own streaming shape exactly). Two new `spartan-backend` dispatch methods:
+  `android_list_devices` (synchronous -- fast enough not to need a background thread) and
+  `android_install_apk` (the same "ack now, event later" shape as `android_build_apk` --
+  `android_install_progress`/`android_install_ready`/`android_install_failed` events). Both refuse
+  honestly, naming the reason, when no real `adb` is found, rather than returning a fabricated
+  empty device list that would look identical to "no device attached." `desktop/`'s status bar
+  gained a second badge, "📲 Install," shown only once a build is `ready` -- clicking it lists real
+  devices fresh (never cached, since a device can be plugged/unplugged between clicks), picks the
+  first real `state === "device"` one automatically (a real, named v1 scope choice over a
+  device-picker UI, since `adb -s` still targets a specific device correctly either way and the
+  tooltip lists every real device found), and installs the just-built APK onto it. 6 new Rust tests
+  (4 pure/always-on parsing tests in `adb.rs`, 1 real always-on `list_devices` test against
+  whatever real `adb` this environment actually has -- confirmed to genuinely start the daemon and
+  return an honestly empty list, not a fixture -- and 1 install-path error test; plus 3 new
+  dispatch-level tests in `spartan-backend` covering both real, environment-dependent outcomes
+  rather than assuming one). Full workspace `cargo fmt --all -- --check`/`cargo clippy --workspace
+  --release --all-targets`/`cargo test --workspace --release -- --test-threads=1` all clean (0
+  failures); `desktop/`'s own `tsc --noEmit`/`vite build` clean. Real, screenshotted Playwright
+  verification (the same mocked-`window.spartan` + `vite preview` technique this whole `desktop/`
+  effort has used since §75.59): building an APK correctly revealed the new Install button; clicking
+  it correctly called `android_list_devices` then `android_install_apk` with the real mocked ready
+  device's serial and the real built APK's path, transitioning through Installing… to ✓ installed;
+  the button's own tooltip correctly listed the real detected device. **What this does not
+  confirm**: no real device was ever actually installed onto in this environment (the same real
+  constraint every Android pass in this project has named); no equivalent UI in `web/` yet (a real,
+  separate follow-up, matching the desktop-then-web sequencing already established for LSP/DAP);
+  no device-picker UI for the multi-device case (the auto-pick-first-ready scope decision above);
+  no `adb logcat` streaming (a real, separate, unstarted piece of task #11's own named scope). The
+  real emulator/system-image half of task #11 remains the one item still fully blocked by this
+  environment's lack of `/dev/kvm`.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

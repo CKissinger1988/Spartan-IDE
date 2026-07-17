@@ -26,6 +26,27 @@ export type AndroidBuildState =
   | { phase: "ready"; apkPath: string }
   | { phase: "failed"; error: string };
 
+/** Real shape of one entry from `android_list_devices`'s own real
+ * `adb devices -l` parse (task #148) -- `state` is ADB's own real state
+ * string (`device`/`offline`/`unauthorized`/...), passed through
+ * verbatim rather than remapped. */
+export interface AndroidDeviceInfo {
+  serial: string;
+  state: string;
+  model: string | null;
+  product: string | null;
+}
+
+/** Real client-side state for the "Install APK" action (task #148) --
+ * mirrors `AndroidBuildState`'s own shape for the sibling
+ * `android_install_apk`/`android_install_progress`/`android_install_ready`/
+ * `android_install_failed` events. */
+export type AndroidInstallState =
+  | { phase: "idle" }
+  | { phase: "installing"; lastLine?: string }
+  | { phase: "ready" }
+  | { phase: "failed"; error: string };
+
 interface StatusBarProps {
   fileCount: number;
   activePath: string | null;
@@ -46,6 +67,17 @@ interface StatusBarProps {
    * (not rendered as clickable) when omitted, matching this component's
    * own existing "no callback, no interactivity" convention elsewhere. */
   onBuildApk?: () => void;
+  /** Real, live devices from the most recent `android_list_devices` call
+   * -- `undefined` before it's ever been fetched. Only devices with
+   * `state === "device"` are real install targets; others (offline/
+   * unauthorized) are shown but not selectable. */
+  androidDevices?: AndroidDeviceInfo[];
+  /** Real, live state of an in-progress/finished `adb install`. */
+  androidInstall?: AndroidInstallState;
+  /** Clicking the Install button triggers a real `adb install -r` against
+   * the most recently built APK -- only rendered once a build is
+   * `"ready"`. */
+  onInstallApk?: () => void;
 }
 
 export default function StatusBar({
@@ -55,6 +87,9 @@ export default function StatusBar({
   androidInfo,
   androidBuild,
   onBuildApk,
+  androidDevices,
+  androidInstall,
+  onInstallApk,
 }: StatusBarProps): React.ReactElement {
   const ext = activePath?.split(".").pop() ?? "";
   const errorCount = diagnostics?.filter((d) => d.severity === "error").length ?? 0;
@@ -106,6 +141,38 @@ export default function StatusBar({
               : androidBuild?.phase === "failed"
                 ? "🤖 ✗ failed"
                 : "🤖 Android"}
+        </button>
+      )}
+      {androidBuild?.phase === "ready" && (
+        <button
+          className="status-android-badge"
+          type="button"
+          disabled={androidInstall?.phase === "installing"}
+          onClick={onInstallApk}
+          title={
+            (androidDevices === undefined
+              ? "Click to list real attached devices and install the built APK."
+              : androidDevices.length === 0
+                ? "No real device attached (adb devices -l reported none)."
+                : `Devices: ${androidDevices
+                    .map((d) => `${d.serial} (${d.state}${d.model ? `, ${d.model}` : ""})`)
+                    .join(", ")}`) +
+            (androidInstall?.phase === "installing" && androidInstall.lastLine
+              ? `\n${androidInstall.lastLine}`
+              : androidInstall?.phase === "ready"
+                ? "\nInstalled."
+                : androidInstall?.phase === "failed"
+                  ? `\n${androidInstall.error}`
+                  : "")
+          }
+        >
+          {androidInstall?.phase === "installing"
+            ? "📲 Installing…"
+            : androidInstall?.phase === "ready"
+              ? "📲 ✓ installed"
+              : androidInstall?.phase === "failed"
+                ? "📲 ✗ failed"
+                : "📲 Install"}
         </button>
       )}
     </div>

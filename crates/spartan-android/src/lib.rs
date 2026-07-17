@@ -28,6 +28,7 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
+pub mod adb;
 pub mod build;
 
 /// Real, detected state of the Android toolchain on this machine --
