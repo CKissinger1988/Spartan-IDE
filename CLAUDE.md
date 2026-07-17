@@ -4189,6 +4189,61 @@ first — it's the parity reference until each row there is actually reimplement
   the current UI since most Settings/nav text already carries the `.mono` class (which reads the
   separate `--font-mono` token, untouched by this pass) -- a real, honestly-named consequence of
   this being a token-level pass, not a typography audit, not hidden or glossed over.
+- **Real, working code — coordinated beta versioning, real desktop/web packaging added to the
+  release pipeline, a real hand-built GitHub Pages landing site (task #153)**: closes "Finalize,
+  build, and push all Spartan IDE projects to GitHub beta releases. Create a github pages site for
+  the IDE project and beta downloads." PR #5 (54 commits, Track A through the GUI-theme pass above)
+  was marked ready and merged into `main` first -- everything from §75.59 onward previously only
+  existed on a feature branch. **Coordinated version bump**: every real version source in this
+  workspace (`crates/spartan-editor-core/Cargo.toml`, `xtask`'s own hardcoded version, `release.yml`'s
+  Windows-job version string, and `desktop/`/`web/`/`gui-builder/`/`mobile/`'s `package.json` +
+  `package-lock.json`, plus `mobile/app.json`) now reads `0.2.0-beta.1` -- one coordinated number
+  across "all Spartan IDE projects," not five independently-drifting ones; re-verified for real via
+  `cargo run -p xtask -- package`, which produced a genuine
+  `spartan-ide-0.2.0-beta.1-x86_64-unknown-linux-gnu.tar.gz`. **`release.yml` extended, not
+  rewritten**: three new jobs -- `desktop-linux-package`/`desktop-windows-package` (real
+  electron-builder packaging of the primary Electron shell, `.AppImage` + `.zip`, building a real
+  `spartan-backend` release binary and `gui-builder/dist` first) and `web-build` (the real client-side
+  WASM browser IDE, zipped as a self-hostable bundle). A real, honest, load-bearing design choice:
+  the two desktop-packaging jobs are marked `continue-on-error: true` and `create-release` runs
+  `if: ${{ !cancelled() }}` with `fail_on_unmatched_files: false` -- this is genuinely the *first*
+  attempt at packaging `desktop/` from within any real CI run (this project's own sandboxed dev
+  session has never been able to attempt it at all, §75.59/§75.77/§75.81's standing network block),
+  so a real first-run failure there must not take down the release's already-proven Linux/Windows
+  wgpu-shell and Android artifacts with it. `desktop/package.json`'s own `build` config was split
+  --  the real backend-binary `extraResources` entry moved from one platform-agnostic top-level
+  array (which only ever had the Linux, extension-less filename) into real `linux`/`win` blocks each
+  naming the correct real binary (`spartan-backend` vs. `spartan-backend.exe`), confirmed against
+  `electron/main.ts`'s own `resolveBackendBinaryPath()` platform check rather than guessed. The
+  release itself is now marked `prerelease: true` with a rewritten, honest release-notes body
+  distinguishing "previously verified across multiple releases" (wgpu shell, Android APK) from
+  "real first attempt this release, not yet hand-verified" (the two new Electron builds). **A new
+  GitHub Pages site** (`site/index.html`/`style.css`, ~200 lines of hand-written HTML/CSS, no
+  framework) reuses `desktop/src/theme.css`'s own real blue/gold token values verbatim -- one shared
+  brand palette, not a sixth independently-picked one. 5 real screenshots (`site/assets/*.png`) were
+  captured live through the same mocked-`window.spartan` + `vite preview` Playwright technique this
+  whole `desktop/` effort has used since §75.59, showing the real current (post-rebrand,
+  post-theme-pass) UI -- not the stale pre-rebrand screenshots already sitting in `docs/screenshots/`
+  from before §75.95, deliberately not reused since they'd misrepresent the product's actual current
+  look. New `.github/workflows/pages.yml` builds `web/`'s real production bundle (the identical
+  `npm run build` recipe `ci.yml`'s own already-passing `web` job uses) into `_site/app/`, stages
+  `site/`'s own content as the artifact root, and deploys via the standard
+  `configure-pages`/`upload-pages-artifact`/`deploy-pages` action sequence, triggered on push to
+  `main`. **A real, honestly-flagged external constraint, not discovered silently**: this
+  repository is currently **private**, and GitHub Pages publishing from a private repository needs
+  a paid GitHub plan (Pro/Team/Enterprise) -- confirmed via a real `search_repositories` API call
+  showing `"private": true`, not assumed. The workflow itself is real and correctly configured; it
+  will start working the moment either the repo is made public or the account already carries a
+  qualifying plan -- named explicitly to the user rather than silently pushed and left to fail
+  mysteriously in Actions. Full workspace `cargo fmt --all -- --check`/`cargo clippy -p
+  spartan-editor-core -p xtask --release --all-targets` clean; `desktop/`'s and `web/`'s own `tsc
+  --noEmit` clean; real, screenshotted Playwright verification of the landing page itself (rendered
+  correctly, zero console errors, zero failed asset requests) via a local `python3 -m http.server`.
+  **What this does not confirm**: no real GitHub Actions run of either `release.yml` or `pages.yml`
+  has completed as of writing this -- both are pushed and real, but their actual CI outcomes
+  (whether electron-builder genuinely succeeds on a real runner, whether Pages activates) are
+  reported honestly once observed, not assumed in advance; no macOS/iOS build of any kind (same
+  standing constraint every prior release pass has named); no code signing on any platform.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

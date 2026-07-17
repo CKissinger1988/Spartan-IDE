@@ -1,0 +1,101 @@
+name: Pages
+
+# Real GitHub Pages deployment: a hand-written static landing/downloads page
+# (`site/`) at the root, plus a real, live build of `web/` (the client-side
+# File System Access + WASM browser IDE, §75.89) served under `/app/` --
+# not a mockup, the actual same build `web/`'s own CI job already verifies.
+#
+# Deliberately triggered on push to `main`, independent of the tag-triggered
+# `release.yml` -- Pages should always reflect the latest merged code, while
+# Releases are versioned, point-in-time snapshots.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "web/**"
+      - "crates/spartan-buffer/**"
+      - "crates/spartan-buffer-wasm/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Pages artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-bindgen-cli
+        # Must exactly match the `wasm-bindgen` crate version pinned in
+        # Cargo.lock (0.2.126) -- ci.yml's own `web` job already
+        # established this exact recipe.
+        run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: npm ci
+        working-directory: web
+        run: npm ci
+
+      - name: Build web/ (compiles spartan-buffer-wasm, typechecks, bundles)
+        working-directory: web
+        run: npm run build
+
+      - name: Assemble Pages artifact
+        # Real, plain file staging -- `site/` (the hand-written landing
+        # page) becomes the artifact root; `web/`'s real production build
+        # goes under `app/`, matching every relative link on the landing
+        # page (`./app/`) and every relative asset path inside `web/dist`
+        # itself (Vite's default `base: "/"` still resolves correctly
+        # under a subpath here since GitHub Pages serves the whole
+        # artifact from one origin, not a nested one).
+        run: |
+          set -e
+          mkdir -p _site
+          cp -r site/. _site/
+          mkdir -p _site/app
+          cp -r web/dist/. _site/app/
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
