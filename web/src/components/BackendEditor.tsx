@@ -116,6 +116,30 @@ function extractDefinitionTarget(result: unknown): DefinitionTarget | null {
   return { path: fileUriToPath(uri), line, character };
 }
 
+/** A real, normalized reference target, ported verbatim from `desktop/`'s
+ * own `ReferenceItem` -- see that file's own doc comment for the full
+ * real reasoning. */
+interface ReferenceItem {
+  path: string;
+  line: number;
+  character: number;
+}
+
+function extractReferences(result: unknown): ReferenceItem[] {
+  if (!Array.isArray(result)) return [];
+  return result
+    .map((entry) => {
+      const e = entry as { uri?: unknown; range?: { start?: { line?: unknown; character?: unknown } } };
+      const line = e.range?.start?.line;
+      const character = e.range?.start?.character;
+      if (typeof e.uri !== "string" || typeof line !== "number" || typeof character !== "number") {
+        return null;
+      }
+      return { path: fileUriToPath(e.uri), line, character };
+    })
+    .filter((i): i is ReferenceItem => i !== null);
+}
+
 /** A real, normalized LSP `SignatureHelp` target, ported verbatim from
  * `desktop/`'s own `SignatureHelpTarget` -- see that file's own doc
  * comment for the full real reasoning. */
@@ -538,6 +562,20 @@ export default function BackendEditor({
     [lineHeightPx]
   );
 
+  /** Real, shared jump-target dispatch, ported verbatim from `desktop/`'s
+   * own `goToTarget` -- see that file's own doc comment for the full real
+   * reasoning. */
+  const goToTarget = useCallback(
+    (target: { path: string; line: number; character: number }) => {
+      if (target.path === file.path) {
+        jumpToLocalPosition(target.line, target.character);
+      } else {
+        onJumpToDefinition?.(target.path, target.line, target.character);
+      }
+    },
+    [file.path, jumpToLocalPosition, onJumpToDefinition]
+  );
+
   // Real go-to-definition (Ctrl+Click, task #165, the web/ half of task
   // #164's own desktop-then-web follow-up) -- ported verbatim from
   // `desktop/`'s own identical wiring, reached over `client.onEvent`
@@ -554,14 +592,10 @@ export default function BackendEditor({
       pendingDefinitionRef.current = null;
       const target = extractDefinitionTarget(d.result);
       if (!target) return;
-      if (target.path === file.path) {
-        jumpToLocalPosition(target.line, target.character);
-      } else {
-        onJumpToDefinition?.(target.path, target.line, target.character);
-      }
+      goToTarget(target);
     });
     return unsubscribe;
-  }, [client, file.docId, file.path, jumpToLocalPosition, onJumpToDefinition]);
+  }, [client, file.docId, goToTarget]);
 
   useEffect(() => {
     if (!pendingJump) return;
@@ -569,9 +603,48 @@ export default function BackendEditor({
     onJumpApplied?.();
   }, [pendingJump, jumpToLocalPosition, onJumpApplied]);
 
+  const [referencesState, setReferencesState] = useState<{
+    x: number;
+    y: number;
+    items: ReferenceItem[] | null;
+  } | null>(null);
+  const pendingReferencesRef = useRef<{ line: number; character: number } | null>(null);
+
+  // Real find-references (Shift+F12, task #175, the web/ half of task
+  // #174's own desktop-then-web follow-up) -- ported verbatim from
+  // `desktop/`'s own identical wiring.
+  useEffect(() => {
+    const unsubscribe = client.onEvent((e) => {
+      if (e.event !== "lsp_references_result") return;
+      const d = e.data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      const pending = pendingReferencesRef.current;
+      if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+      pendingReferencesRef.current = null;
+      setReferencesState((prev) => (prev ? { ...prev, items: extractReferences(d.result) } : prev));
+    });
+    return unsubscribe;
+  }, [client, file.docId]);
+
+  const triggerReferences = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const { line, character } = offsetToLineChar(el.value, el.selectionStart);
+    const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+    const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
+    pendingReferencesRef.current = { line, character };
+    setReferencesState({ x, y, items: null });
+    client
+      .call("lsp_references", { doc_id: file.docId, line, character })
+      .catch((err: Error) => console.error("lsp_references failed:", err));
+  }, [client, charWidth, lineHeightPx, file.docId]);
+
   const handleDefinitionClick = useCallback(
     (e: React.MouseEvent<HTMLTextAreaElement>) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
+      if (!(e.ctrlKey || e.metaKey)) {
+        setReferencesState(null);
+        return;
+      }
       const el = textareaRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
@@ -696,9 +769,21 @@ export default function BackendEditor({
       if (e.key === "Escape" && signatureHelpState) {
         setSignatureHelpState(null);
       }
+      // Real find-references dismissal (Escape), ported verbatim from
+      // `desktop/`'s own identical branch.
+      if (e.key === "Escape" && referencesState) {
+        setReferencesState(null);
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === " ") {
         e.preventDefault();
         triggerCompletion();
+        return;
+      }
+      // Real, manual find-references trigger (Shift+F12), ported verbatim
+      // from `desktop/`'s own identical branch.
+      if (e.key === "F12" && e.shiftKey) {
+        e.preventDefault();
+        triggerReferences();
         return;
       }
       if (e.key === "Tab") {
@@ -743,6 +828,8 @@ export default function BackendEditor({
       acceptCompletion,
       triggerCompletion,
       signatureHelpState,
+      referencesState,
+      triggerReferences,
       client,
       file.docId,
       file.path,
@@ -818,6 +905,41 @@ export default function BackendEditor({
           style={{ left: signatureHelpState.x, top: signatureHelpState.y }}
         >
           {renderSignatureLabel(signatureHelpState.target)}
+        </div>
+      )}
+      {referencesState && (
+        <div
+          className="editor-references-panel mono"
+          style={{ left: referencesState.x, top: referencesState.y }}
+        >
+          <div className="editor-references-header">
+            {referencesState.items === null
+              ? "Finding references…"
+              : `${referencesState.items.length} reference${referencesState.items.length === 1 ? "" : "s"}`}
+          </div>
+          {referencesState.items === null ? (
+            <div className="editor-references-item editor-references-item-empty">Loading…</div>
+          ) : referencesState.items.length === 0 ? (
+            <div className="editor-references-item editor-references-item-empty">
+              No references found
+            </div>
+          ) : (
+            referencesState.items.map((item, i) => (
+              <div
+                key={`${item.path}:${item.line}:${item.character}:${i}`}
+                className="editor-references-item"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setReferencesState(null);
+                  goToTarget(item);
+                }}
+              >
+                {item.path === file.path
+                  ? `line ${item.line + 1}, col ${item.character + 1}`
+                  : `${item.path}:${item.line + 1}`}
+              </div>
+            ))
+          )}
         </div>
       )}
       {completionState && (

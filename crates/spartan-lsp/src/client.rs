@@ -292,6 +292,7 @@ impl LspClient {
                         "completion": {"completionItem": {"snippetSupport": false}},
                         "definition": {"linkSupport": false},
                         "signatureHelp": {"signatureInformation": {"parameterInformation": {"labelOffsetSupport": false}}},
+                        "references": {},
                         "publishDiagnostics": {},
                     }
                 },
@@ -397,6 +398,31 @@ impl LspClient {
             Some(json!({
                 "textDocument": {"uri": file_uri},
                 "position": {"line": line, "character": character},
+            })),
+            DEFAULT_TIMEOUT,
+        )
+    }
+
+    /// Real `textDocument/references` -- the fifth real query method
+    /// following `hover`/`completion`/`definition`/`signatureHelp`'s exact
+    /// shape. A real LSP `references` response is a real `Location[]`
+    /// (never `LocationLink[]`, unlike `definition`), passed through
+    /// unparsed, same division of responsibility every other query method
+    /// here already establishes. `include_declaration` matches the real
+    /// spec's own `ReferenceContext.includeDeclaration` field.
+    pub fn references(
+        &mut self,
+        file_uri: &str,
+        line: i64,
+        character: i64,
+        include_declaration: bool,
+    ) -> Option<Value> {
+        self.request(
+            "textDocument/references",
+            Some(json!({
+                "textDocument": {"uri": file_uri},
+                "position": {"line": line, "character": character},
+                "context": {"includeDeclaration": include_declaration},
             })),
             DEFAULT_TIMEOUT,
         )

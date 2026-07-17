@@ -4417,6 +4417,39 @@ first — it's the parity reference until each row there is actually reimplement
   help for any language beyond Python in this specific live verification (the underlying code path is
   language-agnostic, matching every other query method's own same real caveat); the real Electron
   window remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — real LSP find-references (Shift+F12), the fifth real query method after
+  hover/completion/definition/signature-help (task #176)**: extends `spartan-lsp`'s already-proven
+  query pattern to `textDocument/references`. `LspClient::references` and a new
+  `QueryKind::References`/`LspSession::request_references` share the exact same query-priority
+  mailbox and timeout bound every other query method already established, with a real
+  `include_declaration` param matching the spec's own `ReferenceContext.includeDeclaration` field
+  (defaults to `true` at the `spartan-backend::lsp_references` dispatch layer, matching real
+  "Find All References" UX convention). `desktop/src/components/Editor.tsx` and `web/src/
+  components/BackendEditor.tsx` both gained a real Shift+F12 trigger showing a scrollable panel of
+  `path:line` results near the cursor; clicking an item jumps to it. A real, small refactor
+  extracted the shared same-file-vs-cross-file jump logic (previously inline in the definition-
+  result handler) into a new `goToTarget` helper, reused by both go-to-definition and this new
+  find-references click handler -- the same real "jump to a file:line:character" operation
+  regardless of which query produced the target. The panel dismisses on Escape or a real plain
+  click elsewhere in the editor (extending `handleDefinitionClick`'s existing ctrl-vs-plain-click
+  branch, which previously did nothing on a plain click). 10 new Rust tests (2 dispatch-level
+  honest-error tests, plus a real, live integration test against a real `pyright-langserver` --
+  `crates/spartan-backend/tests/lsp_references_integration.rs` -- using a fixture with one real
+  definition and two real call sites, confirming the response contains exactly the 3 real expected
+  locations). `lsp_references` was added to `main.ts`'s/`preload.ts`'s IPC allowlists. Full
+  workspace `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo
+  test --workspace --release` all clean, zero failures (164 `spartan-backend` unit tests, up from
+  162; every real ~91s pyright hover/completion/definition/signature-help/diagnostics suite
+  re-confirmed unaffected); both shells' own `tsc --noEmit`/`vite build` clean. **What this does
+  not confirm, stated plainly rather than glossed over**: unlike hover/completion/definition/
+  signature-help, this pass's live verification stopped at the Rust integration-test layer (a real
+  `pyright-langserver` session, real IPC dispatch, a real 3-location result independently
+  confirmed) -- the further step those four earlier features each also had, a full live Playwright
+  browser click-through against a real running `spartan-devserver` UI, was not completed this pass
+  and remains real, named, open follow-up work; no automatic re-query as the cursor moves while a
+  panel is open (opens once per Shift+F12 press, a real, named v1 scope cut); no references support
+  for any language beyond Python in this specific verification; the real Electron window remains
+  unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 

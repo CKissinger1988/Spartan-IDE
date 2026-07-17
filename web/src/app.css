@@ -453,6 +453,48 @@
   font-size: 11px;
 }
 
+/* Real LSP find-references panel (task #175, the web/ half of task #174's
+ * own desktop-then-web follow-up), byte-identical to desktop/'s own copy. */
+.editor-references-panel {
+  position: fixed;
+  z-index: 51;
+  min-width: 260px;
+  max-width: 520px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-size: 12px;
+}
+
+.editor-references-header {
+  padding: 6px 10px;
+  color: var(--text-dim);
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-references-item {
+  padding: 4px 10px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-references-item:hover {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.editor-references-item-empty {
+  color: var(--text-dim);
+  cursor: default;
+}
+
 .editor-gutter {
   width: 48px;
   padding: 8px 8px 8px 0;

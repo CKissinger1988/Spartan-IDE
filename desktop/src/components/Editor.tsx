@@ -116,6 +116,34 @@ function extractDefinitionTarget(result: unknown): DefinitionTarget | null {
   return { path: fileUriToPath(uri), line, character };
 }
 
+/** A real, normalized reference target -- a real LSP `references` result
+ * is a real `Location[]` (never `LocationLink[]`, unlike `definition`),
+ * so each entry is a plain `{uri, range}`, no `targetUri`/`targetRange`
+ * fallback needed the way `extractDefinitionTarget` needs. */
+interface ReferenceItem {
+  path: string;
+  line: number;
+  character: number;
+}
+
+/** Normalizes a real LSP `references` result (a real `Location[]`, or
+ * `null`) into a real, jump-ready list. Returns `[]` for a real, honest
+ * "no references found" rather than throwing. */
+function extractReferences(result: unknown): ReferenceItem[] {
+  if (!Array.isArray(result)) return [];
+  return result
+    .map((entry) => {
+      const e = entry as { uri?: unknown; range?: { start?: { line?: unknown; character?: unknown } } };
+      const line = e.range?.start?.line;
+      const character = e.range?.start?.character;
+      if (typeof e.uri !== "string" || typeof line !== "number" || typeof character !== "number") {
+        return null;
+      }
+      return { path: fileUriToPath(e.uri), line, character };
+    })
+    .filter((i): i is ReferenceItem => i !== null);
+}
+
 /** A real, normalized LSP `SignatureHelp` target -- only the fields this
  * v1 tooltip actually renders. `activeParameterLabel` is `null` whenever
  * the active parameter can't be resolved (no `activeParameter` index sent,
@@ -621,6 +649,24 @@ export default function Editor({
     [lineHeightPx]
   );
 
+  /** Real, shared jump-target dispatch -- same file lands locally via
+   * `jumpToLocalPosition`, a different file goes through `App.tsx`'s own
+   * `onJumpToDefinition` (which opens/activates it and hands the position
+   * back down once it's the active file). Used by both a real go-to-
+   * definition result and a real find-references item click -- both are
+   * "jump to a file:line:character", the only real difference is where the
+   * target list came from. */
+  const goToTarget = useCallback(
+    (target: { path: string; line: number; character: number }) => {
+      if (target.path === file.path) {
+        jumpToLocalPosition(target.line, target.character);
+      } else {
+        onJumpToDefinition?.(target.path, target.line, target.character);
+      }
+    },
+    [file.path, jumpToLocalPosition, onJumpToDefinition]
+  );
+
   // Real go-to-definition (Ctrl+Click) -- a request the click handler below
   // fires is tracked here (a ref, not state: nothing renders while it's in
   // flight, unlike hover/completion) so a stale reply for a position the
@@ -642,14 +688,10 @@ export default function Editor({
       // position rather than surfacing an error for a completely normal
       // case.
       if (!target) return;
-      if (target.path === file.path) {
-        jumpToLocalPosition(target.line, target.character);
-      } else {
-        onJumpToDefinition?.(target.path, target.line, target.character);
-      }
+      goToTarget(target);
     });
     return unsubscribe;
-  }, [file.docId, file.path, jumpToLocalPosition, onJumpToDefinition]);
+  }, [file.docId, goToTarget]);
 
   // A real cross-file jump lands here: `App.tsx` has already opened the
   // target file and re-rendered this component with it as `file` (filtered
@@ -665,7 +707,13 @@ export default function Editor({
 
   const handleDefinitionClick = useCallback(
     (e: React.MouseEvent<HTMLTextAreaElement>) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
+      if (!(e.ctrlKey || e.metaKey)) {
+        // A real plain click dismisses an open references panel -- the
+        // same "clicking elsewhere closes it" behavior every real
+        // editor's own find-references popup has.
+        setReferencesState(null);
+        return;
+      }
       const el = textareaRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
@@ -680,6 +728,48 @@ export default function Editor({
     },
     [charWidth, lineHeightPx, file.docId]
   );
+
+  const [referencesState, setReferencesState] = useState<{
+    x: number;
+    y: number;
+    items: ReferenceItem[] | null;
+  } | null>(null);
+  const pendingReferencesRef = useRef<{ line: number; character: number } | null>(null);
+
+  // Real find-references (Shift+F12) -- listens for this exact file's own
+  // `lsp_references_result` events, following the same real query-request/
+  // reply pattern hover/completion/definition/signature-help already
+  // established. `items: null` while the request is in flight (distinct
+  // from `[]`, a real, honest "no references found" once it resolves).
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event !== "lsp_references_result") return;
+      const d = data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      const pending = pendingReferencesRef.current;
+      if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+      pendingReferencesRef.current = null;
+      setReferencesState((prev) => (prev ? { ...prev, items: extractReferences(d.result) } : prev));
+    });
+    return unsubscribe;
+  }, [file.docId]);
+
+  /** Real, manual find-references trigger (Shift+F12, the standard
+   * cross-editor convention) -- computes the real LSP line/character from
+   * the textarea's own `selectionStart`, the same real technique
+   * `triggerCompletion` already uses. */
+  const triggerReferences = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const { line, character } = offsetToLineChar(el.value, el.selectionStart);
+    const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+    const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
+    pendingReferencesRef.current = { line, character };
+    setReferencesState({ x, y, items: null });
+    window.spartan
+      .call("lsp_references", { doc_id: file.docId, line, character })
+      .catch((err: Error) => console.error("lsp_references failed:", err));
+  }, [charWidth, lineHeightPx, file.docId]);
 
   const diagnosticsByLine = useMemo(() => {
     const map = new Map<number, LspDiagnostic[]>();
@@ -825,12 +915,24 @@ export default function Editor({
       if (e.key === "Escape" && signatureHelpState) {
         setSignatureHelpState(null);
       }
+      // Real find-references dismissal (Escape), same real precedence as
+      // signature help's own identical branch above.
+      if (e.key === "Escape" && referencesState) {
+        setReferencesState(null);
+      }
       // Real, manual completion trigger (Ctrl+Space) -- see
       // `triggerCompletion`'s own doc comment for why manual, not
       // automatic-per-keystroke.
       if ((e.ctrlKey || e.metaKey) && e.key === " ") {
         e.preventDefault();
         triggerCompletion();
+        return;
+      }
+      // Real, manual find-references trigger (Shift+F12, the standard
+      // cross-editor convention for "Find All References").
+      if (e.key === "F12" && e.shiftKey) {
+        e.preventDefault();
+        triggerReferences();
         return;
       }
       if (e.key === "Tab") {
@@ -883,6 +985,8 @@ export default function Editor({
       acceptCompletion,
       triggerCompletion,
       signatureHelpState,
+      referencesState,
+      triggerReferences,
       file.docId,
       file.path,
       onContentChange,
@@ -979,6 +1083,45 @@ export default function Editor({
           style={{ left: signatureHelpState.x, top: signatureHelpState.y }}
         >
           {renderSignatureLabel(signatureHelpState.target)}
+        </div>
+      )}
+      {referencesState && (
+        <div
+          className="editor-references-panel mono"
+          style={{ left: referencesState.x, top: referencesState.y }}
+        >
+          <div className="editor-references-header">
+            {referencesState.items === null
+              ? "Finding references…"
+              : `${referencesState.items.length} reference${referencesState.items.length === 1 ? "" : "s"}`}
+          </div>
+          {referencesState.items === null ? (
+            <div className="editor-references-item editor-references-item-empty">Loading…</div>
+          ) : referencesState.items.length === 0 ? (
+            <div className="editor-references-item editor-references-item-empty">
+              No references found
+            </div>
+          ) : (
+            referencesState.items.map((item, i) => (
+              <div
+                key={`${item.path}:${item.line}:${item.character}:${i}`}
+                className="editor-references-item"
+                onMouseDown={(e) => {
+                  // `onMouseDown`, not `onClick` -- matches the completion
+                  // dropdown's own established reasoning (fires before the
+                  // textarea's blur/plain-click dismissal below could race
+                  // it away).
+                  e.preventDefault();
+                  setReferencesState(null);
+                  goToTarget(item);
+                }}
+              >
+                {item.path === file.path
+                  ? `line ${item.line + 1}, col ${item.character + 1}`
+                  : `${item.path}:${item.line + 1}`}
+              </div>
+            ))
+          )}
         </div>
       )}
       {completionState && (

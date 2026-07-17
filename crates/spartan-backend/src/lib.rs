@@ -494,6 +494,50 @@ fn lsp_signature_help(
     Ok(serde_json::json!({ "status": "requested" }))
 }
 
+/// Real, live `textDocument/references` -- the fifth real query method,
+/// the direct sibling of `lsp_hover`/`lsp_completion`/`lsp_definition`/
+/// `lsp_signature_help` above: identical never-blocks-the-caller shape,
+/// identical envelope-unwrapping. A real LSP `references` result is a
+/// real `Location[]` (or `null`), passed through unwrapped exactly as the
+/// server sent it, left for the frontend to normalize into a real jump
+/// target list.
+fn lsp_references(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+    line: i64,
+    character: i64,
+    include_declaration: bool,
+) -> Result<serde_json::Value, String> {
+    let session = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        doc.lsp_session
+            .clone()
+            .ok_or_else(|| "no live LSP session for this file".to_string())?
+    };
+    thread::spawn(move || {
+        let raw = session.request_references(line, character, include_declaration);
+        let result = raw.and_then(|envelope| envelope.get("result").cloned());
+        let event = Event {
+            event: "lsp_references_result".to_string(),
+            data: serde_json::json!({
+                "doc_id": doc_id,
+                "line": line,
+                "character": character,
+                "result": result,
+            }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+    Ok(serde_json::json!({ "status": "requested" }))
+}
+
 /// Real edit application -- `start_char`/`end_char` name a real char
 /// range (matching every other char-indexed API in `spartan-buffer`);
 /// `start_char == end_char` is a pure insert, `text.is_empty()` with
@@ -3111,6 +3155,24 @@ pub fn handle_request(
             let character = get_u64_param(&req.params, "character")? as i64;
             lsp_signature_help(state, out_tx.clone(), doc_id, line, character)
         })(),
+        "lsp_references" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            let line = get_u64_param(&req.params, "line")? as i64;
+            let character = get_u64_param(&req.params, "character")? as i64;
+            let include_declaration = req
+                .params
+                .get("include_declaration")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true);
+            lsp_references(
+                state,
+                out_tx.clone(),
+                doc_id,
+                line,
+                character,
+                include_declaration,
+            )
+        })(),
         "edit" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;
             let start_char = get_u64_param(&req.params, "start_char")? as usize;
@@ -5609,6 +5671,54 @@ mod tests {
             &state,
             2,
             "lsp_signature_help",
+            serde_json::json!({ "doc_id": doc_id, "line": 0, "character": 0 }),
+        );
+        assert!(resp.error.unwrap().contains("no live LSP session"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lsp_references_on_a_real_unopened_doc_id_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "lsp_references",
+            serde_json::json!({ "doc_id": 999, "line": 0, "character": 0 }),
+        );
+        assert!(resp.error.unwrap().contains("no open document"));
+    }
+
+    #[test]
+    fn lsp_references_on_a_real_open_synthetic_file_with_no_lsp_session_errors_honestly() {
+        // The direct sibling of `lsp_hover`'s/`lsp_completion`'s/
+        // `lsp_definition`'s/`lsp_signature_help`'s own identical tests
+        // above -- same real, honest error path, same "unrecognized
+        // extension never gets a real LSP session" cause.
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-lsp-references-no-session-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("data.unknownext");
+        std::fs::write(&file, "hello").unwrap();
+
+        let state = new_state();
+        let open_resp = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        );
+        let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+        let resp = call(
+            &state,
+            2,
+            "lsp_references",
             serde_json::json!({ "doc_id": doc_id, "line": 0, "character": 0 }),
         );
         assert!(resp.error.unwrap().contains("no live LSP session"));
