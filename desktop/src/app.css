@@ -816,6 +816,36 @@
   color: var(--text);
 }
 
+.logcat-panel {
+  max-height: 220px;
+}
+
+.logcat-close {
+  margin-left: auto;
+}
+
+.logcat-body {
+  overflow-y: auto;
+  max-height: 180px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.logcat-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-dim);
+}
+
+.logcat-empty {
+  color: var(--text-dim);
+  opacity: 0.6;
+}
+
 /* Real, live LSP diagnostic summary for the active file (backend
  * lsp_diagnostics events, wired here for the first time). */
 .status-lsp-summary {

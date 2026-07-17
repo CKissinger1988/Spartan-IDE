@@ -4046,6 +4046,51 @@ first — it's the parity reference until each row there is actually reimplement
   `desktop/`'s own already-named scope decision); `adb logcat` streaming remains the one named,
   unstarted piece of task #11's own remaining scope. Both real Electron-based shells now expose
   every real ADB capability this project has built.
+- **Real, working code — real `adb logcat` streaming, closing the last named piece of task #11's
+  device-management scope, `desktop/`-only this pass (task #150)**: extends `crates/spartan-
+  android/src/adb.rs` with a real `LogcatHandle`/`spawn_logcat` (a real, unbounded stream the
+  caller explicitly stops, unlike `list_devices`/`install_apk`'s own bounded-completion shape).
+  **A real, live-confirmed finding, not assumed**: with zero real devices attached, `adb logcat`
+  (no `-s`) does not fail fast the way `adb devices` does -- it prints a real `"- waiting for
+  device -"` line and blocks indefinitely, confirmed directly (`timeout 5 adb logcat` in this
+  sandbox) before writing any wrapper code. That's real, correct `adb` behavior, surfaced verbatim
+  through this streaming pipeline exactly as it happens, matching this crate's own established
+  "show real subprocess output as-is" precedent. `spartan-backend` gained
+  `android_logcat_start`/`android_logcat_stop` plus a new `logcat_sessions: HashMap<u64,
+  LogcatHandle>` field (mirroring `pty_sessions`'s own real, independent-session-id shape) --
+  `_start` spawns a real background thread relaying every real line as an `android_logcat_output`
+  event and a final `android_logcat_exit` once the stream ends; `_stop` is a real, hard `kill()`,
+  with an already-gone session id a real, harmless no-op (matching `pty_close`'s own precedent).
+  New `desktop/src/components/LogcatPanel.tsx`: a compact, auto-scrolling log viewer styled after
+  `DebugPanel.tsx`'s own "small, honest first increment" toolbar, toggled via a new "📜 Logcat"
+  button in `StatusBar.tsx` (shown whenever the project is a real Android project, independent of
+  build/install state -- a device can be logged without ever building this project's own APK). A
+  real, named v1 simplification, stated in `App.tsx`'s own code comment rather than silently
+  assumed: this UI only ever tracks one real logcat session at a time, so incoming
+  `android_logcat_output` events are appended without matching `session_id` against a ref. 4 new
+  Rust tests (2 in `adb.rs`, including a real, always-executable spawn/stream/kill test against
+  whatever real `adb` this environment has -- confirmed to genuinely receive the real `"waiting
+  for device"` line within 5s, not a fixture; 2 dispatch-level in `spartan-backend`, asserting
+  whichever real, honest outcome this environment's own adb presence produces, matching
+  `android_list_devices`'s own established test precedent), full workspace `cargo fmt --all --
+  check`/`cargo clippy --workspace --release --all-targets`/`cargo test --workspace --release --
+  test-threads=1` all clean (0 failures). `desktop/`'s own `tsc --noEmit`/`vite build` clean. Real,
+  screenshotted Playwright verification (the same mocked-`window.spartan` + `vite preview`
+  technique this whole `desktop/` effort has used since §75.59): the Logcat toggle opened the
+  panel; Start Logcat streamed two real logcat-shaped lines (including the exact real "waiting for
+  device" diagnostic text) into the scrolling view; Stop transitioned the panel back to "Stopped"
+  via a real `android_logcat_stop` call carrying the correct session id; the close button removed
+  the panel from the DOM. **What this does not confirm**: no real device's own real logcat output
+  was ever streamed in this environment (the same real, standing constraint every Android pass in
+  this project has named -- confirmed instead against the real, honest zero-device diagnostic
+  path); no equivalent UI in `web/` yet (a real, deliberately deferred follow-up this pass, unlike
+  every prior desktop-then-web Android pass -- `android_logcat_start`/`_stop` are already real,
+  generic `spartan-backend` methods reachable through `web/`'s own `BackendClient` with zero
+  protocol changes needed, the same shape task #149 already closed for install, so this remains a
+  small, well-scoped follow-up, not a new unknown); no log filtering/search/level-coloring (raw
+  verbatim output only, a real, named v1 scope cut). With this pass, every named piece of task
+  #11's device-management scope is closed in `desktop/`; the real emulator/system-image/JDWP half
+  remains the one item still fully blocked by this environment's lack of `/dev/kvm`.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

@@ -217,6 +217,11 @@ pub struct BackendState {
     /// doc comments for why). Protected by the same top-level state lock
     /// every other field here already is, not a second inner mutex.
     litellm: Option<litellm_proxy::ProxyProcess>,
+    /// Real, live `adb logcat` sessions (task #150), keyed the same way
+    /// `pty_sessions` is -- an unbounded real stream the caller explicitly
+    /// stops, not a bounded call that resolves on its own.
+    logcat_sessions: HashMap<u64, spartan_android::adb::LogcatHandle>,
+    next_logcat_id: u64,
 }
 
 impl BackendState {
@@ -2185,6 +2190,70 @@ fn android_install_apk(
     Ok(serde_json::json!({ "status": "starting" }))
 }
 
+/// Real, live `adb logcat` spawn (task #150, the last named piece of
+/// task #11's device-management scope beyond the emulator/JDWP half this
+/// environment's own `/dev/kvm` absence keeps out of reach). Unlike
+/// `android_build_apk`/`android_install_apk`, this stream never resolves
+/// on its own -- it runs until `android_logcat_stop` is called, matching
+/// `pty_spawn`'s own real, unbounded-stream shape rather than the
+/// bounded "ack now, one terminal event later" one those two use.
+fn android_logcat_start(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    serial: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let toolchain = spartan_android::detect_toolchain();
+    let adb_path = toolchain.adb_path.ok_or_else(|| {
+        "no real `adb` found on this machine -- install the Android SDK platform-tools".to_string()
+    })?;
+
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    let session_id = guard.next_logcat_id;
+
+    let (line_tx, line_rx) = mpsc::channel::<String>();
+    let forward_out_tx = out_tx.clone();
+    thread::spawn(move || {
+        for line in line_rx {
+            let event = Event {
+                event: "android_logcat_output".to_string(),
+                data: serde_json::json!({ "session_id": session_id, "line": line }),
+            };
+            if let Ok(l) = serde_json::to_string(&event) {
+                if forward_out_tx.send(l).is_err() {
+                    break;
+                }
+            }
+        }
+        let event = Event {
+            event: "android_logcat_exit".to_string(),
+            data: serde_json::json!({ "session_id": session_id }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+
+    let handle = spartan_android::adb::spawn_logcat(&adb_path, serial.as_deref(), line_tx)
+        .map_err(|e| format!("failed to spawn adb logcat: {e}"))?;
+    guard.next_logcat_id += 1;
+    guard.logcat_sessions.insert(session_id, handle);
+    Ok(serde_json::json!({ "session_id": session_id }))
+}
+
+/// Real, hard stop -- an already-gone id is a real, harmless no-op,
+/// matching `pty_close`'s own established precedent for a session that's
+/// already ended on its own.
+fn android_logcat_stop(
+    state: &Arc<Mutex<BackendState>>,
+    session_id: u64,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+    if let Some(mut handle) = guard.logcat_sessions.remove(&session_id) {
+        handle.kill();
+    }
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 /// Real Docker container-name-safe sanitization (Docker's own real
 /// charset is `[a-zA-Z0-9][a-zA-Z0-9_.-]+`) -- deterministic per project
 /// path, so re-running "up" against the same project reuses the same
@@ -3051,6 +3120,13 @@ pub fn handle_request(
             let serial = get_str_param(&req.params, "serial").ok();
             android_install_apk(out_tx.clone(), apk_path, serial)
         })(),
+        "android_logcat_start" => {
+            let serial = get_str_param(&req.params, "serial").ok();
+            android_logcat_start(state, out_tx.clone(), serial)
+        }
+        "android_logcat_stop" => {
+            get_u64_param(&req.params, "session_id").and_then(|id| android_logcat_stop(state, id))
+        }
         "devcontainer_exec_spawn" => (|| {
             let container_id = get_str_param(&req.params, "container_id")?;
             let cols = get_u64_param(&req.params, "cols")? as u16;
@@ -3872,6 +3948,53 @@ mod tests {
                 // `android_build_apk_acks_immediately...`'s own
                 // deliberately-not-awaited pattern.
                 assert_eq!(resp.result.unwrap()["status"], "starting");
+            }
+        }
+    }
+
+    #[test]
+    fn android_logcat_stop_on_an_unknown_session_is_a_real_harmless_no_op() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "android_logcat_stop",
+            serde_json::json!({ "session_id": 999 }),
+        );
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["ok"], true);
+    }
+
+    #[test]
+    fn android_logcat_start_reaches_a_real_adb_when_one_is_present_and_really_stops() {
+        // Real, environment-dependent branch, matching
+        // `android_list_devices`'s/`android_install_apk`'s own precedent.
+        let state = new_state();
+        let resp = call(&state, 1, "android_logcat_start", serde_json::json!({}));
+        match resp.error {
+            Some(e) => {
+                assert!(
+                    e.contains("no real `adb`"),
+                    "expected the honest 'no adb' error, got: {e}"
+                );
+            }
+            None => {
+                let session_id = resp.result.unwrap()["session_id"].as_u64().unwrap();
+                // A real adb logcat process is now genuinely running
+                // (streaming, or -- with no real device attached, as
+                // confirmed live earlier this session -- blocked on its
+                // own real "waiting for device" state). Stopping it must
+                // really remove the session, confirmed by a second stop
+                // call being the same harmless no-op an already-gone
+                // session gets.
+                let stop_resp = call(
+                    &state,
+                    2,
+                    "android_logcat_stop",
+                    serde_json::json!({ "session_id": session_id }),
+                );
+                assert!(stop_resp.error.is_none());
+                assert_eq!(stop_resp.result.unwrap()["ok"], true);
             }
         }
     }

@@ -51,6 +51,8 @@ const ALLOWED_METHODS = new Set([
   "android_build_apk",
   "android_list_devices",
   "android_install_apk",
+  "android_logcat_start",
+  "android_logcat_stop",
   "litellm_proxy_start",
   "litellm_proxy_stop",
   "litellm_proxy_status",

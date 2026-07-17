@@ -78,6 +78,14 @@ interface StatusBarProps {
    * the most recently built APK -- only rendered once a build is
    * `"ready"`. */
   onInstallApk?: () => void;
+  /** Real, live logcat streaming state (task #150) -- whether the panel
+   * is currently open and whether a real `adb logcat` process is running.
+   * Shown whenever the project is a real Android project, independent of
+   * build/install state (a device can be logcat'd without ever building
+   * this project's own APK). */
+  logcatOpen?: boolean;
+  logcatRunning?: boolean;
+  onToggleLogcat?: () => void;
 }
 
 export default function StatusBar({
@@ -90,6 +98,9 @@ export default function StatusBar({
   androidDevices,
   androidInstall,
   onInstallApk,
+  logcatOpen,
+  logcatRunning,
+  onToggleLogcat,
 }: StatusBarProps): React.ReactElement {
   const ext = activePath?.split(".").pop() ?? "";
   const errorCount = diagnostics?.filter((d) => d.severity === "error").length ?? 0;
@@ -173,6 +184,20 @@ export default function StatusBar({
               : androidInstall?.phase === "failed"
                 ? "📲 ✗ failed"
                 : "📲 Install"}
+        </button>
+      )}
+      {androidInfo?.isAndroidProject && (
+        <button
+          className="status-android-badge"
+          type="button"
+          onClick={onToggleLogcat}
+          title={
+            logcatRunning
+              ? "Streaming adb logcat -- click to close the panel."
+              : "View real, live adb logcat output."
+          }
+        >
+          {logcatOpen ? "📜 Logcat ▾" : "📜 Logcat"}
         </button>
       )}
     </div>

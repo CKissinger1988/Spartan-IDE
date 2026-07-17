@@ -16,6 +16,7 @@ import Editor, {
   type LspDiagnostic,
 } from "./components/Editor";
 import DebugPanel, { type DapSessionState } from "./components/DebugPanel";
+import LogcatPanel from "./components/LogcatPanel";
 import Placeholder from "./components/Placeholder";
 import WorkflowsScreen from "./components/WorkflowsScreen";
 import DesignScreen from "./components/DesignScreen";
@@ -89,6 +90,12 @@ export default function App(): React.ReactElement {
   const [androidInstall, setAndroidInstall] = useState<AndroidInstallState | undefined>(
     undefined
   );
+  // Real adb logcat streaming state (task #150) -- `logcatSessionId` is
+  // the real session id `android_logcat_start` returns, `null` when no
+  // session is currently live (never started, or already stopped/exited).
+  const [logcatOpen, setLogcatOpen] = useState(false);
+  const [logcatSessionId, setLogcatSessionId] = useState<number | null>(null);
+  const [logcatLines, setLogcatLines] = useState<string[]>([]);
 
   // Real, one-shot on mount (ROOT is fixed for this window's lifetime, set
   // via the URL query param) -- android_detect has been real and tested
@@ -144,6 +151,28 @@ export default function App(): React.ReactElement {
         setAndroidInstall({ phase: "failed", error: e.message });
       });
   }, [androidBuild]);
+
+  const toggleLogcat = useCallback(() => {
+    setLogcatOpen((v) => !v);
+  }, []);
+
+  const startLogcat = useCallback(() => {
+    setLogcatLines([]);
+    window.spartan
+      .call("android_logcat_start", {})
+      .then((result) => {
+        const { session_id } = result as { session_id: number };
+        setLogcatSessionId(session_id);
+      })
+      .catch((e: Error) => {
+        setLogcatLines([`error: ${e.message}`]);
+      });
+  }, []);
+
+  const stopLogcat = useCallback(() => {
+    if (logcatSessionId === null) return;
+    window.spartan.call("android_logcat_stop", { session_id: logcatSessionId }).catch(() => {});
+  }, [logcatSessionId]);
 
   useEffect(() => {
     const unsubscribe = window.spartan.onEvent((event, data) => {
@@ -211,6 +240,16 @@ export default function App(): React.ReactElement {
       } else if (event === "android_install_failed") {
         const { error } = data as { error: string };
         setAndroidInstall({ phase: "failed", error });
+      } else if (event === "android_logcat_output") {
+        // Real, deliberate v1 simplification: this UI only ever starts
+        // one real logcat session at a time, so every real output event
+        // is appended without matching `session_id` against a ref --
+        // correct as long as that stays true, named rather than silently
+        // assumed.
+        const { line } = data as { session_id: number; line: string };
+        setLogcatLines((prev) => [...prev, line]);
+      } else if (event === "android_logcat_exit") {
+        setLogcatSessionId(null);
       }
     });
     return unsubscribe;
@@ -451,6 +490,14 @@ export default function App(): React.ReactElement {
                   onStepInto={() => dapSendCommand("dap_step_into")}
                   onStop={dapStop}
                 />
+                <LogcatPanel
+                  visible={logcatOpen}
+                  running={logcatSessionId !== null}
+                  lines={logcatLines}
+                  onStart={startLogcat}
+                  onStop={stopLogcat}
+                  onClose={() => setLogcatOpen(false)}
+                />
                 <div className="content-area">
                   {activeFile ? (
                     <Editor
@@ -482,6 +529,9 @@ export default function App(): React.ReactElement {
               androidDevices={androidDevices}
               androidInstall={androidInstall}
               onInstallApk={installApk}
+              logcatOpen={logcatOpen}
+              logcatRunning={logcatSessionId !== null}
+              onToggleLogcat={toggleLogcat}
             />
           </>
         ) : (
