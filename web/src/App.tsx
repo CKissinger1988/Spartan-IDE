@@ -6,6 +6,7 @@ import BackendFileTree from "./components/BackendFileTree";
 import Editor, { type OpenFile } from "./components/Editor";
 import BackendEditor, { type BackendOpenFile, type LspDiagnostic } from "./components/BackendEditor";
 import DebugPanel, { type DapSessionState } from "./components/DebugPanel";
+import LogcatPanel from "./components/LogcatPanel";
 import { ensureBufferWasmInit, Document as WasmDocument } from "./buffer";
 import { isFileSystemAccessSupported, pickProjectDirectory, readFileText } from "./fsAccess";
 import { applyTheme, type ThemeName } from "./applyTheme";
@@ -153,6 +154,11 @@ export default function App(): React.ReactElement {
   const [androidInstall, setAndroidInstall] = useState<AndroidInstallState | undefined>(
     undefined
   );
+  // Real adb logcat streaming state (task #151, the web/ sibling of
+  // desktop/'s own App.tsx wiring, task #150).
+  const [logcatOpen, setLogcatOpen] = useState(false);
+  const [logcatSessionId, setLogcatSessionId] = useState<number | null>(null);
+  const [logcatLines, setLogcatLines] = useState<string[]>([]);
 
   // Optional backend upgrade: when this page is served by a real
   // spartan-devserver (§75.88 + the /__spartan/session handoff), connect to
@@ -239,6 +245,29 @@ export default function App(): React.ReactElement {
       });
   }, [backendClient, androidBuild]);
 
+  const toggleLogcat = useCallback(() => {
+    setLogcatOpen((v) => !v);
+  }, []);
+
+  const startLogcat = useCallback(() => {
+    if (!backendClient) return;
+    setLogcatLines([]);
+    backendClient
+      .call("android_logcat_start", {})
+      .then((result) => {
+        const { session_id } = result as { session_id: number };
+        setLogcatSessionId(session_id);
+      })
+      .catch((e: Error) => {
+        setLogcatLines([`error: ${e.message}`]);
+      });
+  }, [backendClient]);
+
+  const stopLogcat = useCallback(() => {
+    if (!backendClient || logcatSessionId === null) return;
+    backendClient.call("android_logcat_stop", { session_id: logcatSessionId }).catch(() => {});
+  }, [backendClient, logcatSessionId]);
+
   // Real, live LSP diagnostics stream -- the same real lsp_diagnostics/
   // lsp_error events desktop/'s App.tsx subscribes to via window.spartan.
   // onEvent, here via BackendClient.onEvent's single-argument
@@ -306,6 +335,11 @@ export default function App(): React.ReactElement {
       } else if (e.event === "android_install_failed") {
         const { error } = e.data as { error: string };
         setAndroidInstall({ phase: "failed", error });
+      } else if (e.event === "android_logcat_output") {
+        const { line } = e.data as { session_id: number; line: string };
+        setLogcatLines((prev) => [...prev, line]);
+      } else if (e.event === "android_logcat_exit") {
+        setLogcatSessionId(null);
       }
     });
   }, [backendClient]);
@@ -587,6 +621,14 @@ export default function App(): React.ReactElement {
               onStop={dapStop}
             />
           )}
+          <LogcatPanel
+            visible={logcatOpen}
+            running={logcatSessionId !== null}
+            lines={logcatLines}
+            onStart={startLogcat}
+            onStop={stopLogcat}
+            onClose={() => setLogcatOpen(false)}
+          />
           <div className="content-area">
             {error && <div className="tree-error">{error}</div>}
             {!error && activeContent?.kind === "local" && (
@@ -719,6 +761,20 @@ export default function App(): React.ReactElement {
                 : androidInstall?.phase === "failed"
                   ? "📲 ✗ failed"
                   : "📲 Install"}
+          </button>
+        )}
+        {androidInfo?.isAndroidProject && (
+          <button
+            className="status-android-badge"
+            type="button"
+            onClick={toggleLogcat}
+            title={
+              logcatSessionId !== null
+                ? "Streaming adb logcat -- click to close the panel."
+                : "View real, live adb logcat output."
+            }
+          >
+            {logcatOpen ? "📜 Logcat ▾" : "📜 Logcat"}
           </button>
         )}
       </div>

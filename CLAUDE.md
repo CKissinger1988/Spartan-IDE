@@ -4091,6 +4091,35 @@ first — it's the parity reference until each row there is actually reimplement
   verbatim output only, a real, named v1 scope cut). With this pass, every named piece of task
   #11's device-management scope is closed in `desktop/`; the real emulator/system-image/JDWP half
   remains the one item still fully blocked by this environment's lack of `/dev/kvm`.
+- **Real, working code — real `adb logcat` streaming wired into `web/`, closing the deliberately
+  deferred follow-up §150 named (task #151)**: pure TypeScript, zero backend/protocol changes
+  needed -- `android_logcat_start`/`_stop` are already generic `spartan-backend` methods reachable
+  through `web/`'s own fully generic `BackendClient`, the same shape task #149 already closed for
+  install. New `web/src/components/LogcatPanel.tsx` (byte-identical to `desktop/`'s own copy, not
+  shared code since the two shells don't share a components package) plus the matching "📜 Logcat"
+  toggle button and event handlers in `App.tsx`. **Real, live, end-to-end verification against the
+  actual full stack, not a mock** -- the same "as real as achievable" technique `web/`'s own DAP/
+  hover/completion passes already established, a step up from `desktop/`'s own mocked-
+  `window.spartan` harness: a real `spartan-devserver` binary served the real built `web/dist`
+  against a real Android/Gradle fixture with `ANDROID_HOME` exported; clicking Logcat then Start
+  Logcat opened a real WebSocket-relayed `android_logcat_start` call, and the real, honest
+  `"- waiting for device -"` diagnostic (confirmed live and documented in §150) streamed through
+  the genuine event pipeline into the panel exactly as `adb` itself prints it; Stop correctly
+  transitioned the panel back via a real `android_logcat_stop` call. **A real, environment-specific
+  staleness gap was hit and fixed during this verification, not a code defect** -- the same class
+  of issue §146 first named: the `spartan-devserver` binary on disk predated §150's own addition of
+  `android_logcat_start`/`_stop` to the `spartan-backend` library it links, so the first live
+  attempt correctly failed with `"unknown method"` until rebuilt (`cargo build --release -p
+  spartan-devserver`), after which the real round trip worked as designed. `web/`'s own `npm run
+  typecheck`/`vite build` both clean; no Rust changes this pass, full workspace `cargo fmt --all --
+  check`/`cargo clippy --workspace --release --all-targets` re-confirmed clean anyway. **What this
+  does not confirm**: no real device's own real logcat output was ever streamed in this
+  environment (the same real, standing constraint every Android pass in this project has named);
+  no log filtering/search/level-coloring (matches `desktop/`'s own already-named v1 scope cut).
+  With this pass, both real Electron-based shells expose every real ADB capability this project
+  has built, including logcat; only task #11's emulator/system-image/JDWP half -- confirmed
+  blocked by this environment's lack of `/dev/kvm` and CPU virtualization extensions -- remains
+  open.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
