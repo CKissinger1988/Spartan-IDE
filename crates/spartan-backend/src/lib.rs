@@ -2728,8 +2728,44 @@ fn project_template_files(template: &str) -> Result<Vec<(&'static str, &'static 
                 "System.Console.WriteLine(\"Hello from {{name}}!\");\n",
             ),
         ]),
+        // Real, direct sibling of task #144's own real, spike-verified
+        // minimal Android Gradle project (§ task #144 -- confirmed with a
+        // genuine `BUILD SUCCESSFUL` and a real, ZIP-verified debug APK
+        // before this template was ever written). Deliberately uses a
+        // fixed `com.spartan.app` namespace/applicationId rather than
+        // deriving one from `{{name}}` -- a real Java/Kotlin package
+        // segment can't contain the `-`/`_` characters
+        // `sanitize_project_name` allows, and this template's own
+        // substitution mechanism only supports the one `{{name}}` token,
+        // so a second, package-safe token would be real, separate,
+        // not-yet-justified complexity for a first increment. `{{name}}`
+        // is still used for the real, human-visible `android:label`. A
+        // project created here is immediately buildable via the real
+        // `android_build_apk` (task #144) the moment it's opened.
+        "android" => Ok(vec![
+            (
+                "settings.gradle.kts",
+                "pluginManagement {\n    repositories {\n        google()\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\ndependencyResolutionManagement {\n    repositories {\n        google()\n        mavenCentral()\n    }\n}\nrootProject.name = \"{{name}}\"\ninclude(\":app\")\n",
+            ),
+            (
+                "build.gradle.kts",
+                "plugins {\n    id(\"com.android.application\") version \"8.5.2\" apply false\n    id(\"org.jetbrains.kotlin.android\") version \"2.0.21\" apply false\n}\n",
+            ),
+            (
+                "app/build.gradle.kts",
+                "plugins {\n    id(\"com.android.application\")\n    id(\"org.jetbrains.kotlin.android\")\n}\n\nandroid {\n    namespace = \"com.spartan.app\"\n    compileSdk = 34\n\n    defaultConfig {\n        applicationId = \"com.spartan.app\"\n        minSdk = 24\n        targetSdk = 34\n        versionCode = 1\n        versionName = \"1.0\"\n    }\n    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }\n    kotlinOptions {\n        jvmTarget = \"17\"\n    }\n}\n",
+            ),
+            (
+                "app/src/main/AndroidManifest.xml",
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">\n    <application android:label=\"{{name}}\">\n        <activity android:name=\".MainActivity\" android:exported=\"true\">\n            <intent-filter>\n                <action android:name=\"android.intent.action.MAIN\" />\n                <category android:name=\"android.intent.category.LAUNCHER\" />\n            </intent-filter>\n        </activity>\n    </application>\n</manifest>\n",
+            ),
+            (
+                "app/src/main/java/com/spartan/app/MainActivity.kt",
+                "package com.spartan.app\n\nimport android.app.Activity\nimport android.os.Bundle\n\nclass MainActivity : Activity() {\n    override fun onCreate(savedInstanceState: Bundle?) {\n        super.onCreate(savedInstanceState)\n    }\n}\n",
+            ),
+        ]),
         other => Err(format!(
-            "unknown project template `{other}` -- expected one of rust, typescript, javascript, python, kotlin, java, go, csharp"
+            "unknown project template `{other}` -- expected one of rust, typescript, javascript, python, kotlin, java, go, csharp, android"
         )),
     }
 }
@@ -4502,6 +4538,7 @@ mod tests {
             "java",
             "go",
             "csharp",
+            "android",
         ] {
             let scratch = std::env::temp_dir().join(format!(
                 "spartan-backend-create-project-detect-{template}-{}",
@@ -4536,6 +4573,131 @@ mod tests {
 
             std::fs::remove_dir_all(&scratch).ok();
         }
+    }
+
+    #[test]
+    fn create_project_android_template_is_recognized_by_spartan_android_as_a_real_android_project()
+    {
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-create-project-android-detect-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "create_project",
+            serde_json::json!({
+                "parent_dir": scratch.to_string_lossy(),
+                "template": "android",
+                "name": "my-android-app",
+            }),
+        );
+        assert!(
+            resp.error.is_none(),
+            "create_project errored: {:?}",
+            resp.error
+        );
+        let project_root = scratch.join("my-android-app");
+        assert!(
+            spartan_android::is_android_project(&project_root),
+            "the real android template must be recognized as a real Android project"
+        );
+        let manifest = std::fs::read_to_string(
+            project_root
+                .join("app")
+                .join("src")
+                .join("main")
+                .join("AndroidManifest.xml"),
+        )
+        .unwrap();
+        assert!(manifest.contains("my-android-app"));
+
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    /// Real, live, self-skipping end-to-end confirmation that the android
+    /// template isn't merely *detected* as an Android project but is
+    /// genuinely, actually buildable -- scaffolds a real project via the
+    /// real `create_project` dispatch, then runs the real
+    /// `spartan_android::build::build_debug_apk` against it (the exact
+    /// same function `android_build_apk` calls). Self-skips (matching this
+    /// workspace's own established convention) if this environment has no
+    /// real Android SDK (`SPARTAN_TEST_ANDROID_SDK`) -- when it runs, this
+    /// is a genuine `assembleDebug` against real Google Maven/Maven
+    /// Central dependencies, confirmed once already by `spartan-android`'s
+    /// own `build.rs` test against a hand-written fixture; this test
+    /// confirms the *product's own template content*, not a hand-written
+    /// duplicate, produces an identical real result.
+    #[test]
+    fn create_project_android_template_produces_a_real_buildable_project() {
+        let Ok(sdk_root) = std::env::var("SPARTAN_TEST_ANDROID_SDK") else {
+            eprintln!(
+                "SKIP: SPARTAN_TEST_ANDROID_SDK not set, skipping real android template build test"
+            );
+            return;
+        };
+        let sdk_root = std::path::PathBuf::from(sdk_root);
+        if !sdk_root.is_dir() {
+            eprintln!(
+                "SKIP: {sdk_root:?} does not exist, skipping real android template build test"
+            );
+            return;
+        }
+
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-create-project-android-build-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "create_project",
+            serde_json::json!({
+                "parent_dir": scratch.to_string_lossy(),
+                "template": "android",
+                "name": "buildme",
+            }),
+        );
+        assert!(
+            resp.error.is_none(),
+            "create_project errored: {:?}",
+            resp.error
+        );
+        let project_root = scratch.join("buildme");
+
+        let (tx, rx) = mpsc::channel();
+        let gradle = spartan_android::detect_toolchain().gradle_path;
+        let result = spartan_android::build::build_debug_apk(
+            &project_root,
+            Some(&sdk_root),
+            gradle.as_deref(),
+            tx,
+        );
+        let lines: Vec<String> = rx.try_iter().collect();
+        let apk_path = result.unwrap_or_else(|e| {
+            panic!(
+                "expected a real successful build of the product's own android template, got \
+                 error: {e}\nlast output lines: {:?}",
+                &lines[lines.len().saturating_sub(20)..]
+            )
+        });
+        assert!(apk_path.is_file());
+        let bytes = std::fs::read(&apk_path).unwrap();
+        assert_eq!(
+            &bytes[0..4],
+            b"PK\x03\x04",
+            "expected a real ZIP/APK signature"
+        );
+
+        std::fs::remove_dir_all(&scratch).ok();
     }
 
     #[test]

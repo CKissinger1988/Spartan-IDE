@@ -3813,6 +3813,38 @@ first — it's the parity reference until each row there is actually reimplement
   identical but wasn't separately verified. Task #11 remains open -- this closes the
   compile-and-package piece, not install/run/JDWP debugging, which still need a real device this
   environment cannot provide.
+- **Real, working code — a real Android template in the New Project wizard, closing task #145
+  (immediate follow-up to task #144)**: the New Project wizard (§75.76) already scaffolds 8 real,
+  runnable Tier-1-plus-C# templates but had no Android entry, even though task #144 had just made
+  Android genuinely buildable. `spartan-backend::project_template_files` gained a real `"android"`
+  case -- a direct sibling of task #144's own real, spike-verified minimal Gradle Android project
+  (`com.android.application` 8.5.2, Kotlin 2.0.21), not a fresh, unverified invention. One real,
+  deliberate scope simplification, named rather than silently absorbed: the template uses a fixed
+  `com.spartan.app` namespace/applicationId rather than deriving one from `{{name}}`, since a real
+  Java/Kotlin package segment can't contain the `-`/`_` characters `sanitize_project_name` allows,
+  and `create_project`'s own substitution mechanism only supports one `{{name}}` token -- a second,
+  package-safe token would be real, unjustified complexity for a first increment; `{{name}}` still
+  appears in the real, human-visible `android:label`. `desktop/`'s `NewProjectWizard.tsx` gained a
+  matching "Android (Kotlin)" entry in its existing template `<select>`. Two new dispatch-level
+  tests (added to the existing `create_project` suite): one confirms the real scaffolded project is
+  recognized by `spartan_android::is_android_project` (not just `spartan-languages`' own generic
+  detection, which every other template's test already covers) and that the real `{{name}}`
+  substitution reached the manifest; a second, real, self-skipping, live end-to-end test scaffolds
+  the template via the real `create_project` dispatch and then runs the real `spartan_android::
+  build::build_debug_apk` against it -- the exact same function `android_build_apk` calls -- with
+  `SPARTAN_TEST_ANDROID_SDK=/opt/android-sdk`, confirmed to genuinely pass (40.14s, a real
+  `BUILD SUCCESSFUL`, a real produced APK independently re-verified via its own `PK\x03\x04` ZIP
+  signature) -- proof the *product's own template content*, not a hand-written duplicate, produces
+  an identical real, buildable result. Full workspace `cargo fmt --all -- --check`/`cargo clippy
+  --workspace --release --all-targets`/`cargo test --workspace --release -- --test-threads=1` all
+  clean (0 failures). `desktop/`'s own `tsc --noEmit`/`npm run build` clean. Real, screenshotted
+  Playwright verification (the same mocked-`window.spartan` + `vite preview` technique this whole
+  `desktop/` effort has used since §75.59): the "Android (Kotlin)" option renders in the real
+  wizard's template dropdown, selecting it and submitting the form calls the real `create_project`
+  IPC method with `template: "android"`, confirmed via a real call-log check. **What this does not
+  confirm**: the same real, standing gaps task #144 already named (no device/emulator to install or
+  run the resulting APK against, no real Electron window launch this session); no package-name
+  customization in the wizard UI (the fixed-namespace scope decision above).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
