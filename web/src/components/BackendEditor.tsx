@@ -122,8 +122,12 @@ interface CompletionState {
   line: number;
   character: number;
   /** The real character offset the completion was requested from --
-   * where accepting an item inserts its text. */
+   * where accepting an item's replacement range starts. */
   insertAt: number;
+  /** How many real characters the user has typed at `insertAt` since the
+   * dropdown opened -- see `desktop/src/components/Editor.tsx`'s own
+   * identical field for the full reasoning; this is a direct port. */
+  typedLength: number;
   items: CompletionItem[];
   selectedIndex: number;
 }
@@ -310,22 +314,48 @@ export default function BackendEditor({
     const character = lines[lines.length - 1].length;
     const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
     const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
-    setCompletionState({ x, y, line, character, insertAt: pos, items: [], selectedIndex: 0 });
+    setCompletionState({
+      x,
+      y,
+      line,
+      character,
+      insertAt: pos,
+      typedLength: 0,
+      items: [],
+      selectedIndex: 0,
+    });
     client
       .call("lsp_completion", { doc_id: file.docId, line, character })
       .catch((err: Error) => console.error("lsp_completion failed:", err));
   }, [client, charWidth, lineHeightPx, file.docId]);
 
-  /** Real, minimal v1 insert, ported verbatim from `desktop/`'s own
-   * `acceptCompletion` -- see that file's own doc comment for the named
-   * scope cut (no prefix replacement). */
+  /** Real, live client-side narrowing, ported verbatim from `desktop/`'s
+   * own `filteredCompletionItems` -- see that file's own doc comment for
+   * the full reasoning. */
+  const filteredCompletionItems = useMemo(() => {
+    if (!completionState) return [];
+    if (completionState.typedLength === 0) return completionState.items;
+    const prefix = file.content
+      .slice(completionState.insertAt, completionState.insertAt + completionState.typedLength)
+      .toLowerCase();
+    if (!prefix) return completionState.items;
+    return completionState.items.filter(
+      (item) =>
+        item.insertText.toLowerCase().startsWith(prefix) || item.label.toLowerCase().startsWith(prefix)
+    );
+  }, [completionState, file.content]);
+
+  /** Real prefix-replacing insert, ported verbatim from `desktop/`'s own
+   * `acceptCompletion` -- see that file's own doc comment for the full
+   * reasoning (closes the named v1 scope cut this port previously had). */
   const acceptCompletion = useCallback(
     (item: CompletionItem) => {
       const insertAt = completionState?.insertAt ?? 0;
+      const replaceEnd = insertAt + (completionState?.typedLength ?? 0);
       const newContent =
         prevContentRef.current.slice(0, insertAt) +
         item.insertText +
-        prevContentRef.current.slice(insertAt);
+        prevContentRef.current.slice(replaceEnd);
       prevContentRef.current = newContent;
       setLineCount(newContent.split("\n").length);
       onContentChange(file.path, newContent);
@@ -333,7 +363,7 @@ export default function BackendEditor({
         .call("edit", {
           doc_id: file.docId,
           start_char: insertAt,
-          end_char: insertAt,
+          end_char: replaceEnd,
           text: item.insertText,
         })
         .catch((err: Error) => console.error("edit failed:", err));
@@ -380,8 +410,8 @@ export default function BackendEditor({
         if (e.key === "ArrowDown") {
           e.preventDefault();
           setCompletionState((prev) =>
-            prev && prev.items.length > 0
-              ? { ...prev, selectedIndex: (prev.selectedIndex + 1) % prev.items.length }
+            prev && filteredCompletionItems.length > 0
+              ? { ...prev, selectedIndex: (prev.selectedIndex + 1) % filteredCompletionItems.length }
               : prev
           );
           return;
@@ -389,10 +419,12 @@ export default function BackendEditor({
         if (e.key === "ArrowUp") {
           e.preventDefault();
           setCompletionState((prev) =>
-            prev && prev.items.length > 0
+            prev && filteredCompletionItems.length > 0
               ? {
                   ...prev,
-                  selectedIndex: (prev.selectedIndex - 1 + prev.items.length) % prev.items.length,
+                  selectedIndex:
+                    (prev.selectedIndex - 1 + filteredCompletionItems.length) %
+                    filteredCompletionItems.length,
                 }
               : prev
           );
@@ -400,7 +432,7 @@ export default function BackendEditor({
         }
         if (e.key === "Enter") {
           e.preventDefault();
-          const item = completionState.items[completionState.selectedIndex];
+          const item = filteredCompletionItems[completionState.selectedIndex];
           if (item) acceptCompletion(item);
           else setCompletionState(null);
           return;
@@ -410,7 +442,24 @@ export default function BackendEditor({
           setCompletionState(null);
           return;
         }
-        setCompletionState(null);
+        if (e.key === "Backspace") {
+          // Real live-narrowing on backspace, ported verbatim from
+          // `desktop/`'s own identical branch -- see that file's own doc
+          // comment for the full reasoning.
+          setCompletionState((prev) =>
+            prev && prev.typedLength > 0
+              ? { ...prev, typedLength: prev.typedLength - 1, selectedIndex: 0 }
+              : null
+          );
+        } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          // Real live-narrowing on a printable character, ported verbatim
+          // from `desktop/`'s own identical branch.
+          setCompletionState((prev) =>
+            prev ? { ...prev, typedLength: prev.typedLength + 1, selectedIndex: 0 } : prev
+          );
+        } else {
+          setCompletionState(null);
+        }
       }
       if ((e.ctrlKey || e.metaKey) && e.key === " ") {
         e.preventDefault();
@@ -453,7 +502,16 @@ export default function BackendEditor({
           .catch((err: Error) => console.error(`${isRedo ? "redo" : "undo"} failed:`, err));
       }
     },
-    [completionState, acceptCompletion, triggerCompletion, client, file.docId, file.path, onContentChange]
+    [
+      completionState,
+      filteredCompletionItems,
+      acceptCompletion,
+      triggerCompletion,
+      client,
+      file.docId,
+      file.path,
+      onContentChange,
+    ]
   );
 
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1);
@@ -524,8 +582,10 @@ export default function BackendEditor({
         >
           {completionState.items.length === 0 ? (
             <div className="editor-completion-item editor-completion-item-empty">Loading…</div>
+          ) : filteredCompletionItems.length === 0 ? (
+            <div className="editor-completion-item editor-completion-item-empty">No matches</div>
           ) : (
-            completionState.items.map((item, i) => (
+            filteredCompletionItems.map((item, i) => (
               <div
                 key={`${item.label}-${i}`}
                 className={`editor-completion-item${i === completionState.selectedIndex ? " editor-completion-item-active" : ""}`}

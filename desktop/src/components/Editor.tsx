@@ -120,8 +120,15 @@ interface CompletionState {
   line: number;
   character: number;
   /** The real character offset the completion was requested from --
-   * where accepting an item inserts its text. */
+   * where accepting an item's replacement range starts. */
   insertAt: number;
+  /** How many real characters the user has typed at `insertAt` since the
+   * dropdown opened -- the live-narrowing prefix is always
+   * `document.slice(insertAt, insertAt + typedLength)`, and accepting an
+   * item replaces exactly that range rather than inserting alongside it.
+   * Closes this component's own previously-named v1 gap ("no prefix-
+   * filtering or replacement on accept"). */
+  typedLength: number;
   items: CompletionItem[];
   selectedIndex: number;
 }
@@ -344,26 +351,56 @@ export default function Editor({
     const character = lines[lines.length - 1].length;
     const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
     const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
-    setCompletionState({ x, y, line, character, insertAt: pos, items: [], selectedIndex: 0 });
+    setCompletionState({
+      x,
+      y,
+      line,
+      character,
+      insertAt: pos,
+      typedLength: 0,
+      items: [],
+      selectedIndex: 0,
+    });
     window.spartan
       .call("lsp_completion", { doc_id: file.docId, line, character })
       .catch((err: Error) => console.error("lsp_completion failed:", err));
   }, [charWidth, lineHeightPx, file.docId]);
 
-  /** Real, minimal v1 insert: splices the selected item's `insertText` in
-   * at the exact character offset completion was requested from -- a
-   * named, honest scope cut versus a real editor's own prefix-replacing
-   * insert (which would need tracking exactly how much the user typed
-   * since the dropdown opened). Routed through the same `edit` IPC path
-   * (and so the same real undo/redo checkpointing) every other edit in
-   * this component already uses, not a direct textarea mutation. */
+  /** Real, live client-side narrowing: as the user keeps typing while the
+   * dropdown is open, the already-fetched list is filtered by whatever
+   * they've typed since (no new server round trip needed -- the same
+   * items just get narrower). Case-insensitive prefix match against both
+   * `insertText` and `label`, since either can be the more natural match
+   * depending on the language server (e.g. a snippet's `insertText` often
+   * differs from its own displayed `label`). */
+  const filteredCompletionItems = useMemo(() => {
+    if (!completionState) return [];
+    if (completionState.typedLength === 0) return completionState.items;
+    const prefix = file.content
+      .slice(completionState.insertAt, completionState.insertAt + completionState.typedLength)
+      .toLowerCase();
+    if (!prefix) return completionState.items;
+    return completionState.items.filter(
+      (item) =>
+        item.insertText.toLowerCase().startsWith(prefix) || item.label.toLowerCase().startsWith(prefix)
+    );
+  }, [completionState, file.content]);
+
+  /** Replaces the real range `[insertAt, insertAt + typedLength)` -- the
+   * exact prefix the user typed since the dropdown opened -- with the
+   * selected item's `insertText`, instead of the earlier v1's zero-width
+   * insert-alongside-what-was-typed (which left the typed prefix and the
+   * full completion sitting side by side). Routed through the same `edit`
+   * IPC path (and so the same real undo/redo checkpointing) every other
+   * edit in this component already uses, not a direct textarea mutation. */
   const acceptCompletion = useCallback(
     (item: CompletionItem) => {
       const insertAt = completionState?.insertAt ?? 0;
+      const replaceEnd = insertAt + (completionState?.typedLength ?? 0);
       const newContent =
         prevContentRef.current.slice(0, insertAt) +
         item.insertText +
-        prevContentRef.current.slice(insertAt);
+        prevContentRef.current.slice(replaceEnd);
       prevContentRef.current = newContent;
       setLineCount(newContent.split("\n").length);
       onContentChange(file.path, newContent);
@@ -371,7 +408,7 @@ export default function Editor({
         .call("edit", {
           doc_id: file.docId,
           start_char: insertAt,
-          end_char: insertAt,
+          end_char: replaceEnd,
           text: item.insertText,
         })
         .catch((err: Error) => console.error("edit failed:", err));
@@ -434,8 +471,8 @@ export default function Editor({
         if (e.key === "ArrowDown") {
           e.preventDefault();
           setCompletionState((prev) =>
-            prev && prev.items.length > 0
-              ? { ...prev, selectedIndex: (prev.selectedIndex + 1) % prev.items.length }
+            prev && filteredCompletionItems.length > 0
+              ? { ...prev, selectedIndex: (prev.selectedIndex + 1) % filteredCompletionItems.length }
               : prev
           );
           return;
@@ -443,10 +480,12 @@ export default function Editor({
         if (e.key === "ArrowUp") {
           e.preventDefault();
           setCompletionState((prev) =>
-            prev && prev.items.length > 0
+            prev && filteredCompletionItems.length > 0
               ? {
                   ...prev,
-                  selectedIndex: (prev.selectedIndex - 1 + prev.items.length) % prev.items.length,
+                  selectedIndex:
+                    (prev.selectedIndex - 1 + filteredCompletionItems.length) %
+                    filteredCompletionItems.length,
                 }
               : prev
           );
@@ -454,7 +493,7 @@ export default function Editor({
         }
         if (e.key === "Enter") {
           e.preventDefault();
-          const item = completionState.items[completionState.selectedIndex];
+          const item = filteredCompletionItems[completionState.selectedIndex];
           if (item) acceptCompletion(item);
           else setCompletionState(null);
           return;
@@ -464,11 +503,38 @@ export default function Editor({
           setCompletionState(null);
           return;
         }
-        // Any other real key (typing more, arrows left/right, etc.)
-        // dismisses the dropdown rather than trying to re-filter it --
-        // a real, named v1 scope cut (see `acceptCompletion`'s own doc
-        // comment) -- and falls through to that key's own normal handling.
-        setCompletionState(null);
+        if (e.key === "Backspace") {
+          // Shrinks the tracked prefix by one and keeps narrowing, rather
+          // than dismissing -- matches how a real editor's own completion
+          // dropdown survives a correction. Deliberately not
+          // `preventDefault`-ed: the character still needs to actually be
+          // deleted from the document via this key's own normal handling
+          // below (and `handleChange`'s resulting edit). Backspacing past
+          // where the dropdown opened (`typedLength` already at 0) falls
+          // to the dismiss branch below instead of tracking a negative
+          // prefix.
+          setCompletionState((prev) =>
+            prev && prev.typedLength > 0
+              ? { ...prev, typedLength: prev.typedLength - 1, selectedIndex: 0 }
+              : null
+          );
+        } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          // A real printable character -- extend the tracked prefix and
+          // keep the dropdown open, live-narrowing `filteredCompletionItems`
+          // above, instead of dismissing on the very next keystroke (this
+          // component's own previously-named v1 gap, now closed). Not
+          // `preventDefault`-ed: the character still needs to actually be
+          // typed via this key's own normal handling below.
+          setCompletionState((prev) =>
+            prev ? { ...prev, typedLength: prev.typedLength + 1, selectedIndex: 0 } : prev
+          );
+        } else {
+          // Any other real key (Left/Right/Home/End/Delete/Tab, etc.)
+          // dismisses the dropdown rather than trying to track it -- a
+          // real, named, still-remaining v1 scope cut -- and falls
+          // through to that key's own normal handling below.
+          setCompletionState(null);
+        }
       }
       // Real, manual completion trigger (Ctrl+Space) -- see
       // `triggerCompletion`'s own doc comment for why manual, not
@@ -524,6 +590,7 @@ export default function Editor({
     },
     [
       completionState,
+      filteredCompletionItems,
       acceptCompletion,
       triggerCompletion,
       file.docId,
@@ -622,8 +689,10 @@ export default function Editor({
         >
           {completionState.items.length === 0 ? (
             <div className="editor-completion-item editor-completion-item-empty">Loading…</div>
+          ) : filteredCompletionItems.length === 0 ? (
+            <div className="editor-completion-item editor-completion-item-empty">No matches</div>
           ) : (
-            completionState.items.map((item, i) => (
+            filteredCompletionItems.map((item, i) => (
               <div
                 key={`${item.label}-${i}`}
                 className={`editor-completion-item${i === completionState.selectedIndex ? " editor-completion-item-active" : ""}`}
