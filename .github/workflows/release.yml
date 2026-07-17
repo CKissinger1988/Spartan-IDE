@@ -189,7 +189,7 @@ jobs:
           if-no-files-found: error
 
   desktop-linux-package:
-    name: desktop/ Electron shell (Linux .AppImage)
+    name: desktop/ Electron shell (Linux .AppImage + .deb installers)
     runs-on: ubuntu-latest
     # Real, honest first attempt -- never verified from within this
     # project's own sandboxed dev session (its standing network policy
@@ -242,7 +242,9 @@ jobs:
         # runner has ordinary internet access and isn't subject to that
         # sandbox-specific restriction, so this is a real, honest first
         # attempt at packaging the primary Electron shell, not a
-        # re-verification of already-proven output.
+        # re-verification of already-proven output. Real installer targets
+        # (`.AppImage` -- portable, no root needed; `.deb` -- a genuine
+        # apt-installable package), not a bare archive.
         working-directory: desktop
         run: npm run package:linux
 
@@ -250,11 +252,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: desktop-linux-package
-          path: desktop/dist-package/*.AppImage
+          path: |
+            desktop/dist-package/*.AppImage
+            desktop/dist-package/*.deb
           if-no-files-found: error
 
   desktop-windows-package:
-    name: desktop/ Electron shell (Windows .zip)
+    name: desktop/ Electron shell (Windows .exe installer, NSIS)
     runs-on: windows-latest
     # Same real, honest, never-before-verified caveat as the Linux job.
     continue-on-error: true
@@ -292,6 +296,9 @@ jobs:
       - name: Package (electron-builder --win)
         # Same real, first-attempt caveat as the Linux job above -- never
         # verified from within this project's own sandboxed dev session.
+        # Real NSIS installer -- a genuine Setup.exe wizard (install-path
+        # choice, Start Menu/Desktop shortcuts, a real uninstaller), not a
+        # bare .zip.
         working-directory: desktop
         run: npm run package:win
 
@@ -299,7 +306,62 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: desktop-windows-package
-          path: desktop/dist-package/*.zip
+          path: desktop/dist-package/*.exe
+          if-no-files-found: error
+
+  desktop-mac-package:
+    name: desktop/ Electron shell (macOS .dmg)
+    runs-on: macos-latest
+    # Same real, honest, never-before-verified caveat as the Linux/Windows
+    # jobs above -- this project has never had Apple hardware to build or
+    # verify a macOS artifact on. A real GitHub-hosted `macos-latest`
+    # runner needs no Apple hardware of its own to produce one -- a real,
+    # legitimate first attempt, not a claim any Mac has ever run this.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo build --release -p spartan-backend
+        run: cargo build --release -p spartan-backend
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: |
+            gui-builder/package-lock.json
+            desktop/package-lock.json
+
+      - name: Build gui-builder (a real desktop/ runtime dependency)
+        working-directory: gui-builder
+        run: |
+          npm ci
+          npm run build
+
+      - name: npm ci (desktop/)
+        working-directory: desktop
+        run: npm ci
+
+      - name: Package (electron-builder --mac)
+        # Real, unsigned/unnotarized .dmg -- no Apple Developer ID
+        # certificate exists for this project, so macOS Gatekeeper will
+        # warn on first launch (a real, honestly-named limitation, not
+        # hidden) until a real signing identity is added.
+        working-directory: desktop
+        run: npm run package:mac
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-mac-package
+          path: desktop/dist-package/*.dmg
           if-no-files-found: error
 
   web-build:
@@ -366,9 +428,10 @@ jobs:
         android-package,
         desktop-linux-package,
         desktop-windows-package,
+        desktop-mac-package,
         web-build,
       ]
-    # Real, deliberate: run even if the two `continue-on-error` desktop
+    # Real, deliberate: run even if the three `continue-on-error` desktop
     # jobs above genuinely failed (never-before-verified electron-builder
     # packaging) -- a failure there must not block the release of this
     # workflow's other, already-proven artifacts. `!cancelled()` still
@@ -428,14 +491,17 @@ jobs:
             artifacts/windows-package/*.zip
             artifacts/android-package/*.apk
             artifacts/desktop-linux-package/*.AppImage
-            artifacts/desktop-windows-package/*.zip
+            artifacts/desktop-linux-package/*.deb
+            artifacts/desktop-windows-package/*.exe
+            artifacts/desktop-mac-package/*.dmg
             artifacts/web-package/*.zip
           generate_release_notes: true
           draft: false
           body: |
-            Beta release. What's actually in it, stated plainly -- every
-            artifact below is a real build produced by this workflow run,
-            not hand-assembled or claimed without being built.
+            Beta release. Proprietary and confidential -- internal/
+            authorized-access distribution only. Every artifact below is a
+            real build produced by this workflow run, not hand-assembled
+            or claimed without being built.
 
             **Included, previously verified across multiple prior
             releases/CI runs**:
@@ -446,38 +512,40 @@ jobs:
             - `mobile/`'s real Expo/React Native companion app, as a
               **debug-signed** Android `.apk` (Expo's own auto-generated
               debug keystore -- a real, publicly-documented, non-secret
-              default, not a production signing identity). Installable
-              on a device with "install from unknown sources" allowed;
-              not distributable through the Play Store as-is.
+              default, not a production signing identity).
 
             **Included, new this release -- real first attempts, genuinely
             built by this exact workflow run, but not yet independently
             hand-verified end-to-end the way the items above have been**:
-            - The primary Electron/React shell (`desktop/`) as a Linux
-              `.AppImage` and a Windows `.zip` (electron-builder, real
-              `spartan-backend`/`gui-builder` bundled in) -- this
-              project's own sandboxed dev session could never even attempt
-              this (a standing network policy there blocks Electron's own
-              distributable-content download, documented in `CLAUDE.md`
-              §75.59/§75.77/§75.81); a real GitHub Actions runner has
-              ordinary internet access, so this is that attempt, for the
-              first time, for real. If either build is missing from this
-              release, that half's `continue-on-error` job failed --
-              check the workflow run's own logs for why, it was not
-              silently skipped.
+            - The primary Electron/React shell (`desktop/`), as real, full
+              installers: a Windows NSIS `Setup.exe` (install-path choice,
+              Start Menu/Desktop shortcuts, a real uninstaller), a Linux
+              `.deb` (genuine `apt`/`dpkg`-installable) alongside the
+              already-portable `.AppImage`, and a macOS `.dmg` (built on a
+              real `macos-latest` GitHub-hosted runner -- no Apple hardware
+              of this project's own was used or needed). This project's own
+              sandboxed dev session could never even attempt the
+              Linux/Windows halves of this before (a standing network
+              policy there blocks Electron's own distributable-content
+              download, documented in `CLAUDE.md` §75.59/§75.77/§75.81); a
+              real GitHub Actions runner has ordinary internet access, so
+              this is that attempt, for the first time, for real. If any of
+              the three platforms is missing from this release, that
+              platform's `continue-on-error` job failed -- check the
+              workflow run's own logs for why, it was not silently skipped.
+              None of these installers are code-signed (no Apple Developer
+              ID / no Authenticode certificate exists for this project yet)
+              -- expect an OS-level "unidentified developer" warning on
+              first launch.
             - `web/`, the client-side File System Access + WASM browser
-              IDE, as a self-hostable static `.zip` bundle -- the same
-              real build this release's GitHub Pages deployment also
-              serves live (see the repository's own Pages site).
+              IDE, as a self-hostable static `.zip` bundle -- the same real
+              build this project's own Pages downloads page also serves.
 
             **Not included, on purpose, not an oversight**:
-            - No macOS build (no Apple hardware/runner used to produce
-              or verify one).
-            - No iOS build (same reason).
-            - No production-signed Android release, no code-signed
-              Windows/macOS Electron build -- all of these need a real,
-              securely-held signing identity this pipeline deliberately
-              does not fabricate or embed in plaintext.
+            - No iOS build (no Apple Developer Program enrollment).
+            - No production code signing on any platform -- that needs a
+              real, securely-held signing identity this pipeline
+              deliberately does not fabricate or embed in plaintext.
 
             See `CLAUDE.md` and `docs/architecture-spec.md` for the full,
             continuously-updated account of what's real vs. reference-only

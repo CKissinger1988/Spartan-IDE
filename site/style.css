@@ -102,6 +102,11 @@ header {
   color: var(--hud);
   background: var(--hud-dim);
 }
+.badge-proprietary {
+  border-color: var(--border-bright);
+  color: var(--text-dim);
+  background: var(--surface);
+}
 .nav-links {
   margin-left: auto;
   display: flex;

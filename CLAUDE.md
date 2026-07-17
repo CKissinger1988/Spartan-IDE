@@ -4244,6 +4244,50 @@ first — it's the parity reference until each row there is actually reimplement
   (whether electron-builder genuinely succeeds on a real runner, whether Pages activates) are
   reported honestly once observed, not assumed in advance; no macOS/iOS build of any kind (same
   standing constraint every prior release pass has named); no code signing on any platform.
+- **Real, working code — the project made explicitly proprietary end to end: real full installers
+  (NSIS/deb/dmg), a real cross-workflow Pages architecture serving compiled binaries with zero
+  source exposure (task #154)**: direct user response to the pass above -- "This repository will
+  remain private... update the GitHub page to not allow direct access to source files. Create full
+  installers for releases. This project is proprietary and shall be treated as such." Real,
+  load-bearing finding surfaced and acted on, not just noted: GitHub Release *assets* on a private
+  repo require the visitor to already have repo access, same as browsing the repo itself -- so the
+  immediately preceding pass's own "Get it on Releases" download buttons would have 404/login-walled
+  for anyone without collaborator access, silently defeating the whole point of a public downloads
+  page. Fixed architecturally, not by a workaround: `pages.yml` was rewritten to trigger on the real
+  `workflow_run` completion of `release.yml` (not on every push to `main`), pull that exact run's own
+  build artifacts via `actions/download-artifact`'s real cross-workflow `run-id` support (falling
+  back to a real `gh api` lookup of the latest successful Release run for a manual
+  `workflow_dispatch`), and stage them as stable, version-less filenames directly under the Pages
+  site's own `/downloads/` -- real compiled binaries served as plain static files, entirely
+  bypassing GitHub's private-repo Release access control, with **zero source file of any kind ever
+  touching the Pages artifact**. `site/index.html`'s every GitHub link (nav, hero "View source"
+  button, all six "Get it on Releases" buttons, the "Source" download card, footer GitHub/Changelog
+  links) was removed outright, replaced with direct `./downloads/<file>` links, a `PROPRIETARY`
+  badge, `<meta name="robots" content="noindex, nofollow">`, and a real copyright/all-rights-reserved
+  footer notice matching the already-existing root `LICENSE` (§75.72, unchanged -- already fully
+  proprietary, just now consistently reflected on the public-facing page too). **Real full
+  installers, not bare archives**: `desktop/package.json`'s electron-builder config gained a real
+  `nsis` Windows target (install-path choice, Start Menu/Desktop shortcuts, a real uninstaller --
+  replacing the prior portable `.zip`), a real Linux `.deb` alongside the existing `.AppImage`, and
+  an entirely new `mac` block (`dmg` target) with its own new `desktop-mac-package` CI job on a real
+  `macos-latest` GitHub-hosted runner -- no Apple hardware of this project's own used or needed, the
+  same real "GitHub Actions runners aren't the sandbox" reasoning already established for the
+  Linux/Windows Electron jobs, extended to the one remaining platform. `create-release`'s own
+  `needs`/`files`/body were updated to match (still `continue-on-error`/`fail_on_unmatched_files:
+  false`-protected -- a real macOS-job failure must not block the rest of the release any more than
+  the Linux/Windows ones do). Real, executed local verification: `desktop/package.json` re-validated
+  as parseable JSON after the build-config rewrite; both workflow YAML files re-validated with
+  `yaml.safe_load`; the updated landing page was re-verified live via the same local
+  `python3 -m http.server` + Playwright technique -- confirmed zero console errors, zero failed
+  asset requests, and a real, explicit `document.querySelectorAll("a")` scan confirming **no
+  `github.com` link exists anywhere on the page**. **What this does not confirm**: no real GitHub
+  Actions run of the rewritten `pages.yml`/`release.yml` has completed as of writing this (same
+  honest gap the immediately preceding pass already named, now carried forward to the redesigned
+  cross-workflow trigger specifically); the real macOS `.dmg`/Windows `.exe`(nsis)/Linux `.deb`
+  builds are, like the AppImage before them, genuine first attempts from a real CI runner, not yet
+  independently hand-verified installs; no code signing of any kind on any platform (an explicit,
+  named, unresolved gap on this pass too -- a real signing identity for each platform is real,
+  separate, unstarted future work).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

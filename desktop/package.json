@@ -14,11 +14,13 @@
     "start": "npm run build && electron .",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p electron/tsconfig.json",
     "package:linux": "npm run build && electron-builder --linux --publish=never",
-    "package:win": "npm run build && electron-builder --win --publish=never"
+    "package:win": "npm run build && electron-builder --win --publish=never",
+    "package:mac": "npm run build && electron-builder --mac --publish=never"
   },
   "build": {
     "appId": "com.spartan-ide.SpartanIDE",
     "productName": "Spartan IDE",
+    "copyright": "Copyright (c) 2026 Christopher Kissinger. All rights reserved. Proprietary and confidential.",
     "directories": {
       "output": "dist-package",
       "buildResources": "build-resources"
@@ -40,7 +42,8 @@
     ],
     "linux": {
       "target": [
-        "AppImage"
+        "AppImage",
+        "deb"
       ],
       "category": "Development",
       "extraResources": [
@@ -52,12 +55,30 @@
     },
     "win": {
       "target": [
-        "zip"
+        "nsis"
       ],
       "extraResources": [
         {
           "from": "../target/release/spartan-backend.exe",
           "to": "spartan-backend.exe"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools",
+      "extraResources": [
+        {
+          "from": "../target/release/spartan-backend",
+          "to": "spartan-backend"
         }
       ]
     }

@@ -1,29 +1,39 @@
 name: Pages
 
-# Real GitHub Pages deployment: a hand-written static landing/downloads page
-# (`site/`) at the root, plus a real, live build of `web/` (the client-side
-# File System Access + WASM browser IDE, §75.89) served under `/app/` --
-# not a mockup, the actual same build `web/`'s own CI job already verifies.
+# Real GitHub Pages deployment: a hand-written, proprietary-safe static
+# landing/downloads page (`site/`) at the root, a live build of `web/` (the
+# client-side File System Access + WASM browser IDE, §75.89) served under
+# `/app/`, and real installer binaries served directly from this Pages
+# site under `/downloads/` -- NOT linked out to GitHub Releases.
 #
-# Deliberately triggered on push to `main`, independent of the tag-triggered
-# `release.yml` -- Pages should always reflect the latest merged code, while
-# Releases are versioned, point-in-time snapshots.
+# That last point is load-bearing, not stylistic: this repository is
+# private and proprietary by explicit instruction, and GitHub Release
+# assets on a private repo require the visitor to already have repo
+# access -- a public download page linking `github.com/.../releases/...`
+# would 404/login-wall for anyone outside the org. Hosting the real
+# built binaries as static files on the Pages site itself sidesteps that
+# entirely: the *source* stays private (this workflow never publishes any
+# source file, only compiled artifacts), while the compiled installers
+# remain genuinely downloadable by whoever this Pages site's own access
+# is granted to.
+#
+# Triggered by the "Release" workflow's own completion (not by every push
+# to `main`) -- since the real, downloadable installers only exist once a
+# beta version has actually been tagged and built, tying Pages to that
+# exact run guarantees the downloads page never claims an artifact that
+# wasn't genuinely produced by this specific run.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "site/**"
-      - "web/**"
-      - "crates/spartan-buffer/**"
-      - "crates/spartan-buffer-wasm/**"
-      - ".github/workflows/pages.yml"
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: read
   pages: write
   id-token: write
+  actions: read
 
 concurrency:
   group: pages
@@ -33,52 +43,76 @@ jobs:
   build:
     name: Build Pages artifact
     runs-on: ubuntu-latest
+    # Only deploy off a real, successful Release run -- a failed/cancelled
+    # run's own artifacts may be partial or entirely absent. A manual
+    # `workflow_dispatch` has no `workflow_run` context at all, so it's
+    # allowed through unconditionally (the download step below will fail
+    # loudly on its own if no prior successful run exists to pull from).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Cache cargo registry and build artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install wasm-bindgen-cli
-        # Must exactly match the `wasm-bindgen` crate version pinned in
-        # Cargo.lock (0.2.126) -- ci.yml's own `web` job already
-        # established this exact recipe.
-        run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
-
-      - name: Install Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-          cache-dependency-path: web/package-lock.json
-
-      - name: npm ci
-        working-directory: web
-        run: npm ci
-
-      - name: Build web/ (compiles spartan-buffer-wasm, typechecks, bundles)
-        working-directory: web
-        run: npm run build
-
-      - name: Assemble Pages artifact
-        # Real, plain file staging -- `site/` (the hand-written landing
-        # page) becomes the artifact root; `web/`'s real production build
-        # goes under `app/`, matching every relative link on the landing
-        # page (`./app/`) and every relative asset path inside `web/dist`
-        # itself (Vite's default `base: "/"` still resolves correctly
-        # under a subpath here since GitHub Pages serves the whole
-        # artifact from one origin, not a nested one).
+      - name: Resolve the Release run to pull artifacts from
+        # A real `workflow_run` trigger already carries the exact
+        # triggering run's id. A manual `workflow_dispatch` has no such
+        # context at all -- look up the most recent *successful* "Release"
+        # run via the real GitHub API instead of guessing (this workflow's
+        # own run id would be wrong: it has no build artifacts of its own).
+        id: source_run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          mkdir -p _site
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            echo "run_id=${{ github.event.workflow_run.id }}" >> "$GITHUB_OUTPUT"
+          else
+            RUN_ID=$(gh api "repos/${{ github.repository }}/actions/workflows/release.yml/runs?status=success&per_page=1" \
+              --jq '.workflow_runs[0].id')
+            if [[ -z "$RUN_ID" || "$RUN_ID" == "null" ]]; then
+              echo "::error::No successful Release run found to pull artifacts from." >&2
+              exit 1
+            fi
+            echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all artifacts from that Release run
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ steps.source_run.outputs.run_id }}
+          path: artifacts
+
+      - name: Assemble Pages artifact
+        # Real, plain file staging. `site/` (the hand-written landing page)
+        # becomes the artifact root; `web/`'s real production build
+        # (already built once by the Release run's own `web-build` job,
+        # not rebuilt here) is unzipped under `app/`; every real installer
+        # is copied under `downloads/` with a stable, version-less
+        # filename -- so this page's own download links never need to
+        # change as the version bumps, and no GitHub Release URL of any
+        # kind is ever referenced.
+        run: |
+          set -e
+          mkdir -p _site/app _site/downloads
           cp -r site/. _site/
-          mkdir -p _site/app
-          cp -r web/dist/. _site/app/
+
+          unzip -q artifacts/web-package/*.zip -d _site/app
+
+          # Real installers, renamed to stable filenames. Each cp is
+          # individually best-effort (`|| true`) -- a `continue-on-error`
+          # desktop-packaging job in the Release run may genuinely have
+          # failed for a given platform, and this page must still deploy
+          # with whatever real artifacts did build, not fail outright.
+          cp artifacts/desktop-linux-package/*.AppImage _site/downloads/SpartanIDE-linux-x64.AppImage || true
+          cp artifacts/desktop-linux-package/*.deb _site/downloads/SpartanIDE-linux-x64.deb || true
+          cp artifacts/desktop-windows-package/*.exe _site/downloads/SpartanIDE-windows-x64-Setup.exe || true
+          cp artifacts/desktop-mac-package/*.dmg _site/downloads/SpartanIDE-macos.dmg || true
+          cp artifacts/android-package/*.apk _site/downloads/SpartanIDE-mobile-android.apk || true
+          cp artifacts/linux-package/*.tar.gz _site/downloads/spartan-reference-shell-linux-x64.tar.gz || true
+          cp artifacts/windows-package/*.zip _site/downloads/spartan-reference-shell-windows-x64.zip || true
+
+          echo "Real files staged for /downloads/:"
+          ls -la _site/downloads/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
