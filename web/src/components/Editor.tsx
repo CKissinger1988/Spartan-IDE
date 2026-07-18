@@ -160,6 +160,82 @@ function toggleLineComment(
   };
 }
 
+/** Real multi-line indent/outdent, ported verbatim from `desktop/`'s own
+ * identical wiring -- see that file's own doc comment for the full real
+ * reasoning. */
+function reindentLines(
+  content: string,
+  selStart: number,
+  selEnd: number,
+  indent: string,
+  direction: 1 | -1
+): { content: string; selectionStart: number; selectionEnd: number } {
+  const lines = content.split("\n");
+  const lineStarts: number[] = new Array(lines.length);
+  {
+    let acc = 0;
+    for (let i = 0; i < lines.length; i++) {
+      lineStarts[i] = acc;
+      acc += lines[i].length + 1;
+    }
+  }
+  const lineIndexAt = (off: number): number => {
+    let idx = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lineStarts[i] <= off) idx = i;
+      else break;
+    }
+    return idx;
+  };
+  const firstLine = lineIndexAt(selStart);
+  let lastLine = lineIndexAt(selEnd);
+  if (selEnd > selStart && lastLine > firstLine && lineStarts[lastLine] === selEnd) {
+    lastLine -= 1;
+  }
+
+  const startCol = selStart - lineStarts[firstLine];
+  const endCol = selEnd - lineStarts[lastLine];
+
+  const newLines = lines.slice();
+  let newStartCol = startCol;
+  let newEndCol = endCol;
+
+  for (let i = firstLine; i <= lastLine; i++) {
+    const line = lines[i];
+    let delta = 0;
+    if (direction === 1) {
+      newLines[i] = indent + line;
+      delta = indent.length;
+    } else {
+      const trimmed = line.replace(/^[ \t]+/, "");
+      const leadingLen = line.length - trimmed.length;
+      const stripLen = Math.min(indent.length, leadingLen);
+      if (stripLen > 0) {
+        newLines[i] = line.slice(stripLen);
+        delta = -stripLen;
+      }
+    }
+    if (delta === 0) continue;
+    if (i === firstLine) newStartCol = startCol + delta;
+    if (i === lastLine) newEndCol = endCol + delta;
+  }
+
+  const newContent = newLines.join("\n");
+  let newFirstLineStart = 0;
+  for (let i = 0; i < firstLine; i++) newFirstLineStart += newLines[i].length + 1;
+  let newLastLineStart = newFirstLineStart;
+  for (let i = firstLine; i < lastLine; i++) newLastLineStart += newLines[i].length + 1;
+
+  const clampedNewStartCol = Math.max(0, Math.min(newStartCol, newLines[firstLine].length));
+  const clampedNewEndCol = Math.max(0, Math.min(newEndCol, newLines[lastLine].length));
+
+  return {
+    content: newContent,
+    selectionStart: newFirstLineStart + clampedNewStartCol,
+    selectionEnd: newLastLineStart + clampedNewEndCol,
+  };
+}
+
 export interface OpenFile {
   path: string;
   handle: FileSystemFileHandle;
@@ -343,8 +419,16 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
         const start = el.selectionStart;
         const end = el.selectionEnd;
         const value = el.value;
-        const next = `${value.slice(0, start)}  ${value.slice(end)}`;
-        applyProgrammaticEdit(el, next, start + 2, start + 2);
+        const indent = "  ";
+        // Real multi-line indent/outdent, ported verbatim from
+        // `desktop/`'s own identical wiring.
+        if (e.shiftKey || start !== end) {
+          const result = reindentLines(value, start, end, indent, e.shiftKey ? -1 : 1);
+          applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
+          return;
+        }
+        const next = `${value.slice(0, start)}${indent}${value.slice(end)}`;
+        applyProgrammaticEdit(el, next, start + indent.length, start + indent.length);
       }
       // Real auto-closing brackets/quotes, ported verbatim from
       // `desktop/`'s own identical wiring.

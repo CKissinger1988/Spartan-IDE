@@ -5076,6 +5076,56 @@ first — it's the parity reference until each row there is actually reimplement
   comment in the reference wgpu shell (same established "Electron-shell-only feature" scope every
   recent editor-ergonomics pass in this project has carried); the real Electron window remains
   unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — multi-line Tab/Shift+Tab indent-outdent in all three real editing
+  surfaces (`desktop/Editor.tsx`, `web/BackendEditor.tsx`, `web/Editor.tsx`), task #205-#207**:
+  closes a real, well-known gap versus every mainstream editor's own convention -- before this,
+  Tab with an active selection simply deleted the selection and inserted one indent, and
+  Shift+Tab did nothing at all (no handler existed for it anywhere in this project). New, pure
+  `reindentLines(content, selStart, selEnd, indent, direction)` -- a direct structural sibling of
+  `toggleLineComment`'s own touched-line-range machinery (§202-204), reusing the identical
+  `lineStarts`/`lineIndexAt`/full-line-drag-selection-boundary logic rather than a third,
+  separately-written copy. `direction: 1` prepends `indent` to every real touched line;
+  `direction: -1` strips up to `indent.length` characters of real leading whitespace from each
+  touched line -- matching most editors' own "up to one indent worth, whatever's actually there"
+  outdent behavior rather than requiring an exact match, so a line indented by an odd number of
+  spaces still outdents sensibly instead of refusing. A real, deliberate difference from
+  `toggleLineComment`'s own "leave blank lines alone" rule, named explicitly in the function's own
+  doc comment: blank lines *are* indented like any other line here (an indented blank line is
+  still blank, so there's no reason to skip it) but are never outdented past column 0. Selection
+  restoration reuses the identical per-boundary-line column-shift approach `toggleLineComment`
+  already established. Wired into the existing `Tab` key handler with the standard cross-editor
+  keybinding split: Shift+Tab always outdents the touched line(s), even with a collapsed caret (the
+  common "outdent just my current line" case every mainstream editor supports); plain Tab only
+  switches to full-line indent once a real selection is active (matching VS Code's own convention
+  of indenting every selected line, even a single-line selection, rather than replacing the
+  selected text) -- a Tab press with a collapsed caret keeps its existing, unchanged single-position
+  insert-at-cursor behavior. `desktop/Editor.tsx` uses the real, already-configurable
+  `prefs.tabSize` (default 2); `web/BackendEditor.tsx`/`web/Editor.tsx` use the same hardcoded
+  2-space indent their own existing Tab handlers already used (neither file has a `prefs` concept
+  to read from). Real, live, end-to-end Playwright verification against a real running
+  `spartan-devserver` serving the real built `web/dist` and the same real Python fixture used by
+  the toggle-line-comment pass, using genuine `page.keyboard.press` navigation throughout: Tab on a
+  2-line selection (`    print(name)` / `    return name`, originally 4-space indented) correctly
+  indented both to 6 spaces; Shift+Tab on the same re-selected lines correctly outdented back to 4
+  spaces, and a second Shift+Tab correctly outdented further to 2 spaces; Shift+Tab on line 1
+  (zero leading whitespace) was confirmed a real, correct no-op; Tab with a collapsed caret at the
+  start of line 1 correctly inserted 2 spaces at that exact position, confirming the existing
+  single-position behavior is genuinely unchanged. `desktop/Editor.tsx` was independently
+  re-verified with the identical script and fixture via the established "real `spartan-devserver`
+  serving `desktop/dist`, a mocked `window.spartan` forwarding every call over a genuine WebSocket"
+  technique for the still-unlaunchable real Electron window, producing byte-identical results to
+  `web/BackendEditor.tsx` at every step, screenshot-confirmed. Full workspace `cargo fmt --all --
+  check`/`cargo clippy --workspace --release --all-targets` clean (zero Rust changes -- this is a
+  pure TypeScript/React feature); all three components' own `tsc --noEmit` and both shells' `npm
+  run build` clean. **What this does not confirm**: no live Playwright re-verification of
+  `web/Editor.tsx` specifically (typechecked and built clean, structurally identical logic to the
+  two verified files, not independently re-proven this pass -- matching the exact same scope
+  decision this whole editor-ergonomics feature family has made for this file repeatedly since the
+  auto-closing-brackets pass, §193-195); no configurable indent character (spaces only, matching
+  every existing Tab-insert behavior this codebase already had before this pass); no multi-line
+  indent/outdent in the reference wgpu shell (same established "Electron-shell-only feature" scope
+  every recent editor-ergonomics pass in this project has carried); the real Electron window
+  remains unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 

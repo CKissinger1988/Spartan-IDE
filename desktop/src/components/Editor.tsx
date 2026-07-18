@@ -628,6 +628,93 @@ function toggleLineComment(
   };
 }
 
+/** Real multi-line indent/outdent (Tab/Shift+Tab on an active selection,
+ * or Shift+Tab alone on a collapsed caret) -- `direction` is `1` to
+ * indent (prepend `indent` to every real touched line) or `-1` to outdent
+ * (strip up to `indent.length` characters of real leading whitespace from
+ * every touched line, matching most editors' own "up to one indent
+ * worth, whatever's actually there" outdent behavior rather than
+ * requiring an exact match). Blank lines are indented like any other line
+ * (an indented blank line is still blank, so there's no reason to skip
+ * it, a real, deliberate difference from `toggleLineComment`'s own "leave
+ * blank lines alone" rule) but never outdented past column 0. Selection
+ * restoration reuses the same real column-shift approach
+ * `toggleLineComment` already established: each boundary line's own
+ * per-line delta is applied to that boundary's column, then clamped to
+ * never go negative or past the new line's own length. */
+function reindentLines(
+  content: string,
+  selStart: number,
+  selEnd: number,
+  indent: string,
+  direction: 1 | -1
+): { content: string; selectionStart: number; selectionEnd: number } {
+  const lines = content.split("\n");
+  const lineStarts: number[] = new Array(lines.length);
+  {
+    let acc = 0;
+    for (let i = 0; i < lines.length; i++) {
+      lineStarts[i] = acc;
+      acc += lines[i].length + 1;
+    }
+  }
+  const lineIndexAt = (off: number): number => {
+    let idx = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lineStarts[i] <= off) idx = i;
+      else break;
+    }
+    return idx;
+  };
+  const firstLine = lineIndexAt(selStart);
+  let lastLine = lineIndexAt(selEnd);
+  if (selEnd > selStart && lastLine > firstLine && lineStarts[lastLine] === selEnd) {
+    lastLine -= 1;
+  }
+
+  const startCol = selStart - lineStarts[firstLine];
+  const endCol = selEnd - lineStarts[lastLine];
+
+  const newLines = lines.slice();
+  let newStartCol = startCol;
+  let newEndCol = endCol;
+
+  for (let i = firstLine; i <= lastLine; i++) {
+    const line = lines[i];
+    let delta = 0;
+    if (direction === 1) {
+      newLines[i] = indent + line;
+      delta = indent.length;
+    } else {
+      const trimmed = line.replace(/^[ \t]+/, "");
+      const leadingLen = line.length - trimmed.length;
+      const stripLen = Math.min(indent.length, leadingLen);
+      if (stripLen > 0) {
+        newLines[i] = line.slice(stripLen);
+        delta = -stripLen;
+      }
+    }
+    if (delta === 0) continue;
+    if (i === firstLine) newStartCol = startCol + delta;
+    if (i === lastLine) newEndCol = endCol + delta;
+  }
+
+  const newContent = newLines.join("\n");
+  let newFirstLineStart = 0;
+  for (let i = 0; i < firstLine; i++) newFirstLineStart += newLines[i].length + 1;
+  let newLastLineStart = newFirstLineStart;
+  for (let i = firstLine; i < lastLine; i++) newLastLineStart += newLines[i].length + 1;
+
+  const clampedNewStartCol = Math.max(0, Math.min(newStartCol, newLines[firstLine].length));
+  const clampedNewEndCol = Math.max(0, Math.min(newEndCol, newLines[lastLine].length));
+
+  return {
+    content: newContent,
+    selectionStart: newFirstLineStart + clampedNewStartCol,
+    selectionEnd: newLastLineStart + clampedNewEndCol,
+  };
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -1815,6 +1902,16 @@ export default function Editor({
         const end = el.selectionEnd;
         const value = el.value;
         const indent = " ".repeat(prefs.tabSize);
+        // Real multi-line indent/outdent -- matches every mainstream
+        // editor's own convention: Shift+Tab always outdents the touched
+        // line(s), even with a collapsed caret; plain Tab only switches to
+        // full-line indent once a real selection is active, otherwise it
+        // keeps its existing single-position insert-at-cursor behavior.
+        if (e.shiftKey || start !== end) {
+          const result = reindentLines(value, start, end, indent, e.shiftKey ? -1 : 1);
+          applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
+          return;
+        }
         const next = `${value.slice(0, start)}${indent}${value.slice(end)}`;
         applyProgrammaticEdit(el, next, start + indent.length, start + indent.length);
       }
