@@ -310,6 +310,7 @@ export default function App(): React.ReactElement {
             tab_size?: number;
             word_wrap?: boolean;
             font_family?: string | null;
+            format_on_save?: boolean;
           };
         };
         applyReduceMotion(Boolean(s.appearance?.reduce_motion));
@@ -321,6 +322,7 @@ export default function App(): React.ReactElement {
             fontSize: s.editor.font_size ?? DEFAULT_EDITOR_PREFS.fontSize,
             tabSize: s.editor.tab_size ?? DEFAULT_EDITOR_PREFS.tabSize,
             wordWrap: s.editor.word_wrap ?? DEFAULT_EDITOR_PREFS.wordWrap,
+            formatOnSave: s.editor.format_on_save ?? DEFAULT_EDITOR_PREFS.formatOnSave,
           });
         }
       })

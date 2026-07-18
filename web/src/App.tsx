@@ -177,6 +177,13 @@ export default function App(): React.ReactElement {
   const [logcatOpen, setLogcatOpen] = useState(false);
   const [logcatSessionId, setLogcatSessionId] = useState<number | null>(null);
   const [logcatLines, setLogcatLines] = useState<string[]>([]);
+  // Real Format on Save (task #187), read from the real backend's own
+  // `spartan_settings::EditorSettings.format_on_save` -- unlike theme/font
+  // (kept in `localStorage` since they apply in the pure client-side path
+  // too, §75.89), this only ever means something once a real backend is
+  // connected, so it's fetched from `settings_get` instead, the same
+  // real store `desktop/`'s own SettingsScreen reads and writes.
+  const [formatOnSave, setFormatOnSave] = useState(false);
 
   // Optional backend upgrade: when this page is served by a real
   // spartan-devserver (§75.88 + the /__spartan/session handoff), connect to
@@ -222,6 +229,47 @@ export default function App(): React.ReactElement {
       .then((result) => setAndroidInfo(result as AndroidDetectResult))
       .catch(() => setAndroidInfo(null));
   }, [backendClient]);
+
+  // Real, one-shot `settings_get` once a real backend connection exists --
+  // fetches the real, persisted `format_on_save` value so the toolbar
+  // checkbox reflects it correctly rather than always starting unchecked.
+  useEffect(() => {
+    if (!backendClient) return;
+    backendClient
+      .call("settings_get", {})
+      .then((result) => {
+        const s = result as { editor?: { format_on_save?: boolean } };
+        setFormatOnSave(Boolean(s.editor?.format_on_save));
+      })
+      .catch(() => {});
+  }, [backendClient]);
+
+  const toggleFormatOnSave = useCallback(
+    (checked: boolean) => {
+      if (!backendClient) return;
+      setFormatOnSave(checked);
+      // `settings_set`'s `gpu_enabled` param is mandatory (no fallback),
+      // matching `ModelsPanel.tsx`'s own already-established pattern for
+      // a real partial update -- read the current settings first so this
+      // never risks a required-param error or an accidental GPU-setting
+      // reset.
+      backendClient
+        .call("settings_get", {})
+        .then((result) => {
+          const s = result as {
+            gpu_offload?: { enabled: boolean; layers?: number };
+            editor?: Record<string, unknown>;
+          };
+          return backendClient.call("settings_set", {
+            gpu_enabled: s.gpu_offload?.enabled ?? false,
+            gpu_layers: s.gpu_offload?.layers,
+            editor: { ...s.editor, format_on_save: checked },
+          });
+        })
+        .catch((e: Error) => console.error("settings_set failed:", e));
+    },
+    [backendClient]
+  );
 
   // Real "ack now, event later" trigger for android_build_apk -- mirrors
   // desktop/'s own `buildApk` callback exactly.
@@ -660,6 +708,16 @@ export default function App(): React.ReactElement {
           onBlur={(e) => setFontFamily(e.target.value.trim())}
           style={{ width: 180 }}
         />
+        {backendReady && (
+          <label className="toolbar-btn mono" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={formatOnSave}
+              onChange={(e) => toggleFormatOnSave(e.target.checked)}
+            />
+            Format on save
+          </label>
+        )}
       </div>
       <div className="main-body">
         {availableSidebarViews.length > 0 && (
@@ -745,6 +803,7 @@ export default function App(): React.ReactElement {
                 client={backendClient}
                 file={activeContent.file}
                 onContentChange={handleContentChange}
+                formatOnSave={formatOnSave}
                 diagnostics={diagnosticsByDoc[activeContent.file.docId]}
                 breakpoints={breakpointsByDoc[activeContent.file.docId] ?? []}
                 onToggleBreakpoint={toggleBreakpoint}

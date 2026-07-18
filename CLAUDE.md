@@ -4568,6 +4568,65 @@ first — it's the parity reference until each row there is actually reimplement
   (Rust's own path is exercised for real at the dispatch-test level via a real `rustfmt`
   subprocess); the real Electron window remains unlaunchable in this session (same standing gap
   since §75.59).
+- **Real, working code — real "Format on Save," closing the gap the immediately preceding pass
+  named (task #189)**: user-requested ("Continue without interruption"). `spartan_settings::
+  EditorSettings` gained a real `format_on_save: bool` field (`#[serde(default)]` already applies
+  at the struct level, §75.93's own fix, so a real pre-existing settings file missing this one new
+  sub-field still parses correctly, confirmed by a new dedicated regression test matching this
+  crate's own established per-field pattern). **A real, deliberate design choice, not the obvious
+  one**: this is implemented entirely client-side, composing the already-real, already-tested
+  `format_document` + `edit` + `save_file` IPC methods in sequence, rather than teaching
+  `spartan-backend`'s own `save_file` dispatch to format server-side. The reason: `save_file`
+  currently runs synchronously while holding the global `BackendState` lock, and a real formatter
+  subprocess can take a real, unbounded amount of time -- blocking every other request (file
+  opens, edits, LSP queries) for that duration would be a real regression matching the exact
+  hazard this whole session's own "ack now, event later" convention exists to avoid. Composing the
+  three already-async-safe methods client-side needed no backend changes at all. Both
+  `desktop/src/components/Editor.tsx` and `web/src/components/BackendEditor.tsx`'s own
+  `triggerFormatDocument` were converted from fire-and-forget into a function returning a real
+  `Promise<void>` that resolves once a format cycle has genuinely settled -- including awaiting
+  the real `edit` call's own promise, not just the `format_document_result` event, so a save can
+  never race ahead of an in-flight reformat and read stale buffer content. A new
+  `formatCompletionResolverRef` carries the one-shot resolver from `triggerFormatDocument` to the
+  existing event-subscription `useEffect` (avoiding a second, competing event listener that could
+  double-apply the same result); a real, named 10s safety bound means a wedged formatter can never
+  hang a save indefinitely -- the promise resolves anyway and the save proceeds with whatever the
+  buffer already holds. Ctrl+Shift+F's own existing UX is completely unchanged (it still fires the
+  same promise without awaiting it). `desktop/`'s `EditorPrefs` (already threaded from `App.tsx`
+  through one `settings_get` fetch on mount, the same real "fetch once, pass down" pattern
+  established for `fontSize`/`tabSize`/`wordWrap`) gained `formatOnSave`, and
+  `SettingsScreen.tsx` gained a matching checkbox row next to the existing Word Wrap toggle.
+  `web/` has no `desktop/`-style settings screen or `prefs` bag at all (a real, already-documented
+  narrower scope, §75.89), so this pass added a minimal, self-contained equivalent: a new
+  toolbar checkbox (shown only once a real backend connection exists, since the setting is
+  meaningless in the pure client-side path), backed by its own `settings_get`-on-connect fetch and
+  a `toggleFormatOnSave` callback -- which, matching `ModelsPanel.tsx`'s own already-established
+  real pattern for `settings_set`'s mandatory `gpu_enabled` parameter, reads the current settings
+  first so a format-on-save toggle can never risk a required-param error or an accidental GPU-
+  setting reset. 3 new Rust tests (a standalone-`EditorSettings`-object regression test matching
+  this crate's own per-field convention, an assertion the real default is `false` -- named in-code
+  as a real, deliberate safety choice: an unconfigured formatter must never turn every future save
+  into a silent, surprising failure for a user who never opted in -- and the existing round-trip
+  test extended to cover the new field), full workspace `cargo fmt --all -- --check`/`cargo clippy
+  --workspace --release --all-targets` clean, `cargo build --release --workspace` clean; both
+  shells' own `tsc --noEmit`/`vite build`/`npm run build:electron` clean. **Real, live, end-to-end
+  Playwright verification against the actual compiled `web/dist` served by a real running
+  `spartan-devserver` binary** (not a mock): a real click enabled the toolbar checkbox, sending a
+  real `settings_set` call confirmed via raw WebSocket frame inspection to carry
+  `format_on_save: true` alongside the real, already-saved GPU settings (not a reset); opening the
+  same deliberately-messy Python fixture from the immediately preceding pass and pressing a plain
+  Ctrl+S -- with **no** manual Ctrl+Shift+F -- correctly triggered the real chain end to end,
+  confirmed via raw WebSocket frames in the exact expected order (`format_document` ->
+  `edit` with the fully-correct formatted text -> `save_file`), the live buffer changed to the
+  formatted content with a "Formatted" status pill, and reading the actual file off disk
+  afterward confirmed the formatted bytes genuinely persisted, screenshotted at each step. **What
+  this does not confirm**: no equivalent Format on Save toggle in the reference wgpu shell
+  (`crates/spartan-editor-core`'s `settings_panel.rs`) -- `format_document` itself was never wired
+  into that shell to begin with, matching this whole session's own established pattern that new
+  LSP/formatting features land only in the two Electron-based shells, which are primary; no UI
+  affordance in `web/`'s toolbar checkbox explaining *why* it's hidden until a backend connects
+  (a real, minor, named rough edge, not a functional gap); the real Electron window remains
+  unlaunchable in this session (same standing gap since §75.59).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

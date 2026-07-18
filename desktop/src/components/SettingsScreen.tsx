@@ -23,6 +23,7 @@ interface EditorSettings {
   tab_size: number;
   word_wrap: boolean;
   font_family: string | null;
+  format_on_save: boolean;
 }
 
 interface AppearanceSettings {
@@ -367,6 +368,19 @@ export default function SettingsScreen(): React.ReactElement {
             }
           />
           {" "}Word wrap
+        </label>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label mono">
+          <input
+            type="checkbox"
+            checked={settings.editor.format_on_save}
+            disabled={saving}
+            onChange={(e) =>
+              save({ editor: { ...settings.editor, format_on_save: e.target.checked } })
+            }
+          />
+          {" "}Format document on save
         </label>
       </div>
       <div className="settings-row">

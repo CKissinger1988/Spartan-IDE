@@ -182,6 +182,14 @@ pub struct EditorSettings {
     pub tab_size: u32,
     pub word_wrap: bool,
     pub font_family: Option<String>,
+    /// Real "Format Document on Save" toggle (task #187) -- runs the same
+    /// real `format_document` a manual Ctrl+Shift+F does, immediately
+    /// before the real `save_file` write, every time Ctrl+S is pressed.
+    /// Defaults `false`: an unconfigured formatter (no `black`/`rustfmt`/
+    /// etc. installed, or a language the registry has none for at all,
+    /// e.g. Java) must never turn every future save into a silent,
+    /// surprising failure for a user who never opted in.
+    pub format_on_save: bool,
 }
 
 impl Default for EditorSettings {
@@ -191,6 +199,7 @@ impl Default for EditorSettings {
             tab_size: 2,
             word_wrap: false,
             font_family: None,
+            format_on_save: false,
         }
     }
 }
@@ -408,6 +417,7 @@ mod tests {
                 tab_size: 4,
                 word_wrap: true,
                 font_family: Some("Fira Code".to_string()),
+                format_on_save: true,
             },
             appearance: AppearanceSettings {
                 reduce_motion: true,
@@ -478,6 +488,25 @@ mod tests {
         assert_eq!(settings.font_family, None);
     }
 
+    /// Same real check for `EditorSettings`'s own newer `format_on_save`
+    /// field (task #187) -- a real pre-existing `"editor": {...}` payload
+    /// written before this field existed (even one that already had
+    /// `font_family`) must still parse, falling back to the real, safe
+    /// default of `false` rather than rejecting the whole request.
+    #[test]
+    fn deserializing_a_standalone_editor_object_missing_format_on_save_still_parses() {
+        let value = serde_json::json!({
+            "font_size": 18,
+            "tab_size": 4,
+            "word_wrap": true,
+            "font_family": "Fira Code"
+        });
+        let settings: EditorSettings = serde_json::from_value(value).unwrap();
+        assert_eq!(settings.font_size, 18);
+        assert_eq!(settings.font_family, Some("Fira Code".to_string()));
+        assert!(!settings.format_on_save);
+    }
+
     /// Same real check for `AppearanceSettings`'s own new `theme` field.
     #[test]
     fn deserializing_a_standalone_appearance_object_missing_theme_still_parses() {
@@ -504,6 +533,10 @@ mod tests {
             settings.font_family, None,
             "no font override by default -- the real bundled JetBrains Mono default lives at \
              each call site, not duplicated here as a string literal"
+        );
+        assert!(
+            !settings.format_on_save,
+            "an unconfigured formatter must never turn every future save into a silent failure"
         );
     }
 

@@ -504,9 +504,18 @@ export interface EditorPrefs {
   fontSize: number;
   tabSize: number;
   wordWrap: boolean;
+  /** Real "Format Document on Save" (task #187) -- when true, Ctrl+S
+   * runs the same real `format_document` a manual Ctrl+Shift+F does
+   * before writing to disk. */
+  formatOnSave: boolean;
 }
 
-export const DEFAULT_EDITOR_PREFS: EditorPrefs = { fontSize: 13, tabSize: 2, wordWrap: false };
+export const DEFAULT_EDITOR_PREFS: EditorPrefs = {
+  fontSize: 13,
+  tabSize: 2,
+  wordWrap: false,
+  formatOnSave: false,
+};
 
 interface EditorProps {
   file: OpenFile;
@@ -1204,6 +1213,12 @@ export default function Editor({
    * real v1, matching the "smallest real, correct increment" precedent. */
   const [formatStatus, setFormatStatus] = useState<string | null>(null);
   const pendingFormatRef = useRef(false);
+  /** Real completion signal for a real in-flight format request -- lets a
+   * caller (Format on Save, below) `await` a full format cycle (including
+   * the real `edit` call that applies it) before proceeding, without a
+   * second, competing event subscription that could double-apply the
+   * same real result. Resolved exactly once per cycle, then cleared. */
+  const formatCompletionResolverRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const unsubscribe = window.spartan.onEvent((event, data) => {
@@ -1211,8 +1226,12 @@ export default function Editor({
         const d = data as { doc_id: number; formatted: string };
         if (d.doc_id !== file.docId || !pendingFormatRef.current) return;
         pendingFormatRef.current = false;
+        const resolve = formatCompletionResolverRef.current;
+        formatCompletionResolverRef.current = null;
         if (d.formatted === prevContentRef.current) {
           setFormatStatus("Already formatted");
+          window.setTimeout(() => setFormatStatus(null), 2500);
+          resolve?.();
         } else {
           const oldLength = [...prevContentRef.current].length;
           const caret = textareaRef.current?.selectionStart ?? 0;
@@ -1227,33 +1246,58 @@ export default function Editor({
               end_char: oldLength,
               text: d.formatted,
             })
-            .catch((err: Error) => console.error("edit failed:", err));
+            .catch((err: Error) => console.error("edit failed:", err))
+            .then(() => resolve?.());
           const el = textareaRef.current;
           if (el) {
             const newPos = Math.min(caret, d.formatted.length);
             requestAnimationFrame(() => el.setSelectionRange(newPos, newPos));
           }
           setFormatStatus("Formatted");
+          window.setTimeout(() => setFormatStatus(null), 2500);
         }
-        window.setTimeout(() => setFormatStatus(null), 2500);
       } else if (event === "format_document_error") {
         const d = data as { doc_id: number; message: string };
         if (d.doc_id !== file.docId || !pendingFormatRef.current) return;
         pendingFormatRef.current = false;
         setFormatStatus(`Format failed: ${d.message}`);
         window.setTimeout(() => setFormatStatus(null), 5000);
+        const resolve = formatCompletionResolverRef.current;
+        formatCompletionResolverRef.current = null;
+        resolve?.();
       }
     });
     return unsubscribe;
   }, [file.docId, file.path, onContentChange]);
 
-  const triggerFormatDocument = useCallback(() => {
-    pendingFormatRef.current = true;
-    setFormatStatus("Formatting…");
-    window.spartan.call("format_document", { doc_id: file.docId }).catch((err: Error) => {
-      pendingFormatRef.current = false;
-      setFormatStatus(`Format failed: ${err.message}`);
-      window.setTimeout(() => setFormatStatus(null), 5000);
+  /** Triggers a real format cycle and returns a promise that resolves once
+   * it's fully settled (applied, already-formatted, or failed) -- Ctrl+
+   * Shift+F fires this without awaiting it (unchanged v1 UX); Format on
+   * Save awaits it before calling `save_file`, so the disk write always
+   * sees the real formatted content, not a stale pre-format buffer. A
+   * real, named safety bound: a wedged formatter can never hang a save
+   * indefinitely -- if no real event arrives within 10s, this gives up
+   * and lets the caller proceed with whatever the buffer already holds. */
+  const triggerFormatDocument = useCallback((): Promise<void> => {
+    return new Promise((resolve) => {
+      formatCompletionResolverRef.current = resolve;
+      pendingFormatRef.current = true;
+      setFormatStatus("Formatting…");
+      window.spartan.call("format_document", { doc_id: file.docId }).catch((err: Error) => {
+        pendingFormatRef.current = false;
+        if (formatCompletionResolverRef.current === resolve) {
+          formatCompletionResolverRef.current = null;
+        }
+        setFormatStatus(`Format failed: ${err.message}`);
+        window.setTimeout(() => setFormatStatus(null), 5000);
+        resolve();
+      });
+      window.setTimeout(() => {
+        if (formatCompletionResolverRef.current === resolve) {
+          formatCompletionResolverRef.current = null;
+          resolve();
+        }
+      }, 10000);
     });
   }, [file.docId]);
 
@@ -1472,10 +1516,20 @@ export default function Editor({
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
-        window.spartan
-          .call("save_file", { doc_id: file.docId })
-          .then(() => onContentChange(file.path, prevContentRef.current, true))
-          .catch((err: Error) => console.error("save failed:", err));
+        const doSave = () => {
+          window.spartan
+            .call("save_file", { doc_id: file.docId })
+            .then(() => onContentChange(file.path, prevContentRef.current, true))
+            .catch((err: Error) => console.error("save failed:", err));
+        };
+        // Real Format on Save (task #187): await the real format cycle
+        // (including its own real `edit` apply) before the real disk
+        // write, so a save never races ahead of an in-flight reformat.
+        if (prefs.formatOnSave) {
+          triggerFormatDocument().then(doSave);
+        } else {
+          doSave();
+        }
       }
       // Real undo/redo (task #52 audit finding: this crate's own
       // `undo`/`redo` IPC methods existed but were never called --
@@ -1519,6 +1573,7 @@ export default function Editor({
       file.path,
       onContentChange,
       prefs.tabSize,
+      prefs.formatOnSave,
     ]
   );
 

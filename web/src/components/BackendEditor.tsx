@@ -469,6 +469,12 @@ interface BackendEditorProps {
    * components/Editor.tsx`'s own identical prop -- see that file's own
    * doc comment for the full real reasoning. */
   onApplyRename?: (changes: Record<string, WorkspaceTextEdit[]>) => Promise<number>;
+  /** Real Format on Save (task #187) -- `App.tsx` owns the real, fetched
+   * `spartan_settings::EditorSettings.format_on_save` value; unlike
+   * `desktop/`'s `prefs` object, this app has no other per-file editor
+   * preferences yet, so a single boolean prop is enough rather than a
+   * whole prefs bag. */
+  formatOnSave?: boolean;
 }
 
 /**
@@ -500,6 +506,7 @@ export default function BackendEditor({
   pendingJump = null,
   onJumpApplied,
   onApplyRename,
+  formatOnSave = false,
 }: BackendEditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
@@ -994,9 +1001,12 @@ export default function BackendEditor({
 
   /** Real "Format Document" (Ctrl+Shift+F), ported verbatim from
    * `desktop/`'s own identical wiring -- see that file's own doc comment
-   * for the full real reasoning. */
+   * for the full real reasoning, including the promise-based completion
+   * signal (task #187, Format on Save) that lets Ctrl+S await a real
+   * format cycle before writing to disk. */
   const [formatStatus, setFormatStatus] = useState<string | null>(null);
   const pendingFormatRef = useRef(false);
+  const formatCompletionResolverRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const unsubscribe = client.onEvent((e) => {
@@ -1004,8 +1014,12 @@ export default function BackendEditor({
         const d = e.data as { doc_id: number; formatted: string };
         if (d.doc_id !== file.docId || !pendingFormatRef.current) return;
         pendingFormatRef.current = false;
+        const resolve = formatCompletionResolverRef.current;
+        formatCompletionResolverRef.current = null;
         if (d.formatted === prevContentRef.current) {
           setFormatStatus("Already formatted");
+          window.setTimeout(() => setFormatStatus(null), 2500);
+          resolve?.();
         } else {
           const oldLength = [...prevContentRef.current].length;
           const caret = textareaRef.current?.selectionStart ?? 0;
@@ -1020,33 +1034,50 @@ export default function BackendEditor({
               end_char: oldLength,
               text: d.formatted,
             })
-            .catch((err: Error) => console.error("edit failed:", err));
+            .catch((err: Error) => console.error("edit failed:", err))
+            .then(() => resolve?.());
           const el = textareaRef.current;
           if (el) {
             const newPos = Math.min(caret, d.formatted.length);
             requestAnimationFrame(() => el.setSelectionRange(newPos, newPos));
           }
           setFormatStatus("Formatted");
+          window.setTimeout(() => setFormatStatus(null), 2500);
         }
-        window.setTimeout(() => setFormatStatus(null), 2500);
       } else if (e.event === "format_document_error") {
         const d = e.data as { doc_id: number; message: string };
         if (d.doc_id !== file.docId || !pendingFormatRef.current) return;
         pendingFormatRef.current = false;
         setFormatStatus(`Format failed: ${d.message}`);
         window.setTimeout(() => setFormatStatus(null), 5000);
+        const resolve = formatCompletionResolverRef.current;
+        formatCompletionResolverRef.current = null;
+        resolve?.();
       }
     });
     return unsubscribe;
   }, [client, file.docId, file.path, onContentChange]);
 
-  const triggerFormatDocument = useCallback(() => {
-    pendingFormatRef.current = true;
-    setFormatStatus("Formatting…");
-    client.call("format_document", { doc_id: file.docId }).catch((err: Error) => {
-      pendingFormatRef.current = false;
-      setFormatStatus(`Format failed: ${err.message}`);
-      window.setTimeout(() => setFormatStatus(null), 5000);
+  const triggerFormatDocument = useCallback((): Promise<void> => {
+    return new Promise((resolve) => {
+      formatCompletionResolverRef.current = resolve;
+      pendingFormatRef.current = true;
+      setFormatStatus("Formatting…");
+      client.call("format_document", { doc_id: file.docId }).catch((err: Error) => {
+        pendingFormatRef.current = false;
+        if (formatCompletionResolverRef.current === resolve) {
+          formatCompletionResolverRef.current = null;
+        }
+        setFormatStatus(`Format failed: ${err.message}`);
+        window.setTimeout(() => setFormatStatus(null), 5000);
+        resolve();
+      });
+      window.setTimeout(() => {
+        if (formatCompletionResolverRef.current === resolve) {
+          formatCompletionResolverRef.current = null;
+          resolve();
+        }
+      }, 10000);
     });
   }, [client, file.docId]);
 
@@ -1243,10 +1274,19 @@ export default function BackendEditor({
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
-        client
-          .call("save_file", { doc_id: file.docId })
-          .then(() => onContentChange(file.path, prevContentRef.current, true))
-          .catch((err: Error) => console.error("save failed:", err));
+        const doSave = () => {
+          client
+            .call("save_file", { doc_id: file.docId })
+            .then(() => onContentChange(file.path, prevContentRef.current, true))
+            .catch((err: Error) => console.error("save failed:", err));
+        };
+        // Real Format on Save (task #187), ported verbatim from
+        // `desktop/`'s own identical wiring.
+        if (formatOnSave) {
+          triggerFormatDocument().then(doSave);
+        } else {
+          doSave();
+        }
       }
       const isRedo =
         ((e.ctrlKey || e.metaKey) && e.key === "y") ||
@@ -1279,6 +1319,7 @@ export default function BackendEditor({
       symbolsState,
       triggerDocumentSymbols,
       triggerFormatDocument,
+      formatOnSave,
       client,
       file.docId,
       file.path,
