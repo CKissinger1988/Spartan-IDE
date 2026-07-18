@@ -699,6 +699,25 @@
   cursor: default;
 }
 
+/* Real "Go to Line" (Ctrl+G). Reuses `.editor-rename-input`'s own field
+ * styling, but centered near the top of the viewport rather than
+ * caret-anchored -- the one real overlay here with no cursor position to
+ * anchor to (the user is jumping *away* from wherever they currently are). */
+.editor-gotoline-box {
+  position: fixed;
+  z-index: 51;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 240px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-size: 12px;
+}
+
 /* Real document-symbol outline (Ctrl+Shift+O, task #179) -- reuses
  * `.editor-references-item`'s own row styling, `editor-symbol-item` only
  * adds the kind-label prefix; per-row indentation is applied inline

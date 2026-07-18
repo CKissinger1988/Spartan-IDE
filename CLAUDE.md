@@ -4922,6 +4922,48 @@ first — it's the parity reference until each row there is actually reimplement
   brackets in the reference wgpu shell (`crates/spartan-editor-core`, same established "Electron-shell
   -only feature" scope every recent editor-ergonomics pass in this project has carried); the real
   Electron window remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — "Go to Line" (Ctrl+G) in all three real editing surfaces (`desktop/
+  Editor.tsx`, `web/BackendEditor.tsx`, `web/Editor.tsx`), plus a real, live-tested focus bug found
+  and fixed along the way (tasks #196-#198)**: the standard cross-editor convention -- Ctrl+G opens
+  a centered input accepting a line number (optionally `:column`), Enter jumps the real caret there
+  and scrolls it into view, Escape cancels. Pure client-side; no LSP/backend query needed. Reuses
+  `jumpToLocalPosition` (the same shared landing logic go-to-definition/references/rename/symbols
+  already use) in `desktop/Editor.tsx` and `web/BackendEditor.tsx`; `web/Editor.tsx` has no such
+  helper to reuse (no language server exists in its pure client-side path), so the real
+  line/character-to-offset conversion is inlined there directly. A real overshoot is clamped to the
+  document's actual last line rather than erroring or doing nothing. New `.editor-gotoline-box` CSS
+  (`desktop/app.css`/`web/app.css`, byte-identical) reuses `.editor-rename-input`'s own field
+  styling, centered near the top of the viewport rather than caret-anchored -- the one real overlay
+  in this project with no cursor position to anchor to, since the user is about to jump *away* from
+  wherever they currently are. **A real, live-tested focus bug was found and fixed, not assumed
+  correct from the code reading right**: a live Playwright script that opened the overlay, typed a
+  line number, pressed Escape, then tried to reopen it via a second Ctrl+G found the second open
+  silently never happening -- traced to Escape's own handler only calling `setGotoLineState(null)`,
+  which unmounts the real focused `<input>` without ever returning keyboard focus to the textarea
+  (unlike the Enter path, which already refocuses it via `jumpToLocalPosition`'s own `el.focus()`
+  call) -- so the *next* Ctrl+G keydown had nowhere to land. Fixed in all three components by adding
+  an explicit `textareaRef.current?.focus()` right after `setGotoLineState(null)` in the Escape
+  branch; re-verified fixed via the identical script. 4 real assertions confirmed live against a
+  real running `spartan-devserver` serving the real built `web/dist` and a real 10-line fixture:
+  Ctrl+G→"5"→Enter landed exactly at the start of line 5 (byte-offset-verified, not just visually);
+  Ctrl+G→"8:3"→Enter landed at the correct column-3 offset within line 8 (char-before/char-after
+  both independently checked); Escape genuinely closed the overlay with the selection provably
+  unchanged; and Ctrl+G→"999"→Enter (only 10 real lines exist) correctly clamped to the real start
+  of the last line rather than erroring. `desktop/Editor.tsx` was independently re-verified the same
+  way via the established "real `spartan-devserver` serving `desktop/dist`, a mocked
+  `window.spartan` forwarding every call over a genuine WebSocket" technique this project's own
+  hover/completion/auto-closing-brackets verification passes already established for the still-
+  unlaunchable real Electron window -- both the basic jump and the Escape-then-reopen focus fix
+  were independently confirmed correct there too, after a real verification-process mistake (testing
+  against a stale, not-yet-rebuilt `desktop/dist` after the focus fix was added) was caught and
+  corrected by rebuilding before concluding anything was broken. Full workspace `cargo fmt --all --
+  check`/`cargo clippy --workspace --release --all-targets` clean (zero Rust changes -- this is a
+  pure TypeScript/React feature); both shells' own `tsc --noEmit`/`npm run build` clean. **What this
+  does not confirm**: no Go to Line in the reference wgpu shell (`crates/spartan-editor-core`, same
+  established "Electron-shell-only feature" scope every recent editor-ergonomics pass has carried);
+  no line-number validation feedback for a malformed (non-numeric) input beyond silently closing the
+  overlay; the real Electron window remains unlaunchable in this session (same standing gap since
+  §75.59).
 
 ## Build & test
 

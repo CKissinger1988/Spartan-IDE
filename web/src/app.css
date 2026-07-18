@@ -489,6 +489,22 @@
   white-space: nowrap;
 }
 
+/* Real "Go to Line" (Ctrl+G), byte-identical to desktop/'s own copy. */
+.editor-gotoline-box {
+  position: fixed;
+  z-index: 51;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 240px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-size: 12px;
+}
+
 /* Real document-symbol outline (Ctrl+Shift+O, task #180), byte-identical
  * to desktop/'s own copy. */
 .editor-symbol-kind {

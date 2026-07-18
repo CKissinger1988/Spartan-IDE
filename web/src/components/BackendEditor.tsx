@@ -974,6 +974,30 @@ export default function BackendEditor({
       .catch((err: Error) => console.error("lsp_document_symbol failed:", err));
   }, [client, charWidth, lineHeightPx, file.docId]);
 
+  /** Real "Go to Line" (Ctrl+G), ported verbatim from `desktop/`'s own
+   * identical wiring -- see that file's own doc comment for the full real
+   * reasoning. */
+  const [gotoLineState, setGotoLineState] = useState<{ value: string } | null>(null);
+  const gotoLineInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (gotoLineState) gotoLineInputRef.current?.focus();
+  }, [gotoLineState]);
+
+  const confirmGotoLine = useCallback(() => {
+    setGotoLineState((prev) => {
+      if (!prev) return prev;
+      const match = prev.value.trim().match(/^(\d+)(?::(\d+))?$/);
+      if (!match) return null;
+      const totalLines = prevContentRef.current.split("\n").length;
+      const requestedLine = Math.max(1, parseInt(match[1], 10));
+      const line = Math.min(requestedLine, totalLines) - 1;
+      const character = match[2] ? Math.max(0, parseInt(match[2], 10) - 1) : 0;
+      jumpToLocalPosition(line, character);
+      return null;
+    });
+  }, [jumpToLocalPosition]);
+
   /** Real document-highlight occurrence highlighting, ported verbatim from
    * `desktop/`'s own identical wiring -- see that file's own doc comments
    * for the full real reasoning. */
@@ -1298,6 +1322,13 @@ export default function BackendEditor({
         triggerRename();
         return;
       }
+      // Real "Go to Line" trigger (Ctrl+G), ported verbatim from
+      // `desktop/`'s own identical branch.
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "g" && !gotoLineState) {
+        e.preventDefault();
+        setGotoLineState({ value: "" });
+        return;
+      }
       // Real, manual document-symbol outline trigger (Ctrl+Shift+O),
       // ported verbatim from `desktop/`'s own identical branch.
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "o") {
@@ -1406,6 +1437,7 @@ export default function BackendEditor({
       triggerReferences,
       renameState,
       triggerRename,
+      gotoLineState,
       symbolsState,
       triggerDocumentSymbols,
       triggerFormatDocument,
@@ -1542,6 +1574,37 @@ export default function BackendEditor({
                 renameState.message}
             </div>
           )}
+        </div>
+      )}
+      {gotoLineState && (
+        <div className="editor-gotoline-box mono">
+          <input
+            ref={gotoLineInputRef}
+            className="editor-rename-input"
+            value={gotoLineState.value}
+            onChange={(e) =>
+              setGotoLineState((prev) => (prev ? { ...prev, value: e.target.value } : prev))
+            }
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                e.preventDefault();
+                confirmGotoLine();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setGotoLineState(null);
+                // Real, deliberate refocus: an Escape-closed overlay
+                // otherwise leaves keyboard focus nowhere useful (the
+                // input it was on is about to unmount), unlike the Enter
+                // path, which already refocuses via `jumpToLocalPosition`
+                // itself -- found by live testing a third Ctrl+G press
+                // right after an Escape silently doing nothing.
+                textareaRef.current?.focus();
+              }
+            }}
+            onBlur={() => setGotoLineState(null)}
+            placeholder={`Go to line (1-${lineCount})…`}
+          />
         </div>
       )}
       {symbolsState && (

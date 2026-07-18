@@ -125,6 +125,42 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
     [applyProgrammaticEdit]
   );
 
+  /** Real "Go to Line" (Ctrl+G), ported from `desktop/`'s own identical
+   * wiring -- see that file's own doc comment for the full real
+   * reasoning. This component has no LSP-driven jump helper to reuse (no
+   * language server exists in the pure client-side path), so the real
+   * line/character-to-offset conversion is inlined here directly. */
+  const [gotoLineState, setGotoLineState] = useState<{ value: string } | null>(null);
+  const gotoLineInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (gotoLineState) gotoLineInputRef.current?.focus();
+  }, [gotoLineState]);
+
+  const confirmGotoLine = useCallback(() => {
+    setGotoLineState((prev) => {
+      if (!prev) return prev;
+      const match = prev.value.trim().match(/^(\d+)(?::(\d+))?$/);
+      if (!match) return null;
+      const el = textareaRef.current;
+      if (!el) return null;
+      const lines = prevContentRef.current.split("\n");
+      const totalLines = lines.length;
+      const requestedLine = Math.max(1, parseInt(match[1], 10));
+      const line = Math.min(requestedLine, totalLines) - 1;
+      const character = match[2]
+        ? Math.min(Math.max(0, parseInt(match[2], 10) - 1), lines[line]?.length ?? 0)
+        : 0;
+      let offset = 0;
+      for (let i = 0; i < line; i++) offset += lines[i].length + 1;
+      offset += character;
+      el.focus();
+      el.setSelectionRange(offset, offset);
+      el.scrollTop = Math.max(0, line * 20 - el.clientHeight / 2);
+      return null;
+    });
+  }, []);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Tab") {
@@ -177,6 +213,13 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
           return;
         }
       }
+      // Real "Go to Line" trigger (Ctrl+G), ported from `desktop/`'s own
+      // identical branch.
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "g" && !gotoLineState) {
+        e.preventDefault();
+        setGotoLineState({ value: "" });
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
         writeFileText(file.handle, prevContentRef.current)
@@ -195,7 +238,7 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
         }
       }
     },
-    [file.doc, file.handle, file.path, onContentChange]
+    [file.doc, file.handle, file.path, onContentChange, gotoLineState, applyProgrammaticEdit]
   );
 
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1).join("\n");
@@ -240,6 +283,36 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
           style={textStyle}
         />
       </div>
+      {gotoLineState && (
+        <div className="editor-gotoline-box mono">
+          <input
+            ref={gotoLineInputRef}
+            className="editor-rename-input"
+            value={gotoLineState.value}
+            onChange={(e) =>
+              setGotoLineState((prev) => (prev ? { ...prev, value: e.target.value } : prev))
+            }
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                e.preventDefault();
+                confirmGotoLine();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setGotoLineState(null);
+                // Real, deliberate refocus: an Escape-closed overlay
+                // otherwise leaves keyboard focus nowhere useful, found by
+                // live testing a third Ctrl+G press right after an
+                // Escape silently doing nothing -- see `desktop/`'s own
+                // identical fix for the full real reasoning.
+                textareaRef.current?.focus();
+              }
+            }}
+            onBlur={() => setGotoLineState(null)}
+            placeholder={`Go to line (1-${lineCount})…`}
+          />
+        </div>
+      )}
     </div>
   );
 }
