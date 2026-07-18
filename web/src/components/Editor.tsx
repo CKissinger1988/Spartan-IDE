@@ -353,6 +353,47 @@ function moveLines(
   };
 }
 
+/** Real "Delete Line" (Ctrl+Shift+K), ported verbatim from `desktop/`'s
+ * own identical wiring -- see that file's own doc comment for the full
+ * real reasoning. */
+function deleteLines(
+  content: string,
+  selStart: number,
+  selEnd: number
+): { content: string; selectionStart: number; selectionEnd: number } {
+  const lines = content.split("\n");
+  const lineStarts: number[] = new Array(lines.length);
+  {
+    let acc = 0;
+    for (let i = 0; i < lines.length; i++) {
+      lineStarts[i] = acc;
+      acc += lines[i].length + 1;
+    }
+  }
+  const lineIndexAt = (off: number): number => {
+    let idx = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lineStarts[i] <= off) idx = i;
+      else break;
+    }
+    return idx;
+  };
+  const firstLine = lineIndexAt(selStart);
+  let lastLine = lineIndexAt(selEnd);
+  if (selEnd > selStart && lastLine > firstLine && lineStarts[lastLine] === selEnd) {
+    lastLine -= 1;
+  }
+
+  const newLines = [...lines.slice(0, firstLine), ...lines.slice(lastLine + 1)];
+  const newContent = newLines.join("\n");
+
+  const clampedLine = Math.min(firstLine, Math.max(0, newLines.length - 1));
+  let newOffset = 0;
+  for (let i = 0; i < clampedLine; i++) newOffset += newLines[i].length + 1;
+
+  return { content: newContent, selectionStart: newOffset, selectionEnd: newOffset };
+}
+
 export interface OpenFile {
   path: string;
   handle: FileSystemFileHandle;
@@ -555,6 +596,17 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
           if (result) {
             applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
           }
+        }
+        return;
+      }
+      // Real "Delete Line" (Ctrl+Shift+K), ported verbatim from
+      // `desktop/`'s own identical wiring.
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        const el = textareaRef.current;
+        if (el) {
+          const result = deleteLines(el.value, el.selectionStart, el.selectionEnd);
+          applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
         }
         return;
       }

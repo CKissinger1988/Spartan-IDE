@@ -5223,6 +5223,53 @@ first — it's the parity reference until each row there is actually reimplement
   established "Electron-shell-only feature" scope every recent editor-ergonomics pass in this
   project has carried); the real Electron window remains unlaunchable in this session (same
   standing gap since §75.59).
+- **Real, working code — delete-line (Ctrl+Shift+K) in all three real editing surfaces
+  (`desktop/Editor.tsx`, `web/BackendEditor.tsx`, `web/Editor.tsx`), task #214-#216**: the standard
+  cross-editor convention -- removes the caret's own line (or every line an active selection
+  touches, as one block) entirely, including its own trailing newline, landing the caret at column
+  0 of whatever line now occupies that same index. New, pure `deleteLines(content, selStart,
+  selEnd)` reuses the identical touched-line-range computation `toggleLineComment`/`reindentLines`/
+  `duplicateLines`/`moveLines` already established (§202-213) rather than a fifth, separately-
+  written copy. Unlike `moveLines`, this never refuses -- there's no real document boundary that
+  makes deletion invalid the way there is for a swap -- so it always returns a real result, never
+  `null`; deleting every remaining line correctly collapses to a genuine empty document (`newLines`
+  becomes `[]`, `join("\n")` correctly produces `""`) rather than erroring, and the landing-offset
+  loop's own bound is clamped to `newLines.length - 1` first so it never dereferences an
+  out-of-range index even in that empty-document case. Wired to Ctrl+Shift+K in all three
+  components' existing `handleKeyDown`, matched alongside the other real line-oriented commands
+  this session has built (toggle-comment, indent/outdent, duplicate, move). Real, live, end-to-end
+  Playwright verification against a real running `spartan-devserver` serving the real built
+  `web/dist` and the same real Python fixture this whole editor-ergonomics feature family has used
+  throughout, using genuine `page.keyboard.press` input: Ctrl+Shift+K with the caret on the
+  `print(name)` line correctly removed it entirely (7 lines -> 6), with the caret landing exactly
+  at column 0 of the line that took its place, confirmed via the real character offset; a
+  single-line selection over one of the document's blank lines was correctly deleted as its own
+  block; and, the real edge case this feature specifically needed to get right without crashing --
+  Ctrl+End (landing on the document's own real trailing empty "line," the one `split("\n")` always
+  produces for content ending in a newline) followed by Ctrl+Shift+K correctly deleted that final
+  phantom line with no exception and a sensibly clamped caret landing, confirmed via the full
+  resulting line array and a real, honest report that this pass found no bug worth fixing --
+  every one of the three assertions passed correctly on the first run. `desktop/Editor.tsx` was
+  independently re-verified with the identical script and fixture via the established "real
+  `spartan-devserver` serving `desktop/dist`, a mocked `window.spartan` forwarding every call over
+  a genuine WebSocket" technique for the still-unlaunchable real Electron window, producing
+  byte-identical results to `web/BackendEditor.tsx` at every step, screenshot-confirmed. Full
+  workspace `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets` clean
+  (zero Rust changes -- this is a pure TypeScript/React feature); all three components' own `tsc
+  --noEmit` and both shells' `npm run build` clean. **What this does not confirm**: no live
+  Playwright re-verification of `web/Editor.tsx` specifically (typechecked and built clean,
+  structurally identical logic to the two verified files, not independently re-proven this pass --
+  matching the exact same scope decision this whole editor-ergonomics feature family has made for
+  this file repeatedly since the auto-closing-brackets pass, §193-195); no undo-grouping beyond
+  this codebase's own existing single-checkpoint-per-`applyProgrammaticEdit`-call convention (a
+  real delete-line is one undo step, matching every other real command this session's feature
+  family has already established); no delete-line in the reference wgpu shell (same established
+  "Electron-shell-only feature" scope every recent editor-ergonomics pass in this project has
+  carried); the real Electron window remains unlaunchable in this session (same standing gap since
+  §75.59). **This closes out the immediate real-time-editing-command family this session's
+  editor-ergonomics work has been building** (matching-bracket highlighting, toggle-comment,
+  indent/outdent, duplicate-line, move-line, delete-line) -- all six now share one consistent,
+  reused touched-line-range implementation across all three real editing surfaces.
 
 ## Build & test
 

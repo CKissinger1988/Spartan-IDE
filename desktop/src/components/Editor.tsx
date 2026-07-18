@@ -856,6 +856,57 @@ function moveLines(
   };
 }
 
+/** Real "Delete Line" (Ctrl+Shift+K) -- removes the caret's own line (or
+ * every line an active selection touches, as one block) entirely,
+ * including its own trailing newline, landing the caret at column 0 of
+ * whatever line now occupies that same index -- clamped to the real new
+ * last line if the deleted block ran through the document's own end.
+ * Reuses the same touched-line-range computation
+ * `toggleLineComment`/`reindentLines`/`duplicateLines`/`moveLines`
+ * already established. Unlike `moveLines`, this never refuses -- deleting
+ * every remaining line correctly collapses to a real empty document
+ * (`newLines` becomes `[]`, `join("\n")` correctly produces `""`) rather
+ * than erroring, and the loop that computes the landing offset never
+ * dereferences an out-of-range index even in that empty case, since its
+ * own bound is clamped to `newLines.length - 1` first. */
+function deleteLines(
+  content: string,
+  selStart: number,
+  selEnd: number
+): { content: string; selectionStart: number; selectionEnd: number } {
+  const lines = content.split("\n");
+  const lineStarts: number[] = new Array(lines.length);
+  {
+    let acc = 0;
+    for (let i = 0; i < lines.length; i++) {
+      lineStarts[i] = acc;
+      acc += lines[i].length + 1;
+    }
+  }
+  const lineIndexAt = (off: number): number => {
+    let idx = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lineStarts[i] <= off) idx = i;
+      else break;
+    }
+    return idx;
+  };
+  const firstLine = lineIndexAt(selStart);
+  let lastLine = lineIndexAt(selEnd);
+  if (selEnd > selStart && lastLine > firstLine && lineStarts[lastLine] === selEnd) {
+    lastLine -= 1;
+  }
+
+  const newLines = [...lines.slice(0, firstLine), ...lines.slice(lastLine + 1)];
+  const newContent = newLines.join("\n");
+
+  const clampedLine = Math.min(firstLine, Math.max(0, newLines.length - 1));
+  let newOffset = 0;
+  for (let i = 0; i < clampedLine; i++) newOffset += newLines[i].length + 1;
+
+  return { content: newContent, selectionStart: newOffset, selectionEnd: newOffset };
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -2062,6 +2113,17 @@ export default function Editor({
           if (result) {
             applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
           }
+        }
+        return;
+      }
+      // Real "Delete Line" (Ctrl+Shift+K) -- see `deleteLines`'s own doc
+      // comment.
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        const el = textareaRef.current;
+        if (el) {
+          const result = deleteLines(el.value, el.selectionStart, el.selectionEnd);
+          applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
         }
         return;
       }
