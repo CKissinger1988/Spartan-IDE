@@ -5177,6 +5177,52 @@ first — it's the parity reference until each row there is actually reimplement
   reference wgpu shell (same established "Electron-shell-only feature" scope every recent
   editor-ergonomics pass in this project has carried); the real Electron window remains
   unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — move-line-up/down (Alt+Up/Alt+Down) in all three real editing surfaces
+  (`desktop/Editor.tsx`, `web/BackendEditor.tsx`, `web/Editor.tsx`), task #211-#213**: the standard
+  cross-editor convention -- swaps the touched line block (the caret's own line with no selection,
+  or every line an active selection touches) with the single adjacent line immediately above or
+  below it, keeping the selection following the moved block at the same relative columns. New,
+  pure `moveLines(content, selStart, selEnd, direction)` reuses the identical touched-line-range
+  computation `toggleLineComment`/`reindentLines`/`duplicateLines` already established (§202-210)
+  rather than a fourth, separately-written copy; the actual swap is a real, plain `Array.splice`
+  pair (remove the one adjacent line, reinsert it on the other side of the touched block) --
+  correctness for both single-line and multi-line block moves, in both directions, was worked out
+  by hand against small concrete examples before being wired up (a real off-by-one here would
+  silently scramble line order rather than throw, so this one warranted checking ahead of time
+  rather than relying purely on live testing to catch it). Returns `null` at a real document
+  boundary (nothing above line 0 to swap with when moving up; nothing below the last line when
+  moving down) -- the caller only applies an edit when non-null, so a boundary press is a genuine,
+  silent no-op rather than wrapping around or corrupting the document. Wired to Alt+ArrowUp/
+  Alt+ArrowDown in all three components' existing `handleKeyDown`, checked before the completion-
+  dropdown's own bare `ArrowUp`/`ArrowDown` handling only matters while a dropdown is actually
+  open (a real, narrow, pre-existing precedence interaction named here rather than silently
+  glossed over, not newly introduced by this pass and not fixed, matching this codebase's own
+  established "some other overlay owns this key while open" pattern already used elsewhere). Real,
+  live, end-to-end Playwright verification against a real running `spartan-devserver` serving the
+  real built `web/dist` and the same real Python fixture this whole editor-ergonomics feature
+  family has used throughout, using genuine `page.keyboard.press` input: Alt+Down with the caret on
+  the `print(name)` line correctly swapped it with the very next `return name` line; Alt+Up with
+  the caret on the document's first line was confirmed a genuine no-op (byte-identical content
+  before and after); a 2-line selection spanning the (now-swapped) `return`/`print` block, moved
+  down with Alt+Down, correctly swapped the whole block past the blank line immediately below it in
+  one operation, confirmed against the full resulting line array; Alt+Down with the caret on the
+  document's actual last real line was confirmed a second, independent genuine no-op.
+  `desktop/Editor.tsx` was independently re-verified with the identical script and fixture via the
+  established "real `spartan-devserver` serving `desktop/dist`, a mocked `window.spartan`
+  forwarding every call over a genuine WebSocket" technique for the still-unlaunchable real
+  Electron window, producing byte-identical results to `web/BackendEditor.tsx` at every step,
+  screenshot-confirmed. Full workspace `cargo fmt --all -- --check`/`cargo clippy --workspace
+  --release --all-targets` clean (zero Rust changes -- this is a pure TypeScript/React feature);
+  all three components' own `tsc --noEmit` and both shells' `npm run build` clean. **What this does
+  not confirm**: no live Playwright re-verification of `web/Editor.tsx` specifically (typechecked
+  and built clean, structurally identical logic to the two verified files, not independently
+  re-proven this pass -- matching the exact same scope decision this whole editor-ergonomics
+  feature family has made for this file repeatedly since the auto-closing-brackets pass, §193-195);
+  the real, narrow completion-dropdown arrow-key precedence interaction named above was not
+  independently resolved, only documented; no move-line in the reference wgpu shell (same
+  established "Electron-shell-only feature" scope every recent editor-ergonomics pass in this
+  project has carried); the real Electron window remains unlaunchable in this session (same
+  standing gap since §75.59).
 
 ## Build & test
 

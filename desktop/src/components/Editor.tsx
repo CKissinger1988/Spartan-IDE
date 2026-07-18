@@ -778,6 +778,84 @@ function duplicateLines(
   };
 }
 
+/** Real move-line-up/down (Alt+Up/Alt+Down) -- swaps the touched line
+ * block (the caret's own line with no selection, or every line an active
+ * selection touches) with the single adjacent line immediately above
+ * (`direction: -1`) or below (`direction: 1`), keeping the selection
+ * following the moved block at the same relative start/end columns.
+ * Returns `null` at a real document boundary (nothing above line 0 to
+ * swap with when moving up; nothing below the last line when moving
+ * down) rather than wrapping around or silently doing nothing that still
+ * calls `applyProgrammaticEdit` -- the caller only applies a real edit
+ * when this returns non-null. Reuses the same touched-line-range
+ * computation `toggleLineComment`/`reindentLines`/`duplicateLines` already
+ * established, but the actual swap is a real, plain `Array.splice` pair
+ * (remove the one adjacent line, reinsert it on the other side of the
+ * touched block) rather than a full sort/rebuild -- verified by hand for
+ * both a single line and a multi-line block in both directions before
+ * being wired up, since an off-by-one here would silently scramble line
+ * order rather than throw. */
+function moveLines(
+  content: string,
+  selStart: number,
+  selEnd: number,
+  direction: 1 | -1
+): { content: string; selectionStart: number; selectionEnd: number } | null {
+  const lines = content.split("\n");
+  const lineStarts: number[] = new Array(lines.length);
+  {
+    let acc = 0;
+    for (let i = 0; i < lines.length; i++) {
+      lineStarts[i] = acc;
+      acc += lines[i].length + 1;
+    }
+  }
+  const lineIndexAt = (off: number): number => {
+    let idx = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lineStarts[i] <= off) idx = i;
+      else break;
+    }
+    return idx;
+  };
+  const firstLine = lineIndexAt(selStart);
+  let lastLine = lineIndexAt(selEnd);
+  if (selEnd > selStart && lastLine > firstLine && lineStarts[lastLine] === selEnd) {
+    lastLine -= 1;
+  }
+
+  if (direction === -1 && firstLine === 0) return null;
+  if (direction === 1 && lastLine === lines.length - 1) return null;
+
+  const startCol = selStart - lineStarts[firstLine];
+  const endCol = selEnd - lineStarts[lastLine];
+
+  const newLines = lines.slice();
+  if (direction === -1) {
+    const above = newLines[firstLine - 1];
+    newLines.splice(firstLine - 1, 1);
+    newLines.splice(lastLine, 0, above);
+  } else {
+    const below = newLines[lastLine + 1];
+    newLines.splice(lastLine + 1, 1);
+    newLines.splice(firstLine, 0, below);
+  }
+
+  const newFirstLine = firstLine + direction;
+  const newLastLine = lastLine + direction;
+
+  let newFirstLineStart = 0;
+  for (let i = 0; i < newFirstLine; i++) newFirstLineStart += newLines[i].length + 1;
+  let newLastLineStart = newFirstLineStart;
+  for (let i = newFirstLine; i < newLastLine; i++) newLastLineStart += newLines[i].length + 1;
+
+  return {
+    content: newLines.join("\n"),
+    selectionStart: newFirstLineStart + startCol,
+    selectionEnd: newLastLineStart + endCol,
+  };
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -1965,6 +2043,25 @@ export default function Editor({
         if (el) {
           const result = duplicateLines(el.value, el.selectionStart, el.selectionEnd);
           applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
+        }
+        return;
+      }
+      // Real "Move Line Up/Down" (Alt+Up/Alt+Down) -- see `moveLines`'s own
+      // doc comment. A real document boundary (nothing to swap with) is a
+      // genuine no-op -- `moveLines` returns `null` and no edit is applied.
+      if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        e.preventDefault();
+        const el = textareaRef.current;
+        if (el) {
+          const result = moveLines(
+            el.value,
+            el.selectionStart,
+            el.selectionEnd,
+            e.key === "ArrowUp" ? -1 : 1
+          );
+          if (result) {
+            applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
+          }
         }
         return;
       }

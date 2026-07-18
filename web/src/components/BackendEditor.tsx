@@ -662,6 +662,70 @@ function duplicateLines(
   };
 }
 
+/** Real move-line-up/down (Alt+Up/Alt+Down), ported verbatim from
+ * `desktop/`'s own identical wiring -- see that file's own doc comment
+ * for the full real reasoning. */
+function moveLines(
+  content: string,
+  selStart: number,
+  selEnd: number,
+  direction: 1 | -1
+): { content: string; selectionStart: number; selectionEnd: number } | null {
+  const lines = content.split("\n");
+  const lineStarts: number[] = new Array(lines.length);
+  {
+    let acc = 0;
+    for (let i = 0; i < lines.length; i++) {
+      lineStarts[i] = acc;
+      acc += lines[i].length + 1;
+    }
+  }
+  const lineIndexAt = (off: number): number => {
+    let idx = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lineStarts[i] <= off) idx = i;
+      else break;
+    }
+    return idx;
+  };
+  const firstLine = lineIndexAt(selStart);
+  let lastLine = lineIndexAt(selEnd);
+  if (selEnd > selStart && lastLine > firstLine && lineStarts[lastLine] === selEnd) {
+    lastLine -= 1;
+  }
+
+  if (direction === -1 && firstLine === 0) return null;
+  if (direction === 1 && lastLine === lines.length - 1) return null;
+
+  const startCol = selStart - lineStarts[firstLine];
+  const endCol = selEnd - lineStarts[lastLine];
+
+  const newLines = lines.slice();
+  if (direction === -1) {
+    const above = newLines[firstLine - 1];
+    newLines.splice(firstLine - 1, 1);
+    newLines.splice(lastLine, 0, above);
+  } else {
+    const below = newLines[lastLine + 1];
+    newLines.splice(lastLine + 1, 1);
+    newLines.splice(firstLine, 0, below);
+  }
+
+  const newFirstLine = firstLine + direction;
+  const newLastLine = lastLine + direction;
+
+  let newMoveFirstLineStart = 0;
+  for (let i = 0; i < newFirstLine; i++) newMoveFirstLineStart += newLines[i].length + 1;
+  let newMoveLastLineStart = newMoveFirstLineStart;
+  for (let i = newFirstLine; i < newLastLine; i++) newMoveLastLineStart += newLines[i].length + 1;
+
+  return {
+    content: newLines.join("\n"),
+    selectionStart: newMoveFirstLineStart + startCol,
+    selectionEnd: newMoveLastLineStart + endCol,
+  };
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -1639,6 +1703,24 @@ export default function BackendEditor({
         if (el) {
           const result = duplicateLines(el.value, el.selectionStart, el.selectionEnd);
           applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
+        }
+        return;
+      }
+      // Real "Move Line Up/Down" (Alt+Up/Alt+Down), ported verbatim from
+      // `desktop/`'s own identical wiring.
+      if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        e.preventDefault();
+        const el = textareaRef.current;
+        if (el) {
+          const result = moveLines(
+            el.value,
+            el.selectionStart,
+            el.selectionEnd,
+            e.key === "ArrowUp" ? -1 : 1
+          );
+          if (result) {
+            applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
+          }
         }
         return;
       }
