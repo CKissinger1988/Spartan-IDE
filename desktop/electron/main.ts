@@ -139,6 +139,7 @@ app.whenReady().then(() => {
     "lsp_references",
     "lsp_rename",
     "lsp_document_symbol",
+    "lsp_document_highlight",
     "leo_status",
     "leo_start_task",
     "leo_approve_plan",

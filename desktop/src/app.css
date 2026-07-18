@@ -798,6 +798,7 @@
 }
 
 .editor-highlight-layer,
+.editor-symbol-highlight-layer,
 .editor-textarea {
   position: absolute;
   inset: 0;
@@ -825,6 +826,29 @@
   font-family: inherit;
   background: none;
   padding: 0;
+}
+
+/* Real document-highlight occurrence overlay (task #181) -- shares
+ * `.editor-highlight-layer`'s own exact absolute-positioning/padding box
+ * (via the `position: absolute; inset: 0; padding: 8px 12px; ...` rule
+ * both selectors share above), scroll-synced the same manual way. Real
+ * marks are positioned absolutely within it using plain line/character
+ * pixel math, not native text layout. */
+.editor-symbol-highlight-layer {
+  background: transparent;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.editor-symbol-highlight-mark {
+  position: absolute;
+  background: rgba(var(--accent-rgb, 46, 125, 255), 0.18);
+  border-radius: 2px;
+}
+
+.editor-symbol-highlight-mark-write {
+  background: rgba(212, 175, 55, 0.22);
 }
 
 .editor-textarea-overlay {

@@ -115,6 +115,10 @@ enum QueryKind {
         new_name: String,
     },
     DocumentSymbol,
+    DocumentHighlight {
+        line: i64,
+        character: i64,
+    },
 }
 
 struct PendingQuery {
@@ -453,6 +457,34 @@ impl LspSession {
             .flatten()
     }
 
+    /// Real, synchronous `textDocument/documentHighlight` -- the eighth
+    /// real query method, the direct sibling of `request_hover`/
+    /// `request_completion`/`request_definition`/`request_signature_help`/
+    /// `request_references`/`request_rename`/`request_document_symbol`
+    /// above, sharing the identical query-priority mailbox and the same
+    /// real timeout reasoning. Same calling discipline: callers must run
+    /// this from their own dedicated thread, never the single
+    /// request-processing thread every other IPC method shares.
+    pub fn request_document_highlight(
+        &self,
+        line: i64,
+        character: i64,
+    ) -> Option<serde_json::Value> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        {
+            let mut guard = self.mailbox.state.lock().unwrap();
+            guard.pending_queries.push_back(PendingQuery {
+                kind: QueryKind::DocumentHighlight { line, character },
+                reply: reply_tx,
+            });
+        }
+        self.mailbox.cvar.notify_one();
+        reply_rx
+            .recv_timeout(INDEXING_TIMEOUT + DEFAULT_TIMEOUT)
+            .ok()
+            .flatten()
+    }
+
     /// Signals the background thread to shut down and joins it. Blocks for
     /// up to ~7s worst case, matching `LspClient::shutdown`'s own bound.
     pub fn shutdown(self) {
@@ -559,6 +591,9 @@ fn dispatch_query(client: &mut LspClient, file_uri: &str, query: PendingQuery) {
             new_name,
         } => client.rename(file_uri, line, character, &new_name),
         QueryKind::DocumentSymbol => client.document_symbol(file_uri),
+        QueryKind::DocumentHighlight { line, character } => {
+            client.document_highlight(file_uri, line, character)
+        }
     };
     let _ = query.reply.send(result);
 }

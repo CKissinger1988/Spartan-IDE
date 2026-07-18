@@ -729,6 +729,7 @@
 }
 
 .editor-highlight-layer,
+.editor-symbol-highlight-layer,
 .editor-textarea {
   position: absolute;
   inset: 0;
@@ -756,6 +757,25 @@
   font-family: inherit;
   background: none;
   padding: 0;
+}
+
+/* Real document-highlight occurrence overlay (task #182), byte-identical
+ * to desktop/'s own copy. */
+.editor-symbol-highlight-layer {
+  background: transparent;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.editor-symbol-highlight-mark {
+  position: absolute;
+  background: rgba(var(--accent-rgb, 46, 125, 255), 0.18);
+  border-radius: 2px;
+}
+
+.editor-symbol-highlight-mark-write {
+  background: rgba(212, 175, 55, 0.22);
 }
 
 .editor-textarea-overlay {

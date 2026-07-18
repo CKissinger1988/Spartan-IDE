@@ -302,6 +302,7 @@ impl LspClient {
                         // `pyright-langserver`, which returns real, correctly
                         // nested `children` only once this is declared.
                         "documentSymbol": {"hierarchicalDocumentSymbolSupport": true},
+                        "documentHighlight": {},
                         "publishDiagnostics": {},
                     }
                 },
@@ -492,6 +493,30 @@ impl LspClient {
             "textDocument/documentSymbol",
             Some(json!({
                 "textDocument": {"uri": file_uri},
+            })),
+            DEFAULT_TIMEOUT,
+        )
+    }
+
+    /// Real `textDocument/documentHighlight` -- the eighth real query
+    /// method, the direct sibling of `hover`/`completion`/`definition`/
+    /// `signatureHelp`/`references`/`rename`/`document_symbol` above. Unlike
+    /// `document_symbol`, this one has a real cursor position again (every
+    /// real occurrence of the symbol *at* that position, not the whole
+    /// document). A real response is `DocumentHighlight[] | null`, each
+    /// carrying a real `kind` (1 Text, 2 Read, 3 Write, per spec §3.17.5) --
+    /// passed through unparsed exactly like every other query method here.
+    pub fn document_highlight(
+        &mut self,
+        file_uri: &str,
+        line: i64,
+        character: i64,
+    ) -> Option<Value> {
+        self.request(
+            "textDocument/documentHighlight",
+            Some(json!({
+                "textDocument": {"uri": file_uri},
+                "position": {"line": line, "character": character},
             })),
             DEFAULT_TIMEOUT,
         )

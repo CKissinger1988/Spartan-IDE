@@ -278,6 +278,50 @@ function extractDocumentSymbols(result: unknown): DocumentSymbolItem[] {
   return out;
 }
 
+/** A real, normalized LSP `DocumentHighlight`, ported verbatim from
+ * `desktop/`'s own `DocumentHighlightItem` -- see that file's own doc
+ * comment for the full real reasoning, including the real, named v1
+ * multi-line scope cut. */
+interface DocumentHighlightItem {
+  startLine: number;
+  startCharacter: number;
+  endLine: number;
+  endCharacter: number;
+  kind: number;
+}
+
+/** Normalizes a real LSP `documentHighlight` result, ported verbatim from
+ * `desktop/`'s own `extractDocumentHighlights` -- see that file's own doc
+ * comment for the full real reasoning. */
+function extractDocumentHighlights(result: unknown): DocumentHighlightItem[] {
+  if (!Array.isArray(result)) return [];
+  return result
+    .map((entry) => {
+      const e = entry as {
+        range?: {
+          start?: { line?: unknown; character?: unknown };
+          end?: { line?: unknown; character?: unknown };
+        };
+        kind?: unknown;
+      };
+      const startLine = e.range?.start?.line;
+      const startCharacter = e.range?.start?.character;
+      const endLine = e.range?.end?.line;
+      const endCharacter = e.range?.end?.character;
+      if (
+        typeof startLine !== "number" ||
+        typeof startCharacter !== "number" ||
+        typeof endLine !== "number" ||
+        typeof endCharacter !== "number"
+      ) {
+        return null;
+      }
+      const kind = typeof e.kind === "number" ? e.kind : 1;
+      return { startLine, startCharacter, endLine, endCharacter, kind };
+    })
+    .filter((h): h is DocumentHighlightItem => h !== null);
+}
+
 /** A real, normalized LSP `SignatureHelp` target, ported verbatim from
  * `desktop/`'s own `SignatureHelpTarget` -- see that file's own doc
  * comment for the full real reasoning. */
@@ -460,6 +504,7 @@ export default function BackendEditor({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
+  const symbolHighlightRef = useRef<HTMLDivElement>(null);
   const [lineCount, setLineCount] = useState(1);
   const prevContentRef = useRef(file.content);
 
@@ -909,6 +954,44 @@ export default function BackendEditor({
       .catch((err: Error) => console.error("lsp_document_symbol failed:", err));
   }, [client, charWidth, lineHeightPx, file.docId]);
 
+  /** Real document-highlight occurrence highlighting, ported verbatim from
+   * `desktop/`'s own identical wiring -- see that file's own doc comments
+   * for the full real reasoning. */
+  const [documentHighlights, setDocumentHighlights] = useState<DocumentHighlightItem[]>([]);
+  const pendingHighlightRef = useRef<{ line: number; character: number } | null>(null);
+  const highlightDebounceRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = client.onEvent((e) => {
+      if (e.event !== "lsp_document_highlight_result") return;
+      const d = e.data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      const pending = pendingHighlightRef.current;
+      if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+      setDocumentHighlights(extractDocumentHighlights(d.result));
+    });
+    return unsubscribe;
+  }, [client, file.docId]);
+
+  const handleSelectionChange = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    if (highlightDebounceRef.current !== null) {
+      window.clearTimeout(highlightDebounceRef.current);
+    }
+    if (el.selectionStart !== el.selectionEnd) {
+      setDocumentHighlights([]);
+      return;
+    }
+    highlightDebounceRef.current = window.setTimeout(() => {
+      const { line, character } = offsetToLineChar(el.value, el.selectionStart);
+      pendingHighlightRef.current = { line, character };
+      client
+        .call("lsp_document_highlight", { doc_id: file.docId, line, character })
+        .catch((err: Error) => console.error("lsp_document_highlight failed:", err));
+    }, HOVER_DELAY_MS);
+  }, [client, file.docId]);
+
   const handleDefinitionClick = useCallback(
     (e: React.MouseEvent<HTMLTextAreaElement>) => {
       if (!(e.ctrlKey || e.metaKey)) {
@@ -939,6 +1022,10 @@ export default function BackendEditor({
       highlightRef.current.scrollTop = el.scrollTop;
       highlightRef.current.scrollLeft = el.scrollLeft;
     }
+    if (symbolHighlightRef.current) {
+      symbolHighlightRef.current.scrollTop = el.scrollTop;
+      symbolHighlightRef.current.scrollLeft = el.scrollLeft;
+    }
   }, []);
 
   const handleChange = useCallback(
@@ -948,6 +1035,7 @@ export default function BackendEditor({
       prevContentRef.current = newContent;
       setLineCount(newContent.split("\n").length);
       onContentChange(file.path, newContent);
+      setDocumentHighlights([]);
       client
         .call("edit", { doc_id: file.docId, start_char: 0, end_char: oldLength, text: newContent })
         .catch((err: Error) => console.error("edit failed:", err));
@@ -1173,6 +1261,25 @@ export default function BackendEditor({
             dangerouslySetInnerHTML={{ __html: `${highlightedHtml}\n` }}
           />
         </pre>
+        <div
+          className="editor-symbol-highlight-layer"
+          ref={symbolHighlightRef}
+          aria-hidden="true"
+          style={textStyle}
+        >
+          {documentHighlights.map((h, i) => (
+            <div
+              key={`${h.startLine}:${h.startCharacter}:${h.endCharacter}:${i}`}
+              className={`editor-symbol-highlight-mark${h.kind === 3 ? " editor-symbol-highlight-mark-write" : ""}`}
+              style={{
+                top: h.startLine * lineHeightPx,
+                left: h.startCharacter * charWidth,
+                width: Math.max(2, (h.endCharacter - h.startCharacter) * charWidth),
+                height: lineHeightPx,
+              }}
+            />
+          ))}
+        </div>
         <textarea
           ref={textareaRef}
           className="editor-textarea editor-textarea-overlay mono"
@@ -1184,6 +1291,7 @@ export default function BackendEditor({
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
           onClick={handleDefinitionClick}
+          onSelect={handleSelectionChange}
           style={textStyle}
         />
       </div>

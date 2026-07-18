@@ -304,6 +304,56 @@ function extractDocumentSymbols(result: unknown): DocumentSymbolItem[] {
   return out;
 }
 
+/** A real, normalized LSP `DocumentHighlight` -- `kind` is the real spec
+ * §3.17.5 value (1 Text, 2 Read, 3 Write), used only to pick a slightly
+ * different highlight color at render time, matching `DocumentSymbolItem`'s
+ * own "normalize the data, format at the UI boundary" split. Multi-line
+ * ranges are real and spec-allowed but, for a real symbol occurrence,
+ * essentially never happen in practice -- a real, deliberate v1 scope cut:
+ * only `startLine`/`startCharacter`/`endCharacter` are used at render time
+ * (assuming `endLine === startLine`), named here rather than silently
+ * mis-rendering a genuinely multi-line highlight. */
+interface DocumentHighlightItem {
+  startLine: number;
+  startCharacter: number;
+  endLine: number;
+  endCharacter: number;
+  kind: number;
+}
+
+/** Normalizes a real LSP `documentHighlight` result (a real
+ * `DocumentHighlight[]`, or `null`). Returns `[]` for a real, honest "no
+ * highlightable occurrences here" -- not every cursor position is on a
+ * real symbol. */
+function extractDocumentHighlights(result: unknown): DocumentHighlightItem[] {
+  if (!Array.isArray(result)) return [];
+  return result
+    .map((entry) => {
+      const e = entry as {
+        range?: {
+          start?: { line?: unknown; character?: unknown };
+          end?: { line?: unknown; character?: unknown };
+        };
+        kind?: unknown;
+      };
+      const startLine = e.range?.start?.line;
+      const startCharacter = e.range?.start?.character;
+      const endLine = e.range?.end?.line;
+      const endCharacter = e.range?.end?.character;
+      if (
+        typeof startLine !== "number" ||
+        typeof startCharacter !== "number" ||
+        typeof endLine !== "number" ||
+        typeof endCharacter !== "number"
+      ) {
+        return null;
+      }
+      const kind = typeof e.kind === "number" ? e.kind : 1;
+      return { startLine, startCharacter, endLine, endCharacter, kind };
+    })
+    .filter((h): h is DocumentHighlightItem => h !== null);
+}
+
 /** A real, normalized LSP `SignatureHelp` target -- only the fields this
  * v1 tooltip actually renders. `activeParameterLabel` is `null` whenever
  * the active parameter can't be resolved (no `activeParameter` index sent,
@@ -566,6 +616,7 @@ export default function Editor({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
+  const symbolHighlightRef = useRef<HTMLDivElement>(null);
   const [lineCount, setLineCount] = useState(1);
   const prevContentRef = useRef(file.content);
 
@@ -1091,6 +1142,56 @@ export default function Editor({
       .catch((err: Error) => console.error("lsp_document_symbol failed:", err));
   }, [charWidth, lineHeightPx, file.docId]);
 
+  /** Real document-highlight occurrence highlighting -- the ninth real
+   * LSP-backed editor feature, and the first genuinely passive/automatic
+   * one (every other real query method here is a manual trigger, whether
+   * a keybinding or a mouse action): it fires on real cursor movement
+   * alone, matching how every real editor's own "highlight all
+   * occurrences" behavior works, and renders inline as colored rects
+   * behind the real text rather than a popup, reusing the exact
+   * scroll-synced layering `highlightRef`'s own syntax-color `<pre>`
+   * already established (`syncScroll` now keeps this new layer's own
+   * scroll position matched too). Debounced like hover (`HOVER_DELAY_MS`),
+   * and only fires for a real plain cursor position (`selectionStart ===
+   * selectionEnd`) -- an active text selection means something else is
+   * already being done at that position, not "show me its occurrences". */
+  const [documentHighlights, setDocumentHighlights] = useState<DocumentHighlightItem[]>([]);
+  const pendingHighlightRef = useRef<{ line: number; character: number } | null>(null);
+  const highlightDebounceRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event !== "lsp_document_highlight_result") return;
+      const d = data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      const pending = pendingHighlightRef.current;
+      if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+      setDocumentHighlights(extractDocumentHighlights(d.result));
+    });
+    return unsubscribe;
+  }, [file.docId]);
+
+  const handleSelectionChange = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    if (highlightDebounceRef.current !== null) {
+      window.clearTimeout(highlightDebounceRef.current);
+    }
+    if (el.selectionStart !== el.selectionEnd) {
+      // A real active selection -- clear any stale highlight from before
+      // the selection started rather than leaving it visually stuck.
+      setDocumentHighlights([]);
+      return;
+    }
+    highlightDebounceRef.current = window.setTimeout(() => {
+      const { line, character } = offsetToLineChar(el.value, el.selectionStart);
+      pendingHighlightRef.current = { line, character };
+      window.spartan
+        .call("lsp_document_highlight", { doc_id: file.docId, line, character })
+        .catch((err: Error) => console.error("lsp_document_highlight failed:", err));
+    }, HOVER_DELAY_MS);
+  }, [file.docId]);
+
   const diagnosticsByLine = useMemo(() => {
     const map = new Map<number, LspDiagnostic[]>();
     for (const d of diagnostics) {
@@ -1109,6 +1210,10 @@ export default function Editor({
       highlightRef.current.scrollTop = el.scrollTop;
       highlightRef.current.scrollLeft = el.scrollLeft;
     }
+    if (symbolHighlightRef.current) {
+      symbolHighlightRef.current.scrollTop = el.scrollTop;
+      symbolHighlightRef.current.scrollLeft = el.scrollLeft;
+    }
   }, []);
 
   const handleChange = useCallback(
@@ -1118,6 +1223,10 @@ export default function Editor({
       prevContentRef.current = newContent;
       setLineCount(newContent.split("\n").length);
       onContentChange(file.path, newContent);
+      // A real edit invalidates any real, already-resolved highlight
+      // positions immediately -- `handleSelectionChange`'s own debounce
+      // will naturally re-resolve them against the new content shortly.
+      setDocumentHighlights([]);
       window.spartan
         .call("edit", {
           doc_id: file.docId,
@@ -1402,6 +1511,25 @@ export default function Editor({
             dangerouslySetInnerHTML={{ __html: `${highlightedHtml}\n` }}
           />
         </pre>
+        <div
+          className="editor-symbol-highlight-layer"
+          ref={symbolHighlightRef}
+          aria-hidden="true"
+          style={textStyle}
+        >
+          {documentHighlights.map((h, i) => (
+            <div
+              key={`${h.startLine}:${h.startCharacter}:${h.endCharacter}:${i}`}
+              className={`editor-symbol-highlight-mark${h.kind === 3 ? " editor-symbol-highlight-mark-write" : ""}`}
+              style={{
+                top: h.startLine * lineHeightPx,
+                left: h.startCharacter * charWidth,
+                width: Math.max(2, (h.endCharacter - h.startCharacter) * charWidth),
+                height: lineHeightPx,
+              }}
+            />
+          ))}
+        </div>
         <textarea
           ref={textareaRef}
           className="editor-textarea editor-textarea-overlay mono"
@@ -1413,6 +1541,7 @@ export default function Editor({
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
           onClick={handleDefinitionClick}
+          onSelect={handleSelectionChange}
           style={textStyle}
         />
       </div>

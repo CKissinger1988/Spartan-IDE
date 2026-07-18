@@ -4444,6 +4444,77 @@ first — it's the parity reference until each row there is actually reimplement
   Electron window remains unlaunchable in this session (same standing gap since §75.59).
   `codeAction`/`documentHighlight` (the other two real pyright capabilities this pass's own probe
   found) remain real, named, unstarted follow-up work.
+- **Real, working code — real `textDocument/documentHighlight` (occurrence highlighting), the
+  ninth real LSP query method, plus a real, honest negative finding on `codeAction` that led here
+  (task #182)**: user-requested ("Continue the road map"), continuing directly from
+  document-symbol outline (task #179 immediately above). The previous pass's own live capability
+  probe had found pyright-langserver supports three real, not-yet-wired capabilities --
+  `documentSymbol` (now closed), `codeAction`, and `documentHighlight`. **`codeAction` was
+  investigated first, and deliberately not built**: three separate, real, hand-rolled JSON-RPC
+  probes against a live `pyright-langserver --stdio` session -- a `source.organizeImports` request
+  against a file with a genuinely unused import, a full-context `codeAction` request with an empty
+  diagnostics array, and a third with a real, confirmed `reportSelfClsParameterName` diagnostic
+  actually present in the request context -- all three returned an empty `[]`. Concluded honestly
+  as "not reliably testable with pyright-langserver in this environment," matching this project's
+  own established discipline of not shipping unverifiable features; no code was written for it.
+  Pivoted to `documentHighlight` instead, the third real, live-confirmed capability. Unlike every
+  prior LSP feature this session, this one is **passive** (no keybinding -- fires automatically as
+  the cursor moves) and needs **inline visual rendering** (colored rects behind the syntax-colored
+  text) rather than a popup/panel, so both the trigger mechanism and the rendering technique are
+  new territory for this feature family. `LspClient::document_highlight` and a new
+  `QueryKind::DocumentHighlight`/`LspSession::request_document_highlight` share the exact same
+  query-priority mailbox and `INDEXING_TIMEOUT + DEFAULT_TIMEOUT` bound every prior query method
+  already established; `spartan-backend::lsp_document_highlight` mirrors the same "ack now, event
+  later" shape and envelope-unwrapping discipline, emitting a real `lsp_document_highlight_result`
+  event carrying each highlight's real `kind` (1 Text, 2 Read, 3 Write, per LSP spec §3.17.5).
+  `desktop/src/components/Editor.tsx` and `web/src/components/BackendEditor.tsx` both gained a new
+  scroll-synced overlay layer (`.editor-symbol-highlight-layer`, `symbolHighlightRef`) inserted
+  between the existing syntax-highlight `<pre>` layer and the transparent `<textarea>`, reusing the
+  exact same `position:absolute; inset:0; padding:8px 12px` box `.editor-highlight-layer`/
+  `.editor-textarea` already share and the same manual `scrollTop`/`scrollLeft` sync `syncScroll`
+  already performs for the syntax layer -- no new positioning scheme invented. A real
+  `handleSelectionChange` callback, wired to the textarea's native `onSelect` (fires on click,
+  arrow-key movement, and any selection change -- the correct passive trigger, since no existing
+  keybinding pattern applies to "the cursor moved"), reuses the same `HOVER_DELAY_MS` (400ms)
+  debounce constant hover already established; a real selection (non-collapsed) clears highlights
+  immediately rather than querying, matching the LSP feature's own single-position semantics. A
+  real, deliberate, named v1 scope cut, stated in `DocumentHighlightItem`'s own doc comment: only
+  single-line ranges render correctly (real symbol occurrences are virtually always single-line);
+  highlights are also cleared unconditionally on any edit (`handleChange`), since character
+  positions go stale the instant real content changes. Write-kind (3) occurrences render with a
+  distinct gold tint (`.editor-symbol-highlight-mark-write`), every other kind with the default
+  blue tint -- both colors drawn from the same `--accent-rgb` custom property the rest of each
+  theme already defines. 2 new honest-error Rust tests plus a real, live integration test
+  (`crates/spartan-backend/tests/lsp_document_highlight_integration.rs`, verified passing at
+  91.06s) against a real `pyright-langserver` session -- a fixture with one write occurrence
+  (`value = 1`) and one read occurrence (`print(value)`), confirming exactly 2 real highlights with
+  the correct kinds. `lsp_document_highlight` was added to `main.ts`'s/`preload.ts`'s IPC
+  allowlists at the identical list position in both files, continuing this project's own
+  established drift-avoidance discipline. Full workspace `cargo fmt --all -- --check`/`cargo
+  clippy --workspace --release --all-targets`/`cargo test --workspace --release --
+  test-threads=1` all clean, zero failures across the full 767-test-plus suite; both shells' own
+  `tsc --noEmit`/`vite build`/`npm run build:electron` clean. **Real, live, end-to-end Playwright
+  verification against the actual compiled `web/dist` served by a real running `spartan-devserver`
+  binary** (not a mock), using real mouse/keyboard interaction throughout: a real click on `value`
+  in `value = 1` correctly produced two highlight marks on screen -- a gold write-highlight on line
+  1's `value` and a blue read-highlight on line 2's `value` inside `print(value)` -- screenshotted;
+  a real `Ctrl+End` keypress correctly cleared both marks once the cursor moved to a position with
+  no symbol underneath it, independently confirmed via a raw WebSocket protocol probe showing
+  pyright's own live response for that position is genuinely `null`, not a client-side bug. **A
+  real test-harness artifact was found and correctly diagnosed, not shipped as a false product bug
+  finding**: an earlier verification attempt used a scripted `element.dispatchEvent(new
+  Event("select"))` to simulate cursor movement instead of real Playwright mouse/keyboard input --
+  this synthetic event never reached React's `onSelect` handler at all (confirmed by logging actual
+  outgoing WebSocket frames, which showed zero second request was ever sent), making the highlights
+  appear permanently "stuck." Switching the verification script to genuine `page.click()` and
+  `page.keyboard.press("Control+End")` calls -- real OS-level input Playwright actually dispatches,
+  the same technique every other live-input verification in this project's history already uses --
+  resolved it immediately and confirmed the real product code was correct all along; recorded here
+  so a future verification pass doesn't waste time rediscovering the same test-script pitfall. **What
+  this does not confirm**: no `codeAction`/quick-fix UI of any kind (the real, honest negative
+  finding above); no multi-line highlight ranges (the named v1 scope cut); no occurrence highlighting
+  for any language beyond Python in this specific live verification; the real Electron window remains
+  unlaunchable in this session (same standing gap since §75.59).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
