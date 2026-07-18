@@ -5022,6 +5022,60 @@ first — it's the parity reference until each row there is actually reimplement
   was stress-tested (the scan is real and unbounded-depth-correct by construction, but only small
   fixtures were exercised live); the real Electron window remains unlaunchable in this session (same
   standing gap since §75.59).
+- **Real, working code — toggle line comment (Ctrl+/) in all three real editing surfaces
+  (`desktop/Editor.tsx`, `web/BackendEditor.tsx`, `web/Editor.tsx`), task #202-#204**: the standard
+  cross-editor convention -- Ctrl+/ comments every line spanned by the current selection (or just
+  the caret's own line with no selection), or uncomments them if already commented. Pure client-
+  side, no LSP query needed: a real, hand-rolled `toggleLineComment` keyed off a new
+  `LINE_COMMENT_PREFIXES` map built from `languageForPath`'s own existing hljs language ids -- one
+  source of truth for "what language is this file," not a second, separately-maintained extension
+  map. Deliberately covers only the 8 real Tier-1-plus-C# languages with an unambiguous single-line
+  comment token (`//` for Rust/TypeScript/JavaScript/Kotlin/Java/Go/C#, `#` for Python/Bash);
+  JSON/CSS/XML/Markdown have no such token (JSON has none at all; the others are block-comment-only)
+  and are left as a real, honest no-op rather than a guess. Follows the standard "comment wins over
+  uncomment when mixed" convention -- a selection straddling a mix of commented/uncommented lines
+  always converges to fully commented in one press, matching every mainstream editor's own behavior,
+  determined by checking only the *non-blank* touched lines (an all-blank touched range falls back
+  to checking every line) so a comment applied near a blank line doesn't get miscounted as "already
+  mixed." Blank lines within a touched range are always left untouched in both directions. Recognizes
+  a line as already commented whether or not it carries the trailing space this feature always
+  inserts (`// foo` and `//foo` both toggle off correctly, via a separate `token = prefix.trimEnd()`
+  check). The comment marker is always inserted right after a line's own leading whitespace, not at
+  column 0, so relative indentation is preserved -- confirmed live (see below) on an indented
+  multi-line Python selection. Selection restoration is real, not approximate: for each touched
+  boundary line, a caret/selection edge sitting at or before the leading-whitespace boundary doesn't
+  shift (nothing before it changed), one sitting after it shifts by the exact inserted/removed
+  prefix length -- computed once per boundary line without needing an intermediate offset-mapping
+  pass over the whole document. `web/Editor.tsx` (the pure client-side File System Access + WASM
+  editor, no LSP/language server of any kind) needed the identical logic inlined the same way its
+  own Go to Line implementation already had to (§196-198) -- no shared jump/query helper exists
+  there to reuse, matching that file's own already-established pattern. Real, live, end-to-end
+  Playwright verification against a real running `spartan-devserver` serving the real built
+  `web/dist` and a real Python fixture (`def greet(name): / print(name) / return name` with two
+  trailing blank lines before a final `greet("hi")` call), using genuine `page.keyboard.press`
+  navigation throughout (arrow keys, Home, Shift+ArrowDown) rather than any synthetic selection
+  simulation, consistent with this whole editor-ergonomics feature family's own established
+  distrust of manually dispatched DOM events: Ctrl+/ on line 1 with no selection correctly produced
+  `# def greet(name):`, and a second Ctrl+/ correctly restored the original line exactly; a
+  two-line indented selection (`    print(name)` / `    return name`) correctly commented to
+  `    # print(name)` / `    # return name` -- indentation preserved -- and a second toggle with
+  the same lines re-selected correctly restored both exactly; a selection spanning only a blank
+  line was confirmed left untouched. `desktop/Editor.tsx` was independently re-verified with the
+  identical script and fixture via the established "real `spartan-devserver` serving `desktop/dist`,
+  a mocked `window.spartan` forwarding every call over a genuine WebSocket" technique for the
+  still-unlaunchable real Electron window, producing byte-identical results to `web/BackendEditor.tsx`
+  at every step. Full workspace `cargo fmt --all -- --check`/`cargo clippy --workspace --release
+  --all-targets` clean (zero Rust changes -- this is a pure TypeScript/React feature); all three
+  components' own `tsc --noEmit` and both shells' `npm run build` clean. **What this does not
+  confirm**: no live Playwright re-verification of `web/Editor.tsx` specifically (typechecked and
+  built clean, structurally identical logic to the two verified files, not independently re-proven
+  this pass -- matching the exact same scope decision this whole feature family has made for this
+  file since the auto-closing-brackets pass, §193-195); no block-comment toggling for
+  JSON/CSS/XML/Markdown (a real, honest no-op by design, not a gap); no matching-bracket-style
+  visual indicator showing which lines are about to be toggled before the keypress; no toggle line
+  comment in the reference wgpu shell (same established "Electron-shell-only feature" scope every
+  recent editor-ergonomics pass in this project has carried); the real Electron window remains
+  unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 

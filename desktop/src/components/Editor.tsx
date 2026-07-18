@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { highlightSource } from "../syntax";
+import { highlightSource, languageForPath } from "../syntax";
 
 export interface OpenFile {
   path: string;
@@ -507,6 +507,125 @@ function findMatchingBracket(content: string, offset: number): [number, number] 
   if (beforeCursor && BRACKET_PAIRS[beforeCursor]) return matchBracketForward(content, offset - 1);
   if (beforeCursor && CLOSE_TO_OPEN[beforeCursor]) return matchBracketBackward(content, offset - 1);
   return null;
+}
+
+/** Real, per-language line-comment tokens, keyed by the same hljs
+ * language ids `languageForPath` already returns -- one source of truth
+ * for "what language is this file," not a second, separately-maintained
+ * extension map. Deliberately omits `xml`/`css`/`json`/`markdown`: none
+ * of them has a real, unambiguous single-line comment token (JSON has
+ * none at all; the others are block-comment-only), so `toggleLineComment`
+ * below refuses honestly rather than guessing wrong for those. */
+const LINE_COMMENT_PREFIXES: Record<string, string> = {
+  rust: "// ",
+  typescript: "// ",
+  javascript: "// ",
+  kotlin: "// ",
+  java: "// ",
+  go: "// ",
+  csharp: "// ",
+  python: "# ",
+  bash: "# ",
+};
+
+/** Real, pure line-comment toggle (Ctrl+/) -- no LSP query needed, just
+ * the per-language token above. Comments every line spanned by
+ * `[selStart, selEnd]` (or just the caret's own line with no selection)
+ * if any non-blank spanned line isn't already commented; uncomments every
+ * spanned line otherwise -- the standard "comment wins over uncomment
+ * when mixed" convention, so a selection straddling a mix of commented/
+ * uncommented lines always converges to fully commented in one press
+ * rather than toggling each line independently. Recognizes a line as
+ * already commented whether or not it carries the trailing space this
+ * function always inserts (`// foo` and `//foo` both toggle off
+ * correctly). Blank lines within a touched range are left untouched in
+ * both directions, matching every mainstream editor's own convention.
+ * Returns `null` for a language with no known comment token (an honest
+ * no-op, not a guess) or a caret sitting past the end of the last real
+ * line. */
+function toggleLineComment(
+  content: string,
+  selStart: number,
+  selEnd: number,
+  prefix: string
+): { content: string; selectionStart: number; selectionEnd: number } | null {
+  if (!prefix) return null;
+  const token = prefix.trimEnd();
+  const lines = content.split("\n");
+  const lineStarts: number[] = new Array(lines.length);
+  {
+    let acc = 0;
+    for (let i = 0; i < lines.length; i++) {
+      lineStarts[i] = acc;
+      acc += lines[i].length + 1;
+    }
+  }
+  const lineIndexAt = (off: number): number => {
+    let idx = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lineStarts[i] <= off) idx = i;
+      else break;
+    }
+    return idx;
+  };
+  const firstLine = lineIndexAt(selStart);
+  let lastLine = lineIndexAt(selEnd);
+  // A full-line drag selection's own end offset sits at the *start* of
+  // the line just past the selection -- don't count that line as
+  // "touched," matching every mainstream editor's own multi-line-
+  // selection convention for this exact command.
+  if (selEnd > selStart && lastLine > firstLine && lineStarts[lastLine] === selEnd) {
+    lastLine -= 1;
+  }
+
+  const touchedLines = lines.slice(firstLine, lastLine + 1);
+  const nonBlank = touchedLines.filter((l) => l.trim().length > 0);
+  const relevant = nonBlank.length > 0 ? nonBlank : touchedLines;
+  const allCommented = relevant.every((l) => l.trimStart().startsWith(token));
+
+  const startCol = selStart - lineStarts[firstLine];
+  const endCol = selEnd - lineStarts[lastLine];
+
+  const newLines = lines.slice();
+  let newStartCol = startCol;
+  let newEndCol = endCol;
+
+  for (let i = firstLine; i <= lastLine; i++) {
+    const line = lines[i];
+    const trimmed = line.trimStart();
+    const leadingLen = line.length - trimmed.length;
+    let delta = 0;
+    if (allCommented) {
+      if (trimmed.startsWith(prefix)) {
+        newLines[i] = line.slice(0, leadingLen) + trimmed.slice(prefix.length);
+        delta = -prefix.length;
+      } else if (trimmed.startsWith(token)) {
+        newLines[i] = line.slice(0, leadingLen) + trimmed.slice(token.length);
+        delta = -token.length;
+      }
+    } else if (line.trim().length > 0) {
+      newLines[i] = line.slice(0, leadingLen) + prefix + trimmed;
+      delta = prefix.length;
+    }
+    if (delta === 0) continue;
+    if (i === firstLine && startCol > leadingLen) newStartCol = startCol + delta;
+    if (i === lastLine && endCol > leadingLen) newEndCol = endCol + delta;
+  }
+
+  const newContent = newLines.join("\n");
+  let newFirstLineStart = 0;
+  for (let i = 0; i < firstLine; i++) newFirstLineStart += newLines[i].length + 1;
+  let newLastLineStart = newFirstLineStart;
+  for (let i = firstLine; i < lastLine; i++) newLastLineStart += newLines[i].length + 1;
+
+  const clampedNewStartCol = Math.max(0, Math.min(newStartCol, newLines[firstLine].length));
+  const clampedNewEndCol = Math.max(0, Math.min(newEndCol, newLines[lastLine].length));
+
+  return {
+    content: newContent,
+    selectionStart: newFirstLineStart + clampedNewStartCol,
+    selectionEnd: newLastLineStart + clampedNewEndCol,
+  };
 }
 
 interface HoverState {
@@ -1670,6 +1789,22 @@ export default function Editor({
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
         triggerFormatDocument();
+        return;
+      }
+      // Real "Toggle Line Comment" (Ctrl+/) -- see `toggleLineComment`'s
+      // own doc comment. A real, honest no-op for a language with no
+      // known single-line comment token (JSON/CSS/XML/Markdown) rather
+      // than guessing wrong.
+      if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+        e.preventDefault();
+        const el = textareaRef.current;
+        const prefix = LINE_COMMENT_PREFIXES[languageForPath(file.path) ?? ""];
+        if (el && prefix) {
+          const result = toggleLineComment(el.value, el.selectionStart, el.selectionEnd, prefix);
+          if (result) {
+            applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
+          }
+        }
         return;
       }
       if (e.key === "Tab") {

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { highlightSource } from "../syntax";
+import { highlightSource, languageForPath } from "../syntax";
 import { writeFileText } from "../fsAccess";
 import type { WasmDocument } from "../buffer";
 
@@ -60,6 +60,104 @@ function findMatchingBracket(content: string, offset: number): [number, number] 
   if (beforeCursor && BRACKET_PAIRS[beforeCursor]) return matchBracketForward(content, offset - 1);
   if (beforeCursor && CLOSE_TO_OPEN[beforeCursor]) return matchBracketBackward(content, offset - 1);
   return null;
+}
+
+/** Real, per-language line-comment tokens + toggle logic, ported verbatim
+ * from `desktop/Editor.tsx`'s own identical wiring -- see that file's own
+ * doc comment for the full real reasoning (comment-wins-over-uncomment on
+ * a mixed selection, blank lines left untouched, no known token for
+ * JSON/CSS/XML/Markdown is a real, honest no-op rather than a guess). */
+const LINE_COMMENT_PREFIXES: Record<string, string> = {
+  rust: "// ",
+  typescript: "// ",
+  javascript: "// ",
+  kotlin: "// ",
+  java: "// ",
+  go: "// ",
+  csharp: "// ",
+  python: "# ",
+  bash: "# ",
+};
+
+function toggleLineComment(
+  content: string,
+  selStart: number,
+  selEnd: number,
+  prefix: string
+): { content: string; selectionStart: number; selectionEnd: number } | null {
+  if (!prefix) return null;
+  const token = prefix.trimEnd();
+  const lines = content.split("\n");
+  const lineStarts: number[] = new Array(lines.length);
+  {
+    let acc = 0;
+    for (let i = 0; i < lines.length; i++) {
+      lineStarts[i] = acc;
+      acc += lines[i].length + 1;
+    }
+  }
+  const lineIndexAt = (off: number): number => {
+    let idx = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lineStarts[i] <= off) idx = i;
+      else break;
+    }
+    return idx;
+  };
+  const firstLine = lineIndexAt(selStart);
+  let lastLine = lineIndexAt(selEnd);
+  if (selEnd > selStart && lastLine > firstLine && lineStarts[lastLine] === selEnd) {
+    lastLine -= 1;
+  }
+
+  const touchedLines = lines.slice(firstLine, lastLine + 1);
+  const nonBlank = touchedLines.filter((l) => l.trim().length > 0);
+  const relevant = nonBlank.length > 0 ? nonBlank : touchedLines;
+  const allCommented = relevant.every((l) => l.trimStart().startsWith(token));
+
+  const startCol = selStart - lineStarts[firstLine];
+  const endCol = selEnd - lineStarts[lastLine];
+
+  const newLines = lines.slice();
+  let newStartCol = startCol;
+  let newEndCol = endCol;
+
+  for (let i = firstLine; i <= lastLine; i++) {
+    const line = lines[i];
+    const trimmed = line.trimStart();
+    const leadingLen = line.length - trimmed.length;
+    let delta = 0;
+    if (allCommented) {
+      if (trimmed.startsWith(prefix)) {
+        newLines[i] = line.slice(0, leadingLen) + trimmed.slice(prefix.length);
+        delta = -prefix.length;
+      } else if (trimmed.startsWith(token)) {
+        newLines[i] = line.slice(0, leadingLen) + trimmed.slice(token.length);
+        delta = -token.length;
+      }
+    } else if (line.trim().length > 0) {
+      newLines[i] = line.slice(0, leadingLen) + prefix + trimmed;
+      delta = prefix.length;
+    }
+    if (delta === 0) continue;
+    if (i === firstLine && startCol > leadingLen) newStartCol = startCol + delta;
+    if (i === lastLine && endCol > leadingLen) newEndCol = endCol + delta;
+  }
+
+  const newContent = newLines.join("\n");
+  let newFirstLineStart = 0;
+  for (let i = 0; i < firstLine; i++) newFirstLineStart += newLines[i].length + 1;
+  let newLastLineStart = newFirstLineStart;
+  for (let i = firstLine; i < lastLine; i++) newLastLineStart += newLines[i].length + 1;
+
+  const clampedNewStartCol = Math.max(0, Math.min(newStartCol, newLines[firstLine].length));
+  const clampedNewEndCol = Math.max(0, Math.min(newEndCol, newLines[lastLine].length));
+
+  return {
+    content: newContent,
+    selectionStart: newFirstLineStart + clampedNewStartCol,
+    selectionEnd: newLastLineStart + clampedNewEndCol,
+  };
 }
 
 export interface OpenFile {
@@ -293,6 +391,20 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "g" && !gotoLineState) {
         e.preventDefault();
         setGotoLineState({ value: "" });
+        return;
+      }
+      // Real "Toggle Line Comment" (Ctrl+/), ported verbatim from
+      // `desktop/Editor.tsx`'s own identical wiring.
+      if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+        e.preventDefault();
+        const el = textareaRef.current;
+        const prefix = LINE_COMMENT_PREFIXES[languageForPath(file.path) ?? ""];
+        if (el && prefix) {
+          const result = toggleLineComment(el.value, el.selectionStart, el.selectionEnd, prefix);
+          if (result) {
+            applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
+          }
+        }
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
