@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import FileTree from "./components/FileTree";
 import GitPanel from "./components/GitPanel";
+import SearchPanel from "./components/SearchPanel";
 import ModelsPanel from "./components/ModelsPanel";
 import BackendFileTree from "./components/BackendFileTree";
 import Editor, { type OpenFile } from "./components/Editor";
@@ -36,7 +37,7 @@ function lineCharToOffset(content: string, line: number, character: number): num
   return offset;
 }
 
-type SidebarView = "files" | "git" | "backend" | "models";
+type SidebarView = "files" | "git" | "search" | "backend" | "models";
 
 type BackendStatus = "connecting" | "connected" | "client-only";
 
@@ -423,7 +424,7 @@ export default function App(): React.ReactElement {
   const backendConnected = backendStatus === "connected" && !!backendClient;
   const availableSidebarViews: SidebarView[] = [
     ...(root ? (["files"] as const) : []),
-    ...(backendReady ? (["git", "backend"] as const) : []),
+    ...(backendReady ? (["git", "search", "backend"] as const) : []),
     ...(backendConnected ? (["models"] as const) : []),
   ];
   const activeSidebarView: SidebarView = availableSidebarViews.includes(sidebarView)
@@ -740,6 +741,14 @@ export default function App(): React.ReactElement {
                     Git
                   </button>
                 )}
+                {availableSidebarViews.includes("search") && (
+                  <button
+                    className={`sidebar-toggle-btn ${activeSidebarView === "search" ? "sidebar-toggle-active" : ""}`}
+                    onClick={() => setSidebarView("search")}
+                  >
+                    Search
+                  </button>
+                )}
                 {availableSidebarViews.includes("backend") && (
                   <button
                     className={`sidebar-toggle-btn ${activeSidebarView === "backend" ? "sidebar-toggle-active" : ""}`}
@@ -762,6 +771,12 @@ export default function App(): React.ReactElement {
               <FileTree root={root} onOpenFile={openFile} />
             ) : activeSidebarView === "git" && backendReady && backendClient?.projectRoot ? (
               <GitPanel client={backendClient} root={backendClient.projectRoot} />
+            ) : activeSidebarView === "search" && backendReady && backendClient?.projectRoot ? (
+              <SearchPanel
+                client={backendClient}
+                root={backendClient.projectRoot}
+                onOpenResult={(absPath, line) => handleJumpToDefinition(absPath, line, 0)}
+              />
             ) : activeSidebarView === "backend" && backendReady && backendClient?.projectRoot ? (
               <BackendFileTree
                 client={backendClient}

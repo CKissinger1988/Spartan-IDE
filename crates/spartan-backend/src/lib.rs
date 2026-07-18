@@ -2887,6 +2887,43 @@ fn file_status_json(status: spartan_git::FileStatus) -> &'static str {
     }
 }
 
+/// Real "Find in Files" (task #190) -- the first real, direct UI caller
+/// of `spartan_leo::tool::Sandbox::search_files`, a real, bounded,
+/// already-tested substring search that's existed since §75.68 as one of
+/// Leo's own real tool calls but never had a caller outside the agent
+/// loop. Reused verbatim here rather than reimplemented: a real
+/// throwaway `Sandbox` is constructed purely to get its path-jailed,
+/// noise-directory-skipping, match/file-count-bounded walk for free --
+/// this function has no Leo/agent/model involvement at all. Kept
+/// synchronous and stateless-per-call, matching `git_status`'s own
+/// precedent immediately below: a pure filesystem walk with no
+/// subprocess spawn, unlike `format_document`'s real external-process
+/// call, so it doesn't need the "ack now, event later" treatment.
+fn search_project(
+    project_root: &str,
+    pattern: &str,
+    path: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let sandbox = spartan_leo::tool::Sandbox::new(project_root);
+    match sandbox
+        .search_files(pattern, path)
+        .map_err(|e| e.to_string())?
+    {
+        spartan_leo::tool::ToolResult::SearchMatches(matches) => {
+            let json_matches: Vec<serde_json::Value> = matches
+                .into_iter()
+                .map(|m| serde_json::json!({ "path": m.path, "line": m.line, "text": m.text }))
+                .collect();
+            Ok(serde_json::json!({ "matches": json_matches }))
+        }
+        // `Sandbox::search_files` always returns `SearchMatches` on
+        // success -- every other `ToolResult` variant belongs to a
+        // different real tool call entirely (see `execute()`'s own
+        // match arms), never reachable from this call site.
+        _ => unreachable!("search_files always returns ToolResult::SearchMatches"),
+    }
+}
+
 /// Real, stateless-per-call git status -- no `GitRepo` is kept open in
 /// `BackendState` between calls (unlike Leo's own `leo_project_root`,
 /// which needs a live `Agent`), since every real git operation here is
@@ -3528,6 +3565,12 @@ pub fn handle_request(
         })(),
         "devcontainer_exec_close" => get_u64_param(&req.params, "session_id")
             .and_then(|id| devcontainer_exec_close(state, id)),
+        "search_project" => (|| {
+            let project_root = get_str_param(&req.params, "project_root")?;
+            let pattern = get_str_param(&req.params, "pattern")?;
+            let path = req.params.get("path").and_then(|v| v.as_str());
+            search_project(&project_root, &pattern, path)
+        })(),
         "git_status" => get_str_param(&req.params, "project_root").and_then(|r| git_status(&r)),
         "git_stage" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
@@ -4552,6 +4595,70 @@ mod tests {
         );
         assert!(resp.result.is_none());
         assert!(resp.error.unwrap().contains("no git repository"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn search_project_finds_a_real_substring_across_real_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-search-project-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), "hello world\nsecond line\n").unwrap();
+        std::fs::write(dir.join("sub/b.txt"), "another hello here\n").unwrap();
+        std::fs::write(dir.join("c.txt"), "no match here\n").unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "search_project",
+            serde_json::json!({ "project_root": dir.to_string_lossy(), "pattern": "hello" }),
+        );
+        assert!(
+            resp.error.is_none(),
+            "search_project errored: {:?}",
+            resp.error
+        );
+        let matches = resp.result.unwrap()["matches"].as_array().unwrap().clone();
+        assert_eq!(matches.len(), 2);
+        let paths: Vec<String> = matches
+            .iter()
+            .map(|m| m["path"].as_str().unwrap().to_string())
+            .collect();
+        assert!(paths.contains(&"a.txt".to_string()));
+        assert!(paths.iter().any(|p| p.contains("b.txt")));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn search_project_refuses_a_real_path_jail_escape() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-search-project-jail-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "search_project",
+            serde_json::json!({
+                "project_root": dir.to_string_lossy(),
+                "pattern": "x",
+                "path": "../../etc",
+            }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("path-jail"));
+
         std::fs::remove_dir_all(&dir).ok();
     }
 

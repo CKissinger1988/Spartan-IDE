@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import Sidebar from "./components/Sidebar";
 import FileTree from "./components/FileTree";
 import GitPanel from "./components/GitPanel";
+import SearchPanel from "./components/SearchPanel";
 import TabBar from "./components/TabBar";
 import StatusBar, {
   type AndroidDetectResult,
@@ -59,7 +60,7 @@ export default function App(): React.ReactElement {
   // Real Ctrl+G sidebar toggle (§75.30's own convention in the original
   // wgpu shell -- one left-rail region, not a second pane, shared between
   // the file tree and the real Source Control panel added in §75.65).
-  const [sidebarView, setSidebarView] = useState<"files" | "git">("files");
+  const [sidebarView, setSidebarView] = useState<"files" | "git" | "search">("files");
   const [showNewProjectWizard, setShowNewProjectWizard] = useState(false);
   const [onboardingState, setOnboardingState] = useState<"checking" | "show" | "done">(
     "checking"
@@ -571,6 +572,12 @@ export default function App(): React.ReactElement {
                     Git
                   </button>
                   <button
+                    className={`sidebar-toggle-btn ${sidebarView === "search" ? "sidebar-toggle-active" : ""}`}
+                    onClick={() => setSidebarView("search")}
+                  >
+                    Search
+                  </button>
+                  <button
                     className="sidebar-toggle-btn"
                     title="New Project"
                     onClick={() => setShowNewProjectWizard(true)}
@@ -580,8 +587,13 @@ export default function App(): React.ReactElement {
                 </div>
                 {sidebarView === "files" ? (
                   <FileTree root={ROOT} onOpenFile={openFile} />
-                ) : (
+                ) : sidebarView === "git" ? (
                   <GitPanel root={ROOT} />
+                ) : (
+                  <SearchPanel
+                    root={ROOT}
+                    onOpenResult={(absPath, line) => handleJumpToDefinition(absPath, line, 0)}
+                  />
                 )}
               </div>
               <div className="editor-and-debug">

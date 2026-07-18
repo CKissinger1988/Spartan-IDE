@@ -4627,6 +4627,56 @@ first — it's the parity reference until each row there is actually reimplement
   affordance in `web/`'s toolbar checkbox explaining *why* it's hidden until a backend connects
   (a real, minor, named rough edge, not a functional gap); the real Electron window remains
   unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — real "Find in Files," the first real, direct UI caller of Leo's own
+  substring search, a real off-by-one bug caught by live testing (task #192)**: user-requested
+  ("Continue until the entire project is complete"). `spartan_leo::tool::Sandbox::search_files`
+  has been real, tested, and bounded (200 matches / 20,000 files visited, common noise directories
+  skipped) since §75.68 as one of Leo's own real tool calls, but had no caller anywhere outside the
+  agent loop. New `spartan-backend::search_project(project_root, pattern, path)` closes that gap
+  by constructing a real, throwaway `Sandbox` purely to reuse its already-tested, path-jailed walk
+  -- zero Leo/model involvement, zero new search logic written. Kept synchronous (unlike
+  `format_document`'s own real subprocess call): a pure filesystem walk with real, already-proven
+  bounds needs none of this session's "ack now, event later" machinery, matching `git_status`'s own
+  precedent immediately above it in the file. New `SearchPanel.tsx` in both `desktop/` and `web/`
+  (Enter-to-search, matching this whole session's own "smallest real, correct increment" precedent
+  over firing a filesystem walk on every keystroke) adds a third real sidebar tab next to Files/Git
+  -- `desktop/`'s `App.tsx` gained an unconditional "Search" toggle, `web/`'s gained one gated the
+  same way "Git"/"Backend" already are (`backendReady`, since a real project root is required).
+  Results render grouped by file with each match's real line/text, reusing `git-panel`/`git-row`
+  CSS classes rather than new styling. Clicking a result reuses the *exact same* real
+  `handleJumpToDefinition` open-then-jump machinery go-to-definition already established in both
+  shells (§162-166) -- no new jump code, a real, deliberate reuse. **A real off-by-one bug was
+  found only by live end-to-end testing, not by inspection or by the two new Rust unit tests
+  (which never touch the frontend's own jump math at all)**: `SearchMatch.line` is a real,
+  correctly 1-indexed display convention (`i + 1` in `search_files`'s own existing, unmodified
+  code, matching how a line number is normally shown to a user), but `jumpToLocalPosition`/
+  `pendingJump` -- the exact same real landing logic every LSP-backed jump in both shells already
+  shares -- expect a real 0-indexed line, matching `textDocument/definition`'s own LSP convention.
+  Passing the raw 1-indexed match line straight through landed the caret one real line past the
+  actual match every time (confirmed live: clicking a match on a real file's line 2 landed the
+  caret at the start of a real phantom trailing line instead). Found by comparing a live click's
+  actual resulting caret position against the real match's own known real line, not assumed
+  correct from the code reading right -- fixed with a single `Math.max(0, m.line - 1)` at each
+  panel's own click handler (not in the shared jump machinery itself, which is correct for every
+  other real caller), documented in-code so the conversion isn't silently reintroduced as a bug
+  by a future edit. 2 new Rust tests (a real multi-file substring-match test confirming both real
+  files and their real matched text are found, and a real path-jail-escape refusal test, matching
+  `spartan-leo`'s own already-established test shape for this exact sandbox), full workspace
+  `cargo fmt --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test
+  --workspace --release -- --test-threads=1` all clean, zero failures; both shells' own `tsc
+  --noEmit`/`vite build`/`npm run build:electron` clean. **Real, live, end-to-end Playwright
+  verification against the actual compiled `web/dist` served by a real running `spartan-devserver`
+  binary** (not a mock): a real two-file Python fixture (`main.py`/`utils.py`, each containing the
+  real substring "hello") was searched, correctly returning both real matches grouped under their
+  real filenames with correct real line numbers (screenshotted); clicking the `main.py` result
+  correctly opened that file with the caret landing exactly on line 2 -- the real matched line --
+  confirmed both by reading the live textarea's own `selectionStart` and by a second screenshot,
+  both taken *after* the off-by-one fix was applied and re-verified to land correctly. **What this
+  does not confirm**: no Find in Files UI in the reference wgpu shell (same established "Electron
+  shells only" pattern as every other recent pass); no regex support (plain substring only,
+  matching `search_files`'s own already-documented v1 scope); no replace-in-files; no live
+  re-search while typing; the real Electron window remains unlaunchable in this session (same
+  standing gap since §75.59).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;
