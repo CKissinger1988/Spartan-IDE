@@ -1,7 +1,7 @@
 import React, { useCallback, useState } from "react";
 import type { BackendClient } from "../backendClient";
 
-interface SearchMatch {
+export interface SearchMatch {
   path: string;
   line: number;
   text: string;
@@ -15,6 +15,14 @@ interface SearchPanelProps {
    * for the full real reasoning, including the real 1-indexed-vs-
    * 0-indexed off-by-one bug this exact conversion fixes. */
   onOpenResult: (absolutePath: string, zeroIndexedLine: number) => void;
+  /** Real "Replace in Files," ported verbatim from `desktop/`'s own
+   * identical prop -- see that file's own doc comment for the full real
+   * reasoning. */
+  onReplaceAll: (
+    matches: SearchMatch[],
+    query: string,
+    replacement: string
+  ) => Promise<{ filesChanged: number; totalReplacements: number }>;
 }
 
 /**
@@ -27,11 +35,16 @@ export default function SearchPanel({
   client,
   root,
   onOpenResult,
+  onReplaceAll,
 }: SearchPanelProps): React.ReactElement {
   const [query, setQuery] = useState("");
   const [matches, setMatches] = useState<SearchMatch[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showReplace, setShowReplace] = useState(false);
+  const [replaceQuery, setReplaceQuery] = useState("");
+  const [replacing, setReplacing] = useState(false);
+  const [replaceStatus, setReplaceStatus] = useState<string | null>(null);
 
   const runSearch = useCallback(() => {
     const pattern = query.trim();
@@ -52,6 +65,24 @@ export default function SearchPanel({
       .finally(() => setSearching(false));
   }, [client, query, root]);
 
+  const runReplaceAll = useCallback(() => {
+    if (!matches || matches.length === 0) return;
+    setReplacing(true);
+    setReplaceStatus(null);
+    onReplaceAll(matches, query.trim(), replaceQuery)
+      .then((result) => {
+        setReplaceStatus(
+          `Replaced ${result.totalReplacements} occurrence(s) across ${result.filesChanged} file(s).`
+        );
+        // Real, deliberate re-search rather than trusting the now-stale
+        // preview: reflects the real, post-replace on-disk state exactly
+        // the same way a fresh Enter-triggered search would.
+        runSearch();
+      })
+      .catch((e: Error) => setReplaceStatus(`Replace failed: ${e.message}`))
+      .finally(() => setReplacing(false));
+  }, [matches, query, replaceQuery, onReplaceAll, runSearch]);
+
   const groups = new Map<string, SearchMatch[]>();
   for (const m of matches ?? []) {
     const list = groups.get(m.path) ?? [];
@@ -61,16 +92,47 @@ export default function SearchPanel({
 
   return (
     <div className="git-panel">
-      <input
-        className="git-commit-input mono"
-        placeholder="Search in files (Enter)"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") runSearch();
-        }}
-        style={{ minHeight: "auto", height: 28 }}
-      />
+      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+        <input
+          className="git-commit-input mono"
+          placeholder="Search in files (Enter)"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") runSearch();
+          }}
+          style={{ minHeight: "auto", height: 28, flex: 1 }}
+        />
+        <button
+          type="button"
+          className={`editor-find-btn${showReplace ? " editor-find-btn-active" : ""}`}
+          onClick={() => setShowReplace((prev) => !prev)}
+          title="Toggle Replace"
+        >
+          ⇄
+        </button>
+      </div>
+      {showReplace && (
+        <div style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4 }}>
+          <input
+            className="git-commit-input mono"
+            placeholder="Replace with…"
+            value={replaceQuery}
+            onChange={(e) => setReplaceQuery(e.target.value)}
+            style={{ minHeight: "auto", height: 28, flex: 1 }}
+          />
+          <button
+            type="button"
+            className="git-commit-button"
+            disabled={!matches || matches.length === 0 || replacing}
+            onClick={runReplaceAll}
+            style={{ whiteSpace: "nowrap" }}
+          >
+            {replacing ? "Replacing…" : `Replace All${matches ? ` (${matches.length})` : ""}`}
+          </button>
+        </div>
+      )}
+      {replaceStatus && <div className="git-panel-empty mono">{replaceStatus}</div>}
       {error && <div className="git-panel-empty mono">{error}</div>}
       {searching && <div className="git-panel-empty mono">Searching…</div>}
       {!searching && matches !== null && matches.length === 0 && (

@@ -53,6 +53,42 @@ function lineCharToOffset(content: string, line: number, character: number): num
   return offset;
 }
 
+interface FindMatch {
+  start: number;
+  end: number;
+}
+
+/** Real, pure, plain-substring "find," ported verbatim from `Editor.tsx`'s
+ * own identical wiring (task #223) -- see that file's own doc comment for
+ * the full real reasoning (matches `search_project`'s own established
+ * plain-substring, not regex, v1 scope, so "Replace in Files" below finds
+ * exactly what the search results it operates on already found). */
+function findAllMatches(content: string, query: string, caseSensitive: boolean): FindMatch[] {
+  if (!query) return [];
+  const haystack = caseSensitive ? content : content.toLowerCase();
+  const needle = caseSensitive ? query : query.toLowerCase();
+  const matches: FindMatch[] = [];
+  let idx = haystack.indexOf(needle);
+  while (idx !== -1) {
+    matches.push({ start: idx, end: idx + needle.length });
+    idx = haystack.indexOf(needle, idx + needle.length);
+  }
+  return matches;
+}
+
+/** Real "Replace All," ported verbatim from `Editor.tsx`'s own identical
+ * wiring. */
+function replaceAllMatches(content: string, matches: FindMatch[], replacement: string): string {
+  let result = "";
+  let cursor = 0;
+  for (const m of matches) {
+    result += content.slice(cursor, m.start) + replacement;
+    cursor = m.end;
+  }
+  result += content.slice(cursor);
+  return result;
+}
+
 export default function App(): React.ReactElement {
   const [files, setFiles] = useState<OpenFile[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -431,6 +467,71 @@ export default function App(): React.ReactElement {
     [files, handleContentChange]
   );
 
+  /** Real "Replace in Files" -- the bulk-replace half of the already-real
+   * "Find in Files" panel (tasks #190-192), closing the gap between it and
+   * the in-buffer "Find & Replace" that only ever touches the one
+   * currently open file (task #223). Deliberately reuses `applyRename`'s
+   * own real open-or-reuse-then-`edit` shape rather than a second, parallel
+   * multi-file-apply implementation -- both are "given a set of real
+   * cross-file text changes, get every affected file open and correctly
+   * updated," the only real difference is where the change list comes from
+   * (an LSP `WorkspaceEdit` there, a real client-side substring recompute
+   * here). A real, deliberate correctness property, not incidental: this
+   * recomputes `findAllMatches` against each file's own *current* content
+   * (freshly opened from disk, or the live buffer of an already-open tab)
+   * at replace time, never against the search panel's own possibly-stale
+   * preview text -- so a file edited since the last search still gets
+   * exactly the real matches it actually has, never a phantom or
+   * missed one. Applied as a single whole-file replace per file (matching
+   * `triggerFormatDocument`'s own established "one edit, one undo
+   * checkpoint" convention for a document-wide programmatic change),
+   * not per-match range edits. */
+  const applyReplaceInFiles = useCallback(
+    async (
+      matches: { path: string; line: number; text: string }[],
+      query: string,
+      replacement: string
+    ): Promise<{ filesChanged: number; totalReplacements: number }> => {
+      const relPaths = Array.from(new Set(matches.map((m) => m.path)));
+      let filesChanged = 0;
+      let totalReplacements = 0;
+      for (const relPath of relPaths) {
+        const path = `${ROOT.replace(/\/+$/, "")}/${relPath}`;
+        let docId: number;
+        let content: string;
+        const existing = files.find((f) => f.path === path);
+        if (existing) {
+          docId = existing.docId;
+          content = existing.content;
+        } else {
+          const result = (await window.spartan.call("open_file", { path })) as {
+            doc_id: number;
+            content: string;
+          };
+          docId = result.doc_id;
+          content = result.content;
+          setFiles((prev) => [...prev, { path, docId, content, dirty: false }]);
+        }
+
+        const found = findAllMatches(content, query, true);
+        if (found.length === 0) continue;
+        const next = replaceAllMatches(content, found, replacement);
+        const oldLength = [...content].length;
+        await window.spartan.call("edit", {
+          doc_id: docId,
+          start_char: 0,
+          end_char: oldLength,
+          text: next,
+        });
+        handleContentChange(path, next);
+        filesChanged++;
+        totalReplacements += found.length;
+      }
+      return { filesChanged, totalReplacements };
+    },
+    [files, handleContentChange]
+  );
+
   const closeFile = useCallback(
     (index: number) => {
       const file = files[index];
@@ -593,6 +694,7 @@ export default function App(): React.ReactElement {
                   <SearchPanel
                     root={ROOT}
                     onOpenResult={(absPath, line) => handleJumpToDefinition(absPath, line, 0)}
+                    onReplaceAll={applyReplaceInFiles}
                   />
                 )}
               </div>

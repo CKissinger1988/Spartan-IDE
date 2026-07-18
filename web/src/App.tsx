@@ -37,6 +37,40 @@ function lineCharToOffset(content: string, line: number, character: number): num
   return offset;
 }
 
+interface FindMatch {
+  start: number;
+  end: number;
+}
+
+/** Real, pure, plain-substring "find," ported verbatim from `desktop/
+ * src/App.tsx`'s own identical helper -- see that file's own doc comment
+ * for the full real reasoning. */
+function findAllMatches(content: string, query: string, caseSensitive: boolean): FindMatch[] {
+  if (!query) return [];
+  const haystack = caseSensitive ? content : content.toLowerCase();
+  const needle = caseSensitive ? query : query.toLowerCase();
+  const matches: FindMatch[] = [];
+  let idx = haystack.indexOf(needle);
+  while (idx !== -1) {
+    matches.push({ start: idx, end: idx + needle.length });
+    idx = haystack.indexOf(needle, idx + needle.length);
+  }
+  return matches;
+}
+
+/** Real "Replace All," ported verbatim from `desktop/src/App.tsx`'s own
+ * identical helper. */
+function replaceAllMatches(content: string, matches: FindMatch[], replacement: string): string {
+  let result = "";
+  let cursor = 0;
+  for (const m of matches) {
+    result += content.slice(cursor, m.start) + replacement;
+    cursor = m.end;
+  }
+  result += content.slice(cursor);
+  return result;
+}
+
 type SidebarView = "files" | "git" | "search" | "backend" | "models";
 
 type BackendStatus = "connecting" | "connected" | "client-only";
@@ -660,6 +694,68 @@ export default function App(): React.ReactElement {
     [backendClient, activeContent, handleContentChange]
   );
 
+  /** Real "Replace in Files," ported from `desktop/`'s own identical
+   * `applyReplaceInFiles` -- see that file's own doc comment for the full
+   * real reasoning (recomputes matches against each file's own *current*
+   * content at replace time, never trusting the search panel's own
+   * possibly-stale preview). The real, deliberate active-file-vs-not
+   * split mirrors `applyRename`'s own identical, already-documented
+   * "web/ tracks only one open file, so a touched-but-inactive file is
+   * saved to disk immediately rather than left as an unrepresentable
+   * pending edit" convention just above -- not a shortcut, the same real
+   * scope this whole file's own single-active-file architecture already
+   * requires everywhere else. */
+  const applyReplaceInFiles = useCallback(
+    async (
+      matches: { path: string; line: number; text: string }[],
+      query: string,
+      replacement: string
+    ): Promise<{ filesChanged: number; totalReplacements: number }> => {
+      if (!backendClient) return { filesChanged: 0, totalReplacements: 0 };
+      const relPaths = Array.from(new Set(matches.map((m) => m.path)));
+      let filesChanged = 0;
+      let totalReplacements = 0;
+      for (const relPath of relPaths) {
+        const path = `${backendClient.projectRoot?.replace(/\/+$/, "") ?? ""}/${relPath}`;
+        const isActive = activeContent?.kind === "backend" && activeContent.file.path === path;
+        let docId: number;
+        let content: string;
+        if (isActive && activeContent?.kind === "backend") {
+          docId = activeContent.file.docId;
+          content = activeContent.file.content;
+        } else {
+          const result = (await backendClient.call("open_file", { path })) as {
+            doc_id: number;
+            content: string;
+          };
+          docId = result.doc_id;
+          content = result.content;
+        }
+
+        const found = findAllMatches(content, query, true);
+        if (found.length === 0) continue;
+        const next = replaceAllMatches(content, found, replacement);
+        const oldLength = [...content].length;
+        await backendClient.call("edit", {
+          doc_id: docId,
+          start_char: 0,
+          end_char: oldLength,
+          text: next,
+        });
+
+        if (isActive) {
+          handleContentChange(path, next);
+        } else {
+          await backendClient.call("save_file", { doc_id: docId });
+        }
+        filesChanged++;
+        totalReplacements += found.length;
+      }
+      return { filesChanged, totalReplacements };
+    },
+    [backendClient, activeContent, handleContentChange]
+  );
+
   if (!isFileSystemAccessSupported()) {
     return (
       <div className="app-root">
@@ -776,6 +872,7 @@ export default function App(): React.ReactElement {
                 client={backendClient}
                 root={backendClient.projectRoot}
                 onOpenResult={(absPath, line) => handleJumpToDefinition(absPath, line, 0)}
+                onReplaceAll={applyReplaceInFiles}
               />
             ) : activeSidebarView === "backend" && backendReady && backendClient?.projectRoot ? (
               <BackendFileTree

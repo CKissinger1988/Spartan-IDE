@@ -5459,6 +5459,66 @@ first — it's the parity reference until each row there is actually reimplement
   wgpu shell (same established "Electron-shell-only feature" scope every recent editor-ergonomics
   pass has carried); the real Electron window remains unlaunchable in this session (same standing gap
   since §75.59).
+- **Real, working code — real "Replace in Files," the bulk-replace half of the already-real "Find
+  in Files" panel, a real deliberate cross-shell architectural difference confirmed by live testing
+  rather than assumed, task #226-#228**: closes the gap between the already-shipped cross-file
+  search (§190-192) and the just-shipped in-buffer Find & Replace (§223-225), which only ever
+  touches the one currently open file. Deliberately reuses `applyRename`'s own already-real,
+  already-tested "open-or-reuse each real affected file, then apply through the real `edit` IPC
+  call" shape (task #178) rather than a second, parallel multi-file-apply implementation -- both are
+  "given a set of real cross-file text changes, get every affected file open and correctly updated,"
+  the only real difference being where the change list comes from (an LSP `WorkspaceEdit` there, a
+  plain-substring recompute here, reusing the exact `findAllMatches`/`replaceAllMatches` functions
+  Find & Replace already established). A real, deliberate correctness property, not incidental: each
+  file's real matches are recomputed against its own *current* content (freshly opened from disk, or
+  the live buffer of an already-open tab) at replace time, never against the search panel's own
+  possibly-stale preview text -- so a file edited since the last search still gets exactly the real
+  matches it actually has. Applied as one whole-file replace per file (matching `triggerFormatDocument`'s
+  own "one edit, one undo checkpoint" convention), not per-match range edits. `SearchPanel.tsx` gained
+  a "⇄" toggle (reusing Find & Replace's own `.editor-find-btn` styling for visual consistency even
+  outside the editor) revealing a replace input + a real "Replace All (N)" button (`git-commit-button`
+  styling, matching the Git panel's own commit button), disabled with no results or mid-replace; a
+  success status ("Replaced N occurrence(s) across M file(s)") is followed by a real, deliberate
+  re-search (not a client-side count decrement) so the displayed results always reflect the real
+  post-replace state exactly the same way a fresh Enter-triggered search would. **A real, confirmed-
+  by-live-testing cross-shell architectural difference, not a bug in either shell**: `desktop/`'s own
+  `applyReplaceInFiles` opens every touched file as a new tab with the real replacement already
+  applied in-buffer (dirty, pending an explicit Ctrl+S) -- mirroring `applyRename`'s own identical,
+  already-shipped "review before committing to disk" precedent for that shell's real multi-tab
+  architecture -- while `web/`'s single-active-file architecture (no tabs to hold a pending edit
+  for a file that isn't the one currently displayed, the same real, already-documented scope note
+  `applyRename`'s own `web/` copy already carries) saves a non-active touched file to disk
+  immediately. Confirmed live, not assumed: after a real Replace All in `desktop/`, the search
+  panel's own automatic re-search still found the original real matches (since the real on-disk
+  bytes are genuinely unchanged until the new dirty tabs are saved) -- a real, honest, minor
+  UX rough edge named explicitly rather than hidden, the same class of gap `gui-builder`'s own
+  already-documented "stale tree until save" finding (§75.42) already established a precedent for
+  naming rather than silently absorbing. Real, live, end-to-end Playwright verification against a
+  real running `spartan-devserver` and a real two-file Python fixture (`alpha.py`/`beta.py`, "widget"
+  appearing 3 times in one file and 2 in the other, 5 total): a real search for "widget" correctly
+  showed both real per-file group labels and a real 5-row result list; toggling Replace, typing
+  "gadget," and clicking a real "Replace All (5)" button correctly reported "Replaced 5 occurrence(s)
+  across 2 file(s)." `web/BackendEditor`'s path was confirmed against the real files on disk
+  (independently re-read after the test) -- every real "widget" replaced with "gadget" in both files,
+  confirming the non-active-file-saves-immediately path -- and the panel's own automatic re-search
+  correctly showed "No matches," confirming the on-disk state and the displayed search results agree.
+  `desktop/`'s path was independently re-verified with the identical script and fixture via the
+  established "real `spartan-devserver` serving `desktop/dist`, a mocked `window.spartan` forwarding
+  every call over a genuine WebSocket" technique for the still-unlaunchable real Electron window --
+  the identical real "Replaced 5 occurrence(s) across 2 file(s)" result, screenshot-confirmed showing
+  both files opened as new, correctly-replaced, dirty tabs (`beta.py`'s own live buffer reading
+  `gadget = process("thing")` / `print(gadget)`, exactly as expected), with the real on-disk bytes
+  independently re-read afterward and confirmed still untouched (`widget`, not `gadget`) -- proving
+  the architectural difference above is real and deliberate, not a bug in either implementation.
+  Full workspace `cargo fmt --all -- --check` clean (zero Rust changes -- this is a pure TypeScript/
+  React feature, reusing the already-real `search_project` backend method with no changes needed);
+  both shells' own `tsc --noEmit` clean. **What this does not confirm**: no regex search (plain
+  substring only, matching `search_project`'s own already-documented v1 scope, and Find & Replace's
+  own same choice); no per-match selective replace within the bulk panel (Replace All only -- a
+  real, named v1 scope cut, matching this whole editor-ergonomics feature family's own "smallest
+  real, correct increment" precedent); no equivalent in the reference wgpu shell (that shell has no
+  Find in Files panel to extend at all); the real Electron window remains unlaunchable in this
+  session (same standing gap since §75.59).
 
 ## Build & test
 
