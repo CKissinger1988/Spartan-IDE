@@ -140,6 +140,72 @@ function extractReferences(result: unknown): ReferenceItem[] {
     .filter((i): i is ReferenceItem => i !== null);
 }
 
+/** A real, normalized LSP `TextEdit`, ported verbatim from `desktop/`'s
+ * own `WorkspaceTextEdit` -- see that file's own doc comment for the full
+ * real reasoning, including the real, live finding that a server may use
+ * either the `changes` or `documentChanges` `WorkspaceEdit` shape
+ * regardless of declared client capabilities. */
+export interface WorkspaceTextEdit {
+  startLine: number;
+  startCharacter: number;
+  endLine: number;
+  endCharacter: number;
+  newText: string;
+}
+
+/** Normalizes a real LSP `rename` result, ported verbatim from
+ * `desktop/`'s own `extractWorkspaceEditChanges` -- see that file's own
+ * doc comment for the full real reasoning. */
+function extractWorkspaceEditChanges(result: unknown): Record<string, WorkspaceTextEdit[]> | null {
+  if (!result || typeof result !== "object") return null;
+  const r = result as { changes?: unknown; documentChanges?: unknown };
+  const normalizeEdits = (raw: unknown[]): WorkspaceTextEdit[] =>
+    raw
+      .map((entry) => {
+        const e = entry as {
+          range?: {
+            start?: { line?: unknown; character?: unknown };
+            end?: { line?: unknown; character?: unknown };
+          };
+          newText?: unknown;
+        };
+        const startLine = e.range?.start?.line;
+        const startCharacter = e.range?.start?.character;
+        const endLine = e.range?.end?.line;
+        const endCharacter = e.range?.end?.character;
+        const newText = e.newText;
+        if (
+          typeof startLine !== "number" ||
+          typeof startCharacter !== "number" ||
+          typeof endLine !== "number" ||
+          typeof endCharacter !== "number" ||
+          typeof newText !== "string"
+        ) {
+          return null;
+        }
+        return { startLine, startCharacter, endLine, endCharacter, newText };
+      })
+      .filter((e): e is WorkspaceTextEdit => e !== null);
+
+  const out: Record<string, WorkspaceTextEdit[]> = {};
+  if (r.changes && typeof r.changes === "object") {
+    for (const [uri, edits] of Object.entries(r.changes as Record<string, unknown>)) {
+      if (!Array.isArray(edits)) continue;
+      const normalized = normalizeEdits(edits);
+      if (normalized.length > 0) out[fileUriToPath(uri)] = normalized;
+    }
+  } else if (Array.isArray(r.documentChanges)) {
+    for (const docEdit of r.documentChanges) {
+      const d = docEdit as { textDocument?: { uri?: unknown }; edits?: unknown };
+      const uri = d.textDocument?.uri;
+      if (typeof uri !== "string" || !Array.isArray(d.edits)) continue;
+      const normalized = normalizeEdits(d.edits);
+      if (normalized.length > 0) out[fileUriToPath(uri)] = normalized;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 /** A real, normalized LSP `SignatureHelp` target, ported verbatim from
  * `desktop/`'s own `SignatureHelpTarget` -- see that file's own doc
  * comment for the full real reasoning. */
@@ -283,6 +349,10 @@ interface BackendEditorProps {
   onJumpToDefinition?: (path: string, line: number, character: number) => void;
   pendingJump?: { line: number; character: number } | null;
   onJumpApplied?: () => void;
+  /** Real F2 rename-symbol apply, ported verbatim from `desktop/src/
+   * components/Editor.tsx`'s own identical prop -- see that file's own
+   * doc comment for the full real reasoning. */
+  onApplyRename?: (changes: Record<string, WorkspaceTextEdit[]>) => Promise<number>;
 }
 
 /**
@@ -313,6 +383,7 @@ export default function BackendEditor({
   onJumpToDefinition,
   pendingJump = null,
   onJumpApplied,
+  onApplyRename,
 }: BackendEditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
@@ -639,6 +710,97 @@ export default function BackendEditor({
       .catch((err: Error) => console.error("lsp_references failed:", err));
   }, [client, charWidth, lineHeightPx, file.docId]);
 
+  /** Real F2 rename-symbol, ported verbatim from `desktop/`'s own
+   * identical wiring -- see that file's own doc comments for the full
+   * real reasoning behind each phase. */
+  const [renameState, setRenameState] = useState<{
+    x: number;
+    y: number;
+    line: number;
+    character: number;
+    value: string;
+    phase: "editing" | "requesting" | "applying" | "done" | "error";
+    message?: string;
+  } | null>(null);
+  const pendingRenameRef = useRef<{ line: number; character: number } | null>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  const triggerRename = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const { line, character } = offsetToLineChar(el.value, el.selectionStart);
+    const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+    const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop;
+    setRenameState({ x, y, line, character, value: "", phase: "editing" });
+  }, [charWidth, lineHeightPx]);
+
+  useEffect(() => {
+    if (renameState?.phase === "editing") renameInputRef.current?.focus();
+  }, [renameState?.phase]);
+
+  const confirmRename = useCallback(() => {
+    setRenameState((prev) => {
+      if (!prev || !prev.value.trim()) return prev;
+      pendingRenameRef.current = { line: prev.line, character: prev.character };
+      client
+        .call("lsp_rename", {
+          doc_id: file.docId,
+          line: prev.line,
+          character: prev.character,
+          new_name: prev.value.trim(),
+        })
+        .catch((err: Error) => console.error("lsp_rename failed:", err));
+      return { ...prev, phase: "requesting" };
+    });
+  }, [client, file.docId]);
+
+  useEffect(() => {
+    const unsubscribe = client.onEvent((e) => {
+      if (e.event !== "lsp_rename_result") return;
+      const d = e.data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      const pending = pendingRenameRef.current;
+      if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+      pendingRenameRef.current = null;
+      const changes = extractWorkspaceEditChanges(d.result);
+      if (!changes) {
+        setRenameState((prev) =>
+          prev ? { ...prev, phase: "error", message: "Nothing renameable here" } : prev
+        );
+        return;
+      }
+      if (!onApplyRename) {
+        setRenameState((prev) =>
+          prev ? { ...prev, phase: "error", message: "Rename apply is unavailable" } : prev
+        );
+        return;
+      }
+      setRenameState((prev) => (prev ? { ...prev, phase: "applying" } : prev));
+      onApplyRename(changes)
+        .then((fileCount) => {
+          setRenameState((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  phase: "done",
+                  message: `Renamed in ${fileCount} file${fileCount === 1 ? "" : "s"}`,
+                }
+              : prev
+          );
+        })
+        .catch((err: Error) => {
+          setRenameState((prev) => (prev ? { ...prev, phase: "error", message: err.message } : prev));
+        });
+    });
+    return unsubscribe;
+  }, [client, file.docId, onApplyRename]);
+
+  useEffect(() => {
+    if (renameState?.phase !== "done" && renameState?.phase !== "error") return;
+    const timer = window.setTimeout(() => setRenameState(null), 2000);
+    return () => window.clearTimeout(timer);
+  }, [renameState?.phase]);
+
   const handleDefinitionClick = useCallback(
     (e: React.MouseEvent<HTMLTextAreaElement>) => {
       if (!(e.ctrlKey || e.metaKey)) {
@@ -786,6 +948,15 @@ export default function BackendEditor({
         triggerReferences();
         return;
       }
+      // Real, manual rename-symbol trigger (F2), ported verbatim from
+      // `desktop/`'s own identical branch -- see that file's own doc
+      // comment for why the rename input's own `onKeyDown` handles
+      // Enter/Escape, not this one.
+      if (e.key === "F2" && !renameState) {
+        e.preventDefault();
+        triggerRename();
+        return;
+      }
       if (e.key === "Tab") {
         e.preventDefault();
         const el = textareaRef.current;
@@ -830,6 +1001,8 @@ export default function BackendEditor({
       signatureHelpState,
       referencesState,
       triggerReferences,
+      renameState,
+      triggerRename,
       client,
       file.docId,
       file.path,
@@ -905,6 +1078,42 @@ export default function BackendEditor({
           style={{ left: signatureHelpState.x, top: signatureHelpState.y }}
         >
           {renderSignatureLabel(signatureHelpState.target)}
+        </div>
+      )}
+      {renameState && (
+        <div
+          className="editor-rename-box mono"
+          style={{ left: renameState.x, top: renameState.y }}
+        >
+          {renameState.phase === "editing" ? (
+            <input
+              ref={renameInputRef}
+              className="editor-rename-input"
+              value={renameState.value}
+              onChange={(e) =>
+                setRenameState((prev) => (prev ? { ...prev, value: e.target.value } : prev))
+              }
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  confirmRename();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setRenameState(null);
+                }
+              }}
+              onBlur={() => setRenameState((prev) => (prev?.phase === "editing" ? null : prev))}
+              placeholder="New name…"
+            />
+          ) : (
+            <div className="editor-rename-status">
+              {renameState.phase === "requesting" && "Resolving rename…"}
+              {renameState.phase === "applying" && "Applying edits…"}
+              {(renameState.phase === "done" || renameState.phase === "error") &&
+                renameState.message}
+            </div>
+          )}
         </div>
       )}
       {referencesState && (

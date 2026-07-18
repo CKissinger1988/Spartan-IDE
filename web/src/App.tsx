@@ -4,7 +4,11 @@ import GitPanel from "./components/GitPanel";
 import ModelsPanel from "./components/ModelsPanel";
 import BackendFileTree from "./components/BackendFileTree";
 import Editor, { type OpenFile } from "./components/Editor";
-import BackendEditor, { type BackendOpenFile, type LspDiagnostic } from "./components/BackendEditor";
+import BackendEditor, {
+  type BackendOpenFile,
+  type LspDiagnostic,
+  type WorkspaceTextEdit,
+} from "./components/BackendEditor";
 import DebugPanel, { type DapSessionState } from "./components/DebugPanel";
 import LogcatPanel from "./components/LogcatPanel";
 import { ensureBufferWasmInit, Document as WasmDocument } from "./buffer";
@@ -17,6 +21,20 @@ type ActiveContent =
   | { kind: "local"; file: OpenFile }
   | { kind: "backend"; file: BackendOpenFile }
   | null;
+
+/** Converts a real 0-indexed LSP line/character into a real absolute char
+ * offset into `content`, ported verbatim from `desktop/src/App.tsx`'s own
+ * identical helper -- see that file's own doc comment for the full real
+ * reasoning. */
+function lineCharToOffset(content: string, line: number, character: number): number {
+  const lines = content.split("\n");
+  let offset = 0;
+  for (let i = 0; i < line && i < lines.length; i++) {
+    offset += lines[i].length + 1; // +1 for the real newline this split consumed
+  }
+  offset += Math.min(character, lines[line]?.length ?? 0);
+  return offset;
+}
 
 type SidebarView = "files" | "git" | "backend" | "models";
 
@@ -530,6 +548,69 @@ export default function App(): React.ReactElement {
     });
   }, []);
 
+  /** Real F2 rename-symbol apply -- a real, deliberate difference from
+   * `desktop/`'s own identical-shaped `applyRename`, not a shortcut: `web/`
+   * tracks only one open file at a time (a real, already-documented scope
+   * cut, see web/README.md's own "no tabs" note), so a file this rename
+   * touches but isn't the currently displayed one has no tab to hold a
+   * pending, still-dirty edit the way `desktop/`'s multi-tab state does --
+   * a later `open_file` for it would re-read straight from disk and
+   * silently miss an edit left only in that abandoned backend document.
+   * Saved to disk immediately instead, so the real edit is never lost even
+   * though this UI has nowhere to show it as "pending." The currently
+   * active file (if touched) still gets the same dirty-until-Ctrl+S
+   * treatment `desktop/` uses, since the user has it open to review. */
+  const applyRename = useCallback(
+    async (changes: Record<string, WorkspaceTextEdit[]>): Promise<number> => {
+      if (!backendClient) return 0;
+      let touchedCount = 0;
+      for (const [path, edits] of Object.entries(changes)) {
+        const isActive = activeContent?.kind === "backend" && activeContent.file.path === path;
+        let docId: number;
+        let content: string;
+        if (isActive && activeContent?.kind === "backend") {
+          docId = activeContent.file.docId;
+          content = activeContent.file.content;
+        } else {
+          const result = (await backendClient.call("open_file", { path })) as {
+            doc_id: number;
+            content: string;
+          };
+          docId = result.doc_id;
+          content = result.content;
+        }
+
+        const withOffsets = edits
+          .map((e) => ({
+            edit: e,
+            startOffset: lineCharToOffset(content, e.startLine, e.startCharacter),
+            endOffset: lineCharToOffset(content, e.endLine, e.endCharacter),
+          }))
+          .sort((a, b) => b.startOffset - a.startOffset);
+
+        let working = content;
+        for (const { edit, startOffset, endOffset } of withOffsets) {
+          await backendClient.call("edit", {
+            doc_id: docId,
+            start_char: startOffset,
+            end_char: endOffset,
+            text: edit.newText,
+          });
+          working = working.slice(0, startOffset) + edit.newText + working.slice(endOffset);
+        }
+
+        if (isActive) {
+          handleContentChange(path, working);
+        } else {
+          await backendClient.call("save_file", { doc_id: docId });
+        }
+        touchedCount++;
+      }
+      return touchedCount;
+    },
+    [backendClient, activeContent, handleContentChange]
+  );
+
   if (!isFileSystemAccessSupported()) {
     return (
       <div className="app-root">
@@ -677,6 +758,7 @@ export default function App(): React.ReactElement {
                   pendingJump && pendingJump.path === activeContent.file.path ? pendingJump : null
                 }
                 onJumpApplied={() => setPendingJump(null)}
+                onApplyRename={applyRename}
               />
             )}
             {!error && !activeContent && (

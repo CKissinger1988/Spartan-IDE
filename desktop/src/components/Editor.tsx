@@ -144,6 +144,79 @@ function extractReferences(result: unknown): ReferenceItem[] {
     .filter((i): i is ReferenceItem => i !== null);
 }
 
+/** A real, normalized LSP `TextEdit` -- `line`/`character` are real
+ * 0-indexed LSP positions relative to whatever the document looked like
+ * when the rename request was made, matching every other query result's
+ * own position convention here. */
+export interface WorkspaceTextEdit {
+  startLine: number;
+  startCharacter: number;
+  endLine: number;
+  endCharacter: number;
+  newText: string;
+}
+
+/** Normalizes a real LSP `rename` result (a real `WorkspaceEdit`) into a
+ * real `path -> TextEdit[]` map, ready for a caller to apply. **A real,
+ * live finding, not assumed from the spec**: `open_project`'s own Rust-side
+ * `capabilities` block declares no `workspace.workspaceEdit` field at all,
+ * which per spec should mean a server sticks to the simpler `changes`
+ * shape -- but a real, live `pyright-langserver` session replies with
+ * `documentChanges` regardless (confirmed by `spartan-lsp`'s/
+ * `spartan-backend`'s own live integration tests), so both real shapes are
+ * handled here rather than assuming either one. Returns `null` for a real,
+ * honest "nothing renameable here" (an unbound name, a keyword,
+ * whitespace) -- not every position supports a rename. */
+function extractWorkspaceEditChanges(result: unknown): Record<string, WorkspaceTextEdit[]> | null {
+  if (!result || typeof result !== "object") return null;
+  const r = result as { changes?: unknown; documentChanges?: unknown };
+  const normalizeEdits = (raw: unknown[]): WorkspaceTextEdit[] =>
+    raw
+      .map((entry) => {
+        const e = entry as {
+          range?: {
+            start?: { line?: unknown; character?: unknown };
+            end?: { line?: unknown; character?: unknown };
+          };
+          newText?: unknown;
+        };
+        const startLine = e.range?.start?.line;
+        const startCharacter = e.range?.start?.character;
+        const endLine = e.range?.end?.line;
+        const endCharacter = e.range?.end?.character;
+        const newText = e.newText;
+        if (
+          typeof startLine !== "number" ||
+          typeof startCharacter !== "number" ||
+          typeof endLine !== "number" ||
+          typeof endCharacter !== "number" ||
+          typeof newText !== "string"
+        ) {
+          return null;
+        }
+        return { startLine, startCharacter, endLine, endCharacter, newText };
+      })
+      .filter((e): e is WorkspaceTextEdit => e !== null);
+
+  const out: Record<string, WorkspaceTextEdit[]> = {};
+  if (r.changes && typeof r.changes === "object") {
+    for (const [uri, edits] of Object.entries(r.changes as Record<string, unknown>)) {
+      if (!Array.isArray(edits)) continue;
+      const normalized = normalizeEdits(edits);
+      if (normalized.length > 0) out[fileUriToPath(uri)] = normalized;
+    }
+  } else if (Array.isArray(r.documentChanges)) {
+    for (const docEdit of r.documentChanges) {
+      const d = docEdit as { textDocument?: { uri?: unknown }; edits?: unknown };
+      const uri = d.textDocument?.uri;
+      if (typeof uri !== "string" || !Array.isArray(d.edits)) continue;
+      const normalized = normalizeEdits(d.edits);
+      if (normalized.length > 0) out[fileUriToPath(uri)] = normalized;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 /** A real, normalized LSP `SignatureHelp` target -- only the fields this
  * v1 tooltip actually renders. `activeParameterLabel` is `null` whenever
  * the active parameter can't be resolved (no `activeParameter` index sent,
@@ -346,6 +419,17 @@ interface EditorProps {
    * action, not a persistent prop). */
   pendingJump?: { line: number; character: number } | null;
   onJumpApplied?: () => void;
+  /** Real F2 rename-symbol apply -- given the real, already-normalized
+   * `path -> TextEdit[]` map a resolved `WorkspaceEdit` produced (see
+   * `extractWorkspaceEditChanges`'s own doc comment for the real,
+   * live-discovered shape variance it already handles), opens/finds each
+   * affected file and applies its edits through the existing, already-real
+   * `edit` IPC method -- the same division of responsibility
+   * `onJumpToDefinition` already establishes for "this needs multi-file
+   * state only `App.tsx` owns." Resolves to the real number of files
+   * actually touched, so this component's own rename UI can report a
+   * real result rather than assuming success. */
+  onApplyRename?: (changes: Record<string, WorkspaceTextEdit[]>) => Promise<number>;
 }
 
 /**
@@ -390,6 +474,7 @@ export default function Editor({
   onJumpToDefinition,
   pendingJump = null,
   onJumpApplied,
+  onApplyRename,
 }: EditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
@@ -771,6 +856,111 @@ export default function Editor({
       .catch((err: Error) => console.error("lsp_references failed:", err));
   }, [charWidth, lineHeightPx, file.docId]);
 
+  /** Real F2 rename-symbol -- the sixth real LSP-backed editor feature,
+   * following go-to-definition/signature-help/find-references' own
+   * "compute position from `selectionStart`, show UI near the cursor"
+   * shape. Unlike those three, `editing` is a real, distinct first phase:
+   * a plain new-name text box, no request sent yet -- `requesting` covers
+   * the real `lsp_rename` round trip, `applying` the real multi-file
+   * `edit` application via `onApplyRename`, and `done`/`error` show a
+   * brief real result before this self-dismisses. */
+  const [renameState, setRenameState] = useState<{
+    x: number;
+    y: number;
+    line: number;
+    character: number;
+    value: string;
+    phase: "editing" | "requesting" | "applying" | "done" | "error";
+    message?: string;
+  } | null>(null);
+  const pendingRenameRef = useRef<{ line: number; character: number } | null>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  const triggerRename = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const { line, character } = offsetToLineChar(el.value, el.selectionStart);
+    const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+    const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop;
+    setRenameState({ x, y, line, character, value: "", phase: "editing" });
+  }, [charWidth, lineHeightPx]);
+
+  // Real focus-on-open for the rename input -- a plain `autoFocus` prop
+  // doesn't reliably win against the textarea's own focus on the very
+  // render that mounts it.
+  useEffect(() => {
+    if (renameState?.phase === "editing") renameInputRef.current?.focus();
+  }, [renameState?.phase]);
+
+  const confirmRename = useCallback(() => {
+    setRenameState((prev) => {
+      if (!prev || !prev.value.trim()) return prev;
+      pendingRenameRef.current = { line: prev.line, character: prev.character };
+      window.spartan
+        .call("lsp_rename", {
+          doc_id: file.docId,
+          line: prev.line,
+          character: prev.character,
+          new_name: prev.value.trim(),
+        })
+        .catch((err: Error) => console.error("lsp_rename failed:", err));
+      return { ...prev, phase: "requesting" };
+    });
+  }, [file.docId]);
+
+  // Real `lsp_rename_result` handling -- normalizes the real WorkspaceEdit,
+  // then hands it to `App.tsx` (via `onApplyRename`) to actually apply,
+  // since it may span files this component has never seen.
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event !== "lsp_rename_result") return;
+      const d = data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      const pending = pendingRenameRef.current;
+      if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+      pendingRenameRef.current = null;
+      const changes = extractWorkspaceEditChanges(d.result);
+      if (!changes) {
+        setRenameState((prev) =>
+          prev ? { ...prev, phase: "error", message: "Nothing renameable here" } : prev
+        );
+        return;
+      }
+      if (!onApplyRename) {
+        setRenameState((prev) =>
+          prev ? { ...prev, phase: "error", message: "Rename apply is unavailable" } : prev
+        );
+        return;
+      }
+      setRenameState((prev) => (prev ? { ...prev, phase: "applying" } : prev));
+      onApplyRename(changes)
+        .then((fileCount) => {
+          setRenameState((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  phase: "done",
+                  message: `Renamed in ${fileCount} file${fileCount === 1 ? "" : "s"}`,
+                }
+              : prev
+          );
+        })
+        .catch((err: Error) => {
+          setRenameState((prev) => (prev ? { ...prev, phase: "error", message: err.message } : prev));
+        });
+    });
+    return unsubscribe;
+  }, [file.docId, onApplyRename]);
+
+  // A completed (or failed) rename self-dismisses after a brief real
+  // result is shown -- the same "don't require an extra dismiss click for
+  // a one-shot action" convention `pendingJump`'s own effect establishes.
+  useEffect(() => {
+    if (renameState?.phase !== "done" && renameState?.phase !== "error") return;
+    const timer = window.setTimeout(() => setRenameState(null), 2000);
+    return () => window.clearTimeout(timer);
+  }, [renameState?.phase]);
+
   const diagnosticsByLine = useMemo(() => {
     const map = new Map<number, LspDiagnostic[]>();
     for (const d of diagnostics) {
@@ -935,6 +1125,17 @@ export default function Editor({
         triggerReferences();
         return;
       }
+      // Real, manual rename-symbol trigger (F2, the standard cross-editor
+      // convention). Opens the rename input via `triggerRename`; typing
+      // the new name and Enter/Escape are handled by that input's own
+      // `onKeyDown` below (a real, distinct focused DOM element, unlike
+      // completion/references' own textarea-relative popups), so this
+      // branch never fires again while it's open.
+      if (e.key === "F2" && !renameState) {
+        e.preventDefault();
+        triggerRename();
+        return;
+      }
       if (e.key === "Tab") {
         e.preventDefault();
         const el = textareaRef.current;
@@ -987,6 +1188,8 @@ export default function Editor({
       signatureHelpState,
       referencesState,
       triggerReferences,
+      renameState,
+      triggerRename,
       file.docId,
       file.path,
       onContentChange,
@@ -1083,6 +1286,42 @@ export default function Editor({
           style={{ left: signatureHelpState.x, top: signatureHelpState.y }}
         >
           {renderSignatureLabel(signatureHelpState.target)}
+        </div>
+      )}
+      {renameState && (
+        <div
+          className="editor-rename-box mono"
+          style={{ left: renameState.x, top: renameState.y }}
+        >
+          {renameState.phase === "editing" ? (
+            <input
+              ref={renameInputRef}
+              className="editor-rename-input"
+              value={renameState.value}
+              onChange={(e) =>
+                setRenameState((prev) => (prev ? { ...prev, value: e.target.value } : prev))
+              }
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  confirmRename();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setRenameState(null);
+                }
+              }}
+              onBlur={() => setRenameState((prev) => (prev?.phase === "editing" ? null : prev))}
+              placeholder="New name…"
+            />
+          ) : (
+            <div className="editor-rename-status">
+              {renameState.phase === "requesting" && "Resolving rename…"}
+              {renameState.phase === "applying" && "Applying edits…"}
+              {(renameState.phase === "done" || renameState.phase === "error") &&
+                renameState.message}
+            </div>
+          )}
         </div>
       )}
       {referencesState && (

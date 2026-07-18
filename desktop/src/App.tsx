@@ -14,6 +14,7 @@ import Editor, {
   DEFAULT_EDITOR_PREFS,
   type OpenFile,
   type LspDiagnostic,
+  type WorkspaceTextEdit,
 } from "./components/Editor";
 import DebugPanel, { type DapSessionState } from "./components/DebugPanel";
 import LogcatPanel from "./components/LogcatPanel";
@@ -35,6 +36,21 @@ import { NAV, type ScreenId } from "./nav";
 import "./app.css";
 
 const ROOT = new URLSearchParams(window.location.search).get("root") ?? "/";
+
+/** Converts a real 0-indexed LSP line/character into a real absolute char
+ * offset into `content` -- the same real math `Editor.tsx`'s own
+ * `jumpToLocalPosition` already does locally, needed here at the `App.tsx`
+ * level since a real rename's `WorkspaceEdit` may touch files that
+ * component never mounted for. */
+function lineCharToOffset(content: string, line: number, character: number): number {
+  const lines = content.split("\n");
+  let offset = 0;
+  for (let i = 0; i < line && i < lines.length; i++) {
+    offset += lines[i].length + 1; // +1 for the real newline this split consumed
+  }
+  offset += Math.min(character, lines[line]?.length ?? 0);
+  return offset;
+}
 
 export default function App(): React.ReactElement {
   const [files, setFiles] = useState<OpenFile[]>([]);
@@ -353,6 +369,65 @@ export default function App(): React.ReactElement {
     );
   }, []);
 
+  /** Real F2 rename-symbol apply -- for each real file a resolved
+   * `WorkspaceEdit` touches, opens it (or reuses an already-open tab, via
+   * the same `files`-scanning `openFile` itself already does) and applies
+   * every real edit through the existing, already-real `edit` IPC method.
+   * Edits within one file are applied in descending-start-offset order,
+   * computed once from that file's own real original content (`content`,
+   * captured before any edit in this call touches it) -- since a real
+   * `WorkspaceEdit`'s own edits never overlap (the LSP spec's own
+   * guarantee) and are applied highest-offset-first, every not-yet-applied
+   * edit's own original offset stays valid throughout, so there's no need
+   * to re-derive offsets against a progressively-mutated buffer. Resolves
+   * to the real number of files touched, so `Editor.tsx`'s own rename UI
+   * can report a real result instead of assuming success. */
+  const applyRename = useCallback(
+    async (changes: Record<string, WorkspaceTextEdit[]>): Promise<number> => {
+      let touchedCount = 0;
+      for (const [path, edits] of Object.entries(changes)) {
+        let docId: number;
+        let content: string;
+        const existing = files.find((f) => f.path === path);
+        if (existing) {
+          docId = existing.docId;
+          content = existing.content;
+        } else {
+          const result = (await window.spartan.call("open_file", { path })) as {
+            doc_id: number;
+            content: string;
+          };
+          docId = result.doc_id;
+          content = result.content;
+          setFiles((prev) => [...prev, { path, docId, content, dirty: false }]);
+        }
+
+        const withOffsets = edits
+          .map((e) => ({
+            edit: e,
+            startOffset: lineCharToOffset(content, e.startLine, e.startCharacter),
+            endOffset: lineCharToOffset(content, e.endLine, e.endCharacter),
+          }))
+          .sort((a, b) => b.startOffset - a.startOffset);
+
+        let working = content;
+        for (const { edit, startOffset, endOffset } of withOffsets) {
+          await window.spartan.call("edit", {
+            doc_id: docId,
+            start_char: startOffset,
+            end_char: endOffset,
+            text: edit.newText,
+          });
+          working = working.slice(0, startOffset) + edit.newText + working.slice(endOffset);
+        }
+        handleContentChange(path, working);
+        touchedCount++;
+      }
+      return touchedCount;
+    },
+    [files, handleContentChange]
+  );
+
   const closeFile = useCallback(
     (index: number) => {
       const file = files[index];
@@ -544,6 +619,7 @@ export default function App(): React.ReactElement {
                         pendingJump && pendingJump.path === activeFile.path ? pendingJump : null
                       }
                       onJumpApplied={() => setPendingJump(null)}
+                      onApplyRename={applyRename}
                     />
                   ) : (
                     <div className="empty-state mono">Open a file from the sidebar to start editing.</div>

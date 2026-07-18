@@ -4337,6 +4337,65 @@ first — it's the parity reference until each row there is actually reimplement
   real GitHub repository visibility toggle itself (the one remaining manual step named above,
   outside any available tool's reach); no independent legal review of the Apache 2.0 text beyond
   using its real, standard, unmodified upstream wording.
+- **Real, working code — real LSP rename-symbol (F2), the sixth and final real query/mutation
+  method after hover/completion/definition/signature-help/find-references, plus a real, live
+  finding about `WorkspaceEdit` shape variance (task #178)**: extends `spartan-lsp`'s already-
+  proven query pattern to `textDocument/rename`, but unlike its five siblings the real result is a
+  `WorkspaceEdit` -- a mutation to apply, not a read-only value to display. `LspClient::rename`
+  and a new `QueryKind::Rename`/`LspSession::request_rename` share the exact same query-priority
+  mailbox and timeout bound every other query method already established; `spartan-backend::
+  lsp_rename` mirrors the same "ack now, event later" shape and passes the raw, unwrapped result
+  through untouched -- applying it is left to the frontend, the same division of responsibility
+  `extractDefinitionTarget`/`extractReferences` already established for read-only results.
+  **A real, live finding, not assumed from the spec, caught by running the new integration test,
+  not by inspection**: `open_project`'s own `capabilities` block declares no `workspace.
+  workspaceEdit` field, which per spec should mean a server sticks to the simpler `changes` shape
+  (a real `uri -> TextEdit[]` map) -- but a real, live `pyright-langserver` session replies with
+  `documentChanges` (an array of `TextDocumentEdit`s) regardless. `crates/spartan-backend/tests/
+  lsp_rename_integration.rs`'s first version assumed `changes` and failed immediately against the
+  real server's actual response; fixed by handling both real shapes, in both the Rust test and the
+  frontend's own `extractWorkspaceEditChanges` normalizer -- documented in `LspClient::rename`'s
+  own doc comment so this doesn't need rediscovering. `desktop/src/components/Editor.tsx` and
+  `web/src/components/BackendEditor.tsx` both gained a real F2 trigger: a small inline text input
+  near the cursor (`editing` phase, no request yet), Enter resolves the real rename
+  (`requesting`), then a new `onApplyRename` prop hands the normalized `path -> TextEdit[]` map up
+  to `App.tsx` (`applying`), which opens/finds each affected file and applies every edit through
+  the existing, already-real `edit` IPC method -- edits within one file are applied in descending-
+  start-offset order, computed once from that file's own original content (correct without
+  re-deriving offsets per edit, since a real `WorkspaceEdit`'s own edits never overlap, per the LSP
+  spec's own guarantee). A brief real result (`"Renamed in N file(s)"` or an honest error) shows in
+  the same input's place before it self-dismisses. **A real, deliberate architectural difference
+  between the two shells, not an oversight**: `desktop/`'s `App.tsx` tracks multiple open tabs, so
+  a non-active file touched by a rename opens as a new dirty tab, same as `desktop/`'s own existing
+  multi-file precedent. `web/` tracks only one open file at a time (a real, already-documented
+  scope cut, see `web/README.md`'s own "no tabs" note) -- a file this rename touches but isn't the
+  currently displayed one has no tab to hold a pending edit, and a later `open_file` for it would
+  re-read straight from disk, silently missing an edit left only in an abandoned in-memory backend
+  document. `web/`'s own `applyRename` therefore saves any non-active touched file to disk
+  immediately instead, named explicitly in its own doc comment as a deliberate difference from
+  `desktop/`'s all-files-stay-dirty-until-Ctrl+S convention, not a shortcut. 12 new Rust tests (3
+  dispatch-level honest-error tests in `spartan-backend`, plus the real, live
+  `lsp_rename_integration.rs` test against a real `pyright-langserver` -- a real local-variable
+  rename touching its own definition and one usage, confirming exactly 2 real edits with the
+  correct new text), 774 tests total workspace-wide (up from 762), full `cargo fmt --all --check`/
+  `cargo clippy --workspace --release --all-targets`/`cargo test --workspace --release --
+  test-threads=1` all clean, zero failures. Both shells' own `tsc --noEmit`/`vite build`/`npm run
+  build:electron` clean. **Real, live, end-to-end Playwright verification against the actual
+  compiled `web/dist` served by a real running `spartan-devserver` binary** (not a mock): opened a
+  real `main.py` fixture (`value = 1` / `print(value)`), pressed F2 at the `value` definition,
+  typed `renamed_value`, pressed Enter -- a real `lsp_rename` request reached a real live
+  `pyright-langserver` session, its real `WorkspaceEdit` (confirmed via console log to genuinely
+  use `documentChanges`, not `changes`) was normalized and applied through two real `edit` IPC
+  calls, and the resulting live buffer read back byte-for-byte as `renamed_value = 1\nprint
+  (renamed_value)` -- exactly the real, correct rename, screenshotted with the "Renamed in 1 file"
+  status visible. **What this does not confirm**: no live Playwright verification of the
+  cross-file case specifically (only a single-file rename was exercised live; the multi-file
+  apply logic itself is real and was exercised at the Rust dispatch/normalization level, matching
+  the same depth of verification find-references' own final pass settled for); no rename support
+  for any language beyond Python in this specific live verification; the real Electron window
+  remains unlaunchable in this session (same standing gap since §75.59). With this pass, every
+  real LSP query/mutation method named across tasks #130-#178 (diagnostics, hover, completion,
+  definition, signature help, references, rename) is closed in both `desktop/` and `web/`.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

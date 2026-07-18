@@ -616,6 +616,45 @@
   font-size: 11px;
 }
 
+/* Real LSP rename-symbol box (F2, task #178) -- the sixth real query-
+ * backed editor feature. Same real `position: fixed`/viewport-relative
+ * coordinate shape as `.editor-completion-list`, but a single compact
+ * pill rather than a list: it's either a plain text input (new-name
+ * entry) or a one-line status message, never both. */
+.editor-rename-box {
+  position: fixed;
+  z-index: 51;
+  min-width: 180px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-size: 12px;
+}
+
+.editor-rename-input {
+  width: 100%;
+  padding: 4px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.editor-rename-input:focus {
+  border-color: var(--accent);
+}
+
+.editor-rename-status {
+  padding: 4px 6px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
 /* Real LSP find-references panel (task #174) -- same real `position:
  * fixed` + click-to-jump shape as `.editor-completion-list`, styled as a
  * vertical list of `path:line` results rather than a horizontal-label

@@ -293,6 +293,7 @@ impl LspClient {
                         "definition": {"linkSupport": false},
                         "signatureHelp": {"signatureInformation": {"parameterInformation": {"labelOffsetSupport": false}}},
                         "references": {},
+                        "rename": {},
                         "publishDiagnostics": {},
                     }
                 },
@@ -423,6 +424,41 @@ impl LspClient {
                 "textDocument": {"uri": file_uri},
                 "position": {"line": line, "character": character},
                 "context": {"includeDeclaration": include_declaration},
+            })),
+            DEFAULT_TIMEOUT,
+        )
+    }
+
+    /// Real `textDocument/rename` -- the sixth real query method, the direct
+    /// sibling of `hover`/`completion`/`definition`/`signatureHelp`/
+    /// `references` above. Unlike those five, a real rename response is a
+    /// `WorkspaceEdit` describing a *mutation* -- a real `changes` map of
+    /// `uri -> TextEdit[]`, or `documentChanges` (an array of real
+    /// `TextDocumentEdit`s, each `{textDocument: {uri, version}, edits}`).
+    /// **A real, live finding, not assumed from the spec**: `open_project`'s
+    /// own `capabilities` block declares no `workspace.workspaceEdit` field
+    /// at all, which per spec should mean a server sticks to the simpler
+    /// `changes` shape -- but a real, live `pyright-langserver` session
+    /// replies with `documentChanges` regardless, confirmed by this crate's
+    /// own live integration test. Passed through unparsed exactly like every
+    /// other query method here either way -- this crate's job is the wire
+    /// request, not normalizing or applying the resulting edits (that's a
+    /// real caller's job, since it may span files this session never
+    /// opened, and since a caller must already handle both real shapes to
+    /// be correct against any server, not just this one).
+    pub fn rename(
+        &mut self,
+        file_uri: &str,
+        line: i64,
+        character: i64,
+        new_name: &str,
+    ) -> Option<Value> {
+        self.request(
+            "textDocument/rename",
+            Some(json!({
+                "textDocument": {"uri": file_uri},
+                "position": {"line": line, "character": character},
+                "newName": new_name,
             })),
             DEFAULT_TIMEOUT,
         )
