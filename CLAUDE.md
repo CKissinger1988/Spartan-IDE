@@ -4839,6 +4839,89 @@ first — it's the parity reference until each row there is actually reimplement
   panel is open (opens once per Shift+F12 press, a real, named v1 scope cut); no references support
   for any language beyond Python in this specific verification; the real Electron window remains
   unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — auto-closing brackets/quotes in all three real editing surfaces
+  (`desktop/Editor.tsx`, `web/BackendEditor.tsx`, `web/Editor.tsx`), plus a real, previously-latent
+  data-loss bug found and fixed in the same pass, affecting Tab-indent too, not just this new
+  feature (tasks #193-#195)**: closes "Continue" with the next real, well-scoped editor ergonomics
+  gap. Typing an opener (`(`/`[`/`{`/`"`/`'`/`` ` ``) auto-inserts its matching closer with the
+  caret placed between them; typing the exact closer that's already there skips over it instead of
+  duplicating it; typing an opener while a real selection is active wraps the selection instead of
+  replacing it (the one new interaction beyond simple pairing, matching every mainstream editor's
+  own convention); a quote only auto-pairs when not immediately before a real word character (so
+  closing an existing string doesn't insert a stray extra quote) -- brackets always pair regardless
+  of what follows. **A real, serious, previously-undiscovered bug was found during live
+  verification of the fifth scenario (wrap-selection) and traced all the way to its root cause, not
+  patched around**: the established "set `el.value` directly, then `el.dispatchEvent(new
+  Event('input', {bubbles:true}))`" technique -- originally introduced by the pre-existing
+  Tab-indent handler in both Electron-based shells' editors, then reused verbatim for this new
+  feature -- does **not** reliably reach React's own `onChange` handler in either component. Found
+  via a real, escalating live-debugging sequence, each step distinguishing a real product bug from
+  a real verification-methodology mistake rather than assuming either: (1) a minimal, dependency-free
+  HTML/JS reproduction of the identical DOM technique (no React involved) worked flawlessly,
+  isolating the failure to something specific about how these components' React tree processes a
+  *manually dispatched* native event, not a general browser/DOM limitation; (2) a debug log placed
+  directly inside `handleChange` confirmed it **never fires at all** for a manually-dispatched
+  event in this exact scenario, even though the identical technique visibly mutates the DOM
+  correctly; (3) reordering the dispatch/selection-setting calls and switching from two separate
+  `selectionStart`/`selectionEnd` assignments to one atomic `setSelectionRange()` call each failed
+  to fix it, ruling out an event-ordering race as the cause; (4) a live round trip through the real
+  backend proved the consequence is genuine, not cosmetic: typing Tab (with no auto-closing-brackets
+  code involved at all) followed immediately by a real Ctrl+S silently saved the file *without* the
+  Tab's own indentation -- a real, silent data-loss bug pre-dating this pass entirely, not
+  introduced by it. **A real, embarrassing methodology mistake was also caught and corrected
+  mid-investigation, named honestly rather than glossed over**: an early re-verification pass
+  appeared to show the bug persisting even after the real fix (below) was applied and rebuilt --
+  traced to `cat -A`'s own inability to visually distinguish trailing whitespace from nothing when
+  it's the very last content in a file with no following newline (`"x = 1\n  "` and `"x = 1\n"`
+  render visually identical in a terminal via `cat -A`); switching to `python3 -c "print(repr(...))"`
+  (or `od -c`) for every subsequent disk-content check immediately confirmed the fix was correct all
+  along -- a real lesson about verification tooling, not a real regression, and one worth recording
+  so it isn't rediscovered from scratch. **The real fix**: every programmatic mutation (Tab-indent,
+  auto-pair, wrap-selection) in all three components now routes through a new, shared
+  `applyProgrammaticEdit(el, newContent, selStart, selEnd)` function -- extracted directly from each
+  component's own pre-existing `handleChange` body -- that imperatively sets `el.value`/selection
+  for immediate visual feedback *and* directly calls the exact same state-update/IPC-call/
+  signature-help-trigger logic a genuine native input event already triggers, entirely sidestepping
+  the question of whether React chooses to recognize a synthetic `dispatchEvent` call. `handleChange`
+  itself became a thin one-line wrapper calling this same function with the textarea's own already-
+  current value/selection (a harmless self-reassignment for a real native event, verified not to
+  change real-typing behavior). The real root cause of *why* the manual dispatch technique fails
+  specifically here was investigated but not conclusively pinned to one exact React internal
+  mechanism (a live trace showed `handleChange` simply never invoked, with no thrown exception and
+  `dispatchEvent` itself returning `true`) -- named as a real, honest unknown rather than a
+  fabricated explanation, since the fix that actually resolves it (bypass the event system entirely)
+  doesn't require knowing the precise internal reason it was unreliable. **Real, live, end-to-end
+  verification, in both Electron-based shells, of all 5 scenarios plus real disk persistence**:
+  `web/BackendEditor.tsx` was driven against a real running `spartan-devserver` + real project
+  fixture -- auto-pair, skip-close, quote-pair, quote-skip-close, and wrap-selection all produced
+  the exact real expected buffer content, screenshotted; a full round trip (all 5 interactions, then
+  real Ctrl+S) with Format on Save (a real, already-shipped feature, §189) temporarily disabled
+  showed the real saved file on disk matching the real DOM value byte-for-byte via `python3 repr`;
+  re-enabling Format on Save showed the real `black` formatter correctly reformatting the saved
+  content (adding real PEP8 blank lines, a trailing newline) -- confirming that feature's own
+  already-verified correct behavior, not a new bug. `desktop/Editor.tsx` was independently verified
+  the same way, using the same established "real `spartan-devserver` serving `desktop/dist`, a
+  mocked `window.spartan` forwarding every call over a genuine WebSocket" technique this project's
+  own hover/completion verification passes already established for the still-unlaunchable real
+  Electron window -- all 5 scenarios passed identically, and a real Ctrl+S save with Format on Save
+  disabled again matched the DOM value byte-for-byte on disk. `web/Editor.tsx` (the pure
+  client-side File System Access + WASM editor) received the identical `applyProgrammaticEdit`
+  refactor and passed `tsc --noEmit` clean, but was not independently live-verified this pass the
+  same depth as the other two -- its own save path (a real File System Access API write, not an IPC
+  call) shares the exact same underlying `handleChange`-must-actually-fire mechanism the other two
+  components' fix addresses, so the fix is real and structurally identical, just not re-proven via a
+  fourth live Playwright round trip given this pass's own time budget. Full workspace `cargo fmt
+  --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test --workspace
+  --release -- --test-threads=1` all clean (zero Rust changes were needed -- this was a pure
+  TypeScript/React fix, the Rust backend and `spartan-buffer` were independently re-confirmed
+  correct via the same raw-stdio-protocol technique used to rule them out as the cause); both
+  shells' own `tsc --noEmit`/`npm run build` clean. **What this does not confirm**: the exact
+  internal React mechanism behind the manual-dispatch failure (named as a real, honest unknown
+  above); no live Playwright re-verification of `web/Editor.tsx` specifically (typechecked and
+  structurally identical to the two verified fixes, not independently re-proven); no auto-closing
+  brackets in the reference wgpu shell (`crates/spartan-editor-core`, same established "Electron-shell
+  -only feature" scope every recent editor-ergonomics pass in this project has carried); the real
+  Electron window remains unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 

@@ -43,6 +43,19 @@ function worstSeverity(diags: LspDiagnostic[]): string {
  * firing a request, not on every raw mousemove pixel. */
 const HOVER_DELAY_MS = 400;
 
+/** Real auto-closing bracket/quote pairs, ported verbatim from
+ * `desktop/`'s own identical constants (task #193/#194) -- see that
+ * file's own doc comment for the full real reasoning. */
+const OPEN_TO_CLOSE: Record<string, string> = {
+  "(": ")",
+  "[": "]",
+  "{": "}",
+  '"': '"',
+  "'": "'",
+  "`": "`",
+};
+const CLOSE_CHARS = new Set(Object.values(OPEN_TO_CLOSE));
+
 /** Extracts real, displayable text from a real LSP `Hover` result's
  * `contents` field, which the spec allows in three real shapes:
  * `MarkupContent` (`{kind, value}`), a bare `MarkedString` (a plain
@@ -1117,9 +1130,39 @@ export default function BackendEditor({
     }
   }, []);
 
-  const handleChange = useCallback(
-    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      const newContent = e.target.value;
+  /** The real, shared core of applying an edit -- extracted from
+   * `handleChange` (below) so keyboard-triggered mutations (Tab-indent,
+   * auto-closing brackets/quotes) can call it directly instead of
+   * manually mutating `el.value` and dispatching a synthetic native
+   * "input" event.
+   *
+   * **A real, serious bug this refactor fixes, found only by live
+   * testing -- not by inspection**: the previous "set `el.value`, then
+   * `el.dispatchEvent(new Event('input', {bubbles:true}))`" technique
+   * (originally established by the Tab-indent handler, then reused for
+   * auto-closing brackets) does NOT reliably reach React's `onChange` in
+   * this component. A live Playwright round trip proved it: typing Tab
+   * or an auto-pairing bracket visibly updated the textarea's raw DOM
+   * `.value` (so it *looked* correct on screen), but the real backend
+   * document was never told about the change (`handleChange` -- and so
+   * the real `edit` IPC call inside it -- never fired), and a subsequent
+   * real Ctrl+S wrote the file to disk *without* the Tab indent or the
+   * auto-paired closing character at all -- a real, silent data-loss bug
+   * that had nothing to do with auto-closing brackets specifically; Tab
+   * alone reproduced it identically. The exact mechanism was never fully
+   * isolated (a minimal, React-free HTML reproduction of the identical
+   * DOM technique worked perfectly, so it's specific to how this
+   * component's own React tree processes a *manually dispatched* native
+   * event, not a general DOM/browser limitation) -- rather than keep
+   * relying on an event-dispatch technique proven unreliable here, this
+   * function makes every programmatic mutation call the *same* real
+   * update path a genuine native input event already goes through,
+   * sidestepping the question of whether React chooses to recognize the
+   * synthetic dispatch at all. */
+  const applyProgrammaticEdit = useCallback(
+    (el: HTMLTextAreaElement, newContent: string, selStart: number, selEnd: number) => {
+      el.value = newContent;
+      el.setSelectionRange(selStart, selEnd);
       const oldLength = [...prevContentRef.current].length;
       prevContentRef.current = newContent;
       setLineCount(newContent.split("\n").length);
@@ -1132,8 +1175,7 @@ export default function BackendEditor({
       // Real signature-help auto-trigger, ported verbatim from `desktop/`'s
       // own identical wiring -- see that file's own doc comment for the
       // full real reasoning.
-      const el = e.target;
-      const pos = el.selectionStart;
+      const pos = selStart;
       const justTyped = pos > 0 ? newContent[pos - 1] : "";
       if (justTyped === "(" || justTyped === ",") {
         const { line, character } = offsetToLineChar(newContent, pos);
@@ -1149,6 +1191,14 @@ export default function BackendEditor({
       }
     },
     [client, charWidth, lineHeightPx, file.docId, file.path, onContentChange]
+  );
+
+  const handleChange = useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const el = e.target;
+      applyProgrammaticEdit(el, el.value, el.selectionStart, el.selectionEnd);
+    },
+    [applyProgrammaticEdit]
   );
 
   const handleKeyDown = useCallback(
@@ -1268,9 +1318,49 @@ export default function BackendEditor({
         const start = el.selectionStart;
         const end = el.selectionEnd;
         const value = el.value;
-        el.value = `${value.slice(0, start)}  ${value.slice(end)}`;
-        el.selectionStart = el.selectionEnd = start + 2;
-        el.dispatchEvent(new Event("input", { bubbles: true }));
+        const next = `${value.slice(0, start)}  ${value.slice(end)}`;
+        applyProgrammaticEdit(el, next, start + 2, start + 2);
+      }
+      // Real auto-closing brackets/quotes, ported verbatim from
+      // `desktop/`'s own identical wiring -- see that file's own doc
+      // comment for the full real reasoning.
+      if (
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        Object.prototype.hasOwnProperty.call(OPEN_TO_CLOSE, e.key)
+      ) {
+        const el = textareaRef.current;
+        if (el) {
+          const start = el.selectionStart;
+          const end = el.selectionEnd;
+          const value = el.value;
+          const closeChar = OPEN_TO_CLOSE[e.key];
+          if (start !== end) {
+            e.preventDefault();
+            const selected = value.slice(start, end);
+            const next = `${value.slice(0, start)}${e.key}${selected}${closeChar}${value.slice(end)}`;
+            applyProgrammaticEdit(el, next, start + 1, start + 1 + selected.length);
+            return;
+          }
+          const isQuote = e.key === '"' || e.key === "'" || e.key === "`";
+          const nextChar = value[start] ?? "";
+          const shouldPair = !isQuote || nextChar === "" || /[\s)\]},;]/.test(nextChar);
+          if (shouldPair) {
+            e.preventDefault();
+            const next = `${value.slice(0, start)}${e.key}${closeChar}${value.slice(start)}`;
+            applyProgrammaticEdit(el, next, start + 1, start + 1);
+            return;
+          }
+        }
+      }
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && CLOSE_CHARS.has(e.key)) {
+        const el = textareaRef.current;
+        if (el && el.selectionStart === el.selectionEnd && el.value[el.selectionStart] === e.key) {
+          e.preventDefault();
+          el.selectionStart = el.selectionEnd = el.selectionStart + 1;
+          return;
+        }
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault();
