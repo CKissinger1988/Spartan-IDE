@@ -715,6 +715,69 @@ function reindentLines(
   };
 }
 
+/** Real line/block duplication (Ctrl+Shift+D) -- the standard cross-
+ * editor convention: with no selection, duplicates the caret's own line
+ * directly below itself and moves the caret onto the new copy at the
+ * same column; with an active selection, duplicates every line the
+ * selection touches as one block, inserted immediately after the last
+ * touched line, and moves the selection down onto the new copy at the
+ * same relative start/end columns. Reuses the same touched-line-range
+ * computation `toggleLineComment`/`reindentLines` already established
+ * (`lineStarts`/`lineIndexAt`/full-line-drag-selection-boundary logic),
+ * but needs no per-line delta tracking the way those two do -- every
+ * touched line shifts down by the exact same fixed amount (the touched
+ * block's own line count), so the new selection is computed directly
+ * from that shift rather than accumulated line-by-line. */
+function duplicateLines(
+  content: string,
+  selStart: number,
+  selEnd: number
+): { content: string; selectionStart: number; selectionEnd: number } {
+  const lines = content.split("\n");
+  const lineStarts: number[] = new Array(lines.length);
+  {
+    let acc = 0;
+    for (let i = 0; i < lines.length; i++) {
+      lineStarts[i] = acc;
+      acc += lines[i].length + 1;
+    }
+  }
+  const lineIndexAt = (off: number): number => {
+    let idx = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lineStarts[i] <= off) idx = i;
+      else break;
+    }
+    return idx;
+  };
+  const firstLine = lineIndexAt(selStart);
+  let lastLine = lineIndexAt(selEnd);
+  if (selEnd > selStart && lastLine > firstLine && lineStarts[lastLine] === selEnd) {
+    lastLine -= 1;
+  }
+
+  const startCol = selStart - lineStarts[firstLine];
+  const endCol = selEnd - lineStarts[lastLine];
+
+  const touched = lines.slice(firstLine, lastLine + 1);
+  const newLines = [...lines.slice(0, lastLine + 1), ...touched, ...lines.slice(lastLine + 1)];
+
+  const shift = touched.length;
+  const newFirstLine = firstLine + shift;
+  const newLastLine = lastLine + shift;
+
+  let newFirstLineStart = 0;
+  for (let i = 0; i < newFirstLine; i++) newFirstLineStart += newLines[i].length + 1;
+  let newLastLineStart = newFirstLineStart;
+  for (let i = newFirstLine; i < newLastLine; i++) newLastLineStart += newLines[i].length + 1;
+
+  return {
+    content: newLines.join("\n"),
+    selectionStart: newFirstLineStart + startCol,
+    selectionEnd: newLastLineStart + endCol,
+  };
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -1891,6 +1954,17 @@ export default function Editor({
           if (result) {
             applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
           }
+        }
+        return;
+      }
+      // Real "Duplicate Line" (Ctrl+Shift+D) -- see `duplicateLines`'s own
+      // doc comment.
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "d") {
+        e.preventDefault();
+        const el = textareaRef.current;
+        if (el) {
+          const result = duplicateLines(el.value, el.selectionStart, el.selectionEnd);
+          applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
         }
         return;
       }

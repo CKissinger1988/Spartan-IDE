@@ -609,6 +609,59 @@ function reindentLines(
   };
 }
 
+/** Real line/block duplication (Ctrl+Shift+D), ported verbatim from
+ * `desktop/`'s own identical wiring -- see that file's own doc comment
+ * for the full real reasoning. */
+function duplicateLines(
+  content: string,
+  selStart: number,
+  selEnd: number
+): { content: string; selectionStart: number; selectionEnd: number } {
+  const lines = content.split("\n");
+  const lineStarts: number[] = new Array(lines.length);
+  {
+    let acc = 0;
+    for (let i = 0; i < lines.length; i++) {
+      lineStarts[i] = acc;
+      acc += lines[i].length + 1;
+    }
+  }
+  const lineIndexAt = (off: number): number => {
+    let idx = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lineStarts[i] <= off) idx = i;
+      else break;
+    }
+    return idx;
+  };
+  const firstLine = lineIndexAt(selStart);
+  let lastLine = lineIndexAt(selEnd);
+  if (selEnd > selStart && lastLine > firstLine && lineStarts[lastLine] === selEnd) {
+    lastLine -= 1;
+  }
+
+  const startCol = selStart - lineStarts[firstLine];
+  const endCol = selEnd - lineStarts[lastLine];
+
+  const touched = lines.slice(firstLine, lastLine + 1);
+  const newLines = [...lines.slice(0, lastLine + 1), ...touched, ...lines.slice(lastLine + 1)];
+
+  const shift = touched.length;
+  const newFirstLine = firstLine + shift;
+  const newLastLine = lastLine + shift;
+
+  let newDupFirstLineStart = 0;
+  for (let i = 0; i < newFirstLine; i++) newDupFirstLineStart += newLines[i].length + 1;
+  let newDupLastLineStart = newDupFirstLineStart;
+  for (let i = newFirstLine; i < newLastLine; i++) newDupLastLineStart += newLines[i].length + 1;
+
+  return {
+    content: newLines.join("\n"),
+    selectionStart: newDupFirstLineStart + startCol,
+    selectionEnd: newDupLastLineStart + endCol,
+  };
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -1575,6 +1628,17 @@ export default function BackendEditor({
           if (result) {
             applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
           }
+        }
+        return;
+      }
+      // Real "Duplicate Line" (Ctrl+Shift+D), ported verbatim from
+      // `desktop/`'s own identical wiring.
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "d") {
+        e.preventDefault();
+        const el = textareaRef.current;
+        if (el) {
+          const result = duplicateLines(el.value, el.selectionStart, el.selectionEnd);
+          applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
         }
         return;
       }

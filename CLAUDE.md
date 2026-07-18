@@ -5126,6 +5126,57 @@ first — it's the parity reference until each row there is actually reimplement
   indent/outdent in the reference wgpu shell (same established "Electron-shell-only feature" scope
   every recent editor-ergonomics pass in this project has carried); the real Electron window
   remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — line/block duplication (Ctrl+Shift+D) in all three real editing surfaces
+  (`desktop/Editor.tsx`, `web/BackendEditor.tsx`, `web/Editor.tsx`), task #208-#210**: the standard
+  cross-editor convention -- with no selection, duplicates the caret's own line directly below
+  itself and moves the caret onto the new copy at the same column; with an active selection,
+  duplicates every line the selection touches as one block, inserted immediately after the last
+  touched line, moving the selection down onto the new copy at the same relative start/end
+  columns. New, pure `duplicateLines(content, selStart, selEnd)` reuses the identical touched-
+  line-range computation (`lineStarts`/`lineIndexAt`/full-line-drag-selection-boundary logic)
+  `toggleLineComment`/`reindentLines` already established (§202-207) rather than a third,
+  separately-written copy -- but needs no per-line delta tracking the way those two do, since
+  every touched line shifts down by the exact same fixed amount (the touched block's own line
+  count), so the new selection is computed directly from that shift rather than accumulated
+  line-by-line. Wired to Ctrl+Shift+D in all three components' existing `handleKeyDown`, matched
+  before the Tab handler (no interaction between the two -- Ctrl+Shift+D never reaches the Tab
+  branch since it always returns first). **A real verification-methodology lesson, caught and
+  resolved before it could be reported as a false bug**: the first live test's own hand-derived
+  expected selection offset (18) didn't match the real, live result (17) -- rather than assuming
+  either the code or the test was simply wrong, the exact same pure function was re-run in
+  isolation against the identical fixture content in a plain Node script, which reproduced 17
+  exactly and traced the actual cause: `"def greet(name):"` is 16 characters, not the 17 the
+  original manual verification had miscounted by hand -- a real arithmetic mistake in the
+  verification itself, not a product bug, confirmed by direct recomputation rather than either
+  blindly trusting the live result or blindly trusting the hand check. Recorded here so this
+  specific miscounting mistake isn't repeated in a future verification pass for this fixture.
+  Real, live, end-to-end Playwright verification against a real running `spartan-devserver`
+  serving the real built `web/dist` and the same real Python fixture this whole editor-ergonomics
+  feature family has used since the toggle-line-comment pass, using genuine `page.keyboard.press`
+  input throughout: Ctrl+Shift+D with the caret collapsed at line 1 correctly duplicated that
+  exact line directly below itself (line count 7 -> 8), with the caret landing exactly at column 0
+  of the new duplicate line, confirmed via the exact real character offset, not just visually;
+  Ctrl+Shift+D with a 2-line selection spanning the already-duplicated file's `print`/`return`
+  lines correctly duplicated both as one block immediately below themselves (line count 8 -> 10),
+  with the new selection correctly landing on the fresh copy, confirmed via both the full resulting
+  line array and a screenshot showing the real selection highlight on the new block, not the
+  original. `desktop/Editor.tsx` was independently re-verified with the identical script and
+  fixture via the established "real `spartan-devserver` serving `desktop/dist`, a mocked
+  `window.spartan` forwarding every call over a genuine WebSocket" technique for the still-
+  unlaunchable real Electron window, producing byte-identical results to `web/BackendEditor.tsx`
+  at every step, screenshot-confirmed. Full workspace `cargo fmt --all -- --check`/`cargo clippy
+  --workspace --release --all-targets` clean (zero Rust changes -- this is a pure TypeScript/React
+  feature); all three components' own `tsc --noEmit` and both shells' `npm run build` clean. **What
+  this does not confirm**: no live Playwright re-verification of `web/Editor.tsx` specifically
+  (typechecked and built clean, structurally identical logic to the two verified files, not
+  independently re-proven this pass -- matching the exact same scope decision this whole
+  editor-ergonomics feature family has made for this file repeatedly since the auto-closing-
+  brackets pass, §193-195); no `Alt+Shift+Down`-style "duplicate without moving the selection"
+  variant (a real, named, minor v1 scope cut -- Ctrl+Shift+D's own real behavior already matches
+  the more common convention of following the duplicated block); no duplicate-line in the
+  reference wgpu shell (same established "Electron-shell-only feature" scope every recent
+  editor-ergonomics pass in this project has carried); the real Electron window remains
+  unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 
