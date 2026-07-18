@@ -447,6 +447,68 @@ function offsetToLineChar(content: string, offset: number): { line: number; char
   return { line: lines.length - 1, character: lines[lines.length - 1].length };
 }
 
+const BRACKET_PAIRS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
+const CLOSE_TO_OPEN: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+
+function matchBracketForward(content: string, openOffset: number): [number, number] | null {
+  const open = content[openOffset];
+  const close = BRACKET_PAIRS[open];
+  let depth = 0;
+  for (let i = openOffset; i < content.length; i++) {
+    if (content[i] === open) depth++;
+    else if (content[i] === close && --depth === 0) return [openOffset, i];
+  }
+  return null;
+}
+
+function matchBracketBackward(content: string, closeOffset: number): [number, number] | null {
+  const close = content[closeOffset];
+  const open = CLOSE_TO_OPEN[close];
+  let depth = 0;
+  for (let i = closeOffset; i >= 0; i--) {
+    if (content[i] === close) depth++;
+    else if (content[i] === open && --depth === 0) return [closeOffset, i];
+  }
+  return null;
+}
+
+/** Real, pure bracket-pair matcher -- a plain forward/backward depth-
+ * tracking scan of the whole document, no LSP round trip needed (unlike
+ * `documentHighlights`/hover/etc., every one of which needs a real
+ * language server). A real, deliberate, named v1 scope cut: no string/
+ * comment awareness, so a bracket character inside a string literal or
+ * comment is matched like any other -- exactly the same honest
+ * simplification most editors' own *first* bracket-matching increment
+ * ships with, before layering in tokenization.
+ *
+ * Checks all four real cursor-adjacency cases, in the same priority order
+ * every mainstream editor's own bracket matching uses: the character at
+ * `offset` first (cursor sitting just *before* an opener or closer), then
+ * the character just before `offset` (cursor sitting just *after* one).
+ * **A real bug was caught only by live testing, not by inspection**: an
+ * earlier version only checked "before cursor is a closer," never "before
+ * cursor is an opener" -- so the single most common real trigger for this
+ * whole feature, the cursor landing right after a just-typed or
+ * just-auto-paired `(`, silently showed no match at all. A live Playwright
+ * script moving the real caret with real arrow-key presses (matching a
+ * real user's own keyboard, not a synthetic DOM event) caught it directly:
+ * landing right after `f(` in `def f(x, y):` showed zero highlight marks,
+ * while landing right before the matching `)` correctly showed two. Fixed
+ * by covering all four cases explicitly instead of assuming the two
+ * checked so far were symmetric. Returns both real matched offsets, or
+ * `null` if the cursor isn't adjacent to any bracket, or its match
+ * genuinely isn't found (a real, unbalanced/incomplete document -- not an
+ * error, just nothing to show). */
+function findMatchingBracket(content: string, offset: number): [number, number] | null {
+  const atCursor = content[offset];
+  if (atCursor && BRACKET_PAIRS[atCursor]) return matchBracketForward(content, offset);
+  if (atCursor && CLOSE_TO_OPEN[atCursor]) return matchBracketBackward(content, offset);
+  const beforeCursor = content[offset - 1];
+  if (beforeCursor && BRACKET_PAIRS[beforeCursor]) return matchBracketForward(content, offset - 1);
+  if (beforeCursor && CLOSE_TO_OPEN[beforeCursor]) return matchBracketBackward(content, offset - 1);
+  return null;
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -1211,6 +1273,12 @@ export default function Editor({
   const pendingHighlightRef = useRef<{ line: number; character: number } | null>(null);
   const highlightDebounceRef = useRef<number | null>(null);
 
+  /** Real matching-bracket highlighting -- unlike `documentHighlights`
+   * above, this is pure, synchronous, local computation (`findMatchingBracket`),
+   * so it updates on every real cursor move with no debounce and no
+   * network round trip at all. */
+  const [bracketMatch, setBracketMatch] = useState<[number, number] | null>(null);
+
   useEffect(() => {
     const unsubscribe = window.spartan.onEvent((event, data) => {
       if (event !== "lsp_document_highlight_result") return;
@@ -1233,8 +1301,10 @@ export default function Editor({
       // A real active selection -- clear any stale highlight from before
       // the selection started rather than leaving it visually stuck.
       setDocumentHighlights([]);
+      setBracketMatch(null);
       return;
     }
+    setBracketMatch(findMatchingBracket(el.value, el.selectionStart));
     highlightDebounceRef.current = window.setTimeout(() => {
       const { line, character } = offsetToLineChar(el.value, el.selectionStart);
       pendingHighlightRef.current = { line, character };
@@ -1412,6 +1482,14 @@ export default function Editor({
       // positions immediately -- `handleSelectionChange`'s own debounce
       // will naturally re-resolve them against the new content shortly.
       setDocumentHighlights([]);
+      // Real matching-bracket highlighting recompute -- unlike
+      // `documentHighlights`, this is pure/synchronous, so it's
+      // recomputed here directly against the real post-edit content/
+      // caret rather than waiting on a later `handleSelectionChange`
+      // (whose own native "select" event isn't guaranteed to fire for
+      // every programmatic edit, the same reliability gap this file's
+      // own `applyProgrammaticEdit` doc comment already found once).
+      setBracketMatch(findMatchingBracket(newContent, selStart));
       window.spartan
         .call("edit", {
           doc_id: file.docId,
@@ -1802,6 +1880,21 @@ export default function Editor({
               }}
             />
           ))}
+          {bracketMatch?.map((offset) => {
+            const { line, character } = offsetToLineChar(prevContentRef.current, offset);
+            return (
+              <div
+                key={`bracket:${offset}`}
+                className="editor-bracket-match-mark"
+                style={{
+                  top: line * lineHeightPx,
+                  left: character * charWidth,
+                  width: charWidth,
+                  height: lineHeightPx,
+                }}
+              />
+            );
+          })}
         </div>
         <textarea
           ref={textareaRef}

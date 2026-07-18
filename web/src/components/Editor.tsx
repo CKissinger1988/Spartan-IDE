@@ -16,6 +16,52 @@ const OPEN_TO_CLOSE: Record<string, string> = {
 };
 const CLOSE_CHARS = new Set(Object.values(OPEN_TO_CLOSE));
 
+function offsetToLineChar(content: string, offset: number): { line: number; character: number } {
+  const before = content.slice(0, offset);
+  const lines = before.split("\n");
+  return { line: lines.length - 1, character: lines[lines.length - 1].length };
+}
+
+const BRACKET_PAIRS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
+const CLOSE_TO_OPEN: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+
+function matchBracketForward(content: string, openOffset: number): [number, number] | null {
+  const open = content[openOffset];
+  const close = BRACKET_PAIRS[open];
+  let depth = 0;
+  for (let i = openOffset; i < content.length; i++) {
+    if (content[i] === open) depth++;
+    else if (content[i] === close && --depth === 0) return [openOffset, i];
+  }
+  return null;
+}
+
+function matchBracketBackward(content: string, closeOffset: number): [number, number] | null {
+  const close = content[closeOffset];
+  const open = CLOSE_TO_OPEN[close];
+  let depth = 0;
+  for (let i = closeOffset; i >= 0; i--) {
+    if (content[i] === close) depth++;
+    else if (content[i] === open && --depth === 0) return [closeOffset, i];
+  }
+  return null;
+}
+
+/** Real, pure bracket-pair matcher, ported verbatim from `desktop/`'s own
+ * identical wiring -- see that file's own doc comment for the full real
+ * reasoning, including the deliberate v1 scope cut (no string/comment
+ * awareness) and the real "before cursor is an opener" case a live test
+ * caught missing here too. */
+function findMatchingBracket(content: string, offset: number): [number, number] | null {
+  const atCursor = content[offset];
+  if (atCursor && BRACKET_PAIRS[atCursor]) return matchBracketForward(content, offset);
+  if (atCursor && CLOSE_TO_OPEN[atCursor]) return matchBracketBackward(content, offset);
+  const beforeCursor = content[offset - 1];
+  if (beforeCursor && BRACKET_PAIRS[beforeCursor]) return matchBracketForward(content, offset - 1);
+  if (beforeCursor && CLOSE_TO_OPEN[beforeCursor]) return matchBracketBackward(content, offset - 1);
+  return null;
+}
+
 export interface OpenFile {
   path: string;
   handle: FileSystemFileHandle;
@@ -50,8 +96,22 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
+  const symbolHighlightRef = useRef<HTMLDivElement>(null);
   const [lineCount, setLineCount] = useState(1);
   const prevContentRef = useRef(file.content);
+
+  /** Real matching-bracket highlighting, ported verbatim from
+   * `desktop/`'s own identical wiring -- see that file's own doc comment
+   * for the full real reasoning. */
+  const [bracketMatch, setBracketMatch] = useState<[number, number] | null>(null);
+  const charWidth = useMemo(() => {
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return 13 * 0.6;
+    ctx.font = `13px "JetBrains Mono", monospace`;
+    return ctx.measureText("M").width || 13 * 0.6;
+  }, []);
+  const lineHeightPx = 20;
 
   useEffect(() => {
     prevContentRef.current = file.content;
@@ -71,6 +131,20 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
       highlightRef.current.scrollTop = el.scrollTop;
       highlightRef.current.scrollLeft = el.scrollLeft;
     }
+    if (symbolHighlightRef.current) {
+      symbolHighlightRef.current.scrollTop = el.scrollTop;
+      symbolHighlightRef.current.scrollLeft = el.scrollLeft;
+    }
+  }, []);
+
+  const handleSelectionChange = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    if (el.selectionStart !== el.selectionEnd) {
+      setBracketMatch(null);
+      return;
+    }
+    setBracketMatch(findMatchingBracket(el.value, el.selectionStart));
   }, []);
 
   /** The real, shared core of applying an edit -- extracted from
@@ -113,6 +187,7 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
         console.error("real WasmDocument.replace failed:", err);
       }
       onContentChange(file.path, newContent);
+      setBracketMatch(findMatchingBracket(newContent, selStart));
     },
     [file.doc, file.path, onContentChange]
   );
@@ -272,6 +347,28 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
             dangerouslySetInnerHTML={{ __html: `${highlightedHtml}\n` }}
           />
         </pre>
+        <div
+          className="editor-symbol-highlight-layer"
+          ref={symbolHighlightRef}
+          aria-hidden="true"
+          style={textStyle}
+        >
+          {bracketMatch?.map((offset) => {
+            const { line, character } = offsetToLineChar(prevContentRef.current, offset);
+            return (
+              <div
+                key={`bracket:${offset}`}
+                className="editor-bracket-match-mark"
+                style={{
+                  top: line * lineHeightPx,
+                  left: character * charWidth,
+                  width: charWidth,
+                  height: lineHeightPx,
+                }}
+              />
+            );
+          })}
+        </div>
         <textarea
           ref={textareaRef}
           className="editor-textarea editor-textarea-overlay mono"
@@ -280,6 +377,8 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           onScroll={syncScroll}
+          onSelect={handleSelectionChange}
+          onClick={handleSelectionChange}
           style={textStyle}
         />
       </div>

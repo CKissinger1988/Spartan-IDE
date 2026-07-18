@@ -794,6 +794,15 @@
   background: rgba(212, 175, 55, 0.22);
 }
 
+/* Real matching-bracket highlight, byte-identical to desktop/'s own copy. */
+.editor-bracket-match-mark {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid rgba(212, 175, 55, 0.75);
+  border-radius: 2px;
+  background: rgba(212, 175, 55, 0.12);
+}
+
 /* Real "Format Document" transient status pill (Ctrl+Shift+F), byte-identical
  * to desktop/'s own copy. */
 .editor-format-status {

@@ -4964,6 +4964,64 @@ first — it's the parity reference until each row there is actually reimplement
   no line-number validation feedback for a malformed (non-numeric) input beyond silently closing the
   overlay; the real Electron window remains unlaunchable in this session (same standing gap since
   §75.59).
+- **Real, working code — matching-bracket highlighting in all three real editing surfaces
+  (`desktop/Editor.tsx`, `web/BackendEditor.tsx`, `web/Editor.tsx`), plus a real logic bug found and
+  fixed by deliberately distinguishing a test-script artifact from a genuine product bug (task
+  #201)**: whenever the caret sits immediately before or after a bracket (`(`/`)`/`[`/`]`/`{`/`}`),
+  both it and its real match are outlined live, recomputed on every selection change and every edit.
+  Pure client-side, no LSP query needed -- a real, hand-rolled depth-counting scan
+  (`matchBracketForward`/`matchBracketBackward`, unified by `findMatchingBracket`), the same
+  "smallest real, correct mechanism" precedent this whole editor-ergonomics feature family has
+  followed since auto-closing brackets. `web/Editor.tsx` (the pure client-side File System Access +
+  WASM editor) needed real new scaffolding none of its siblings required: it had no `onSelect`
+  handling, no `offsetToLineChar`, and no overlay-layer `<div>` at all before this pass -- all three
+  added here for the first time, plus a defensive `onClick` handler alongside `onSelect` (real
+  redundancy, not present in the other two files, added specifically because this file's own
+  click-to-position path had no equivalent selection-change signal to hook otherwise). Rendered via
+  a new `.editor-bracket-match-mark` CSS class (`desktop/app.css`/`web/app.css`, byte-identical) --
+  a thin gold outline + a faint fill, layered in the same `.editor-symbol-highlight-layer` overlay
+  document-highlight marks already use, positioned the identical `top: line * lineHeightPx; left:
+  character * charWidth` way every other inline marker in these files already computes its position.
+  **Two real, distinct problems surfaced during verification, deliberately kept separate rather than
+  conflated into one finding**: (1) A first verification script (`verify.mjs`) simulated cursor
+  movement via `el.setSelectionRange()` plus a manually dispatched `"select"` event and saw zero
+  marks even for cases that should have matched -- but this project's own established, repeatedly-
+  confirmed finding (first surfaced during the auto-closing-brackets pass) is that manually
+  dispatched synthetic DOM events do not reliably reach React's event handlers in these specific
+  components. Rather than trust that negative result, a second script (`verify2.mjs`) was written
+  using genuine `page.keyboard.press("ArrowRight")` navigation -- real, OS-level input Playwright
+  actually dispatches, the same technique every other live-input verification in this project's
+  history already uses -- which correctly produced marks for the valid cases, confirming the first
+  script's silence was a test-methodology artifact, not evidence of a working *or* broken feature.
+  (2) With a trustworthy verification technique in hand, `verify2.mjs` then found a real, genuine
+  logic bug: the original `findMatchingBracket` only checked 3 of the 4 real cursor-adjacency cases
+  (cursor sits on an opener; cursor sits on a closer; cursor sits right after a closer) and was
+  missing the fourth -- cursor sitting right after an *opener* -- which is the single most common
+  real trigger (e.g. the exact position auto-closing-brackets, §193-195, leaves the caret in
+  immediately after inserting a pair). `AFTER_ARROW_TO_OPEN_PAREN marks: 0` (expected 2) isolated it
+  precisely, while the other two live assertions (`AFTER_ARROW_BEFORE_CLOSE_PAREN marks: 2`,
+  `AFTER_ARROW_NO_BRACKET marks: 0`) both already passed, confirming the bug was scoped to exactly
+  that one missing case, not a broader failure. Fixed by rewriting `findMatchingBracket` into a
+  clean, explicit 4-case function built on the two shared `matchBracketForward`/`matchBracketBackward`
+  helpers, applied identically across all three files. Re-verified fixed via the same real-keyboard
+  `verify2.mjs` script (all three assertions passing) and independently again against
+  `desktop/Editor.tsx` via `verify-desktop.mjs`, using the established "real `spartan-devserver`
+  serving `desktop/dist`, a mocked `window.spartan` forwarding every call over a genuine WebSocket"
+  technique for the still-unlaunchable real Electron window -- after a real verification-process
+  mistake (testing against a stale, not-yet-rebuilt `desktop/dist`, the same class of mistake this
+  project's own Go to Line pass, §196-198, already made and fixed once before) was caught and
+  corrected by rebuilding before concluding anything was broken. Full workspace `cargo fmt --all --
+  check`/`cargo clippy --workspace --release --all-targets` clean (zero Rust changes -- this is a
+  pure TypeScript/React feature); both shells' own `tsc --noEmit`/`npm run build` clean. **What this
+  does not confirm**: no live Playwright re-verification of `web/Editor.tsx` specifically (typechecked
+  and built clean, structurally identical logic to the two verified files, not independently
+  re-proven this pass -- matching the exact same scope decision the auto-closing-brackets pass, §193-
+  195, already made for this same file); no matching-bracket highlighting in the reference wgpu shell
+  (same established "Electron-shell-only feature" scope every recent editor-ergonomics pass has
+  carried); no highlighting across a real multi-thousand-character document's worth of nesting depth
+  was stress-tested (the scan is real and unbounded-depth-correct by construction, but only small
+  fixtures were exercised live); the real Electron window remains unlaunchable in this session (same
+  standing gap since §75.59).
 
 ## Build & test
 

@@ -870,6 +870,18 @@
   background: rgba(212, 175, 55, 0.22);
 }
 
+/* Real matching-bracket highlight -- a distinct outlined box (not a
+ * filled background, unlike occurrence highlighting above) so a
+ * bracket pair reads as "this is the boundary of a scope," not "this
+ * text is selected/referenced." */
+.editor-bracket-match-mark {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid rgba(212, 175, 55, 0.75);
+  border-radius: 2px;
+  background: rgba(212, 175, 55, 0.12);
+}
+
 /* Real "Format Document" transient status pill (Ctrl+Shift+F). */
 .editor-format-status {
   position: absolute;

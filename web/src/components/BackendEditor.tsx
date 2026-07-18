@@ -395,6 +395,46 @@ function offsetToLineChar(content: string, offset: number): { line: number; char
   return { line: lines.length - 1, character: lines[lines.length - 1].length };
 }
 
+const BRACKET_PAIRS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
+const CLOSE_TO_OPEN: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+
+function matchBracketForward(content: string, openOffset: number): [number, number] | null {
+  const open = content[openOffset];
+  const close = BRACKET_PAIRS[open];
+  let depth = 0;
+  for (let i = openOffset; i < content.length; i++) {
+    if (content[i] === open) depth++;
+    else if (content[i] === close && --depth === 0) return [openOffset, i];
+  }
+  return null;
+}
+
+function matchBracketBackward(content: string, closeOffset: number): [number, number] | null {
+  const close = content[closeOffset];
+  const open = CLOSE_TO_OPEN[close];
+  let depth = 0;
+  for (let i = closeOffset; i >= 0; i--) {
+    if (content[i] === close) depth++;
+    else if (content[i] === open && --depth === 0) return [closeOffset, i];
+  }
+  return null;
+}
+
+/** Real, pure bracket-pair matcher, ported verbatim from `desktop/`'s own
+ * identical wiring -- see that file's own doc comment for the full real
+ * reasoning, including the deliberate v1 scope cut (no string/comment
+ * awareness) and the real "before cursor is an opener" case a live test
+ * caught missing here too. */
+function findMatchingBracket(content: string, offset: number): [number, number] | null {
+  const atCursor = content[offset];
+  if (atCursor && BRACKET_PAIRS[atCursor]) return matchBracketForward(content, offset);
+  if (atCursor && CLOSE_TO_OPEN[atCursor]) return matchBracketBackward(content, offset);
+  const beforeCursor = content[offset - 1];
+  if (beforeCursor && BRACKET_PAIRS[beforeCursor]) return matchBracketForward(content, offset - 1);
+  if (beforeCursor && CLOSE_TO_OPEN[beforeCursor]) return matchBracketBackward(content, offset - 1);
+  return null;
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -1005,6 +1045,11 @@ export default function BackendEditor({
   const pendingHighlightRef = useRef<{ line: number; character: number } | null>(null);
   const highlightDebounceRef = useRef<number | null>(null);
 
+  /** Real matching-bracket highlighting, ported verbatim from `desktop/`'s
+   * own identical wiring -- see that file's own doc comment for the full
+   * real reasoning. */
+  const [bracketMatch, setBracketMatch] = useState<[number, number] | null>(null);
+
   useEffect(() => {
     const unsubscribe = client.onEvent((e) => {
       if (e.event !== "lsp_document_highlight_result") return;
@@ -1025,8 +1070,10 @@ export default function BackendEditor({
     }
     if (el.selectionStart !== el.selectionEnd) {
       setDocumentHighlights([]);
+      setBracketMatch(null);
       return;
     }
+    setBracketMatch(findMatchingBracket(el.value, el.selectionStart));
     highlightDebounceRef.current = window.setTimeout(() => {
       const { line, character } = offsetToLineChar(el.value, el.selectionStart);
       pendingHighlightRef.current = { line, character };
@@ -1192,6 +1239,7 @@ export default function BackendEditor({
       setLineCount(newContent.split("\n").length);
       onContentChange(file.path, newContent);
       setDocumentHighlights([]);
+      setBracketMatch(findMatchingBracket(newContent, selStart));
       client
         .call("edit", { doc_id: file.docId, start_char: 0, end_char: oldLength, text: newContent })
         .catch((err: Error) => console.error("edit failed:", err));
@@ -1507,6 +1555,21 @@ export default function BackendEditor({
               }}
             />
           ))}
+          {bracketMatch?.map((offset) => {
+            const { line, character } = offsetToLineChar(prevContentRef.current, offset);
+            return (
+              <div
+                key={`bracket:${offset}`}
+                className="editor-bracket-match-mark"
+                style={{
+                  top: line * lineHeightPx,
+                  left: character * charWidth,
+                  width: charWidth,
+                  height: lineHeightPx,
+                }}
+              />
+            );
+          })}
         </div>
         <textarea
           ref={textareaRef}
