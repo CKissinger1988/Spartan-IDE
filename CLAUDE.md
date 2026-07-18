@@ -4515,6 +4515,59 @@ first — it's the parity reference until each row there is actually reimplement
   finding above); no multi-line highlight ranges (the named v1 scope cut); no occurrence highlighting
   for any language beyond Python in this specific live verification; the real Electron window remains
   unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — real "Format Document" (Ctrl+Shift+F), the first real caller of the
+  registry's own `formatter` field, real since §20.1 but unwired anywhere until now (task #186)**:
+  user-requested ("Continue without interruption"), picked because the immediately preceding
+  pass's own capability probe had already confirmed `pyright-langserver` implements no
+  `documentFormatting` at all -- so the real path to a Format Document feature was never LSP, it
+  was the `formatter: Option<CommandSpec>` field every `languages.toml` entry has carried since
+  §20.1 with zero callers. New `crates/spartan-backend/src/format_integration.rs`:
+  `resolve_formatter_command` maps each real, known formatter program to its correct real
+  stdin-in/stdout-out invocation (`rustfmt` bare, `black -q -`, `gofmt` bare, `prettier
+  --stdin-filepath <path>` -- the last one specifically needs the real file path to pick its
+  parser, information the static registry entry can't carry), the same "adapt the new caller
+  instead of risking the shared registry" precedent `dap_integration::resolve_dap_command` already
+  set for Python's `debugpy`; a real, honest, named gap: `ktlint` (Kotlin) and `dotnet format`
+  (C#, a project-wide command with no stdin/stdout filter mode at all) return `None` and the
+  dispatch reports that plainly rather than guessing at an invocation. `run_formatter` pipes the
+  source through a real subprocess with the standard dedicated-writer-thread recipe for the
+  classic stdin-write/stdout-read pipe deadlock, and distinguishes "not installed" (spawn error)
+  from "rejected the input" (non-zero exit, real stderr relayed). **A real, deliberate design
+  choice**: the backend formats the *live in-memory buffer*, never the file on disk (matching
+  `gui-builder`'s own §75.42 "operate on the live buffer" discipline), and only ever reports the
+  formatted text back via a `format_document_result`/`format_document_error` event -- both shells
+  apply it through the same real whole-buffer `edit` IPC path typing already uses, so a format is
+  one real undo checkpoint like any other edit, and the dirty marker updates for free.
+  `spartan-backend::format_document` follows the same "ack now, event later" shape every other
+  external-process call already uses. `desktop/src/components/Editor.tsx` and
+  `web/src/components/BackendEditor.tsx` both gained the Ctrl+Shift+F trigger, a transient status
+  pill (Formatting… / Formatted / Already formatted / a real relayed error), caret restored to its
+  old offset clamped (exact caret preservation through an arbitrary reformat is a real, named v1
+  scope cut), and stale occurrence-highlights cleared on apply. `format_document` was added to
+  `main.ts`'s/`preload.ts`'s IPC allowlists at the identical position, continuing the established
+  drift-avoidance discipline. 10 new Rust tests (6 in `format_integration` -- including two real,
+  self-skipping executions against the actually-installed `rustfmt` and `black`, the latter
+  confirming a real syntax error is relayed as a real failure, not swallowed; 4 dispatch-level in
+  `lib.rs` -- unopened doc, unrecognized extension, Java's real no-formatter-configured case, and
+  a real end-to-end `handle_request` round trip against a real `rustfmt` subprocess asserting the
+  exact real formatted output arrives in the event). Full `cargo fmt --all -- --check`/`cargo
+  clippy --workspace --release --all-targets` clean; both shells' own `tsc --noEmit`/`vite build`/
+  `npm run build:electron` clean. **Real, live, end-to-end Playwright verification against the
+  actual compiled `web/dist` served by a real running `spartan-devserver` binary** (not a mock),
+  with the same binary-staleness class §146/§151 already documented pre-empted this time by
+  rebuilding `spartan-devserver` before launching it: opened a real, deliberately-messy Python
+  fixture (`x=1` / `y   =    x+2` / `print( x , y )`), pressed a real Ctrl+Shift+F -- the real
+  status pill showed "Formatting…", a real `black` subprocess ran, and the live buffer changed to
+  exactly `x = 1` / `y = x + 2` / `print(x, y)` with the pill reading "Formatted" (screenshotted);
+  a real Ctrl+S then wrote the buffer, and reading the actual file off disk afterward confirmed
+  the formatted bytes persisted through the real backend `Document`, not just the DOM. **What this
+  does not confirm**: no format-on-save option (a real, separate, unstarted follow-up); no
+  range/selection formatting (whole-document only); no Kotlin/C# formatting (the named
+  filter-mode gap above); no Java formatting at all (the registry itself configures none -- a
+  real registry-level gap, not this pass's); only Python was exercised live end-to-end
+  (Rust's own path is exercised for real at the dispatch-test level via a real `rustfmt`
+  subprocess); the real Electron window remains unlaunchable in this session (same standing gap
+  since §75.59).
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

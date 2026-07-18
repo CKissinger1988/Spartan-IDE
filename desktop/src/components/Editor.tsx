@@ -1192,6 +1192,71 @@ export default function Editor({
     }, HOVER_DELAY_MS);
   }, [file.docId]);
 
+  /** Real "Format Document" (Ctrl+Shift+F) -- the first real caller of the
+   * registry's own `formatter` field (real since §20.1, unwired anywhere
+   * until now). The backend runs the language's real formatter binary
+   * against the *live buffer* (not disk) and reports the formatted text
+   * back via a `format_document_result` event; applying it goes through
+   * the same real whole-buffer `edit` IPC path typing already uses, so a
+   * format is a single real undo checkpoint like any other edit. The
+   * caret is restored to its old offset, clamped -- a formatter can move
+   * text arbitrarily, so exact caret preservation is out of scope for a
+   * real v1, matching the "smallest real, correct increment" precedent. */
+  const [formatStatus, setFormatStatus] = useState<string | null>(null);
+  const pendingFormatRef = useRef(false);
+
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event === "format_document_result") {
+        const d = data as { doc_id: number; formatted: string };
+        if (d.doc_id !== file.docId || !pendingFormatRef.current) return;
+        pendingFormatRef.current = false;
+        if (d.formatted === prevContentRef.current) {
+          setFormatStatus("Already formatted");
+        } else {
+          const oldLength = [...prevContentRef.current].length;
+          const caret = textareaRef.current?.selectionStart ?? 0;
+          prevContentRef.current = d.formatted;
+          setLineCount(d.formatted.split("\n").length);
+          onContentChange(file.path, d.formatted);
+          setDocumentHighlights([]);
+          window.spartan
+            .call("edit", {
+              doc_id: file.docId,
+              start_char: 0,
+              end_char: oldLength,
+              text: d.formatted,
+            })
+            .catch((err: Error) => console.error("edit failed:", err));
+          const el = textareaRef.current;
+          if (el) {
+            const newPos = Math.min(caret, d.formatted.length);
+            requestAnimationFrame(() => el.setSelectionRange(newPos, newPos));
+          }
+          setFormatStatus("Formatted");
+        }
+        window.setTimeout(() => setFormatStatus(null), 2500);
+      } else if (event === "format_document_error") {
+        const d = data as { doc_id: number; message: string };
+        if (d.doc_id !== file.docId || !pendingFormatRef.current) return;
+        pendingFormatRef.current = false;
+        setFormatStatus(`Format failed: ${d.message}`);
+        window.setTimeout(() => setFormatStatus(null), 5000);
+      }
+    });
+    return unsubscribe;
+  }, [file.docId, file.path, onContentChange]);
+
+  const triggerFormatDocument = useCallback(() => {
+    pendingFormatRef.current = true;
+    setFormatStatus("Formatting…");
+    window.spartan.call("format_document", { doc_id: file.docId }).catch((err: Error) => {
+      pendingFormatRef.current = false;
+      setFormatStatus(`Format failed: ${err.message}`);
+      window.setTimeout(() => setFormatStatus(null), 5000);
+    });
+  }, [file.docId]);
+
   const diagnosticsByLine = useMemo(() => {
     const map = new Map<number, LspDiagnostic[]>();
     for (const d of diagnostics) {
@@ -1387,6 +1452,12 @@ export default function Editor({
         triggerDocumentSymbols();
         return;
       }
+      // Real "Format Document" trigger (Ctrl+Shift+F).
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        triggerFormatDocument();
+        return;
+      }
       if (e.key === "Tab") {
         e.preventDefault();
         const el = textareaRef.current;
@@ -1443,6 +1514,7 @@ export default function Editor({
       triggerRename,
       symbolsState,
       triggerDocumentSymbols,
+      triggerFormatDocument,
       file.docId,
       file.path,
       onContentChange,
@@ -1553,6 +1625,7 @@ export default function Editor({
           {hoverState.text}
         </div>
       )}
+      {formatStatus && <div className="editor-format-status mono">{formatStatus}</div>}
       {signatureHelpState?.target && (
         <div
           className="editor-signature-help-tooltip mono"

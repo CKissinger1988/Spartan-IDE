@@ -45,6 +45,12 @@ use spartan_model::{
 };
 
 mod dap_integration;
+/// Real "Format Document" -- shells out to each language's own configured
+/// formatter (`languages.toml`'s `formatter` field, real since §20.1 but
+/// unwired anywhere until now). See its own module doc comment for the
+/// full account, including which real formatters this does and doesn't
+/// support.
+mod format_integration;
 /// Real Hugging Face -> Ollama model downloader (curated list + user-defined
 /// custom links) -- moved here from `spartan-devserver` so `desktop/`'s
 /// Electron shell (which spawns a plain `spartan-backend`, not a
@@ -662,6 +668,66 @@ fn lsp_document_highlight(
                 "character": character,
                 "result": result,
             }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+    Ok(serde_json::json!({ "status": "requested" }))
+}
+
+/// Real "Format Document" -- the real, previously-unwired `formatter`
+/// field on every language's own registry entry (§20.1) finally gets a
+/// real caller. Formats the *live in-memory buffer*, not the file on
+/// disk (matching `gui-builder`'s own established "operate on the live
+/// buffer" discipline, §75.42), so an unsaved edit still formats
+/// correctly; the caller applies the real result through the normal
+/// `edit` IPC path, which is why this only ever reports formatted text
+/// back, never writes anything itself. Never blocks the single
+/// request-processing thread -- spawns the real formatter subprocess on
+/// its own thread and reports back via a real `format_document_result`/
+/// `format_document_error` event, the same shape every other real
+/// external-process call in this crate already uses.
+fn format_document(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+) -> Result<serde_json::Value, String> {
+    let (path, source) = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        (doc.path.clone(), doc.document.text())
+    };
+
+    let registry = spartan_languages::LanguageRegistry::curated_default();
+    let profile = registry
+        .profile_for_file(&path)
+        .ok_or_else(|| "no language profile recognizes this file".to_string())?;
+    let configured = profile
+        .formatter
+        .clone()
+        .ok_or_else(|| format!("no formatter is configured for language `{}`", profile.id))?;
+    let (program, args) = format_integration::resolve_formatter_command(&configured, &path)
+        .ok_or_else(|| {
+            format!(
+                "`{}` has no supported stdin/stdout formatting mode -- Format Document isn't wired for this language yet",
+                configured.program
+            )
+        })?;
+
+    thread::spawn(move || {
+        let event = match format_integration::run_formatter(&program, &args, &source) {
+            Ok(formatted) => Event {
+                event: "format_document_result".to_string(),
+                data: serde_json::json!({ "doc_id": doc_id, "formatted": formatted }),
+            },
+            Err(message) => Event {
+                event: "format_document_error".to_string(),
+                data: serde_json::json!({ "doc_id": doc_id, "message": message }),
+            },
         };
         if let Ok(l) = serde_json::to_string(&event) {
             let _ = out_tx.send(l);
@@ -3321,6 +3387,10 @@ pub fn handle_request(
             let line = get_u64_param(&req.params, "line")? as i64;
             let character = get_u64_param(&req.params, "character")? as i64;
             lsp_document_highlight(state, out_tx.clone(), doc_id, line, character)
+        })(),
+        "format_document" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            format_document(state, out_tx.clone(), doc_id)
         })(),
         "edit" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;
@@ -6029,6 +6099,139 @@ mod tests {
             serde_json::json!({ "doc_id": doc_id, "line": 0, "character": 0 }),
         );
         assert!(resp.error.unwrap().contains("no live LSP session"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn format_document_on_a_real_unopened_doc_id_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "format_document",
+            serde_json::json!({ "doc_id": 999 }),
+        );
+        assert!(resp.error.unwrap().contains("no open document"));
+    }
+
+    #[test]
+    fn format_document_on_a_real_unrecognized_extension_errors_honestly() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-format-document-no-profile-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("data.unknownext");
+        std::fs::write(&file, "hello").unwrap();
+
+        let state = new_state();
+        let open_resp = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        );
+        let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+        let resp = call(
+            &state,
+            2,
+            "format_document",
+            serde_json::json!({ "doc_id": doc_id }),
+        );
+        assert!(resp
+            .error
+            .unwrap()
+            .contains("no language profile recognizes"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn format_document_on_a_real_language_with_no_configured_formatter_errors_honestly() {
+        // Java is the one real Tier 1 language with no `formatter` entry
+        // in the curated registry at all.
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-format-document-no-formatter-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Main.java");
+        std::fs::write(&file, "class Main {}").unwrap();
+
+        let state = new_state();
+        let open_resp = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        );
+        let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+        let resp = call(
+            &state,
+            2,
+            "format_document",
+            serde_json::json!({ "doc_id": doc_id }),
+        );
+        assert!(resp.error.unwrap().contains("no formatter is configured"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn format_document_reformats_a_real_file_via_a_real_installed_rustfmt_if_present() {
+        if std::process::Command::new("rustfmt")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("SKIP: rustfmt not installed");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-format-document-real-rustfmt-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("main.rs");
+        std::fs::write(&file, "fn main( ) { let x=1 ; }").unwrap();
+
+        let state = new_state();
+        let open_resp = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        );
+        let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let resp = handle_request(
+            &state,
+            req(
+                2,
+                "format_document",
+                serde_json::json!({ "doc_id": doc_id }),
+            ),
+            tx,
+        );
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["status"], "requested");
+
+        let line = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        let event: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(event["event"], "format_document_result");
+        assert_eq!(event["data"]["doc_id"], doc_id);
+        let formatted = event["data"]["formatted"].as_str().unwrap();
+        assert!(formatted.contains("fn main() {"), "got: {formatted}");
 
         std::fs::remove_dir_all(&dir).ok();
     }

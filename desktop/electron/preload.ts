@@ -24,6 +24,7 @@ const ALLOWED_METHODS = new Set([
   "lsp_rename",
   "lsp_document_symbol",
   "lsp_document_highlight",
+  "format_document",
   "leo_status",
   "leo_start_task",
   "leo_approve_plan",

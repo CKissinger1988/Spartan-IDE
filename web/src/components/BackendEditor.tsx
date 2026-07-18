@@ -992,6 +992,64 @@ export default function BackendEditor({
     }, HOVER_DELAY_MS);
   }, [client, file.docId]);
 
+  /** Real "Format Document" (Ctrl+Shift+F), ported verbatim from
+   * `desktop/`'s own identical wiring -- see that file's own doc comment
+   * for the full real reasoning. */
+  const [formatStatus, setFormatStatus] = useState<string | null>(null);
+  const pendingFormatRef = useRef(false);
+
+  useEffect(() => {
+    const unsubscribe = client.onEvent((e) => {
+      if (e.event === "format_document_result") {
+        const d = e.data as { doc_id: number; formatted: string };
+        if (d.doc_id !== file.docId || !pendingFormatRef.current) return;
+        pendingFormatRef.current = false;
+        if (d.formatted === prevContentRef.current) {
+          setFormatStatus("Already formatted");
+        } else {
+          const oldLength = [...prevContentRef.current].length;
+          const caret = textareaRef.current?.selectionStart ?? 0;
+          prevContentRef.current = d.formatted;
+          setLineCount(d.formatted.split("\n").length);
+          onContentChange(file.path, d.formatted);
+          setDocumentHighlights([]);
+          client
+            .call("edit", {
+              doc_id: file.docId,
+              start_char: 0,
+              end_char: oldLength,
+              text: d.formatted,
+            })
+            .catch((err: Error) => console.error("edit failed:", err));
+          const el = textareaRef.current;
+          if (el) {
+            const newPos = Math.min(caret, d.formatted.length);
+            requestAnimationFrame(() => el.setSelectionRange(newPos, newPos));
+          }
+          setFormatStatus("Formatted");
+        }
+        window.setTimeout(() => setFormatStatus(null), 2500);
+      } else if (e.event === "format_document_error") {
+        const d = e.data as { doc_id: number; message: string };
+        if (d.doc_id !== file.docId || !pendingFormatRef.current) return;
+        pendingFormatRef.current = false;
+        setFormatStatus(`Format failed: ${d.message}`);
+        window.setTimeout(() => setFormatStatus(null), 5000);
+      }
+    });
+    return unsubscribe;
+  }, [client, file.docId, file.path, onContentChange]);
+
+  const triggerFormatDocument = useCallback(() => {
+    pendingFormatRef.current = true;
+    setFormatStatus("Formatting…");
+    client.call("format_document", { doc_id: file.docId }).catch((err: Error) => {
+      pendingFormatRef.current = false;
+      setFormatStatus(`Format failed: ${err.message}`);
+      window.setTimeout(() => setFormatStatus(null), 5000);
+    });
+  }, [client, file.docId]);
+
   const handleDefinitionClick = useCallback(
     (e: React.MouseEvent<HTMLTextAreaElement>) => {
       if (!(e.ctrlKey || e.metaKey)) {
@@ -1166,6 +1224,12 @@ export default function BackendEditor({
         triggerDocumentSymbols();
         return;
       }
+      // Real "Format Document" trigger (Ctrl+Shift+F).
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        triggerFormatDocument();
+        return;
+      }
       if (e.key === "Tab") {
         e.preventDefault();
         const el = textareaRef.current;
@@ -1214,6 +1278,7 @@ export default function BackendEditor({
       triggerRename,
       symbolsState,
       triggerDocumentSymbols,
+      triggerFormatDocument,
       client,
       file.docId,
       file.path,
@@ -1303,6 +1368,7 @@ export default function BackendEditor({
           {hoverState.text}
         </div>
       )}
+      {formatStatus && <div className="editor-format-status mono">{formatStatus}</div>}
       {signatureHelpState?.target && (
         <div
           className="editor-signature-help-tooltip mono"
