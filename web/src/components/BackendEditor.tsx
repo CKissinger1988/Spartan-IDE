@@ -900,6 +900,16 @@ export default function BackendEditor({
   const [lineCount, setLineCount] = useState(1);
   const prevContentRef = useRef(file.content);
 
+  /** Real, live font-size zoom (Ctrl+=/Ctrl+-/Ctrl+0), ported verbatim
+   * from `desktop/`'s own identical wiring -- this component has no
+   * `prefs`/Settings concept, so the base is a plain default (13px,
+   * matching this file's own prior hardcoded value) rather than a
+   * persisted setting. */
+  const [fontSize, setFontSize] = useState(13);
+  const zoomFontSize = useCallback((step: number) => {
+    setFontSize((prev) => Math.min(32, Math.max(8, prev + step)));
+  }, []);
+
   useEffect(() => {
     prevContentRef.current = file.content;
     setLineCount(file.content.split("\n").length);
@@ -955,22 +965,23 @@ export default function BackendEditor({
     };
   }, []);
 
-  // Real monospace glyph width, measured once via a real canvas
-  // `measureText` call -- the only way to convert a raw pixel mouse
-  // position into an LSP-spec line/character position for a plain
-  // `<textarea>`, matching `desktop/`'s own identical technique (this
-  // file uses a fixed 13px font, unlike `desktop/`'s own configurable
-  // `prefs.fontSize`, since this component has no equivalent settings
-  // wiring yet -- `textStyle` below is likewise hardcoded).
+  // Real monospace glyph width, measured once per font size via a real
+  // canvas `measureText` call -- the only way to convert a raw pixel
+  // mouse position into an LSP-spec line/character position for a plain
+  // `<textarea>`, matching `desktop/`'s own identical technique. The base
+  // size is a plain default (13px), not a persisted `prefs.fontSize` the
+  // way `desktop/` has -- this component has no Settings wiring of its
+  // own -- but it's now live-adjustable via the same real Ctrl+=/Ctrl+-
+  // zoom (`textStyle` below reads the same `fontSize` state).
   const charWidth = useMemo(() => {
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
-    if (!ctx) return 13 * 0.6;
-    ctx.font = `13px "JetBrains Mono", monospace`;
-    return ctx.measureText("M").width || 13 * 0.6;
-  }, []);
+    if (!ctx) return fontSize * 0.6;
+    ctx.font = `${fontSize}px "JetBrains Mono", monospace`;
+    return ctx.measureText("M").width || fontSize * 0.6;
+  }, [fontSize]);
 
-  const lineHeightPx = 20;
+  const lineHeightPx = Math.round(fontSize * 1.54);
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<HTMLTextAreaElement>) => {
@@ -1776,6 +1787,23 @@ export default function BackendEditor({
         }
         return;
       }
+      // Real font-size zoom (Ctrl+=/Ctrl++/Ctrl+-/Ctrl+0), ported
+      // verbatim from `desktop/`'s own identical wiring.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        zoomFontSize(1);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "-") {
+        e.preventDefault();
+        zoomFontSize(-1);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "0") {
+        e.preventDefault();
+        setFontSize(13);
+        return;
+      }
       if (e.key === "Tab") {
         e.preventDefault();
         const el = textareaRef.current;
@@ -1893,8 +1921,8 @@ export default function BackendEditor({
 
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1);
   const textStyle: React.CSSProperties = {
-    fontSize: "13px",
-    lineHeight: "20px",
+    fontSize: `${fontSize}px`,
+    lineHeight: `${lineHeightPx}px`,
     tabSize: 2,
     whiteSpace: "pre",
   };

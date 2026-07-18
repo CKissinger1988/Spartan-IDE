@@ -5270,6 +5270,61 @@ first — it's the parity reference until each row there is actually reimplement
   editor-ergonomics work has been building** (matching-bracket highlighting, toggle-comment,
   indent/outdent, duplicate-line, move-line, delete-line) -- all six now share one consistent,
   reused touched-line-range implementation across all three real editing surfaces.
+- **Real, working code — live font-size zoom (Ctrl+=/Ctrl++/Ctrl+-/Ctrl+0) in all three real
+  editing surfaces (`desktop/Editor.tsx`, `web/BackendEditor.tsx`, `web/Editor.tsx`), task
+  #217-#219**: closes a real, standard browser/editor convention (Chrome's own Ctrl+=/Ctrl+-/
+  Ctrl+0 window zoom, VS Code's own identical editor-zoom keybindings) this project never had --
+  before this pass, the only way to change the editor's font size at all was through Settings
+  (`desktop/`'s own `prefs.fontSize`), and `web/BackendEditor.tsx`/`web/Editor.tsx` had no font-
+  size control of any kind, both hardcoding a plain `13px`. Verified first, not assumed: a real,
+  live Playwright check confirmed double-click-select-word and triple-click-select-line already
+  work correctly for free in a plain `<textarea>` (native browser behavior, zero custom code
+  needed) -- ruling that out as a real gap before any code was written for it, avoiding wasted
+  effort. **`desktop/Editor.tsx`**: a new `fontSizeDelta` state is a real, deliberate *session-only*
+  offset layered on top of `prefs.fontSize` (the real, persisted Settings value) -- matching the
+  standard "editor zoom is separate from the settings.json font size" convention most editors and
+  browsers already use, rather than mutating the persisted setting itself. `effectiveFontSize =
+  clamp(prefs.fontSize + fontSizeDelta, 8, 32)` replaces every prior `prefs.fontSize` reference used
+  for actual rendering (the canvas `measureText` char-width calc, `lineHeightPx`, `textStyle`'s
+  `fontSize`/`lineHeight`) -- `prefs.tabSize`/`prefs.wordWrap` are untouched, this is a font-size-
+  only change. A real `zoomFontSize(step)` helper clamps the *delta* itself at the moment each zoom
+  step is applied (not just the read side), so hitting the maximum and then zooming out takes
+  exactly one real press to visibly shrink again, rather than several wasted presses first
+  unwinding an over-shot delta. **`web/BackendEditor.tsx`/`web/Editor.tsx`**: ported the identical
+  mechanism, but since neither file has any `prefs`/Settings concept at all, the base is a plain
+  local `fontSize` state defaulting to `13` (matching each file's own prior hardcoded value)
+  rather than a delta on top of an external source -- `zoomFontSize` clamps this state directly to
+  the same `[8, 32]` range, and Ctrl+0 resets it back to `13`. All three components matched the
+  keybinding the same standard way: `e.key === "="` (plain Ctrl+=) and `e.key === "+"` (the real,
+  common case where a US keyboard layout reports `"+"` for Ctrl+Shift+=/Ctrl++) both zoom in
+  identically; `e.key === "-"` zooms out; `e.key === "0"` resets. Real, live, end-to-end Playwright
+  verification against a real running `spartan-devserver` serving the real built `web/dist`,
+  reading the textarea's own real `getComputedStyle(...).fontSize` (not just internal state) at
+  every step: 3x Ctrl+= correctly moved `13px -> 16px`; one Ctrl+- correctly moved `16px -> 15px`;
+  Ctrl+0 correctly reset to `13px`; 30 consecutive Ctrl+- presses from the reset point correctly
+  clamped at the real `8px` floor rather than going negative or erroring; 30 consecutive Ctrl+=
+  presses from a fresh reset correctly clamped at the real `32px` ceiling; and the document's own
+  real content and dirty/saved state were confirmed completely unaffected by zooming alone (a pure
+  cosmetic change, no `edit` IPC call fired), both directly (checking the live buffer text) and
+  incidentally (the on-disk fixture file, independently re-read via `python3 -c "print(repr(...))"`,
+  matched byte-for-byte before and after this entire test). `desktop/Editor.tsx` was independently
+  re-verified with the identical script and fixture via the established "real `spartan-devserver`
+  serving `desktop/dist`, a mocked `window.spartan` forwarding every call over a genuine WebSocket"
+  technique for the still-unlaunchable real Electron window, producing byte-identical results to
+  `web/BackendEditor.tsx` at every step, screenshot-confirmed. Full workspace `cargo fmt --all --
+  check`/`cargo clippy --workspace --release --all-targets` clean (zero Rust changes -- this is a
+  pure TypeScript/React feature); all three components' own `tsc --noEmit` and both shells' `npm
+  run build` clean. **What this does not confirm**: no live Playwright re-verification of
+  `web/Editor.tsx` specifically (typechecked and built clean, structurally identical logic to the
+  two verified files, not independently re-proven this pass -- matching the exact same scope
+  decision this whole editor-ergonomics feature family has made for this file repeatedly since the
+  auto-closing-brackets pass, §193-195); no Ctrl+Scroll-wheel zoom (keyboard-only, a real, named v1
+  scope cut); no persistence of the session-only zoom level across a file switch or app restart (a
+  real, deliberate design choice, not an oversight -- matches the "separate from the persisted
+  setting" convention this whole feature is built on); no font-size zoom in the reference wgpu
+  shell (same established "Electron-shell-only feature" scope every recent editor-ergonomics pass
+  in this project has carried); the real Electron window remains unlaunchable in this session
+  (same standing gap since §75.59).
 
 ## Build & test
 

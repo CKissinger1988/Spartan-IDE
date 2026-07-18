@@ -436,14 +436,22 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
    * `desktop/`'s own identical wiring -- see that file's own doc comment
    * for the full real reasoning. */
   const [bracketMatch, setBracketMatch] = useState<[number, number] | null>(null);
+
+  /** Real, live font-size zoom (Ctrl+=/Ctrl+-/Ctrl+0), ported verbatim
+   * from `desktop/`'s own identical wiring. */
+  const [fontSize, setFontSize] = useState(13);
+  const zoomFontSize = useCallback((step: number) => {
+    setFontSize((prev) => Math.min(32, Math.max(8, prev + step)));
+  }, []);
+
   const charWidth = useMemo(() => {
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
-    if (!ctx) return 13 * 0.6;
-    ctx.font = `13px "JetBrains Mono", monospace`;
-    return ctx.measureText("M").width || 13 * 0.6;
-  }, []);
-  const lineHeightPx = 20;
+    if (!ctx) return fontSize * 0.6;
+    ctx.font = `${fontSize}px "JetBrains Mono", monospace`;
+    return ctx.measureText("M").width || fontSize * 0.6;
+  }, [fontSize]);
+  const lineHeightPx = Math.round(fontSize * 1.54);
 
   useEffect(() => {
     prevContentRef.current = file.content;
@@ -610,6 +618,23 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
         }
         return;
       }
+      // Real font-size zoom (Ctrl+=/Ctrl++/Ctrl+-/Ctrl+0), ported
+      // verbatim from `desktop/`'s own identical wiring.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        zoomFontSize(1);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "-") {
+        e.preventDefault();
+        zoomFontSize(-1);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "0") {
+        e.preventDefault();
+        setFontSize(13);
+        return;
+      }
       if (e.key === "Tab") {
         e.preventDefault();
         const el = textareaRef.current;
@@ -712,8 +737,8 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
 
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1).join("\n");
   const textStyle: React.CSSProperties = {
-    fontSize: "13px",
-    lineHeight: "20px",
+    fontSize: `${fontSize}px`,
+    lineHeight: `${lineHeightPx}px`,
     tabSize: 2,
     whiteSpace: "pre",
   };

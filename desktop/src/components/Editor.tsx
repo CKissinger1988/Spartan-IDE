@@ -1104,6 +1104,23 @@ export default function Editor({
   const [lineCount, setLineCount] = useState(1);
   const prevContentRef = useRef(file.content);
 
+  /** Real, live font-size zoom (Ctrl+=/Ctrl+-/Ctrl+0) -- a session-only
+   * delta layered on top of `prefs.fontSize` (the real, persisted
+   * Settings value), matching the standard "editor zoom is separate from
+   * the settings.json font size" convention most editors and browsers
+   * already use. `prefs.fontSize` changing externally (a real Settings
+   * screen edit) still takes effect immediately -- `effectiveFontSize` is
+   * always recomputed from the current `prefs.fontSize` plus this delta,
+   * never a frozen snapshot. */
+  const [fontSizeDelta, setFontSizeDelta] = useState(0);
+  const effectiveFontSize = Math.min(32, Math.max(8, prefs.fontSize + fontSizeDelta));
+  const zoomFontSize = useCallback(
+    (step: number) => {
+      setFontSizeDelta((prev) => Math.min(32, Math.max(8, prefs.fontSize + prev + step)) - prefs.fontSize);
+    },
+    [prefs.fontSize]
+  );
+
   useEffect(() => {
     prevContentRef.current = file.content;
     setLineCount(file.content.split("\n").length);
@@ -1155,12 +1172,12 @@ export default function Editor({
   const charWidth = useMemo(() => {
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
-    if (!ctx) return prefs.fontSize * 0.6;
-    ctx.font = `${prefs.fontSize}px "JetBrains Mono", monospace`;
-    return ctx.measureText("M").width || prefs.fontSize * 0.6;
-  }, [prefs.fontSize]);
+    if (!ctx) return effectiveFontSize * 0.6;
+    ctx.font = `${effectiveFontSize}px "JetBrains Mono", monospace`;
+    return ctx.measureText("M").width || effectiveFontSize * 0.6;
+  }, [effectiveFontSize]);
 
-  const lineHeightPx = Math.round(prefs.fontSize * 1.54);
+  const lineHeightPx = Math.round(effectiveFontSize * 1.54);
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<HTMLTextAreaElement>) => {
@@ -2127,6 +2144,27 @@ export default function Editor({
         }
         return;
       }
+      // Real font-size zoom (Ctrl+=/Ctrl++ to zoom in, Ctrl+- to zoom
+      // out, Ctrl+0 to reset) -- see `zoomFontSize`'s own doc comment for
+      // the real "session-only delta on top of the persisted setting"
+      // design. `e.key === "+"` covers the real, common case where a US
+      // keyboard layout reports "+" for Ctrl+Shift+=/Ctrl++ rather than
+      // "=" -- both zoom in identically.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        zoomFontSize(1);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "-") {
+        e.preventDefault();
+        zoomFontSize(-1);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "0") {
+        e.preventDefault();
+        setFontSizeDelta(0);
+        return;
+      }
       if (e.key === "Tab") {
         e.preventDefault();
         const el = textareaRef.current;
@@ -2274,8 +2312,8 @@ export default function Editor({
   // the exact same style object rather than one being styled via CSS and
   // the other via inline props.
   const textStyle: React.CSSProperties = {
-    fontSize: `${prefs.fontSize}px`,
-    lineHeight: `${Math.round(prefs.fontSize * 1.54)}px`,
+    fontSize: `${effectiveFontSize}px`,
+    lineHeight: `${lineHeightPx}px`,
     tabSize: prefs.tabSize,
     whiteSpace: prefs.wordWrap ? "pre-wrap" : "pre",
   };
