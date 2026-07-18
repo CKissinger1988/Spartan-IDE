@@ -5325,6 +5325,67 @@ first — it's the parity reference until each row there is actually reimplement
   shell (same established "Electron-shell-only feature" scope every recent editor-ergonomics pass
   in this project has carried); the real Electron window remains unlaunchable in this session
   (same standing gap since §75.59).
+- **Real, working code — trailing-whitespace-trim fallback for Format Document, in
+  `desktop/Editor.tsx` and `web/BackendEditor.tsx`, task #220-#222**: closes a real, honest gap
+  Format Document (§186) shipped with -- pressing Ctrl+Shift+F on a file whose language has no
+  configured formatter (confirmed by directly reading `crates/spartan-languages/languages.toml`:
+  Java has zero `[language.formatter]` entry at all; Kotlin/C# have one but
+  `format_integration::resolve_formatter_command` returns `None` for both since neither `ktlint`
+  nor `dotnet format` supports a real stdin/stdout filter-mode invocation) previously produced a
+  real, technically-honest but practically useless bare `"Format failed: ..."` message with zero
+  actual effect. **A real, deliberate scoping decision, verified against the actual dispatch code
+  before writing anything, not assumed**: `spartan-backend::format_document`
+  (`crates/spartan-backend/src/lib.rs`) has two structurally distinct error shapes -- three
+  synchronous rejections returned directly from the function *before* any formatter subprocess is
+  ever spawned (no language recognized, no formatter configured for this language, formatter has
+  no stdin/stdout filter mode wired), surfaced to the frontend as an immediate JSON-RPC promise
+  rejection; versus async `format_document_error` events from *inside* an already-spawned
+  subprocess thread (the binary genuinely isn't installed, or it ran and rejected the input -- a
+  real syntax error). The fallback is scoped to catch **only** the three synchronous, no-formatter-
+  exists messages (matched via `err.message.includes(...)` against `"no formatter"`/`"no language
+  profile"`/`"no supported stdin/stdout formatting mode"`), never the async event path -- so a real
+  configured formatter's own genuine failure (an actual syntax error, a missing binary) is never
+  silently swallowed or masked by a fallback trim, only the "there was never anything to even try"
+  case. New, pure `trimTrailingWhitespace(content)` strips `/[ \t]+$/` from every line, ported
+  identically to both files. On a caught no-formatter rejection, the fallback manually replicates
+  the same live-buffer-update sequence the pre-existing `format_document_result` success-path event
+  handler already established in the same file (update `prevContentRef`, `setLineCount`,
+  `onContentChange`, clear stale document-highlights/bracket-match, fire the real `edit` IPC call,
+  restore the caret clamped to the new length) -- **a real, deliberate design choice, not
+  incidental**: `applyProgrammaticEdit` is declared via `useCallback` textually *after*
+  `triggerFormatDocument` in both files, so referencing it in `triggerFormatDocument`'s own
+  `useCallback` dependency array would throw a real TDZ (Temporal Dead Zone) `ReferenceError` on
+  first render -- recognized and avoided by design before writing any code, not discovered as a
+  bug. If the trimmed content is identical to the original (no real trailing whitespace existed),
+  no edit fires at all and a distinct, honest `"No formatter configured -- nothing to trim"` status
+  shows instead of a no-op success message. Real, live, end-to-end Playwright verification against
+  a real running `spartan-devserver` and a real two-file fixture (a genuinely trailing-whitespace-
+  laden `Main.java`, and a `broken.py` with a real, deliberate Python syntax error as the negative
+  control): the Java file's Ctrl+Shift+F correctly trimmed every trailing space/tab across all
+  three affected lines with the rest of the content byte-for-byte unchanged, showing
+  `"No formatter configured -- trimmed trailing whitespace"`; a second Ctrl+Shift+F on the
+  now-clean file correctly showed `"No formatter configured -- nothing to trim"` with zero edit
+  fired; the Python file -- which *does* have a real configured formatter (`black`) -- correctly
+  reached the async failure path instead, leaving the buffer completely unchanged and showing the
+  real, honest `"Format failed: formatter \`black\` exited with exit status: 123: error: cannot
+  format -: Cannot parse: 2:4:     pass"`, confirming the fallback correctly does **not** fire on a
+  real configured-formatter failure. `desktop/Editor.tsx` was independently re-verified with the
+  identical script and fixture via the established "real `spartan-devserver` serving
+  `desktop/dist`, a mocked `window.spartan` forwarding every call over a genuine WebSocket"
+  technique for the still-unlaunchable real Electron window, producing byte-identical results to
+  `web/BackendEditor.tsx` at every step (both the trim and the negative-control failure),
+  screenshot-confirmed. Full workspace `cargo fmt --all -- --check` clean (zero Rust changes --
+  this is a pure TypeScript/React feature); both shells' own `tsc --noEmit` clean. **What this does
+  not confirm**: no equivalent in `web/Editor.tsx` (the pure client-side File System Access + WASM
+  editor has no `triggerFormatDocument`/`format_document` call of any kind, confirmed via grep --
+  Format Document itself was never wired into that file, matching that feature's own already-
+  documented scope, so this fallback has nothing to attach to there); no trim-on-save or any
+  automatic trigger beyond the existing Ctrl+Shift+F/Format-on-Save call sites Format Document
+  itself already uses; no configurable trim behavior (always full-document, matching Format
+  Document's own existing whole-buffer-only scope); no equivalent in the reference wgpu shell
+  (`format_document` itself was never wired into that shell to begin with, matching every LSP/
+  formatting feature this session has built landing only in the two Electron-based shells); the
+  real Electron window remains unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 

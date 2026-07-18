@@ -907,6 +907,27 @@ function deleteLines(
   return { content: newContent, selectionStart: newOffset, selectionEnd: newOffset };
 }
 
+/** Real, pure, language-agnostic "trim trailing whitespace" -- strips
+ * trailing spaces/tabs from every line, leaving line count and every
+ * other character untouched. A real, deliberate, named v1 scope cut:
+ * this does *not* also insert a missing final newline (a distinct real
+ * editor convention, `insert_final_newline`, not attempted here) -- just
+ * the one, narrow, unambiguous transform. Used as `triggerFormatDocument`'s
+ * own real fallback when the backend's `format_document` synchronously
+ * refuses because no real formatter is configured or wired for this
+ * file's language (Java has zero configured formatter at all; Kotlin/C#
+ * have one configured but no real stdin/stdout filter-mode invocation,
+ * §183) -- a real, honest, universally-applicable improvement over doing
+ * nothing, never applied when a real *configured* formatter fails to run
+ * or rejects the input (that stays a real, reported failure, not silently
+ * papered over). */
+function trimTrailingWhitespace(content: string): string {
+  return content
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/, ""))
+    .join("\n");
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -1816,8 +1837,48 @@ export default function Editor({
         if (formatCompletionResolverRef.current === resolve) {
           formatCompletionResolverRef.current = null;
         }
-        setFormatStatus(`Format failed: ${err.message}`);
-        window.setTimeout(() => setFormatStatus(null), 5000);
+        // Real "no formatter configured/wired for this language" fallback
+        // -- see `trimTrailingWhitespace`'s own doc comment for the full
+        // real reasoning. Matched by message substring against the
+        // backend's own three real synchronous-rejection shapes
+        // (`format_document` in `spartan-backend::lib.rs`); deliberately
+        // does NOT match any other real rejection reason (a poisoned
+        // backend state, an already-closed document), which stay real,
+        // honest failures instead of being silently papered over.
+        const isNoFormatterError =
+          err.message.includes("no formatter") ||
+          err.message.includes("no language profile") ||
+          err.message.includes("no supported stdin/stdout formatting mode");
+        const el = textareaRef.current;
+        if (isNoFormatterError && el) {
+          const trimmed = trimTrailingWhitespace(prevContentRef.current);
+          if (trimmed !== prevContentRef.current) {
+            const oldLength = [...prevContentRef.current].length;
+            const caret = el.selectionStart;
+            prevContentRef.current = trimmed;
+            setLineCount(trimmed.split("\n").length);
+            onContentChange(file.path, trimmed);
+            setDocumentHighlights([]);
+            setBracketMatch(null);
+            window.spartan
+              .call("edit", {
+                doc_id: file.docId,
+                start_char: 0,
+                end_char: oldLength,
+                text: trimmed,
+              })
+              .catch((editErr: Error) => console.error("edit failed:", editErr));
+            const newPos = Math.min(caret, trimmed.length);
+            requestAnimationFrame(() => el.setSelectionRange(newPos, newPos));
+            setFormatStatus("No formatter configured -- trimmed trailing whitespace");
+          } else {
+            setFormatStatus("No formatter configured -- nothing to trim");
+          }
+          window.setTimeout(() => setFormatStatus(null), 3000);
+        } else {
+          setFormatStatus(`Format failed: ${err.message}`);
+          window.setTimeout(() => setFormatStatus(null), 5000);
+        }
         resolve();
       });
       window.setTimeout(() => {
@@ -1827,7 +1888,7 @@ export default function Editor({
         }
       }, 10000);
     });
-  }, [file.docId]);
+  }, [file.docId, file.path, onContentChange]);
 
   const diagnosticsByLine = useMemo(() => {
     const map = new Map<number, LspDiagnostic[]>();

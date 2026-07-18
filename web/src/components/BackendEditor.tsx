@@ -767,6 +767,16 @@ function deleteLines(
   return { content: newContent, selectionStart: newOffset, selectionEnd: newOffset };
 }
 
+/** Real, pure, language-agnostic "trim trailing whitespace," ported
+ * verbatim from `desktop/`'s own identical wiring -- see that file's own
+ * doc comment for the full real reasoning. */
+function trimTrailingWhitespace(content: string): string {
+  return content
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/, ""))
+    .join("\n");
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -1495,8 +1505,42 @@ export default function BackendEditor({
         if (formatCompletionResolverRef.current === resolve) {
           formatCompletionResolverRef.current = null;
         }
-        setFormatStatus(`Format failed: ${err.message}`);
-        window.setTimeout(() => setFormatStatus(null), 5000);
+        // Real "no formatter configured/wired for this language" fallback,
+        // ported verbatim from `desktop/`'s own identical wiring.
+        const isNoFormatterError =
+          err.message.includes("no formatter") ||
+          err.message.includes("no language profile") ||
+          err.message.includes("no supported stdin/stdout formatting mode");
+        const el = textareaRef.current;
+        if (isNoFormatterError && el) {
+          const trimmed = trimTrailingWhitespace(prevContentRef.current);
+          if (trimmed !== prevContentRef.current) {
+            const oldLength = [...prevContentRef.current].length;
+            const caret = el.selectionStart;
+            prevContentRef.current = trimmed;
+            setLineCount(trimmed.split("\n").length);
+            onContentChange(file.path, trimmed);
+            setDocumentHighlights([]);
+            setBracketMatch(null);
+            client
+              .call("edit", {
+                doc_id: file.docId,
+                start_char: 0,
+                end_char: oldLength,
+                text: trimmed,
+              })
+              .catch((editErr: Error) => console.error("edit failed:", editErr));
+            const newPos = Math.min(caret, trimmed.length);
+            requestAnimationFrame(() => el.setSelectionRange(newPos, newPos));
+            setFormatStatus("No formatter configured -- trimmed trailing whitespace");
+          } else {
+            setFormatStatus("No formatter configured -- nothing to trim");
+          }
+          window.setTimeout(() => setFormatStatus(null), 3000);
+        } else {
+          setFormatStatus(`Format failed: ${err.message}`);
+          window.setTimeout(() => setFormatStatus(null), 5000);
+        }
         resolve();
       });
       window.setTimeout(() => {
@@ -1506,7 +1550,7 @@ export default function BackendEditor({
         }
       }, 10000);
     });
-  }, [client, file.docId]);
+  }, [client, file.docId, file.path, onContentChange]);
 
   const handleDefinitionClick = useCallback(
     (e: React.MouseEvent<HTMLTextAreaElement>) => {
