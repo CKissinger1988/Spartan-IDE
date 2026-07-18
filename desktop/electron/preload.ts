@@ -22,6 +22,7 @@ const ALLOWED_METHODS = new Set([
   "lsp_signature_help",
   "lsp_references",
   "lsp_rename",
+  "lsp_document_symbol",
   "leo_status",
   "leo_start_task",
   "leo_approve_plan",

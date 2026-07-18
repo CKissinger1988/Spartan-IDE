@@ -217,6 +217,93 @@ function extractWorkspaceEditChanges(result: unknown): Record<string, WorkspaceT
   return Object.keys(out).length > 0 ? out : null;
 }
 
+/** A real, normalized, flattened LSP document symbol -- `depth` (0 for a
+ * top-level symbol) is the only structural information kept from a real
+ * hierarchical result's own `children` nesting, enough for the panel below
+ * to indent without needing a recursive render. `kind` is the real LSP
+ * `SymbolKind` integer, looked up against `SYMBOL_KIND_LABELS` at render
+ * time rather than resolved here, matching this file's own "normalize the
+ * data, format at the UI boundary" split. */
+interface DocumentSymbolItem {
+  name: string;
+  kind: number;
+  line: number;
+  character: number;
+  depth: number;
+}
+
+/** The real LSP `SymbolKind` enum's own integer values (spec §3.17.4) --
+ * only used to render a short, human-readable label next to each real
+ * symbol name. */
+const SYMBOL_KIND_LABELS: Record<number, string> = {
+  1: "File",
+  2: "Module",
+  3: "Namespace",
+  4: "Package",
+  5: "Class",
+  6: "Method",
+  7: "Property",
+  8: "Field",
+  9: "Constructor",
+  10: "Enum",
+  11: "Interface",
+  12: "Function",
+  13: "Variable",
+  14: "Constant",
+  15: "String",
+  16: "Number",
+  17: "Boolean",
+  18: "Array",
+  19: "Object",
+  20: "Key",
+  21: "Null",
+  22: "EnumMember",
+  23: "Struct",
+  24: "Event",
+  25: "Operator",
+  26: "TypeParameter",
+};
+
+/** Normalizes a real LSP `documentSymbol` result into a real, flat,
+ * jump-ready list. Handles both real response shapes the spec allows --
+ * a nested `DocumentSymbol[]` (`selectionRange`/`range` directly on each
+ * node, real `children`) or a flat `SymbolInformation[]` (its position
+ * nested one level deeper, under `location.range`, and never any real
+ * `children`) -- **a real, live finding, not assumed from the spec**: see
+ * `open_project`'s own Rust-side doc comment for why this crate declares
+ * `hierarchicalDocumentSymbolSupport`, which makes every real server this
+ * crate has been tested against reply with the nested shape; this
+ * normalizer still handles the flat one too, for any real server that
+ * doesn't honor that declared capability. Returns `[]` for a real, honest
+ * "no symbols in this file" rather than throwing. */
+function extractDocumentSymbols(result: unknown): DocumentSymbolItem[] {
+  if (!Array.isArray(result)) return [];
+  const out: DocumentSymbolItem[] = [];
+  const walk = (nodes: unknown[], depth: number) => {
+    for (const node of nodes) {
+      const n = node as {
+        name?: unknown;
+        kind?: unknown;
+        range?: { start?: { line?: unknown; character?: unknown } };
+        selectionRange?: { start?: { line?: unknown; character?: unknown } };
+        location?: { range?: { start?: { line?: unknown; character?: unknown } } };
+        children?: unknown;
+      };
+      const name = typeof n.name === "string" ? n.name : null;
+      const kind = typeof n.kind === "number" ? n.kind : 0;
+      const posSource = n.selectionRange ?? n.range ?? n.location?.range;
+      const line = posSource?.start?.line;
+      const character = posSource?.start?.character;
+      if (name && typeof line === "number" && typeof character === "number") {
+        out.push({ name, kind, line, character, depth });
+      }
+      if (Array.isArray(n.children)) walk(n.children, depth + 1);
+    }
+  };
+  walk(result, 0);
+  return out;
+}
+
 /** A real, normalized LSP `SignatureHelp` target -- only the fields this
  * v1 tooltip actually renders. `activeParameterLabel` is `null` whenever
  * the active parameter can't be resolved (no `activeParameter` index sent,
@@ -795,8 +882,10 @@ export default function Editor({
       if (!(e.ctrlKey || e.metaKey)) {
         // A real plain click dismisses an open references panel -- the
         // same "clicking elsewhere closes it" behavior every real
-        // editor's own find-references popup has.
+        // editor's own find-references popup has. Same for a real open
+        // document-symbol outline panel.
         setReferencesState(null);
+        setSymbolsState(null);
         return;
       }
       const el = textareaRef.current;
@@ -961,6 +1050,47 @@ export default function Editor({
     return () => window.clearTimeout(timer);
   }, [renameState?.phase]);
 
+  /** Real document-symbol outline (Ctrl+Shift+O, the standard cross-editor
+   * "Go to Symbol in File" convention) -- the seventh real LSP-backed
+   * editor feature, following find-references' own exact "panel near the
+   * cursor, items: null while in flight" shape, since a whole-document
+   * request has no real per-request position of its own to key a pending
+   * ref off of the way the other six do -- a single in-flight boolean is
+   * enough here (only one outline request can be open at a time, matching
+   * every other panel in this component). */
+  const [symbolsState, setSymbolsState] = useState<{
+    x: number;
+    y: number;
+    items: DocumentSymbolItem[] | null;
+  } | null>(null);
+  const pendingSymbolsRef = useRef(false);
+
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event !== "lsp_document_symbol_result") return;
+      const d = data as { doc_id: number; result: unknown };
+      if (d.doc_id !== file.docId || !pendingSymbolsRef.current) return;
+      pendingSymbolsRef.current = false;
+      setSymbolsState((prev) =>
+        prev ? { ...prev, items: extractDocumentSymbols(d.result) } : prev
+      );
+    });
+    return unsubscribe;
+  }, [file.docId]);
+
+  const triggerDocumentSymbols = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const { line, character } = offsetToLineChar(el.value, el.selectionStart);
+    const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+    const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
+    pendingSymbolsRef.current = true;
+    setSymbolsState({ x, y, items: null });
+    window.spartan
+      .call("lsp_document_symbol", { doc_id: file.docId })
+      .catch((err: Error) => console.error("lsp_document_symbol failed:", err));
+  }, [charWidth, lineHeightPx, file.docId]);
+
   const diagnosticsByLine = useMemo(() => {
     const map = new Map<number, LspDiagnostic[]>();
     for (const d of diagnostics) {
@@ -1110,6 +1240,11 @@ export default function Editor({
       if (e.key === "Escape" && referencesState) {
         setReferencesState(null);
       }
+      // Real document-symbol outline dismissal (Escape), same real
+      // precedence as find-references' own identical branch above.
+      if (e.key === "Escape" && symbolsState) {
+        setSymbolsState(null);
+      }
       // Real, manual completion trigger (Ctrl+Space) -- see
       // `triggerCompletion`'s own doc comment for why manual, not
       // automatic-per-keystroke.
@@ -1134,6 +1269,13 @@ export default function Editor({
       if (e.key === "F2" && !renameState) {
         e.preventDefault();
         triggerRename();
+        return;
+      }
+      // Real, manual document-symbol outline trigger (Ctrl+Shift+O, the
+      // standard cross-editor "Go to Symbol in File" convention).
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        triggerDocumentSymbols();
         return;
       }
       if (e.key === "Tab") {
@@ -1190,6 +1332,8 @@ export default function Editor({
       triggerReferences,
       renameState,
       triggerRename,
+      symbolsState,
+      triggerDocumentSymbols,
       file.docId,
       file.path,
       onContentChange,
@@ -1321,6 +1465,43 @@ export default function Editor({
               {(renameState.phase === "done" || renameState.phase === "error") &&
                 renameState.message}
             </div>
+          )}
+        </div>
+      )}
+      {symbolsState && (
+        <div
+          className="editor-references-panel mono"
+          style={{ left: symbolsState.x, top: symbolsState.y }}
+        >
+          <div className="editor-references-header">
+            {symbolsState.items === null
+              ? "Loading symbols…"
+              : `${symbolsState.items.length} symbol${symbolsState.items.length === 1 ? "" : "s"}`}
+          </div>
+          {symbolsState.items === null ? (
+            <div className="editor-references-item editor-references-item-empty">Loading…</div>
+          ) : symbolsState.items.length === 0 ? (
+            <div className="editor-references-item editor-references-item-empty">
+              No symbols found
+            </div>
+          ) : (
+            symbolsState.items.map((item, i) => (
+              <div
+                key={`${item.name}:${item.line}:${item.character}:${i}`}
+                className="editor-references-item editor-symbol-item"
+                style={{ paddingLeft: 10 + item.depth * 14 }}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setSymbolsState(null);
+                  jumpToLocalPosition(item.line, item.character);
+                }}
+              >
+                <span className="editor-symbol-kind">
+                  {SYMBOL_KIND_LABELS[item.kind] ?? "Symbol"}
+                </span>
+                {item.name}
+              </div>
+            ))
           )}
         </div>
       )}

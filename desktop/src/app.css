@@ -699,6 +699,16 @@
   cursor: default;
 }
 
+/* Real document-symbol outline (Ctrl+Shift+O, task #179) -- reuses
+ * `.editor-references-item`'s own row styling, `editor-symbol-item` only
+ * adds the kind-label prefix; per-row indentation is applied inline
+ * (depth varies per real symbol, not expressible as a fixed class). */
+.editor-symbol-kind {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  margin-right: 6px;
+}
+
 .editor-gutter {
   width: 48px;
   padding: 8px 8px 8px 0;

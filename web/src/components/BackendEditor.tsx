@@ -206,6 +206,78 @@ function extractWorkspaceEditChanges(result: unknown): Record<string, WorkspaceT
   return Object.keys(out).length > 0 ? out : null;
 }
 
+/** A real, normalized, flattened LSP document symbol, ported verbatim from
+ * `desktop/`'s own `DocumentSymbolItem` -- see that file's own doc comment
+ * for the full real reasoning. */
+interface DocumentSymbolItem {
+  name: string;
+  kind: number;
+  line: number;
+  character: number;
+  depth: number;
+}
+
+const SYMBOL_KIND_LABELS: Record<number, string> = {
+  1: "File",
+  2: "Module",
+  3: "Namespace",
+  4: "Package",
+  5: "Class",
+  6: "Method",
+  7: "Property",
+  8: "Field",
+  9: "Constructor",
+  10: "Enum",
+  11: "Interface",
+  12: "Function",
+  13: "Variable",
+  14: "Constant",
+  15: "String",
+  16: "Number",
+  17: "Boolean",
+  18: "Array",
+  19: "Object",
+  20: "Key",
+  21: "Null",
+  22: "EnumMember",
+  23: "Struct",
+  24: "Event",
+  25: "Operator",
+  26: "TypeParameter",
+};
+
+/** Normalizes a real LSP `documentSymbol` result, ported verbatim from
+ * `desktop/`'s own `extractDocumentSymbols` -- see that file's own doc
+ * comment for the full real reasoning, including the real, live finding
+ * behind `hierarchicalDocumentSymbolSupport`. */
+function extractDocumentSymbols(result: unknown): DocumentSymbolItem[] {
+  if (!Array.isArray(result)) return [];
+  const out: DocumentSymbolItem[] = [];
+  const walk = (nodes: unknown[], depth: number) => {
+    for (const node of nodes) {
+      const n = node as {
+        name?: unknown;
+        kind?: unknown;
+        range?: { start?: { line?: unknown; character?: unknown } };
+        selectionRange?: { start?: { line?: unknown; character?: unknown } };
+        location?: { range?: { start?: { line?: unknown; character?: unknown } } };
+        children?: unknown;
+      };
+      const name = typeof n.name === "string" ? n.name : null;
+      const kind = typeof n.kind === "number" ? n.kind : 0;
+      const posSource = n.selectionRange ?? n.range ?? n.location?.range;
+      const line = posSource?.start?.line;
+      const character = posSource?.start?.character;
+      if (name && typeof line === "number" && typeof character === "number") {
+        out.push({ name, kind, line, character, depth });
+      }
+      if (Array.isArray(n.children)) walk(n.children, depth + 1);
+    }
+  };
+  walk(result, 0);
+  return out;
+}
+
 /** A real, normalized LSP `SignatureHelp` target, ported verbatim from
  * `desktop/`'s own `SignatureHelpTarget` -- see that file's own doc
  * comment for the full real reasoning. */
@@ -801,10 +873,47 @@ export default function BackendEditor({
     return () => window.clearTimeout(timer);
   }, [renameState?.phase]);
 
+  /** Real document-symbol outline (Ctrl+Shift+O), ported verbatim from
+   * `desktop/`'s own identical wiring -- see that file's own doc comments
+   * for the full real reasoning. */
+  const [symbolsState, setSymbolsState] = useState<{
+    x: number;
+    y: number;
+    items: DocumentSymbolItem[] | null;
+  } | null>(null);
+  const pendingSymbolsRef = useRef(false);
+
+  useEffect(() => {
+    const unsubscribe = client.onEvent((e) => {
+      if (e.event !== "lsp_document_symbol_result") return;
+      const d = e.data as { doc_id: number; result: unknown };
+      if (d.doc_id !== file.docId || !pendingSymbolsRef.current) return;
+      pendingSymbolsRef.current = false;
+      setSymbolsState((prev) =>
+        prev ? { ...prev, items: extractDocumentSymbols(d.result) } : prev
+      );
+    });
+    return unsubscribe;
+  }, [client, file.docId]);
+
+  const triggerDocumentSymbols = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const { line, character } = offsetToLineChar(el.value, el.selectionStart);
+    const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+    const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
+    pendingSymbolsRef.current = true;
+    setSymbolsState({ x, y, items: null });
+    client
+      .call("lsp_document_symbol", { doc_id: file.docId })
+      .catch((err: Error) => console.error("lsp_document_symbol failed:", err));
+  }, [client, charWidth, lineHeightPx, file.docId]);
+
   const handleDefinitionClick = useCallback(
     (e: React.MouseEvent<HTMLTextAreaElement>) => {
       if (!(e.ctrlKey || e.metaKey)) {
         setReferencesState(null);
+        setSymbolsState(null);
         return;
       }
       const el = textareaRef.current;
@@ -936,6 +1045,11 @@ export default function BackendEditor({
       if (e.key === "Escape" && referencesState) {
         setReferencesState(null);
       }
+      // Real document-symbol outline dismissal (Escape), ported verbatim
+      // from `desktop/`'s own identical branch.
+      if (e.key === "Escape" && symbolsState) {
+        setSymbolsState(null);
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === " ") {
         e.preventDefault();
         triggerCompletion();
@@ -955,6 +1069,13 @@ export default function BackendEditor({
       if (e.key === "F2" && !renameState) {
         e.preventDefault();
         triggerRename();
+        return;
+      }
+      // Real, manual document-symbol outline trigger (Ctrl+Shift+O),
+      // ported verbatim from `desktop/`'s own identical branch.
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        triggerDocumentSymbols();
         return;
       }
       if (e.key === "Tab") {
@@ -1003,6 +1124,8 @@ export default function BackendEditor({
       triggerReferences,
       renameState,
       triggerRename,
+      symbolsState,
+      triggerDocumentSymbols,
       client,
       file.docId,
       file.path,
@@ -1113,6 +1236,43 @@ export default function BackendEditor({
               {(renameState.phase === "done" || renameState.phase === "error") &&
                 renameState.message}
             </div>
+          )}
+        </div>
+      )}
+      {symbolsState && (
+        <div
+          className="editor-references-panel mono"
+          style={{ left: symbolsState.x, top: symbolsState.y }}
+        >
+          <div className="editor-references-header">
+            {symbolsState.items === null
+              ? "Loading symbols…"
+              : `${symbolsState.items.length} symbol${symbolsState.items.length === 1 ? "" : "s"}`}
+          </div>
+          {symbolsState.items === null ? (
+            <div className="editor-references-item editor-references-item-empty">Loading…</div>
+          ) : symbolsState.items.length === 0 ? (
+            <div className="editor-references-item editor-references-item-empty">
+              No symbols found
+            </div>
+          ) : (
+            symbolsState.items.map((item, i) => (
+              <div
+                key={`${item.name}:${item.line}:${item.character}:${i}`}
+                className="editor-references-item editor-symbol-item"
+                style={{ paddingLeft: 10 + item.depth * 14 }}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setSymbolsState(null);
+                  jumpToLocalPosition(item.line, item.character);
+                }}
+              >
+                <span className="editor-symbol-kind">
+                  {SYMBOL_KIND_LABELS[item.kind] ?? "Symbol"}
+                </span>
+                {item.name}
+              </div>
+            ))
           )}
         </div>
       )}

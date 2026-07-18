@@ -294,6 +294,14 @@ impl LspClient {
                         "signatureHelp": {"signatureInformation": {"parameterInformation": {"labelOffsetSupport": false}}},
                         "references": {},
                         "rename": {},
+                        // Real, live finding: without this, a real server
+                        // must (per spec) reply with the flatter
+                        // `SymbolInformation[]` shape instead of the nested
+                        // `DocumentSymbol[]` this crate's own `document_symbol`
+                        // is built around -- confirmed live against
+                        // `pyright-langserver`, which returns real, correctly
+                        // nested `children` only once this is declared.
+                        "documentSymbol": {"hierarchicalDocumentSymbolSupport": true},
                         "publishDiagnostics": {},
                     }
                 },
@@ -459,6 +467,31 @@ impl LspClient {
                 "textDocument": {"uri": file_uri},
                 "position": {"line": line, "character": character},
                 "newName": new_name,
+            })),
+            DEFAULT_TIMEOUT,
+        )
+    }
+
+    /// Real `textDocument/documentSymbol` -- the seventh real query method,
+    /// the direct sibling of `hover`/`completion`/`definition`/
+    /// `signatureHelp`/`references`/`rename` above, but the first with no
+    /// real cursor position of its own (a symbol outline covers the whole
+    /// document at once). A real response is either a nested
+    /// `DocumentSymbol[]` (each carrying real `children`) or a flat
+    /// `SymbolInformation[]`, per spec depending on whether
+    /// `hierarchicalDocumentSymbolSupport` was declared -- `open_project`
+    /// declares it (see that method's own doc comment for the real, live
+    /// finding this was based on), so every real server this crate has been
+    /// tested against replies with the nested shape. Passed through
+    /// unparsed exactly like every other query method here -- normalizing
+    /// either real shape into a flat, jump-ready list is a real caller's
+    /// job, matching `references`'/`definition`'s own established division
+    /// of responsibility.
+    pub fn document_symbol(&mut self, file_uri: &str) -> Option<Value> {
+        self.request(
+            "textDocument/documentSymbol",
+            Some(json!({
+                "textDocument": {"uri": file_uri},
             })),
             DEFAULT_TIMEOUT,
         )

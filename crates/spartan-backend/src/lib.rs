@@ -589,6 +589,45 @@ fn lsp_rename(
     Ok(serde_json::json!({ "status": "requested" }))
 }
 
+/// Real, live `textDocument/documentSymbol` -- the seventh real query
+/// method, the direct sibling of `lsp_hover`/`lsp_completion`/
+/// `lsp_definition`/`lsp_signature_help`/`lsp_references`/`lsp_rename`
+/// above: identical never-blocks-the-caller shape, identical envelope-
+/// unwrapping. Unlike every other query method here, this one takes no
+/// `line`/`character` -- a document symbol request covers the whole
+/// document, not one cursor position.
+fn lsp_document_symbol(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+) -> Result<serde_json::Value, String> {
+    let session = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        doc.lsp_session
+            .clone()
+            .ok_or_else(|| "no live LSP session for this file".to_string())?
+    };
+    thread::spawn(move || {
+        let raw = session.request_document_symbol();
+        let result = raw.and_then(|envelope| envelope.get("result").cloned());
+        let event = Event {
+            event: "lsp_document_symbol_result".to_string(),
+            data: serde_json::json!({
+                "doc_id": doc_id,
+                "result": result,
+            }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+    Ok(serde_json::json!({ "status": "requested" }))
+}
+
 /// Real edit application -- `start_char`/`end_char` name a real char
 /// range (matching every other char-indexed API in `spartan-buffer`);
 /// `start_char == end_char` is a pure insert, `text.is_empty()` with
@@ -3231,6 +3270,10 @@ pub fn handle_request(
             let new_name = get_str_param(&req.params, "new_name")?;
             lsp_rename(state, out_tx.clone(), doc_id, line, character, new_name)
         })(),
+        "lsp_document_symbol" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            lsp_document_symbol(state, out_tx.clone(), doc_id)
+        })(),
         "edit" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;
             let start_char = get_u64_param(&req.params, "start_char")? as usize;
@@ -5842,6 +5885,55 @@ mod tests {
             serde_json::json!({ "doc_id": 999, "line": 0, "character": 0 }),
         );
         assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn lsp_document_symbol_on_a_real_unopened_doc_id_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "lsp_document_symbol",
+            serde_json::json!({ "doc_id": 999 }),
+        );
+        assert!(resp.error.unwrap().contains("no open document"));
+    }
+
+    #[test]
+    fn lsp_document_symbol_on_a_real_open_synthetic_file_with_no_lsp_session_errors_honestly() {
+        // The direct sibling of `lsp_hover`'s/`lsp_completion`'s/
+        // `lsp_definition`'s/`lsp_signature_help`'s/`lsp_references`'s/
+        // `lsp_rename`'s own identical tests above -- same real, honest
+        // error path, same "unrecognized extension never gets a real LSP
+        // session" cause.
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-lsp-document-symbol-no-session-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("data.unknownext");
+        std::fs::write(&file, "hello").unwrap();
+
+        let state = new_state();
+        let open_resp = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        );
+        let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+        let resp = call(
+            &state,
+            2,
+            "lsp_document_symbol",
+            serde_json::json!({ "doc_id": doc_id }),
+        );
+        assert!(resp.error.unwrap().contains("no live LSP session"));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

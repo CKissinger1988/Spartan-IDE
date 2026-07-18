@@ -4396,6 +4396,54 @@ first — it's the parity reference until each row there is actually reimplement
   remains unlaunchable in this session (same standing gap since §75.59). With this pass, every
   real LSP query/mutation method named across tasks #130-#178 (diagnostics, hover, completion,
   definition, signature help, references, rename) is closed in both `desktop/` and `web/`.
+- **Real, working code — real LSP document-symbol outline (Ctrl+Shift+O), the eighth real query
+  method, a real spec-vs-reality investigation before writing any code (task #179)**: before
+  picking this feature, a real, live capability probe against `pyright-langserver` (a hand-rolled
+  JSON-RPC client, not assumption) confirmed it does **not** implement `documentFormatting` at all
+  (no bundled formatter, ruling out "Format Document" as this pass's next increment) but does
+  implement `documentSymbol`, `codeAction`, and `documentHighlight` -- `documentSymbol` was chosen
+  as the most standalone-valuable of the three and, unlike a rename's `WorkspaceEdit`, a genuinely
+  read-only query (matching hover/definition/references' own shape, not rename's mutation-apply
+  one). A second real probe confirmed the exact real capability-negotiation behavior this pass
+  depends on: declaring `hierarchicalDocumentSymbolSupport: true` makes pyright reply with a real,
+  correctly nested `DocumentSymbol[]` (each carrying real `children`); without it, per spec, a
+  server must reply with the flatter `SymbolInformation[]` instead -- `open_project`'s own
+  capabilities block now declares it. `LspClient::document_symbol`, a new `QueryKind::
+  DocumentSymbol`/`LspSession::request_document_symbol` (no `line`/`character` params, unlike
+  every other query method here -- a document symbol request covers the whole document, not one
+  cursor position), and `spartan-backend::lsp_document_symbol` all follow the exact established
+  shape. `desktop/src/components/Editor.tsx` and `web/src/components/BackendEditor.tsx` both
+  gained a real Ctrl+Shift+O trigger (the standard cross-editor "Go to Symbol in File" convention)
+  reusing the exact references-panel UI shape (a `null`-while-loading list, click-to-jump via the
+  already-real `jumpToLocalPosition`), plus a real `extractDocumentSymbols` normalizer that
+  flattens either real response shape (`DocumentSymbol[]`'s nested `children`, or
+  `SymbolInformation[]`'s `location.range`) into one indentation-depth-tagged list, and a real
+  `SYMBOL_KIND_LABELS` map (the LSP spec's own `SymbolKind` integers) rendered as a small label per
+  row. 3 new Rust tests (2 dispatch-level honest-error tests, plus a real, live integration test
+  against a real `pyright-langserver` -- a real class with one real nested method plus a real
+  top-level function, confirming exactly the expected 2 top-level symbols with `greet` correctly
+  nested as `Greeter`'s own real `children[0]`), 765 tests total workspace-wide, full `cargo fmt
+  --all -- --check`/`cargo clippy --workspace --release --all-targets`/`cargo test --workspace
+  --release -- --test-threads=1` all clean, zero failures. Both shells' own `tsc --noEmit`/`vite
+  build`/`npm run build:electron` clean. **Real, live, end-to-end Playwright verification against
+  the actual compiled `web/dist` served by a real running `spartan-devserver` binary** (not a
+  mock): opened a real `main.py` fixture (a `Greeter` class with one `greet` method, plus a
+  top-level `standalone` function), pressed Ctrl+Shift+O -- a real `lsp_document_symbol` request
+  reached a real live `pyright-langserver` session and returned the real, correctly nested result,
+  rendered on screen exactly as `Class Greeter` / indented `Method greet` / `Function standalone`,
+  screenshotted. **A real test-script mistake was caught and fixed while building this
+  verification, not a product bug**: the first click-to-jump assertion used a substring locator
+  (`hasText: "greet"`), which also matched the real `"Greeter"` row (a genuine substring, case-
+  insensitive) and landed the click on the wrong row; fixed with an exact-text locator
+  (`/^Methodgreet$/`), after which clicking the real `greet` row correctly jumped the caret to
+  that method's own real position in the live buffer, confirmed by reading `selectionStart` back
+  and comparing it against the fixture's own known `def greet` offset. **What this does not
+  confirm**: no live verification of the flat `SymbolInformation[]` fallback shape (every real
+  server this crate has been tested against honors the declared hierarchical capability); no
+  symbol outline for any language beyond Python in this specific live verification; the real
+  Electron window remains unlaunchable in this session (same standing gap since §75.59).
+  `codeAction`/`documentHighlight` (the other two real pyright capabilities this pass's own probe
+  found) remain real, named, unstarted follow-up work.
 - **Reference only, not implemented**: everything else. `prototypes/*.jsx` are React mockups of
   the intended UI — they demonstrate the interaction design, they are not the app. §52–§54 are
   design-only amendments written to fold the legacy console's features into this architecture;

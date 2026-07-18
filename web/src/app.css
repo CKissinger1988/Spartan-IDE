@@ -489,6 +489,14 @@
   white-space: nowrap;
 }
 
+/* Real document-symbol outline (Ctrl+Shift+O, task #180), byte-identical
+ * to desktop/'s own copy. */
+.editor-symbol-kind {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  margin-right: 6px;
+}
+
 /* Real LSP find-references panel (task #175, the web/ half of task #174's
  * own desktop-then-web follow-up), byte-identical to desktop/'s own copy. */
 .editor-references-panel {
