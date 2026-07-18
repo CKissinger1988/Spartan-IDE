@@ -5386,6 +5386,79 @@ first — it's the parity reference until each row there is actually reimplement
   (`format_document` itself was never wired into that shell to begin with, matching every LSP/
   formatting feature this session has built landing only in the two Electron-based shells); the
   real Electron window remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — real in-buffer "Find & Replace" (Ctrl+F/Ctrl+H) in all three real editing
+  surfaces (`desktop/Editor.tsx`, `web/BackendEditor.tsx`, `web/Editor.tsx`), two real bugs found
+  and fixed by live testing, task #223-#225**:
+  closes a real, standard editor gap distinct from the already-shipped, cross-file "Find in Files"
+  panel (§190-192) -- searching and replacing within only the currently open buffer, with live
+  next/prev navigation, a real match count, a case-sensitivity toggle, and Replace/Replace All.
+  Pure client-side, no LSP/backend query needed: new, pure `findAllMatches`/`replaceAllMatches`
+  functions match `search_project`'s own already-established plain-substring (not regex) v1 scope
+  -- one real source of "how this app defines a text search," not a second, differently-behaved
+  one. Ctrl+F opens the bar (pre-filling the query with any active selection, the common cross-
+  editor convention); Ctrl+H opens it directly into Replace mode; both are guarded so Ctrl+Shift+F
+  (Format Document) is never intercepted. Matches recompute live via a `useMemo` keyed on
+  `file.content` (not `findState` itself), so typing while the bar is open keeps the match list
+  and highlights in sync with the real edit, matching this crate's own already-established
+  staleness discipline (task #161). Match highlights render in the shared
+  `editor-symbol-highlight-layer` overlay documentHighlight/bracketMatch already use -- a dim
+  accent tint for every match, a distinct gold outline for the current one -- and `Replace`/
+  `Replace All` both route through the real `applyProgrammaticEdit`/backend `edit` call every other
+  keyboard command in this file already uses, so a replace gets the identical real undo checkpoint.
+  **Two real bugs were found only by live testing, not by inspection, both real UX-breaking, both
+  fixed and re-verified before this shipped**: (1) the initial focus-management `useEffect`
+  (`if (findState) findQueryInputRef.current?.focus()`) depended on the *whole* `findState` object,
+  the same pattern `gotoLineState`'s own single-input overlay already (harmlessly) uses -- but
+  since every keystroke typed into the *replace* field also produces a new `findState` object
+  reference, this silently yanked keyboard focus back to the query field on every single keystroke
+  typed into Replace, making it effectively impossible to type there at all; confirmed live (typing
+  "person" into Replace produced a garbled, non-matching query instead), fixed by depending on
+  `Boolean(findState)` instead (the same fix `renameState`'s own effect already uses via its
+  narrower `renameState?.phase` dependency) so the effect only re-fires when the bar actually opens,
+  not on every internal field change. (2) After the first fix, a second, independent bug survived a
+  full live re-test: pressing Escape right after clicking "Replace All" did nothing, because that
+  button becomes `disabled` the instant `findMatches` empties out, and a browser drops keyboard
+  focus off an element entirely the moment it's disabled -- leaving no focused descendant inside the
+  find box for an Escape keypress to bubble through at all, so neither the query/replace inputs' own
+  Escape handling nor an initially-tried box-level `onKeyDown` (confirmed via a second live retest to
+  still fail this exact case) could ever see it; fixed with a real, standard `window`-level
+  `keydown` listener, live only while the bar is open, the correct pattern for "close on Escape
+  regardless of what currently holds focus" -- confirmed to not double-fire when an input already
+  handles its own Escape, since that handler's `e.stopPropagation()` genuinely stops the underlying
+  native event from reaching the bubble-phase `window` listener. Real, live, end-to-end Playwright
+  verification against a real running `spartan-devserver` and a real Python fixture (`name`
+  appearing 4 times across a function body/comment/call sites, `greet`/`Greet` appearing 3 times
+  case-insensitively but only 2 case-sensitively): Ctrl+F correctly opened the bar and showed a real
+  "1/4" count with 4 real highlight marks (1 current, gold) rendered; Enter/Shift+Enter correctly
+  advanced/retreated the current-match index; the case-sensitivity toggle correctly narrowed
+  "greet"'s count from 3 to 2 and back; toggling Replace, typing "person", and clicking Replace All
+  correctly rewrote every real "name" occurrence to "person" in the live buffer (confirmed via the
+  exact resulting content, not just a success message) with the tab's dirty marker updating; and
+  Escape correctly closed the bar even with focus already dropped off the just-disabled Replace All
+  button, confirming the second fix. `desktop/Editor.tsx` was independently re-verified with the
+  identical script and fixture via the established "real `spartan-devserver` serving `desktop/dist`,
+  a mocked `window.spartan` forwarding every call over a genuine WebSocket" technique for the still-
+  unlaunchable real Electron window, producing byte-identical results to `web/BackendEditor.tsx` at
+  every step, screenshot-confirmed at both the open-bar and post-replace-all states. Both real
+  bug fixes above (the `Boolean(findState)` focus-effect dependency, the global-`window`-listener
+  Escape handler) were applied identically in `web/Editor.tsx` (the pure client-side File System
+  Access + WASM editor) from the start, not rediscovered there -- that component's own
+  `applyProgrammaticEdit` is declared *earlier* in the file (no TDZ hazard to route around),
+  confirmed correct rather than assumed by reading its real declaration order before wiring
+  `replaceCurrentMatch`/`replaceAll` to call it directly. Full workspace `cargo fmt --all -- --check`
+  clean (zero Rust changes -- this is a pure TypeScript/React feature); all three components' own
+  `tsc --noEmit` and both shells' `npm run build` clean. **What this does not confirm**: no live
+  Playwright re-verification of `web/Editor.tsx` specifically (typechecked and built clean,
+  structurally identical logic including both real bug fixes, not independently re-proven this pass
+  -- matching the exact same scope decision this whole editor-ergonomics feature family has made for
+  this file repeatedly since the auto-closing-brackets pass, §193-195, since File System Access API
+  automation needs a real OPFS-substitute harness this session's own established Playwright technique
+  for the other two files doesn't cover); no regex search (plain substring only, matching
+  `search_project`'s own already-documented v1 scope); no "replace and find next" single-step combo
+  (Replace advances via a separate, already-existing Next action); no Find & Replace in the reference
+  wgpu shell (same established "Electron-shell-only feature" scope every recent editor-ergonomics
+  pass has carried); the real Electron window remains unlaunchable in this session (same standing gap
+  since §75.59).
 
 ## Build & test
 

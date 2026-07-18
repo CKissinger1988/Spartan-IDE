@@ -777,6 +777,41 @@ function trimTrailingWhitespace(content: string): string {
     .join("\n");
 }
 
+interface FindMatch {
+  start: number;
+  end: number;
+}
+
+/** Real, pure, plain-substring "find," ported verbatim from `desktop/`'s
+ * own identical wiring -- see that file's own doc comment for the full
+ * real reasoning (matches `search_project`'s own established plain-
+ * substring, not regex, v1 scope). */
+function findAllMatches(content: string, query: string, caseSensitive: boolean): FindMatch[] {
+  if (!query) return [];
+  const haystack = caseSensitive ? content : content.toLowerCase();
+  const needle = caseSensitive ? query : query.toLowerCase();
+  const matches: FindMatch[] = [];
+  let idx = haystack.indexOf(needle);
+  while (idx !== -1) {
+    matches.push({ start: idx, end: idx + needle.length });
+    idx = haystack.indexOf(needle, idx + needle.length);
+  }
+  return matches;
+}
+
+/** Real "Replace All," ported verbatim from `desktop/`'s own identical
+ * wiring. */
+function replaceAllMatches(content: string, matches: FindMatch[], replacement: string): string {
+  let result = "";
+  let cursor = 0;
+  for (const m of matches) {
+    result += content.slice(cursor, m.start) + replacement;
+    cursor = m.end;
+  }
+  result += content.slice(cursor);
+  return result;
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -1552,6 +1587,128 @@ export default function BackendEditor({
     });
   }, [client, file.docId, file.path, onContentChange]);
 
+  /** Real "Find & Replace" (Ctrl+F / Ctrl+H), ported verbatim from
+   * `desktop/`'s own identical wiring -- see that file's own doc comment
+   * for the full real reasoning (distinct from cross-file "Find in Files",
+   * tasks #190-192; recomputes live on every query/case-sensitivity change
+   * and every real edit). */
+  const [findState, setFindState] = useState<{
+    query: string;
+    replaceQuery: string;
+    showReplace: boolean;
+    caseSensitive: boolean;
+    currentIndex: number;
+  } | null>(null);
+  const findQueryInputRef = useRef<HTMLInputElement>(null);
+
+  /** A real bug, found live in `desktop/`'s own copy of this component --
+   * see that file's own doc comment for the full account -- fixed
+   * identically here: depend on whether the box is open, not the whole
+   * object, so typing into the *replace* field doesn't keep yanking focus
+   * back to the query field on every keystroke. */
+  useEffect(() => {
+    if (findState) findQueryInputRef.current?.focus();
+  }, [Boolean(findState)]);
+
+  /** A second real bug, also found live in `desktop/`'s own copy -- see
+   * that file's own doc comment for the full account (a disabled
+   * "Replace All" button drops focus entirely, leaving no focused
+   * descendant of the find box for Escape to bubble through). Fixed
+   * identically here with a real, global, only-while-open `window`
+   * listener. */
+  useEffect(() => {
+    if (!findState) return;
+    const handleGlobalEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setFindState(null);
+        textareaRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", handleGlobalEscape);
+    return () => window.removeEventListener("keydown", handleGlobalEscape);
+  }, [Boolean(findState)]);
+
+  const findMatches = useMemo(() => {
+    if (!findState || !findState.query) return [];
+    return findAllMatches(prevContentRef.current, findState.query, findState.caseSensitive);
+    // `file.content` is deliberately in the dep list (not `findState`
+    // itself) so live-typing while the find bar is open keeps the match
+    // list and highlights in sync with the real edit.
+  }, [findState?.query, findState?.caseSensitive, file.content]);
+
+  const selectMatch = useCallback(
+    (match: FindMatch) => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.setSelectionRange(match.start, match.end);
+      const { line } = offsetToLineChar(prevContentRef.current, match.start);
+      el.scrollTop = Math.max(0, line * lineHeightPx - el.clientHeight / 2);
+    },
+    [lineHeightPx]
+  );
+
+  useEffect(() => {
+    if (!findState || findMatches.length === 0) return;
+    const clamped = Math.min(findState.currentIndex, findMatches.length - 1);
+    selectMatch(findMatches[clamped]);
+  }, [findMatches, findState?.currentIndex]);
+
+  const findNext = useCallback((direction: 1 | -1) => {
+    setFindState((prev) => {
+      if (!prev) return prev;
+      const count = findMatches.length;
+      if (count === 0) return prev;
+      const next = (((prev.currentIndex + direction) % count) + count) % count;
+      return { ...prev, currentIndex: next };
+    });
+  }, [findMatches]);
+
+  const replaceCurrentMatch = useCallback(() => {
+    setFindState((prev) => {
+      if (!prev || findMatches.length === 0) return prev;
+      const el = textareaRef.current;
+      if (!el) return prev;
+      const match = findMatches[Math.min(prev.currentIndex, findMatches.length - 1)];
+      const value = el.value;
+      const next = value.slice(0, match.start) + prev.replaceQuery + value.slice(match.end);
+      const caretPos = match.start + prev.replaceQuery.length;
+      applyProgrammaticEdit(el, next, caretPos, caretPos);
+      return prev;
+    });
+    // `applyProgrammaticEdit` is deliberately not in the dep list -- see
+    // the identical, already-explained reason in `desktop/`'s own copy.
+  }, [findMatches]);
+
+  const replaceAll = useCallback(() => {
+    setFindState((prev) => {
+      if (!prev || findMatches.length === 0) return prev;
+      const el = textareaRef.current;
+      if (!el) return prev;
+      const next = replaceAllMatches(el.value, findMatches, prev.replaceQuery);
+      applyProgrammaticEdit(el, next, 0, 0);
+      return { ...prev, currentIndex: 0 };
+    });
+  }, [findMatches]);
+
+  const findMatchMarks = useMemo(() => {
+    if (!findState || findMatches.length === 0) return [];
+    const content = prevContentRef.current;
+    const currentIdx = Math.min(findState.currentIndex, findMatches.length - 1);
+    const marks: { line: number; startChar: number; endChar: number; isCurrent: boolean }[] = [];
+    findMatches.forEach((m, i) => {
+      const startPos = offsetToLineChar(content, m.start);
+      const endPos = offsetToLineChar(content, m.end);
+      if (startPos.line !== endPos.line) return;
+      marks.push({
+        line: startPos.line,
+        startChar: startPos.character,
+        endChar: endPos.character,
+        isCurrent: i === currentIdx,
+      });
+    });
+    return marks;
+  }, [findState, findMatches]);
+
   const handleDefinitionClick = useCallback(
     (e: React.MouseEvent<HTMLTextAreaElement>) => {
       if (!(e.ctrlKey || e.metaKey)) {
@@ -1736,6 +1893,11 @@ export default function BackendEditor({
       if (e.key === "Escape" && symbolsState) {
         setSymbolsState(null);
       }
+      // Real Find & Replace dismissal (Escape), ported verbatim from
+      // `desktop/`'s own identical branch.
+      if (e.key === "Escape" && findState) {
+        setFindState(null);
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === " ") {
         e.preventDefault();
         triggerCompletion();
@@ -1762,6 +1924,41 @@ export default function BackendEditor({
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "g" && !gotoLineState) {
         e.preventDefault();
         setGotoLineState({ value: "" });
+        return;
+      }
+      // Real "Find" (Ctrl+F) and "Find & Replace" (Ctrl+H) triggers,
+      // ported verbatim from `desktop/`'s own identical branches -- see
+      // that file's own doc comment for the full real reasoning.
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "f" && !findState) {
+        e.preventDefault();
+        const el = textareaRef.current;
+        const selected =
+          el && el.selectionStart !== el.selectionEnd
+            ? el.value.slice(el.selectionStart, el.selectionEnd)
+            : "";
+        setFindState({
+          query: selected,
+          replaceQuery: "",
+          showReplace: false,
+          caseSensitive: false,
+          currentIndex: 0,
+        });
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "h" && !findState) {
+        e.preventDefault();
+        const el = textareaRef.current;
+        const selected =
+          el && el.selectionStart !== el.selectionEnd
+            ? el.value.slice(el.selectionStart, el.selectionEnd)
+            : "";
+        setFindState({
+          query: selected,
+          replaceQuery: "",
+          showReplace: true,
+          caseSensitive: false,
+          currentIndex: 0,
+        });
         return;
       }
       // Real, manual document-symbol outline trigger (Ctrl+Shift+O),
@@ -1952,6 +2149,7 @@ export default function BackendEditor({
       renameState,
       triggerRename,
       gotoLineState,
+      findState,
       symbolsState,
       triggerDocumentSymbols,
       triggerFormatDocument,
@@ -2036,6 +2234,18 @@ export default function BackendEditor({
               />
             );
           })}
+          {findMatchMarks.map((m, i) => (
+            <div
+              key={`find:${m.line}:${m.startChar}:${i}`}
+              className={`editor-find-match-mark${m.isCurrent ? " editor-find-match-mark-current" : ""}`}
+              style={{
+                top: m.line * lineHeightPx,
+                left: m.startChar * charWidth,
+                width: Math.max(2, (m.endChar - m.startChar) * charWidth),
+                height: lineHeightPx,
+              }}
+            />
+          ))}
         </div>
         <textarea
           ref={textareaRef}
@@ -2134,6 +2344,143 @@ export default function BackendEditor({
             onBlur={() => setGotoLineState(null)}
             placeholder={`Go to line (1-${lineCount})…`}
           />
+        </div>
+      )}
+      {findState && (
+        <div className="editor-find-box mono">
+          <div className="editor-find-row">
+            <input
+              ref={findQueryInputRef}
+              className="editor-find-input"
+              value={findState.query}
+              onChange={(e) =>
+                setFindState((prev) =>
+                  prev ? { ...prev, query: e.target.value, currentIndex: 0 } : prev
+                )
+              }
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "h") {
+                  e.preventDefault();
+                  setFindState((prev) => (prev ? { ...prev, showReplace: true } : prev));
+                  return;
+                }
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+                  e.preventDefault();
+                  findQueryInputRef.current?.select();
+                  return;
+                }
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  findNext(e.shiftKey ? -1 : 1);
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setFindState(null);
+                  textareaRef.current?.focus();
+                }
+              }}
+              placeholder="Find…"
+            />
+            <span className="editor-find-count">
+              {findState.query
+                ? findMatches.length > 0
+                  ? `${Math.min(findState.currentIndex, findMatches.length - 1) + 1}/${findMatches.length}`
+                  : "No results"
+                : ""}
+            </span>
+            <button
+              type="button"
+              className={`editor-find-btn${findState.caseSensitive ? " editor-find-btn-active" : ""}`}
+              onClick={() =>
+                setFindState((prev) =>
+                  prev ? { ...prev, caseSensitive: !prev.caseSensitive } : prev
+                )
+              }
+              title="Match case"
+            >
+              Aa
+            </button>
+            <button
+              type="button"
+              className="editor-find-btn"
+              onClick={() => findNext(-1)}
+              disabled={findMatches.length === 0}
+              title="Previous match (Shift+Enter)"
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              className="editor-find-btn"
+              onClick={() => findNext(1)}
+              disabled={findMatches.length === 0}
+              title="Next match (Enter)"
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              className={`editor-find-btn${findState.showReplace ? " editor-find-btn-active" : ""}`}
+              onClick={() =>
+                setFindState((prev) => (prev ? { ...prev, showReplace: !prev.showReplace } : prev))
+              }
+              title="Toggle Replace (Ctrl+H)"
+            >
+              ⇄
+            </button>
+            <button
+              type="button"
+              className="editor-find-btn"
+              onClick={() => {
+                setFindState(null);
+                textareaRef.current?.focus();
+              }}
+              title="Close (Escape)"
+            >
+              ×
+            </button>
+          </div>
+          {findState.showReplace && (
+            <div className="editor-find-row">
+              <input
+                className="editor-find-input"
+                value={findState.replaceQuery}
+                onChange={(e) =>
+                  setFindState((prev) =>
+                    prev ? { ...prev, replaceQuery: e.target.value } : prev
+                  )
+                }
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    replaceCurrentMatch();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    setFindState(null);
+                    textareaRef.current?.focus();
+                  }
+                }}
+                placeholder="Replace…"
+              />
+              <button
+                type="button"
+                className="editor-find-btn"
+                onClick={replaceCurrentMatch}
+                disabled={findMatches.length === 0}
+              >
+                Replace
+              </button>
+              <button
+                type="button"
+                className="editor-find-btn"
+                onClick={replaceAll}
+                disabled={findMatches.length === 0}
+              >
+                Replace All
+              </button>
+            </div>
+          )}
         </div>
       )}
       {symbolsState && (

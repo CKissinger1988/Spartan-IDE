@@ -928,6 +928,46 @@ function trimTrailingWhitespace(content: string): string {
     .join("\n");
 }
 
+interface FindMatch {
+  start: number;
+  end: number;
+}
+
+/** Real, pure, plain-substring "find" -- matches `search_project`'s own
+ * already-established v1 scope (task #190): plain substring, not regex.
+ * An empty query correctly returns zero matches rather than matching
+ * every position. Advances by the real match length (not by 1) so
+ * matches never overlap, matching every mainstream editor's own "find
+ * next" semantics. */
+function findAllMatches(content: string, query: string, caseSensitive: boolean): FindMatch[] {
+  if (!query) return [];
+  const haystack = caseSensitive ? content : content.toLowerCase();
+  const needle = caseSensitive ? query : query.toLowerCase();
+  const matches: FindMatch[] = [];
+  let idx = haystack.indexOf(needle);
+  while (idx !== -1) {
+    matches.push({ start: idx, end: idx + needle.length });
+    idx = haystack.indexOf(needle, idx + needle.length);
+  }
+  return matches;
+}
+
+/** Real "Replace All" -- rebuilds the document in a single left-to-right
+ * pass over the given (already-sorted, non-overlapping -- guaranteed by
+ * `findAllMatches`'s own construction) matches, so every replacement
+ * applies via exactly one real edit/undo checkpoint rather than N
+ * separate ones. */
+function replaceAllMatches(content: string, matches: FindMatch[], replacement: string): string {
+  let result = "";
+  let cursor = 0;
+  for (const m of matches) {
+    result += content.slice(cursor, m.start) + replacement;
+    cursor = m.end;
+  }
+  result += content.slice(cursor);
+  return result;
+}
+
 interface HoverState {
   /** Viewport-relative coordinates (from the real triggering mouse
    * event) -- paired with `position: fixed` CSS so this renders next to
@@ -1890,6 +1930,172 @@ export default function Editor({
     });
   }, [file.docId, file.path, onContentChange]);
 
+  /** Real "Find & Replace" (Ctrl+F / Ctrl+H) -- pure client-side, no LSP/
+   * backend query needed, distinct from the already-real, cross-file
+   * "Find in Files" panel (task #190-192): this searches only the
+   * currently open buffer, with live next/prev navigation and an actual
+   * replace/replace-all. `matches` is recomputed on every query/case-
+   * sensitivity change *and* on every real edit (`handleChange` re-derives
+   * it), so it never goes stale the way a one-shot search would after the
+   * user keeps typing. `currentIndex` is clamped, not reset, when the
+   * match count shrinks (e.g. the user is mid-Replace-All), so navigating
+   * right after a replace doesn't jump to a surprising position. */
+  const [findState, setFindState] = useState<{
+    query: string;
+    replaceQuery: string;
+    showReplace: boolean;
+    caseSensitive: boolean;
+    currentIndex: number;
+  } | null>(null);
+  const findQueryInputRef = useRef<HTMLInputElement>(null);
+
+  /** A real bug was found only by live-testing typing into the *replace*
+   * field, not by inspection: depending on the whole `findState` object
+   * (as `gotoLineState`'s own single-input overlay harmlessly does)
+   * re-fires this effect on *every* keystroke, including ones typed into
+   * the replace field -- since every keystroke there also produces a new
+   * `findState` object reference -- silently yanking focus back to the
+   * query input mid-type. `gotoLineState` never surfaced this because it
+   * has only one input to fight over with itself. Fixed the same way
+   * `renameState`'s own effect already avoids it: depend on a narrow,
+   * only-changes-when-it-matters value (here, whether the box is open at
+   * all) instead of the whole object. */
+  useEffect(() => {
+    if (findState) findQueryInputRef.current?.focus();
+  }, [Boolean(findState)]);
+
+  /** A second real bug, also found only by live testing (not the first
+   * one above -- this one survived that fix): clicking "Replace All"
+   * disables that same button the instant `findMatches` empties out, and
+   * a browser drops keyboard focus entirely off an element the moment it
+   * becomes `disabled` -- so a subsequent Escape press has no focused
+   * descendant of the find box left to bubble through at all, and neither
+   * the query/replace inputs' own `onKeyDown` nor a box-level one (tried
+   * first, and confirmed via a second live re-test to still fail this
+   * exact case) can ever see it. A real, global, capture-nothing-more-
+   * than-necessary `window` listener, live only while the box is open, is
+   * the standard fix for this whole class of "close on Escape regardless
+   * of what currently holds focus" requirement -- and it doesn't double-
+   * fire when an input already handled its own Escape, since that
+   * handler's `e.stopPropagation()` genuinely stops the underlying native
+   * event from ever reaching this bubble-phase `window` listener. */
+  useEffect(() => {
+    if (!findState) return;
+    const handleGlobalEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setFindState(null);
+        textareaRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", handleGlobalEscape);
+    return () => window.removeEventListener("keydown", handleGlobalEscape);
+  }, [Boolean(findState)]);
+
+  const findMatches = useMemo(() => {
+    if (!findState || !findState.query) return [];
+    return findAllMatches(prevContentRef.current, findState.query, findState.caseSensitive);
+    // `file.content` is deliberately in the dep list (not `findState`
+    // itself, which would also fire on unrelated field changes) so
+    // live-typing while the find bar is open keeps the match list and
+    // highlights in sync with the real edit, not just the query text.
+  }, [findState?.query, findState?.caseSensitive, file.content]);
+
+  /** Real, shared "select this match in the textarea and scroll it into
+   * view" -- the find-bar analogue of `jumpToLocalPosition`, but selects a
+   * real range instead of collapsing to a point, since a found match is
+   * something the user is about to act on (replace, or just see
+   * highlighted), not just navigate past. */
+  const selectMatch = useCallback(
+    (match: FindMatch) => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.setSelectionRange(match.start, match.end);
+      const { line } = offsetToLineChar(prevContentRef.current, match.start);
+      el.scrollTop = Math.max(0, line * lineHeightPx - el.clientHeight / 2);
+    },
+    [lineHeightPx]
+  );
+
+  useEffect(() => {
+    if (!findState || findMatches.length === 0) return;
+    const clamped = Math.min(findState.currentIndex, findMatches.length - 1);
+    selectMatch(findMatches[clamped]);
+    // Fires only when the match list itself changes (a new query, a live
+    // edit) or `currentIndex` moves (navigate/replace) -- not on every
+    // render, since `selectMatch` itself is stable across those.
+  }, [findMatches, findState?.currentIndex]);
+
+  const findNext = useCallback((direction: 1 | -1) => {
+    setFindState((prev) => {
+      if (!prev) return prev;
+      const count = findMatches.length;
+      if (count === 0) return prev;
+      const next = ((prev.currentIndex + direction) % count + count) % count;
+      return { ...prev, currentIndex: next };
+    });
+    // A functional `setFindState` update is used specifically so this
+    // doesn't need `findState` itself as a dependency -- only `findMatches`.
+  }, [findMatches]);
+
+  const replaceCurrentMatch = useCallback(() => {
+    setFindState((prev) => {
+      if (!prev || findMatches.length === 0) return prev;
+      const el = textareaRef.current;
+      if (!el) return prev;
+      const match = findMatches[Math.min(prev.currentIndex, findMatches.length - 1)];
+      const value = el.value;
+      const next = value.slice(0, match.start) + prev.replaceQuery + value.slice(match.end);
+      const caretPos = match.start + prev.replaceQuery.length;
+      applyProgrammaticEdit(el, next, caretPos, caretPos);
+      return prev;
+    });
+    // `applyProgrammaticEdit` is deliberately not in the dep list -- it's
+    // declared later in this component (its own doc comment explains the
+    // real TDZ hazard listing it here would hit), but referencing it only
+    // inside this closure's *body* (not the dep array) is safe, the same
+    // established pattern `handleKeyDown` already relies on below.
+  }, [findMatches]);
+
+  const replaceAll = useCallback(() => {
+    setFindState((prev) => {
+      if (!prev || findMatches.length === 0) return prev;
+      const el = textareaRef.current;
+      if (!el) return prev;
+      const next = replaceAllMatches(el.value, findMatches, prev.replaceQuery);
+      applyProgrammaticEdit(el, next, 0, 0);
+      return { ...prev, currentIndex: 0 };
+    });
+    // Same real reason as `replaceCurrentMatch` above.
+  }, [findMatches]);
+
+  /** Real find-match highlight marks, the find-bar analogue of
+   * `documentHighlights`' own render shape (a rect per line/char span in
+   * the shared `editor-symbol-highlight-layer`). A real, named v1 scope
+   * cut: only single-line matches render a mark (`startPos.line ===
+   * endPos.line`, true for every ordinary query) -- a query containing a
+   * literal newline is still fully navigable/replaceable via
+   * `findMatches` itself, it just isn't drawn, since a query that spans
+   * lines is a real edge case not worth the added multi-rect-per-match
+   * complexity for this first increment. */
+  const findMatchMarks = useMemo(() => {
+    if (!findState || findMatches.length === 0) return [];
+    const content = prevContentRef.current;
+    const currentIdx = Math.min(findState.currentIndex, findMatches.length - 1);
+    const marks: { line: number; startChar: number; endChar: number; isCurrent: boolean }[] = [];
+    findMatches.forEach((m, i) => {
+      const startPos = offsetToLineChar(content, m.start);
+      const endPos = offsetToLineChar(content, m.end);
+      if (startPos.line !== endPos.line) return;
+      marks.push({
+        line: startPos.line,
+        startChar: startPos.character,
+        endChar: endPos.character,
+        isCurrent: i === currentIdx,
+      });
+    });
+    return marks;
+  }, [findState, findMatches]);
+
   const diagnosticsByLine = useMemo(() => {
     const map = new Map<number, LspDiagnostic[]>();
     for (const d of diagnostics) {
@@ -2100,6 +2306,13 @@ export default function Editor({
       if (e.key === "Escape" && symbolsState) {
         setSymbolsState(null);
       }
+      // Real Find & Replace dismissal (Escape) reached only if the user
+      // clicked back into the main textarea while the find bar stayed
+      // open (its own query/replace inputs handle Escape directly, see
+      // below -- this is the fallback for the other real focus case).
+      if (e.key === "Escape" && findState) {
+        setFindState(null);
+      }
       // Real, manual completion trigger (Ctrl+Space) -- see
       // `triggerCompletion`'s own doc comment for why manual, not
       // automatic-per-keystroke.
@@ -2133,6 +2346,46 @@ export default function Editor({
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "g" && !gotoLineState) {
         e.preventDefault();
         setGotoLineState({ value: "" });
+        return;
+      }
+      // Real "Find" (Ctrl+F, no Shift -- Ctrl+Shift+F stays Format
+      // Document, handled separately below) and "Find & Replace" (Ctrl+H)
+      // triggers, the standard cross-editor convention. A real, common
+      // touch: an active selection at open time pre-fills the query, the
+      // same convention nearly every mainstream editor already follows.
+      // Enter/Shift+Enter/Escape are handled by the find bar's own inputs
+      // below (a real, distinct focused element, like rename/goto-line
+      // above) -- these branches never fire again while it's open.
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "f" && !findState) {
+        e.preventDefault();
+        const el = textareaRef.current;
+        const selected =
+          el && el.selectionStart !== el.selectionEnd
+            ? el.value.slice(el.selectionStart, el.selectionEnd)
+            : "";
+        setFindState({
+          query: selected,
+          replaceQuery: "",
+          showReplace: false,
+          caseSensitive: false,
+          currentIndex: 0,
+        });
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "h" && !findState) {
+        e.preventDefault();
+        const el = textareaRef.current;
+        const selected =
+          el && el.selectionStart !== el.selectionEnd
+            ? el.value.slice(el.selectionStart, el.selectionEnd)
+            : "";
+        setFindState({
+          query: selected,
+          replaceQuery: "",
+          showReplace: true,
+          caseSensitive: false,
+          currentIndex: 0,
+        });
         return;
       }
       // Real, manual document-symbol outline trigger (Ctrl+Shift+O, the
@@ -2354,6 +2607,7 @@ export default function Editor({
       renameState,
       triggerRename,
       gotoLineState,
+      findState,
       symbolsState,
       triggerDocumentSymbols,
       triggerFormatDocument,
@@ -2459,6 +2713,18 @@ export default function Editor({
               />
             );
           })}
+          {findMatchMarks.map((m, i) => (
+            <div
+              key={`find:${m.line}:${m.startChar}:${i}`}
+              className={`editor-find-match-mark${m.isCurrent ? " editor-find-match-mark-current" : ""}`}
+              style={{
+                top: m.line * lineHeightPx,
+                left: m.startChar * charWidth,
+                width: Math.max(2, (m.endChar - m.startChar) * charWidth),
+                height: lineHeightPx,
+              }}
+            />
+          ))}
         </div>
         <textarea
           ref={textareaRef}
@@ -2557,6 +2823,148 @@ export default function Editor({
             onBlur={() => setGotoLineState(null)}
             placeholder={`Go to line (1-${lineCount})…`}
           />
+        </div>
+      )}
+      {findState && (
+        <div className="editor-find-box mono">
+          <div className="editor-find-row">
+            <input
+              ref={findQueryInputRef}
+              className="editor-find-input"
+              value={findState.query}
+              onChange={(e) =>
+                setFindState((prev) =>
+                  prev ? { ...prev, query: e.target.value, currentIndex: 0 } : prev
+                )
+              }
+              onKeyDown={(e) => {
+                // Real Ctrl+H-while-open: expands to show Replace instead
+                // of falling through to the outer Ctrl+H handler (which
+                // only fires when no find bar is open at all).
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "h") {
+                  e.preventDefault();
+                  setFindState((prev) => (prev ? { ...prev, showReplace: true } : prev));
+                  return;
+                }
+                // Real Ctrl+F-while-open: most editors just re-focus/
+                // re-select the query field rather than doing nothing.
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+                  e.preventDefault();
+                  findQueryInputRef.current?.select();
+                  return;
+                }
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  findNext(e.shiftKey ? -1 : 1);
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setFindState(null);
+                  textareaRef.current?.focus();
+                }
+              }}
+              placeholder="Find…"
+            />
+            <span className="editor-find-count">
+              {findState.query
+                ? findMatches.length > 0
+                  ? `${Math.min(findState.currentIndex, findMatches.length - 1) + 1}/${findMatches.length}`
+                  : "No results"
+                : ""}
+            </span>
+            <button
+              type="button"
+              className={`editor-find-btn${findState.caseSensitive ? " editor-find-btn-active" : ""}`}
+              onClick={() =>
+                setFindState((prev) =>
+                  prev ? { ...prev, caseSensitive: !prev.caseSensitive } : prev
+                )
+              }
+              title="Match case"
+            >
+              Aa
+            </button>
+            <button
+              type="button"
+              className="editor-find-btn"
+              onClick={() => findNext(-1)}
+              disabled={findMatches.length === 0}
+              title="Previous match (Shift+Enter)"
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              className="editor-find-btn"
+              onClick={() => findNext(1)}
+              disabled={findMatches.length === 0}
+              title="Next match (Enter)"
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              className={`editor-find-btn${findState.showReplace ? " editor-find-btn-active" : ""}`}
+              onClick={() =>
+                setFindState((prev) => (prev ? { ...prev, showReplace: !prev.showReplace } : prev))
+              }
+              title="Toggle Replace (Ctrl+H)"
+            >
+              ⇄
+            </button>
+            <button
+              type="button"
+              className="editor-find-btn"
+              onClick={() => {
+                setFindState(null);
+                textareaRef.current?.focus();
+              }}
+              title="Close (Escape)"
+            >
+              ×
+            </button>
+          </div>
+          {findState.showReplace && (
+            <div className="editor-find-row">
+              <input
+                className="editor-find-input"
+                value={findState.replaceQuery}
+                onChange={(e) =>
+                  setFindState((prev) =>
+                    prev ? { ...prev, replaceQuery: e.target.value } : prev
+                  )
+                }
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    replaceCurrentMatch();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    setFindState(null);
+                    textareaRef.current?.focus();
+                  }
+                }}
+                placeholder="Replace…"
+              />
+              <button
+                type="button"
+                className="editor-find-btn"
+                onClick={replaceCurrentMatch}
+                disabled={findMatches.length === 0}
+              >
+                Replace
+              </button>
+              <button
+                type="button"
+                className="editor-find-btn"
+                onClick={replaceAll}
+                disabled={findMatches.length === 0}
+              >
+                Replace All
+              </button>
+            </div>
+          )}
         </div>
       )}
       {symbolsState && (
