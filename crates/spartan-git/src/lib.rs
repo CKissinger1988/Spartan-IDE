@@ -62,6 +62,17 @@ fn from_git_status(s: Status) -> (Option<FileStatus>, Option<FileStatus>, bool) 
     (staged, unstaged, s.is_conflicted())
 }
 
+/// One real commit in `log()`'s output -- see that method's own doc
+/// comment for exactly what each field carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitInfo {
+    pub oid: String,
+    pub summary: String,
+    pub author: String,
+    /// Real commit time, unix seconds.
+    pub time: i64,
+}
+
 /// A real, open local git repository. Every method here is a thin,
 /// honest wrapper over a real `git2` call -- no simulated state.
 pub struct GitRepo {
@@ -218,6 +229,35 @@ impl GitRepo {
             None => return Ok(None),
         };
         Ok(std::str::from_utf8(blob.content()).ok().map(str::to_string))
+    }
+
+    /// Real `git log` -- the most recent `max` commits reachable from
+    /// `HEAD`, newest first (a real `revwalk` over the actual commit
+    /// graph, not just first-parent hopping, so merge history is
+    /// complete). A repo with no commits yet returns an honest empty
+    /// list, not an error. Each entry: (full hex oid, summary line,
+    /// author name, commit time as real unix seconds).
+    pub fn log(&self, max: usize) -> Result<Vec<CommitInfo>, git2::Error> {
+        if self.repo.head().is_err() {
+            return Ok(Vec::new());
+        }
+        let mut walk = self.repo.revwalk()?;
+        walk.push_head()?;
+        let mut out = Vec::new();
+        for oid in walk {
+            if out.len() >= max {
+                break;
+            }
+            let oid = oid?;
+            let commit = self.repo.find_commit(oid)?;
+            out.push(CommitInfo {
+                oid: oid.to_string(),
+                summary: commit.summary().unwrap_or("").to_string(),
+                author: commit.author().name().unwrap_or("").to_string(),
+                time: commit.time().seconds(),
+            });
+        }
+        Ok(out)
     }
 
     /// Every real local branch name, sorted, with the current branch
@@ -480,6 +520,40 @@ mod tests {
             repo.index_blob_content(Path::new("f.txt")).unwrap(),
             Some("staged version".to_string())
         );
+    }
+
+    #[test]
+    fn log_on_a_repo_with_no_commits_is_an_honest_empty_list() {
+        let (_tmp, repo) = TempRepo::new("log_empty");
+        assert_eq!(repo.log(10).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn log_returns_real_commits_newest_first_and_honors_max() {
+        let (tmp, repo) = TempRepo::new("log_real");
+        tmp.write("f.txt", "v1");
+        repo.stage(Path::new("f.txt")).unwrap();
+        let first = repo.commit("first commit").unwrap();
+        tmp.write("f.txt", "v2");
+        repo.stage(Path::new("f.txt")).unwrap();
+        let second = repo.commit("second commit").unwrap();
+        tmp.write("f.txt", "v3");
+        repo.stage(Path::new("f.txt")).unwrap();
+        let third = repo.commit("third commit").unwrap();
+
+        let log = repo.log(10).unwrap();
+        assert_eq!(log.len(), 3);
+        assert_eq!(log[0].oid, third.to_string());
+        assert_eq!(log[0].summary, "third commit");
+        assert_eq!(log[0].author, "Spartan Test");
+        assert!(log[0].time > 0);
+        assert_eq!(log[1].oid, second.to_string());
+        assert_eq!(log[2].oid, first.to_string());
+
+        let bounded = repo.log(2).unwrap();
+        assert_eq!(bounded.len(), 2);
+        assert_eq!(bounded[0].oid, third.to_string());
+        assert_eq!(bounded[1].oid, second.to_string());
     }
 
     #[test]

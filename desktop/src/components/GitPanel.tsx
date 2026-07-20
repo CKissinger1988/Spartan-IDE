@@ -34,6 +34,24 @@ interface BranchInfo {
   current: boolean;
 }
 
+interface CommitInfo {
+  oid: string;
+  summary: string;
+  author: string;
+  /** Real commit time, unix seconds. */
+  time: number;
+}
+
+/** Real relative-age formatting for the history list -- coarse on
+ * purpose (a source-control sidebar, not a timestamp report). */
+function formatAge(unixSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
 /** Real diff rendering -- ported verbatim from `LeoChatPanel.tsx`'s own
  * `DiffView` (one `<div>` per real line, colored by its real `+`/`-`/` `
  * prefix). Deliberately duplicated rather than extracted into a shared
@@ -108,6 +126,9 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [branchError, setBranchError] = useState<string | null>(null);
   const [newBranchName, setNewBranchName] = useState("");
   const [switching, setSwitching] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [commits, setCommits] = useState<CommitInfo[] | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     window.spartan
@@ -234,6 +255,23 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
       .then((result) => setBranches((result as { branches: BranchInfo[] }).branches))
       .catch((e: Error) => setBranchError(e.message));
   }, [root, newBranchName]);
+
+  const toggleHistory = useCallback(() => {
+    if (showHistory) {
+      setShowHistory(false);
+      setHistoryError(null);
+      return;
+    }
+    // Fetched fresh on every open, matching the branch list's own
+    // no-caching choice -- a commit can land between opens.
+    setShowHistory(true);
+    setHistoryError(null);
+    setCommits(null);
+    window.spartan
+      .call("git_log", { project_root: root, max: 25 })
+      .then((result) => setCommits((result as { commits: CommitInfo[] }).commits))
+      .catch((e: Error) => setHistoryError(e.message));
+  }, [root, showHistory]);
 
   if (error) {
     return <div className="git-panel git-panel-empty mono">{error}</div>;
@@ -368,6 +406,42 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
 
       {status.entries.length === 0 && (
         <div className="git-panel-empty mono">No changes.</div>
+      )}
+
+      <div
+        className="git-section-label mono"
+        onClick={toggleHistory}
+        style={{ cursor: "pointer" }}
+        title="Commit history"
+      >
+        History {showHistory ? "▾" : "▸"}
+      </div>
+      {showHistory && (
+        <div className="git-section">
+          {historyError && <div className="git-panel-empty mono">{historyError}</div>}
+          {commits === null && !historyError && (
+            <div className="git-panel-empty mono">Loading history…</div>
+          )}
+          {commits?.length === 0 && <div className="git-panel-empty mono">No commits yet.</div>}
+          {commits?.map((c) => (
+            <div
+              key={c.oid}
+              className="git-row"
+              title={`${c.oid}\n${c.author} — ${new Date(c.time * 1000).toLocaleString()}`}
+            >
+              <span
+                className="mono"
+                style={{ color: "var(--accent)", fontSize: 11, flexShrink: 0 }}
+              >
+                {c.oid.slice(0, 7)}
+              </span>
+              <span className="mono git-row-path">{c.summary}</span>
+              <span className="mono" style={{ opacity: 0.6, whiteSpace: "nowrap", fontSize: 11 }}>
+                {formatAge(c.time)}
+              </span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

@@ -5624,6 +5624,41 @@ first — it's the parity reference until each row there is actually reimplement
   offering when a checkout is refused (the honest error is shown, resolution is the
   user's); the real Electron window remains unlaunchable in this session (same standing
   gap since §75.59).
+- **Real, working code — real commit history (git log) view in both shells' Source Control
+  panels, completing the basic read-only git surface family (status/diff/branches/log),
+  task #236**: new `spartan_git::CommitInfo` + `GitRepo::log(max)` -- a real `revwalk` over
+  the actual commit graph from `HEAD` (not first-parent hopping, so merge history is
+  complete), newest first, bounded by `max`, with a repo that has no commits yet returning
+  an honest empty list rather than an error; each entry carries the real full hex oid,
+  summary line, author name, and commit time as real unix seconds. 2 new `spartan-git`
+  tests (21 total in that crate -- newest-first order and the `max` bound both asserted
+  against real created commits' own oids, plus the no-commits empty case). New
+  `spartan-backend::git_log(project_root, max)` dispatch method (`max` optional, default
+  50), 1 new dispatch-level test (a real two-commit round trip asserting order, author, a
+  real 40-hex oid, and a real positive timestamp), registered in `main.ts`'s/`preload.ts`'s
+  IPC allowlists at the identical position. **UI, both shells**: a new clickable "History
+  ▸/▾" section at the bottom of each `GitPanel.tsx`, fetched fresh on every open (matching
+  the branch list's own no-caching choice -- a commit can land between opens), rendering
+  each real commit as short-hash (7 chars, accent-colored) + summary + a coarse relative
+  age (`formatAge`, deliberately coarse -- a source-control sidebar, not a timestamp
+  report), with the row tooltip carrying the real full oid, author, and local date. A
+  real, small CSS finding handled before it could ship wrong: `.git-status-glyph` is a
+  fixed 12px wide (sized for one status letter), too narrow for a 7-char hash -- the hash
+  span uses its own inline style instead of borrowing that class. Real, live, end-to-end
+  Playwright verification in both shells against a real 3-commit fixture: the rendered
+  short hashes matched the real `git log --oneline` output captured at fixture-creation
+  time exactly (`72584f9`/`e8a439b`/`e0e49ea`), newest first, all three summaries correct,
+  the first row's tooltip regex-confirmed to carry a real 40-hex oid + the real author
+  name, and a second click collapsing the section -- `web/` against a real running
+  `spartan-devserver` serving the real built `web/dist`, `desktop/` via the established
+  mocked-`window.spartan`-over-real-WebSocket technique, byte-identical results,
+  screenshotted. Full `cargo fmt --all -- --check`/`cargo clippy --workspace --release
+  --all-targets` clean; both shells' `tsc --noEmit`/`npm run build` clean. **What this
+  does not confirm**: no per-commit detail view (clicking a commit shows nothing beyond
+  the tooltip -- a commit's own diff/changed-file list is a real, named follow-up); no
+  pagination past the first `max` commits (fixed at 25 in the UI); no author
+  filter/search; the real Electron window remains unlaunchable in this session (same
+  standing gap since §75.59).
 
 ## Build & test
 

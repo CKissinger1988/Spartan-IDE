@@ -168,6 +168,7 @@ app.whenReady().then(() => {
     "git_branches",
     "git_checkout",
     "git_create_branch",
+    "git_log",
     "settings_get",
     "settings_set",
     "check_for_updates",

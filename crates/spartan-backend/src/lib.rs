@@ -3044,6 +3044,28 @@ fn git_checkout(project_root: &str, branch: &str) -> Result<serde_json::Value, S
     Ok(serde_json::json!({ "ok": true }))
 }
 
+/// Real `git log` -- the most recent commits reachable from `HEAD`,
+/// newest first, bounded by a caller-supplied (or default 50) `max`. A
+/// repo with no commits returns an honest empty list.
+fn git_log(project_root: &str, max: usize) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let commits = repo
+        .log(max)
+        .map_err(|e| format!("git log: {e}"))?
+        .into_iter()
+        .map(|c| {
+            serde_json::json!({
+                "oid": c.oid,
+                "summary": c.summary,
+                "author": c.author,
+                "time": c.time,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "commits": commits }))
+}
+
 /// Real `git branch <name>` from the current `HEAD` -- does not switch to
 /// the new branch (matching the real command's own behavior); an existing
 /// branch of the same name is a real, relayed error.
@@ -3685,6 +3707,11 @@ pub fn handle_request(
             let root = get_str_param(&req.params, "project_root")?;
             let branch = get_str_param(&req.params, "branch")?;
             git_create_branch(&root, &branch)
+        })(),
+        "git_log" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let max = req.params.get("max").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+            git_log(&root, max)
         })(),
         "settings_get" => settings_get(),
         "settings_set" => (|| {
@@ -4977,6 +5004,52 @@ mod tests {
             serde_json::json!({ "project_root": root }),
         );
         assert_eq!(status.result.unwrap()["branch"], "feature");
+    }
+
+    #[test]
+    fn git_log_returns_real_commits_newest_first_through_the_dispatch() {
+        let tmp = TempRepo::new("log_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "v1").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "first commit" }),
+        );
+        std::fs::write(tmp.dir.join("f.txt"), "v2").unwrap();
+        call(
+            &state,
+            3,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            4,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "second commit" }),
+        );
+        let resp = call(
+            &state,
+            5,
+            "git_log",
+            serde_json::json!({ "project_root": root, "max": 10 }),
+        );
+        let commits = resp.result.unwrap()["commits"].as_array().unwrap().clone();
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0]["summary"], "second commit");
+        assert_eq!(commits[1]["summary"], "first commit");
+        assert_eq!(commits[0]["author"], "Spartan Test");
+        assert_eq!(commits[0]["oid"].as_str().unwrap().len(), 40);
+        assert!(commits[0]["time"].as_i64().unwrap() > 0);
     }
 
     #[test]
