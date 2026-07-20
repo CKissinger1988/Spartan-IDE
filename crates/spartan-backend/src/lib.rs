@@ -3017,6 +3017,44 @@ fn git_diff(project_root: &str, path: &str, staged: bool) -> Result<serde_json::
     }))
 }
 
+/// Real local branch list -- every real local branch name plus which one
+/// is current (none flagged for a real detached `HEAD`).
+fn git_branches(project_root: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let branches = repo
+        .list_branches()
+        .map_err(|e| format!("git branches: {e}"))?
+        .into_iter()
+        .map(|(name, is_current)| serde_json::json!({ "name": name, "current": is_current }))
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "branches": branches }))
+}
+
+/// Real, *safe* branch switch -- `spartan_git::checkout_branch` uses
+/// `libgit2`'s own conflict-refusing safe checkout, so a real uncommitted
+/// change that conflicts with the target branch surfaces the real error
+/// here (relayed verbatim) with the repository left exactly where it was,
+/// never force-discarded.
+fn git_checkout(project_root: &str, branch: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.checkout_branch(branch)
+        .map_err(|e| format!("git checkout: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// Real `git branch <name>` from the current `HEAD` -- does not switch to
+/// the new branch (matching the real command's own behavior); an existing
+/// branch of the same name is a real, relayed error.
+fn git_create_branch(project_root: &str, branch: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.create_branch(branch)
+        .map_err(|e| format!("git create branch: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 /// Real settings read/write, wrapping `spartan_settings` directly --
 /// deliberately no in-memory caching in `BackendState`, since this
 /// crate's own request volume for settings is low (opened once when the
@@ -3636,6 +3674,17 @@ pub fn handle_request(
                 .and_then(|v| v.as_bool())
                 .ok_or("missing/invalid bool param `staged`")?;
             git_diff(&root, &path, staged)
+        })(),
+        "git_branches" => get_str_param(&req.params, "project_root").and_then(|r| git_branches(&r)),
+        "git_checkout" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let branch = get_str_param(&req.params, "branch")?;
+            git_checkout(&root, &branch)
+        })(),
+        "git_create_branch" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let branch = get_str_param(&req.params, "branch")?;
+            git_create_branch(&root, &branch)
         })(),
         "settings_get" => settings_get(),
         "settings_set" => (|| {
@@ -4857,6 +4906,105 @@ mod tests {
         assert!(resp.result.is_none());
         assert!(resp.error.unwrap().contains("no git repository found"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn git_branches_create_and_checkout_round_trip_through_the_real_dispatch() {
+        let tmp = TempRepo::new("branches_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "content").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "first" }),
+        );
+
+        let branches = call(
+            &state,
+            3,
+            "git_branches",
+            serde_json::json!({ "project_root": root }),
+        );
+        let list = branches.result.unwrap()["branches"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["name"], "master");
+        assert_eq!(list[0]["current"], true);
+
+        let created = call(
+            &state,
+            4,
+            "git_create_branch",
+            serde_json::json!({ "project_root": root, "branch": "feature" }),
+        );
+        assert_eq!(created.result.unwrap()["ok"], true);
+
+        let checked_out = call(
+            &state,
+            5,
+            "git_checkout",
+            serde_json::json!({ "project_root": root, "branch": "feature" }),
+        );
+        assert_eq!(checked_out.result.unwrap()["ok"], true);
+
+        let branches_after = call(
+            &state,
+            6,
+            "git_branches",
+            serde_json::json!({ "project_root": root }),
+        );
+        let list = branches_after.result.unwrap()["branches"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let feature = list.iter().find(|b| b["name"] == "feature").unwrap();
+        assert_eq!(feature["current"], true);
+        // git_status must also report the real new branch name.
+        let status = call(
+            &state,
+            7,
+            "git_status",
+            serde_json::json!({ "project_root": root }),
+        );
+        assert_eq!(status.result.unwrap()["branch"], "feature");
+    }
+
+    #[test]
+    fn git_checkout_of_a_nonexistent_branch_errors_honestly() {
+        let tmp = TempRepo::new("checkout_missing");
+        std::fs::write(tmp.dir.join("f.txt"), "content").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "first" }),
+        );
+        let resp = call(
+            &state,
+            3,
+            "git_checkout",
+            serde_json::json!({ "project_root": root, "branch": "no-such-branch" }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("git checkout"));
     }
 
     #[test]

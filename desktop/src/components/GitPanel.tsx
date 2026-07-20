@@ -29,6 +29,11 @@ interface ExpandedDiff {
   staged: boolean;
 }
 
+interface BranchInfo {
+  name: string;
+  current: boolean;
+}
+
 /** Real diff rendering -- ported verbatim from `LeoChatPanel.tsx`'s own
  * `DiffView` (one `<div>` per real line, colored by its real `+`/`-`/` `
  * prefix). Deliberately duplicated rather than extracted into a shared
@@ -75,11 +80,19 @@ function DiffView({ diff }: { diff: string }): React.ReactElement {
  * via `DiffView`, the same rendering already proven correct for Leo's own
  * edit-preview diffs.
  *
+ * Real branch switcher (task #233-235): clicking the branch label opens
+ * a real, freshly-fetched branch list -- clicking a non-current branch
+ * performs a real *safe* checkout (`spartan_git::checkout_branch` uses
+ * libgit2's own conflict-refusing checkout, so a conflicting dirty change
+ * surfaces the real error with the repo untouched, never force-discarded)
+ * -- plus a new-branch input creating a real branch from `HEAD` without
+ * switching to it (matching `git branch`'s own behavior).
+ *
  * A deliberate, named v1 scope cut, matching this whole `desktop/`
  * effort's own established pattern of naming what's deferred rather than
- * silently omitting it: no branch switcher, no per-hunk staging, no
- * stash, no merge-conflict resolution UI -- conflicted files are shown
- * with a marker but not specially handled.
+ * silently omitting it: no per-hunk staging, no stash, no branch
+ * delete/rename, no merge-conflict resolution UI -- conflicted files are
+ * shown with a marker but not specially handled.
  */
 export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [status, setStatus] = useState<GitStatus | null>(null);
@@ -90,6 +103,11 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [diffContent, setDiffContent] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
+  const [showBranches, setShowBranches] = useState(false);
+  const [branches, setBranches] = useState<BranchInfo[] | null>(null);
+  const [branchError, setBranchError] = useState<string | null>(null);
+  const [newBranchName, setNewBranchName] = useState("");
+  const [switching, setSwitching] = useState(false);
 
   const refresh = useCallback(() => {
     window.spartan
@@ -163,6 +181,60 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
     [root, expandedDiff]
   );
 
+  const toggleBranches = useCallback(() => {
+    if (showBranches) {
+      setShowBranches(false);
+      setBranchError(null);
+      return;
+    }
+    // Fetched fresh on every open, never cached -- branches can change
+    // out from under the panel (a terminal `git branch`, Leo's own
+    // checkpointing) between opens.
+    setShowBranches(true);
+    setBranchError(null);
+    window.spartan
+      .call("git_branches", { project_root: root })
+      .then((result) => setBranches((result as { branches: BranchInfo[] }).branches))
+      .catch((e: Error) => setBranchError(e.message));
+  }, [root, showBranches]);
+
+  const checkoutBranch = useCallback(
+    (name: string) => {
+      setSwitching(true);
+      setBranchError(null);
+      window.spartan
+        .call("git_checkout", { project_root: root, branch: name })
+        .then(() => {
+          setShowBranches(false);
+          setBranches(null);
+          refresh();
+        })
+        // A real safe-checkout refusal (a conflicting dirty change)
+        // surfaces libgit2's own real error here, with the repository
+        // untouched -- shown, never force-resolved.
+        .catch((e: Error) => setBranchError(e.message))
+        .finally(() => setSwitching(false));
+    },
+    [root, refresh]
+  );
+
+  const createBranch = useCallback(() => {
+    const name = newBranchName.trim();
+    if (!name) return;
+    setBranchError(null);
+    window.spartan
+      .call("git_create_branch", { project_root: root, branch: name })
+      .then(() => {
+        setNewBranchName("");
+        // Re-fetch so the real new branch shows up immediately;
+        // deliberately does NOT auto-switch, matching `git branch`'s own
+        // real behavior (switching stays one explicit click away).
+        return window.spartan.call("git_branches", { project_root: root });
+      })
+      .then((result) => setBranches((result as { branches: BranchInfo[] }).branches))
+      .catch((e: Error) => setBranchError(e.message));
+  }, [root, newBranchName]);
+
   if (error) {
     return <div className="git-panel git-panel-empty mono">{error}</div>;
   }
@@ -175,7 +247,55 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
 
   return (
     <div className="git-panel">
-      <div className="git-branch mono">{status.branch ? `⎇ ${status.branch}` : "(detached HEAD)"}</div>
+      <div
+        className="git-branch mono"
+        onClick={toggleBranches}
+        style={{ cursor: "pointer" }}
+        title="Switch branch"
+      >
+        {status.branch ? `⎇ ${status.branch}` : "(detached HEAD)"} {showBranches ? "▾" : "▸"}
+      </div>
+      {showBranches && (
+        <div className="git-section">
+          {branchError && <div className="git-panel-empty mono">{branchError}</div>}
+          {branches === null && !branchError && (
+            <div className="git-panel-empty mono">Loading branches…</div>
+          )}
+          {branches?.map((b) => (
+            <div
+              key={b.name}
+              className="git-row"
+              onClick={() => {
+                if (!b.current && !switching) checkoutBranch(b.name);
+              }}
+              title={b.current ? "Current branch" : `Switch to ${b.name}`}
+            >
+              <span className="git-status-glyph mono">{b.current ? "✓" : ""}</span>
+              <span className="mono git-row-path">{b.name}</span>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4 }}>
+            <input
+              className="git-commit-input mono"
+              placeholder="New branch name…"
+              value={newBranchName}
+              onChange={(e) => setNewBranchName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") createBranch();
+              }}
+              style={{ minHeight: "auto", height: 28, flex: 1 }}
+            />
+            <button
+              type="button"
+              className="editor-find-btn"
+              disabled={!newBranchName.trim()}
+              onClick={createBranch}
+            >
+              Create
+            </button>
+          </div>
+        </div>
+      )}
 
       <textarea
         className="git-commit-input mono"

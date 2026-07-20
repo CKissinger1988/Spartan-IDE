@@ -5580,6 +5580,50 @@ first — it's the parity reference until each row there is actually reimplement
   git panel (same established "Electron-shells-only" scope every recent pass has carried);
   the real Electron window remains unlaunchable in this session (same standing gap since
   §75.59).
+- **Real, working code — real branch switcher (list/switch/create) in both shells' Source
+  Control panels, closing the second scope cut named since §75.30/§75.65, task #233-#235**:
+  three new, real `spartan-git` methods -- `list_branches()` (every real local branch,
+  sorted, current flagged; a real detached `HEAD` simply flags nothing), `checkout_branch
+  (name)` (a real *safe* checkout: `libgit2`'s own default conflict-refusing
+  `CheckoutBuilder::safe()`, with `HEAD` only moved *after* the working-tree checkout
+  succeeds, so a refused checkout leaves the repository exactly where it was -- never a
+  force-discard), and `create_branch(name)` (a real `git branch <name>` from `HEAD`,
+  deliberately *not* switching to it, matching the real command's own behavior;
+  `force = false`, so an existing name is a real error, never silently moved). 4 new
+  `spartan-git` tests (19 total in that crate), including the load-bearing one: a real
+  checkout genuinely rewrites the working-tree file to the target branch's content, and a
+  real conflicting uncommitted edit makes `checkout_branch` refuse with the repo provably
+  untouched (still on the old branch, local edit byte-preserved). Three new `spartan-
+  backend` dispatch methods (`git_branches`/`git_checkout`/`git_create_branch`, 2 new
+  dispatch-level tests including a full create-switch-status round trip confirming
+  `git_status`'s own branch field tracks the real switch), registered in `main.ts`'s/
+  `preload.ts`'s IPC allowlists at the identical position. **UI, both shells**: the Git
+  panel's previously-static branch label is now a real clickable toggle (`▸`/`▾`) opening a
+  freshly-fetched branch list -- fetched on every open, never cached, since branches can
+  change out from under the panel (a terminal `git branch`, Leo's own checkpointing) --
+  with the current branch check-marked, click-to-switch on any other branch, and a
+  new-branch input + Create button (re-fetches the list, does not auto-switch). A real
+  safe-checkout refusal surfaces `libgit2`'s own real error text in the panel, never
+  force-resolved. Real, live, end-to-end Playwright verification in both shells against
+  identical real two-branch fixtures (`master`/`feature` with genuinely different committed
+  content): the list rendered both real branches with the correct current-mark; clicking
+  `feature` performed a real checkout (label updated, and the real git CLI independently
+  confirmed the branch and working-tree content afterward); creating `verify-branch`
+  showed all three real branches with the current branch unchanged (confirming
+  no-auto-switch); and after writing a real conflicting dirty edit to the fixture file,
+  clicking `master` surfaced the real `libgit2` refusal (`"1 conflict prevents checkout;
+  class=Checkout (20); code=Conflict (-13)"`) with the branch still `feature` and the dirty
+  edit byte-preserved on disk -- independently cross-checked via the real `git` CLI after
+  each shell's run, both shells byte-identical, screenshotted. `web/` was driven against a
+  real running `spartan-devserver` serving the real built `web/dist`; `desktop/` via the
+  established mocked-`window.spartan`-over-real-WebSocket technique. Full `cargo fmt --all
+  -- --check`/`cargo clippy --workspace --release --all-targets` clean; both shells'
+  `tsc --noEmit`/`npm run build` clean. **What this does not confirm**: no branch
+  delete/rename (a real, named v1 scope cut); no remote branches (local-only, matching
+  `spartan-git`'s own whole-crate local-only scope since §75.30); no stash-and-switch
+  offering when a checkout is refused (the honest error is shown, resolution is the
+  user's); the real Electron window remains unlaunchable in this session (same standing
+  gap since §75.59).
 
 ## Build & test
 

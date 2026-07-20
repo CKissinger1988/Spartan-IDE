@@ -34,6 +34,11 @@ interface ExpandedDiff {
   staged: boolean;
 }
 
+interface BranchInfo {
+  name: string;
+  current: boolean;
+}
+
 /** Real diff rendering -- ported verbatim from `desktop/`'s own copy in
  * `GitPanel.tsx` (itself ported from `LeoChatPanel.tsx`'s `DiffView`):
  * one `<div>` per real line, colored by its real `+`/`-`/` ` prefix. */
@@ -84,9 +89,16 @@ function DiffView({ diff }: { diff: string }): React.ReactElement {
  * the row's own stage/unstage click target via `stopPropagation` --
  * ported verbatim from `desktop/`'s own copy.
  *
- * Same real, named v1 scope cut as the ported original: no branch
- * switcher, no per-hunk staging, no stash, no merge-conflict resolution
- * UI (conflicted files show a marker only).
+ * Real branch switcher (task #233-235), ported verbatim from `desktop/`'s
+ * own copy: clicking the branch label opens a freshly-fetched branch
+ * list, clicking a non-current branch performs a real safe checkout (a
+ * conflicting dirty change surfaces libgit2's own real refusal, repo
+ * untouched), and a new-branch input creates a real branch from `HEAD`
+ * without switching.
+ *
+ * Same real, named v1 scope cut as the ported original: no per-hunk
+ * staging, no stash, no branch delete/rename, no merge-conflict
+ * resolution UI (conflicted files show a marker only).
  */
 export default function GitPanel({ client, root }: GitPanelProps): React.ReactElement {
   const [status, setStatus] = useState<GitStatus | null>(null);
@@ -97,6 +109,11 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
   const [diffContent, setDiffContent] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
+  const [showBranches, setShowBranches] = useState(false);
+  const [branches, setBranches] = useState<BranchInfo[] | null>(null);
+  const [branchError, setBranchError] = useState<string | null>(null);
+  const [newBranchName, setNewBranchName] = useState("");
+  const [switching, setSwitching] = useState(false);
 
   const refresh = useCallback(() => {
     client
@@ -170,6 +187,55 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
     [client, root, expandedDiff]
   );
 
+  const toggleBranches = useCallback(() => {
+    if (showBranches) {
+      setShowBranches(false);
+      setBranchError(null);
+      return;
+    }
+    // Fetched fresh on every open, never cached -- branches can change
+    // out from under the panel between opens.
+    setShowBranches(true);
+    setBranchError(null);
+    client
+      .call("git_branches", { project_root: root })
+      .then((result) => setBranches((result as { branches: BranchInfo[] }).branches))
+      .catch((e: Error) => setBranchError(e.message));
+  }, [client, root, showBranches]);
+
+  const checkoutBranch = useCallback(
+    (name: string) => {
+      setSwitching(true);
+      setBranchError(null);
+      client
+        .call("git_checkout", { project_root: root, branch: name })
+        .then(() => {
+          setShowBranches(false);
+          setBranches(null);
+          refresh();
+        })
+        // A real safe-checkout refusal surfaces libgit2's own real error
+        // here, repo untouched -- shown, never force-resolved.
+        .catch((e: Error) => setBranchError(e.message))
+        .finally(() => setSwitching(false));
+    },
+    [client, root, refresh]
+  );
+
+  const createBranch = useCallback(() => {
+    const name = newBranchName.trim();
+    if (!name) return;
+    setBranchError(null);
+    client
+      .call("git_create_branch", { project_root: root, branch: name })
+      .then(() => {
+        setNewBranchName("");
+        return client.call("git_branches", { project_root: root });
+      })
+      .then((result) => setBranches((result as { branches: BranchInfo[] }).branches))
+      .catch((e: Error) => setBranchError(e.message));
+  }, [client, root, newBranchName]);
+
   if (error) {
     return <div className="git-panel git-panel-empty mono">{error}</div>;
   }
@@ -182,7 +248,55 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
 
   return (
     <div className="git-panel">
-      <div className="git-branch mono">{status.branch ? `⎇ ${status.branch}` : "(detached HEAD)"}</div>
+      <div
+        className="git-branch mono"
+        onClick={toggleBranches}
+        style={{ cursor: "pointer" }}
+        title="Switch branch"
+      >
+        {status.branch ? `⎇ ${status.branch}` : "(detached HEAD)"} {showBranches ? "▾" : "▸"}
+      </div>
+      {showBranches && (
+        <div className="git-section">
+          {branchError && <div className="git-panel-empty mono">{branchError}</div>}
+          {branches === null && !branchError && (
+            <div className="git-panel-empty mono">Loading branches…</div>
+          )}
+          {branches?.map((b) => (
+            <div
+              key={b.name}
+              className="git-row"
+              onClick={() => {
+                if (!b.current && !switching) checkoutBranch(b.name);
+              }}
+              title={b.current ? "Current branch" : `Switch to ${b.name}`}
+            >
+              <span className="git-status-glyph mono">{b.current ? "✓" : ""}</span>
+              <span className="mono git-row-path">{b.name}</span>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4 }}>
+            <input
+              className="git-commit-input mono"
+              placeholder="New branch name…"
+              value={newBranchName}
+              onChange={(e) => setNewBranchName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") createBranch();
+              }}
+              style={{ minHeight: "auto", height: 28, flex: 1 }}
+            />
+            <button
+              type="button"
+              className="editor-find-btn"
+              disabled={!newBranchName.trim()}
+              onClick={createBranch}
+            >
+              Create
+            </button>
+          </div>
+        </div>
+      )}
 
       <textarea
         className="git-commit-input mono"

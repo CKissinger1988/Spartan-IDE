@@ -220,6 +220,51 @@ impl GitRepo {
         Ok(std::str::from_utf8(blob.content()).ok().map(str::to_string))
     }
 
+    /// Every real local branch name, sorted, with the current branch
+    /// flagged. Detached `HEAD` (a real, valid git state) simply flags
+    /// nothing as current.
+    pub fn list_branches(&self) -> Result<Vec<(String, bool)>, git2::Error> {
+        let current = self.current_branch();
+        let mut names: Vec<(String, bool)> = self
+            .repo
+            .branches(Some(git2::BranchType::Local))?
+            .filter_map(|b| {
+                let (branch, _) = b.ok()?;
+                let name = branch.name().ok()??.to_string();
+                let is_current = current.as_deref() == Some(name.as_str());
+                Some((name, is_current))
+            })
+            .collect();
+        names.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(names)
+    }
+
+    /// Real `git switch <name>` -- a *safe* checkout: `libgit2`'s default
+    /// (`CheckoutBuilder::new()` with `safe()`) refuses to overwrite real
+    /// uncommitted changes that conflict with the target branch's content,
+    /// exactly like the real `git switch` refuses, surfacing `libgit2`'s
+    /// own real conflict error rather than force-discarding anything.
+    /// `HEAD` is only moved *after* the working-tree checkout succeeds, so
+    /// a refused checkout leaves the repository exactly where it was.
+    pub fn checkout_branch(&self, name: &str) -> Result<(), git2::Error> {
+        let refname = format!("refs/heads/{name}");
+        let obj = self.repo.revparse_single(&refname)?;
+        let mut opts = git2::build::CheckoutBuilder::new();
+        opts.safe();
+        self.repo.checkout_tree(&obj, Some(&mut opts))?;
+        self.repo.set_head(&refname)
+    }
+
+    /// Real `git branch <name>` from the current `HEAD` commit. Does not
+    /// switch to it (matching the real `git branch` command's own
+    /// behavior); `force = false`, so an existing branch of the same name
+    /// is a real error, never silently moved.
+    pub fn create_branch(&self, name: &str) -> Result<(), git2::Error> {
+        let head = self.repo.head()?.peel_to_commit()?;
+        self.repo.branch(name, &head, false)?;
+        Ok(())
+    }
+
     /// Real index's own version of `path`'s content, as real UTF-8 text --
     /// the "after" half of a real staged diff, and the "before" half of a
     /// real unstaged diff. `Ok(None)` covers a path with no index entry at
@@ -434,6 +479,82 @@ mod tests {
         assert_eq!(
             repo.index_blob_content(Path::new("f.txt")).unwrap(),
             Some("staged version".to_string())
+        );
+    }
+
+    #[test]
+    fn list_branches_reports_the_single_initial_branch_as_current() {
+        let (tmp, repo) = TempRepo::new("branches_initial");
+        tmp.write("f.txt", "v1");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("first").unwrap();
+        assert_eq!(
+            repo.list_branches().unwrap(),
+            vec![("master".to_string(), true)]
+        );
+    }
+
+    #[test]
+    fn create_branch_adds_a_real_branch_without_switching_to_it() {
+        let (tmp, repo) = TempRepo::new("branches_create");
+        tmp.write("f.txt", "v1");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("first").unwrap();
+        repo.create_branch("feature").unwrap();
+        assert_eq!(
+            repo.list_branches().unwrap(),
+            vec![("feature".to_string(), false), ("master".to_string(), true)]
+        );
+        // Creating an already-existing branch is a real error, not a
+        // silent overwrite.
+        assert!(repo.create_branch("feature").is_err());
+    }
+
+    #[test]
+    fn checkout_branch_really_switches_head_and_the_working_tree() {
+        let (tmp, repo) = TempRepo::new("branches_checkout");
+        tmp.write("f.txt", "master content");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("on master").unwrap();
+        repo.create_branch("feature").unwrap();
+        repo.checkout_branch("feature").unwrap();
+        assert_eq!(repo.current_branch().unwrap(), "feature");
+        tmp.write("f.txt", "feature content");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("on feature").unwrap();
+        repo.checkout_branch("master").unwrap();
+        assert_eq!(repo.current_branch().unwrap(), "master");
+        // The real working-tree file must reflect master's own content
+        // again -- a real checkout, not just a HEAD pointer move.
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "master content"
+        );
+    }
+
+    #[test]
+    fn checkout_branch_refuses_to_clobber_a_real_conflicting_dirty_change() {
+        let (tmp, repo) = TempRepo::new("branches_checkout_dirty");
+        tmp.write("f.txt", "master content");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("on master").unwrap();
+        repo.create_branch("feature").unwrap();
+        repo.checkout_branch("feature").unwrap();
+        tmp.write("f.txt", "feature content");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("on feature").unwrap();
+        repo.checkout_branch("master").unwrap();
+        // A real, uncommitted local edit that conflicts with feature's
+        // own version of the same file.
+        tmp.write("f.txt", "LOCAL UNCOMMITTED");
+        let result = repo.checkout_branch("feature");
+        assert!(result.is_err(), "safe checkout must refuse the conflict");
+        // Refused means *nothing* moved: still on master, local edit
+        // untouched.
+        assert_eq!(repo.current_branch().unwrap(), "master");
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "LOCAL UNCOMMITTED"
         );
     }
 
