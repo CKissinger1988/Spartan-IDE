@@ -193,6 +193,47 @@ impl GitRepo {
             None
         }
     }
+
+    /// Real `HEAD`'s own version of `path`'s content, as real UTF-8 text --
+    /// the "before" half of a real staged diff. `Ok(None)` covers both real,
+    /// honest cases that aren't errors: no `HEAD` yet (a brand-new repo with
+    /// no commits), or `HEAD`'s tree simply has no such path (a newly-added
+    /// file). A real, non-UTF-8 blob is also reported as `Ok(None)` rather
+    /// than a lossy or garbled diff -- this crate's own real scope is text
+    /// source files, matching every other real text-only assumption already
+    /// made elsewhere in this workspace (tree-sitter highlighting, LSP).
+    pub fn head_blob_content(&self, path: &Path) -> Result<Option<String>, git2::Error> {
+        let head_commit = match self.repo.head().and_then(|h| h.peel_to_commit()) {
+            Ok(commit) => commit,
+            Err(_) => return Ok(None),
+        };
+        let tree = head_commit.tree()?;
+        let entry = match tree.get_path(path) {
+            Ok(entry) => entry,
+            Err(_) => return Ok(None),
+        };
+        let object = entry.to_object(&self.repo)?;
+        let blob = match object.as_blob() {
+            Some(blob) => blob,
+            None => return Ok(None),
+        };
+        Ok(std::str::from_utf8(blob.content()).ok().map(str::to_string))
+    }
+
+    /// Real index's own version of `path`'s content, as real UTF-8 text --
+    /// the "after" half of a real staged diff, and the "before" half of a
+    /// real unstaged diff. `Ok(None)` covers a path with no index entry at
+    /// all (an untracked file has nothing staged), or a real non-UTF-8 blob
+    /// -- same real scope decision as `head_blob_content`.
+    pub fn index_blob_content(&self, path: &Path) -> Result<Option<String>, git2::Error> {
+        let index = self.repo.index()?;
+        let entry = match index.get_path(path, 0) {
+            Some(entry) => entry,
+            None => return Ok(None),
+        };
+        let blob = self.repo.find_blob(entry.id)?;
+        Ok(std::str::from_utf8(blob.content()).ok().map(str::to_string))
+    }
 }
 
 #[cfg(test)]
@@ -343,6 +384,57 @@ mod tests {
         let status = repo.status().unwrap();
         assert_eq!(status[0].staged, None);
         assert_eq!(status[0].unstaged, Some(FileStatus::Modified));
+    }
+
+    #[test]
+    fn head_blob_content_is_none_with_no_commits_yet() {
+        let (tmp, repo) = TempRepo::new("head_blob_no_commits");
+        tmp.write("f.txt", "v1");
+        assert_eq!(repo.head_blob_content(Path::new("f.txt")).unwrap(), None);
+    }
+
+    #[test]
+    fn head_blob_content_is_none_for_a_path_head_does_not_have() {
+        let (tmp, repo) = TempRepo::new("head_blob_missing_path");
+        tmp.write("f.txt", "v1");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("first").unwrap();
+        assert_eq!(repo.head_blob_content(Path::new("nope.txt")).unwrap(), None);
+    }
+
+    #[test]
+    fn head_blob_content_returns_the_real_committed_text() {
+        let (tmp, repo) = TempRepo::new("head_blob_real");
+        tmp.write("f.txt", "v1 content");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("first").unwrap();
+        tmp.write("f.txt", "v2 content, not yet staged");
+        assert_eq!(
+            repo.head_blob_content(Path::new("f.txt")).unwrap(),
+            Some("v1 content".to_string())
+        );
+    }
+
+    #[test]
+    fn index_blob_content_is_none_for_an_untracked_file() {
+        let (tmp, repo) = TempRepo::new("index_blob_untracked");
+        tmp.write("f.txt", "hello");
+        assert_eq!(repo.index_blob_content(Path::new("f.txt")).unwrap(), None);
+    }
+
+    #[test]
+    fn index_blob_content_returns_the_real_staged_text() {
+        let (tmp, repo) = TempRepo::new("index_blob_real");
+        tmp.write("f.txt", "committed");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("first").unwrap();
+        tmp.write("f.txt", "staged version");
+        repo.stage(Path::new("f.txt")).unwrap();
+        tmp.write("f.txt", "working tree version, not staged");
+        assert_eq!(
+            repo.index_blob_content(Path::new("f.txt")).unwrap(),
+            Some("staged version".to_string())
+        );
     }
 
     #[test]

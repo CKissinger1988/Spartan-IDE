@@ -29,6 +29,33 @@ interface GitPanelProps {
   root: string;
 }
 
+interface ExpandedDiff {
+  path: string;
+  staged: boolean;
+}
+
+/** Real diff rendering -- ported verbatim from `desktop/`'s own copy in
+ * `GitPanel.tsx` (itself ported from `LeoChatPanel.tsx`'s `DiffView`):
+ * one `<div>` per real line, colored by its real `+`/`-`/` ` prefix. */
+function DiffView({ diff }: { diff: string }): React.ReactElement {
+  const lines = diff.split("\n").filter((_, i, arr) => !(i === arr.length - 1 && arr[i] === ""));
+  if (lines.length === 0) {
+    return <div className="leo-diff mono git-panel-empty">No changes.</div>;
+  }
+  return (
+    <pre className="leo-diff mono">
+      {lines.map((line, i) => {
+        const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "ctx";
+        return (
+          <div key={i} className={`leo-diff-line leo-diff-${kind}`}>
+            {line || " "}
+          </div>
+        );
+      })}
+    </pre>
+  );
+}
+
 /**
  * Real Source Control panel for the web app, closing the "git" half of the
  * gap `App.tsx`'s own doc comment named since §75.89 ("no LSP, no DAP, no
@@ -51,15 +78,25 @@ interface GitPanelProps {
  * project root, which may or may not be the same directory the File
  * System Access side currently has open.
  *
- * Same real, named v1 scope cut as the ported original: no diff view, no
- * branch switcher, no per-hunk staging, no stash, no merge-conflict
- * resolution UI (conflicted files show a marker only).
+ * Real diff view (task #229-232): a "±" button per row toggles an inline
+ * expansion calling the real `git_diff` IPC method (staged rows diff
+ * `HEAD`-vs-index, unstaged rows diff index-vs-working-tree), kept off
+ * the row's own stage/unstage click target via `stopPropagation` --
+ * ported verbatim from `desktop/`'s own copy.
+ *
+ * Same real, named v1 scope cut as the ported original: no branch
+ * switcher, no per-hunk staging, no stash, no merge-conflict resolution
+ * UI (conflicted files show a marker only).
  */
 export default function GitPanel({ client, root }: GitPanelProps): React.ReactElement {
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [committing, setCommitting] = useState(false);
+  const [expandedDiff, setExpandedDiff] = useState<ExpandedDiff | null>(null);
+  const [diffContent, setDiffContent] = useState<string | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     client
@@ -111,6 +148,28 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
       .finally(() => setCommitting(false));
   }, [client, root, message, refresh]);
 
+  const toggleDiff = useCallback(
+    (path: string, staged: boolean, e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (expandedDiff && expandedDiff.path === path && expandedDiff.staged === staged) {
+        setExpandedDiff(null);
+        setDiffContent(null);
+        setDiffError(null);
+        return;
+      }
+      setExpandedDiff({ path, staged });
+      setDiffContent(null);
+      setDiffError(null);
+      setDiffLoading(true);
+      client
+        .call("git_diff", { project_root: root, path, staged })
+        .then((result) => setDiffContent((result as { diff: string }).diff))
+        .catch((err: Error) => setDiffError(err.message))
+        .finally(() => setDiffLoading(false));
+    },
+    [client, root, expandedDiff]
+  );
+
   if (error) {
     return <div className="git-panel git-panel-empty mono">{error}</div>;
   }
@@ -142,21 +201,55 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
       <div className="git-section-label mono">Staged Changes ({staged.length})</div>
       <div className="git-section">
         {staged.map((entry) => (
-          <div key={`staged-${entry.path}`} className="git-row" onClick={() => unstage(entry.path)}>
-            <span className="git-status-glyph mono">{STATUS_GLYPH[entry.staged ?? ""] ?? "?"}</span>
-            <span className="mono git-row-path">{entry.path}</span>
-          </div>
+          <React.Fragment key={`staged-${entry.path}`}>
+            <div className="git-row" onClick={() => unstage(entry.path)}>
+              <span className="git-status-glyph mono">{STATUS_GLYPH[entry.staged ?? ""] ?? "?"}</span>
+              <span className="mono git-row-path">{entry.path}</span>
+              <button
+                type="button"
+                className="editor-find-btn"
+                title="View diff"
+                onClick={(e) => toggleDiff(entry.path, true, e)}
+              >
+                ±
+              </button>
+            </div>
+            {expandedDiff?.path === entry.path && expandedDiff.staged === true && (
+              <div onClick={(e) => e.stopPropagation()}>
+                {diffLoading && <div className="git-panel-empty mono">Loading diff…</div>}
+                {diffError && <div className="git-panel-empty mono">{diffError}</div>}
+                {diffContent !== null && <DiffView diff={diffContent} />}
+              </div>
+            )}
+          </React.Fragment>
         ))}
       </div>
 
       <div className="git-section-label mono">Changes ({unstaged.length})</div>
       <div className="git-section">
         {unstaged.map((entry) => (
-          <div key={`unstaged-${entry.path}`} className="git-row" onClick={() => stage(entry.path)}>
-            <span className="git-status-glyph mono">{STATUS_GLYPH[entry.unstaged ?? ""] ?? "?"}</span>
-            <span className="mono git-row-path">{entry.path}</span>
-            {entry.conflicted && <span className="git-conflict-marker mono">!</span>}
-          </div>
+          <React.Fragment key={`unstaged-${entry.path}`}>
+            <div className="git-row" onClick={() => stage(entry.path)}>
+              <span className="git-status-glyph mono">{STATUS_GLYPH[entry.unstaged ?? ""] ?? "?"}</span>
+              <span className="mono git-row-path">{entry.path}</span>
+              {entry.conflicted && <span className="git-conflict-marker mono">!</span>}
+              <button
+                type="button"
+                className="editor-find-btn"
+                title="View diff"
+                onClick={(e) => toggleDiff(entry.path, false, e)}
+              >
+                ±
+              </button>
+            </div>
+            {expandedDiff?.path === entry.path && expandedDiff.staged === false && (
+              <div onClick={(e) => e.stopPropagation()}>
+                {diffLoading && <div className="git-panel-empty mono">Loading diff…</div>}
+                {diffError && <div className="git-panel-empty mono">{diffError}</div>}
+                {diffContent !== null && <DiffView diff={diffContent} />}
+              </div>
+            )}
+          </React.Fragment>
         ))}
       </div>
 

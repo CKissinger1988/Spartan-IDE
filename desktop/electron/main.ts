@@ -164,6 +164,7 @@ app.whenReady().then(() => {
     "git_stage",
     "git_unstage",
     "git_commit",
+    "git_diff",
     "settings_get",
     "settings_set",
     "check_for_updates",

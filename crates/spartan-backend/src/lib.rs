@@ -2977,6 +2977,46 @@ fn git_commit(project_root: &str, message: &str) -> Result<serde_json::Value, St
     Ok(serde_json::json!({ "ok": true, "oid": oid.to_string() }))
 }
 
+/// Real staged/unstaged diff for one file, reusing the already-tested
+/// `compute_diff` (§75.68) -- real git semantics, not a simplified
+/// approximation. `staged: true` diffs `HEAD`'s own blob against the
+/// index's blob (exactly what `git diff --staged` shows). `staged: false`
+/// diffs the index's own blob against the real current working-tree file
+/// content read directly off disk (exactly what a plain `git diff` shows
+/// for an already-tracked file), resolved against the repo's own real
+/// `workdir()` rather than the raw `project_root` param, since a real git
+/// repo can be discovered from a subdirectory while `path` is always
+/// root-relative to the repo itself. A path missing from either real half
+/// (HEAD/index/disk) is treated as empty content, not an error -- the
+/// correct, honest representation of a real newly-added or newly-deleted
+/// file, matching `compute_diff`'s own existing "every line added/removed"
+/// behavior against empty content.
+fn git_diff(project_root: &str, path: &str, staged: bool) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let rel_path = std::path::Path::new(path);
+    let index_content = repo
+        .index_blob_content(rel_path)
+        .map_err(|e| format!("git diff (index): {e}"))?
+        .unwrap_or_default();
+    let (old_content, new_content) = if staged {
+        let head_content = repo
+            .head_blob_content(rel_path)
+            .map_err(|e| format!("git diff (HEAD): {e}"))?
+            .unwrap_or_default();
+        (head_content, index_content)
+    } else {
+        let workdir = repo
+            .workdir()
+            .ok_or("repository has no working directory")?;
+        let disk_content = std::fs::read_to_string(workdir.join(rel_path)).unwrap_or_default();
+        (index_content, disk_content)
+    };
+    Ok(serde_json::json!({
+        "diff": compute_diff(&old_content, &new_content),
+    }))
+}
+
 /// Real settings read/write, wrapping `spartan_settings` directly --
 /// deliberately no in-memory caching in `BackendState`, since this
 /// crate's own request volume for settings is low (opened once when the
@@ -3586,6 +3626,16 @@ pub fn handle_request(
             let root = get_str_param(&req.params, "project_root")?;
             let message = get_str_param(&req.params, "message")?;
             git_commit(&root, &message)
+        })(),
+        "git_diff" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let path = get_str_param(&req.params, "path")?;
+            let staged = req
+                .params
+                .get("staged")
+                .and_then(|v| v.as_bool())
+                .ok_or("missing/invalid bool param `staged`")?;
+            git_diff(&root, &path, staged)
         })(),
         "settings_get" => settings_get(),
         "settings_set" => (|| {
@@ -4710,6 +4760,103 @@ mod tests {
             .clone();
         assert!(entries[0]["staged"].is_null());
         assert_eq!(entries[0]["unstaged"], "added");
+    }
+
+    #[test]
+    fn git_diff_staged_shows_the_real_head_vs_index_difference() {
+        let tmp = TempRepo::new("diff_staged");
+        std::fs::write(tmp.dir.join("f.txt"), "line one\nline two\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "first" }),
+        );
+        std::fs::write(tmp.dir.join("f.txt"), "line one\nline two changed\n").unwrap();
+        call(
+            &state,
+            3,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        let resp = call(
+            &state,
+            4,
+            "git_diff",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "staged": true }),
+        );
+        let diff = resp.result.unwrap()["diff"].as_str().unwrap().to_string();
+        assert!(diff.contains("-line two\n"), "diff was: {diff}");
+        assert!(diff.contains("+line two changed\n"), "diff was: {diff}");
+        assert!(diff.contains(" line one\n"), "diff was: {diff}");
+    }
+
+    #[test]
+    fn git_diff_unstaged_shows_the_real_index_vs_working_tree_difference() {
+        let tmp = TempRepo::new("diff_unstaged");
+        std::fs::write(tmp.dir.join("f.txt"), "original\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "first" }),
+        );
+        // A real unstaged edit -- never re-staged, so the index still has
+        // "original" and only the working-tree file has changed.
+        std::fs::write(tmp.dir.join("f.txt"), "edited but not staged\n").unwrap();
+        let resp = call(
+            &state,
+            3,
+            "git_diff",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "staged": false }),
+        );
+        let diff = resp.result.unwrap()["diff"].as_str().unwrap().to_string();
+        assert!(diff.contains("-original\n"), "diff was: {diff}");
+        assert!(
+            diff.contains("+edited but not staged\n"),
+            "diff was: {diff}"
+        );
+    }
+
+    #[test]
+    fn git_diff_on_a_real_non_repo_path_errors_honestly() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-git-diff-non-repo-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "git_diff",
+            serde_json::json!({
+                "project_root": dir.to_string_lossy(),
+                "path": "f.txt",
+                "staged": true,
+            }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("no git repository found"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

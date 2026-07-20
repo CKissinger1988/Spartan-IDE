@@ -5519,6 +5519,67 @@ first — it's the parity reference until each row there is actually reimplement
   real, correct increment" precedent); no equivalent in the reference wgpu shell (that shell has no
   Find in Files panel to extend at all); the real Electron window remains unlaunchable in this
   session (same standing gap since §75.59).
+- **Real, working code — real per-file Git diff view in both shells' Source Control panels,
+  closing the "no diff view" scope cut both panels have named since §75.30/§75.65, task
+  #229-#232**: before this, neither shell's Git panel could show *what* changed in a file --
+  only that it had. Two new, real `spartan-git` methods, `head_blob_content(path)` and
+  `index_blob_content(path)` (5 new tests, 15 total in that crate), read a real file's `HEAD`
+  and index blob content via `git2`'s own real tree/index lookups -- both return `Ok(None)`
+  (not an error) for the real, honest no-blob cases: no commits yet, a path `HEAD`/the index
+  simply doesn't have (a newly-added/untracked file), or a real non-UTF-8 blob (this crate's
+  real scope is text source files, the same text-only assumption tree-sitter/LSP already
+  make). A new `spartan-backend::git_diff(project_root, path, staged)` dispatch method reuses
+  the *already-tested* `compute_diff` (§75.68's `similar`-crate line diff, bounded to 500
+  lines, previously only ever called by Leo's own edit-preview flow -- its first second
+  caller) with real git semantics, not an approximation: `staged: true` diffs `HEAD`'s blob
+  against the index's blob (exactly `git diff --staged`); `staged: false` diffs the index's
+  blob against the real working-tree file read off disk, resolved against the repo's own real
+  `workdir()` rather than the raw `project_root` param (a repo can be discovered from a
+  subdirectory while `path` is always repo-root-relative). A missing half is treated as empty
+  content, matching `compute_diff`'s own existing every-line-added/removed behavior for a
+  real new or deleted file. 3 new dispatch-level tests (186 total in `spartan-backend`'s
+  `--lib` suite, all passing single-threaded), including a real staged (`HEAD`-vs-index) and
+  a real unstaged (index-vs-worktree, never re-staged) round trip against a real temp repo,
+  and an honest non-repo error. `git_diff` was added to `main.ts`'s/`preload.ts`'s IPC
+  allowlists at the identical list position, continuing the established drift-avoidance
+  discipline. **UI, both shells**: each `GitPanel.tsx` row gained a small "±" button
+  (reusing `.editor-find-btn` styling) whose click is `stopPropagation`-isolated from the
+  row's own stage/unstage click target -- viewing a diff must never accidentally stage the
+  file it's showing -- toggling a real inline expansion rendered by a `DiffView` ported
+  verbatim from `LeoChatPanel.tsx`'s own already-proven component (deliberately duplicated,
+  not extracted into a shared abstraction: the two call sites share nothing else, named
+  in-code). `web/src/app.css` gained the `.leo-diff*` classes byte-identical to `desktop/`'s
+  (they didn't exist there -- `web/` has no Leo panel). **A real verification-methodology
+  finding, correctly diagnosed as a test-script artifact and not misreported as a product
+  bug**: the first web Playwright run showed the expansion stuck at "Loading diff…" at a
+  fixed 600ms wait -- a raw WebSocket probe against the same running devserver answered the
+  identical `git_diff` request in milliseconds with the exact correct diff, isolating the
+  stall to the page, and a second run with real WS frame logging showed the request genuinely
+  sent and answered: the first page load also fires `android_detect` (a real, cold
+  `gradle --version` subprocess taking several seconds), and the devserver's per-connection
+  thread dispatches serially, so the diff call sat queued behind it -- the fix was replacing
+  the fixed wait with `waitForSelector`, the same "wait for the real state, not a fixed
+  delay" lesson task #133's own account already recorded once. Real, live, end-to-end
+  Playwright verification in both shells against a real git fixture (one file with a real
+  staged `HEAD`-vs-index change, one with a real unstaged index-vs-worktree change): the
+  unstaged diff rendered exactly `[" beta original","+beta NEW-UNSTAGED-LINE"]`, the staged
+  diff exactly `[" alpha line one","-alpha line two","+alpha line two CHANGED-STAGED",
+  " alpha line three"]` -- the real, correct per-direction semantics, not the same diff twice
+  -- with the ± clicks confirmed to never stage/unstage anything (section counts unchanged)
+  and a second click collapsing the expansion; `web/` was driven against a real running
+  `spartan-devserver` serving the real built `web/dist`, `desktop/` independently via the
+  established "real devserver serving `desktop/dist`, a mocked `window.spartan` forwarding
+  every call over a genuine WebSocket" technique, byte-identical results, screenshotted (the
+  desktop staged-diff screenshot shows the real red/green/dim inline rendering under the
+  staged row). Full `cargo fmt --all -- --check`/`cargo clippy --workspace --release
+  --all-targets` clean; both shells' `tsc --noEmit`/`npm run build` clean. **What this does
+  not confirm**: no per-hunk staging from within the diff (view-only); no side-by-side or
+  word-level diff (line-level `+`/`-`/` ` only, matching `compute_diff`'s own real format);
+  one diff expansion open at a time (opening another closes the first -- a real, deliberate
+  single-`expandedDiff`-state simplification); no diff for the wgpu reference shell's own
+  git panel (same established "Electron-shells-only" scope every recent pass has carried);
+  the real Electron window remains unlaunchable in this session (same standing gap since
+  §75.59).
 
 ## Build & test
 
