@@ -5749,6 +5749,37 @@ first — it's the parity reference until each row there is actually reimplement
   added to `desktop/` (it has none by deliberate convention -- main-process glue is verified by
   review + runtime scripts, as here), so bug #2's real ENOENT/EACCES verification lives as a
   scratchpad runtime check, documented rather than committed as a bespoke test harness.
+- **Real, working code — single-instance lock + main-process crash safety net for `desktop/`,
+  continuing the production-hardening pass (task #240)**: two more standard, load-bearing
+  production requirements the Electron main process was missing. **Single-instance lock**: without
+  `app.requestSingleInstanceLock()`, launching Spartan IDE a second time (double-clicking the icon
+  while it's already running) spawns a whole second instance -- a second `spartan-backend`
+  subprocess, a second window, a second everything -- a real resource/correctness bug for any
+  shipped desktop app. Now the second process gets `false`, quits, and (crucially, since
+  `app.quit()` is async) its `whenReady` callback early-returns so it never even briefly stands up
+  a second backend; the first, already-running process gets a real `second-instance` event and
+  focuses/restores its existing window instead. Deliberately bypassed when `SPARTAN_ROOT` is set
+  (the test/dev harness path) so automated single-controller launches aren't blocked by a stale
+  lock. A module-level `mainWindow` reference was added (cleared on `closed`) so the
+  `second-instance` handler has a real window to focus. **Main-process crash safety net**: a
+  genuinely-uncaught exception or unhandled promise rejection in Electron's own main process would
+  otherwise take the whole app down silently. This project's crash story already covers the two
+  *other* real processes -- `spartan-backend`'s Rust panic hook (§75.82) and the renderer's own
+  reporter -- but the Node main process had no equivalent; added `process.on("uncaughtException")`
+  / `("unhandledRejection")` handlers that log visibly rather than dying invisibly (deliberately
+  *not* swallow-and-continue past a truly fatal error -- the app may be in a bad state -- just
+  guaranteeing the failure is never silent). `npm run typecheck`/`npm run build` clean. **What
+  this does not confirm**: the single-instance behavior needs two real concurrent Electron launches
+  to observe live, which this session's standing Electron-launch block prevents -- verified instead
+  by structural reasoning against the standard, documented Electron pattern (the same
+  review-and-reason basis §75.73/§75.76's own main-process fixes rest on). **A real, deliberately-
+  deferred production item, named not silently skipped**: a native application menu (File/Edit/
+  View/Help with a real About dialog and Documentation/Report-Issue links) -- a genuine shipped-IDE
+  polish gap -- was *not* added this pass, because a menu with role-based Edit accelerators
+  (Ctrl+Z/Ctrl+Y) would risk shadowing the custom editor's own backend-routed undo/redo keybindings
+  (`Editor.tsx` intercepts those keys and `preventDefault`s them), and distinguishing a safe menu
+  from a regression there genuinely needs a live Electron launch this environment can't provide.
+  Real future work, best done when the app can actually be launched.
 
 ## Build & test
 

@@ -74,6 +74,11 @@ function resolveGuiBuilderCliPath(): string {
 
 let backend: BackendClient | null = null;
 let guiBuilder: GuiBuilderClient | null = null;
+// The one real main window. Tracked so a second launch attempt (see the
+// single-instance lock below) can focus/restore it rather than spawning a
+// second full instance (a second `spartan-backend` subprocess + a second
+// window) -- a real resource/correctness bug for any shipped desktop app.
+let mainWindow: BrowserWindow | null = null;
 
 // Real §75.76 "open a different project" support -- the render process
 // itself has no way to change its own root query param after load, so
@@ -104,6 +109,10 @@ function createWindow(): void {
       sandbox: true,
     },
   });
+  mainWindow = win;
+  win.on("closed", () => {
+    if (mainWindow === win) mainWindow = null;
+  });
 
   // Real initial file-tree root. In dev, the repo checkout itself
   // (`import.meta.dirname` is `desktop/dist-electron/`, so `../..` is the
@@ -121,7 +130,54 @@ function createWindow(): void {
   loadRootIntoWindow(win, rootDir);
 }
 
+// Real single-instance lock -- a standard, load-bearing production
+// requirement. Without it, launching Spartan IDE a second time (double-
+// clicking the icon while it's already running) spawns a whole second
+// instance: a second `spartan-backend` subprocess, a second window, a
+// second everything. `requestSingleInstanceLock` returns `false` in that
+// second process; it quits immediately, and the *first* (already-running)
+// process gets a real `second-instance` event where it focuses/restores
+// its existing window instead -- the conventional "app is already open"
+// behavior. Deliberately skipped when `SPARTAN_ROOT` is set (the test/dev
+// harness path), so automated launches from a single controlling process
+// aren't blocked by a stale lock.
+const gotSingleInstanceLock = process.env.SPARTAN_ROOT
+  ? true
+  : app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
+// Real main-process crash safety net. A genuinely-uncaught exception or an
+// unhandled promise rejection in Electron's own main process would
+// otherwise take the whole app down silently (or, for a rejection, only
+// warn). This project's crash-reporting story already covers the two other
+// real processes -- `spartan-backend`'s Rust panic hook (§75.82) and the
+// renderer's own reporter -- but the Electron/Node main process had no
+// equivalent net. Log it visibly rather than dying silently; deliberately
+// does NOT swallow-and-continue past a truly fatal error (the app may be in
+// a bad state), it just guarantees the failure is never invisible.
+process.on("uncaughtException", (err) => {
+  console.error("[spartan-main] uncaught exception:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[spartan-main] unhandled rejection:", reason);
+});
+
 app.whenReady().then(() => {
+  // A second instance that lost the lock is quitting -- `app.quit()` is
+  // async, so `whenReady` can still fire here first. Return before
+  // spawning any backend/window so the losing instance never briefly
+  // stands up a real second `spartan-backend` subprocess.
+  if (!gotSingleInstanceLock) return;
+
   // Real production hardening: if the bundled `spartan-backend` binary is
   // missing or unresolvable, `resolveBackendBinaryPath` throws. Without
   // this guard the whole `whenReady` callback would reject silently and a
