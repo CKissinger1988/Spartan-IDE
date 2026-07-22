@@ -260,6 +260,75 @@ impl GitRepo {
         Ok(out)
     }
 
+    /// Every file a real commit changed, relative to its first parent
+    /// (a root commit diffs against the empty tree, so everything shows
+    /// as `Added` -- the real, correct answer). A real tree-to-tree
+    /// `git2::Diff`, not a hand-rolled walk.
+    pub fn commit_changed_files(
+        &self,
+        oid_str: &str,
+    ) -> Result<Vec<(String, FileStatus)>, git2::Error> {
+        let oid = git2::Oid::from_str(oid_str)?;
+        let commit = self.repo.find_commit(oid)?;
+        let tree = commit.tree()?;
+        let parent_tree = match commit.parent(0) {
+            Ok(parent) => Some(parent.tree()?),
+            Err(_) => None,
+        };
+        let diff = self
+            .repo
+            .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+        let mut out = Vec::new();
+        for delta in diff.deltas() {
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let status = match delta.status() {
+                git2::Delta::Added | git2::Delta::Copied => FileStatus::Added,
+                git2::Delta::Deleted => FileStatus::Deleted,
+                git2::Delta::Renamed => FileStatus::Renamed,
+                git2::Delta::Typechange => FileStatus::TypeChanged,
+                _ => FileStatus::Modified,
+            };
+            out.push((path, status));
+        }
+        Ok(out)
+    }
+
+    /// A specific real commit's own version of `path`'s content -- the
+    /// same `Ok(None)`-for-missing-path/non-UTF-8 contract as
+    /// `head_blob_content`, generalized to any commit by oid.
+    pub fn commit_blob_content(
+        &self,
+        oid_str: &str,
+        path: &Path,
+    ) -> Result<Option<String>, git2::Error> {
+        let oid = git2::Oid::from_str(oid_str)?;
+        let commit = self.repo.find_commit(oid)?;
+        let tree = commit.tree()?;
+        let entry = match tree.get_path(path) {
+            Ok(entry) => entry,
+            Err(_) => return Ok(None),
+        };
+        let object = entry.to_object(&self.repo)?;
+        let blob = match object.as_blob() {
+            Some(blob) => blob,
+            None => return Ok(None),
+        };
+        Ok(std::str::from_utf8(blob.content()).ok().map(str::to_string))
+    }
+
+    /// A real commit's first-parent oid, or `None` for a root commit (a
+    /// real, valid state, not an error).
+    pub fn commit_parent(&self, oid_str: &str) -> Result<Option<String>, git2::Error> {
+        let oid = git2::Oid::from_str(oid_str)?;
+        let commit = self.repo.find_commit(oid)?;
+        Ok(commit.parent_id(0).ok().map(|p| p.to_string()))
+    }
+
     /// Every real local branch name, sorted, with the current branch
     /// flagged. Detached `HEAD` (a real, valid git state) simply flags
     /// nothing as current.
@@ -554,6 +623,76 @@ mod tests {
         assert_eq!(bounded.len(), 2);
         assert_eq!(bounded[0].oid, third.to_string());
         assert_eq!(bounded[1].oid, second.to_string());
+    }
+
+    #[test]
+    fn commit_changed_files_reports_a_root_commit_as_all_added() {
+        let (tmp, repo) = TempRepo::new("commit_files_root");
+        tmp.write("a.txt", "a");
+        tmp.write("b.txt", "b");
+        repo.stage(Path::new("a.txt")).unwrap();
+        repo.stage(Path::new("b.txt")).unwrap();
+        let oid = repo.commit("root").unwrap();
+        let mut files = repo.commit_changed_files(&oid.to_string()).unwrap();
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            files,
+            vec![
+                ("a.txt".to_string(), FileStatus::Added),
+                ("b.txt".to_string(), FileStatus::Added)
+            ]
+        );
+    }
+
+    #[test]
+    fn commit_changed_files_reports_only_what_that_commit_really_touched() {
+        let (tmp, repo) = TempRepo::new("commit_files_second");
+        tmp.write("a.txt", "a v1");
+        tmp.write("b.txt", "b v1");
+        repo.stage(Path::new("a.txt")).unwrap();
+        repo.stage(Path::new("b.txt")).unwrap();
+        repo.commit("first").unwrap();
+        tmp.write("a.txt", "a v2");
+        tmp.write("c.txt", "c new");
+        repo.stage(Path::new("a.txt")).unwrap();
+        repo.stage(Path::new("c.txt")).unwrap();
+        let second = repo.commit("second").unwrap();
+        let mut files = repo.commit_changed_files(&second.to_string()).unwrap();
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        // b.txt was untouched by the second commit and must not appear.
+        assert_eq!(
+            files,
+            vec![
+                ("a.txt".to_string(), FileStatus::Modified),
+                ("c.txt".to_string(), FileStatus::Added)
+            ]
+        );
+    }
+
+    #[test]
+    fn commit_blob_content_and_parent_resolve_real_per_commit_data() {
+        let (tmp, repo) = TempRepo::new("commit_blob");
+        tmp.write("f.txt", "v1");
+        repo.stage(Path::new("f.txt")).unwrap();
+        let first = repo.commit("first").unwrap();
+        tmp.write("f.txt", "v2");
+        repo.stage(Path::new("f.txt")).unwrap();
+        let second = repo.commit("second").unwrap();
+        assert_eq!(
+            repo.commit_blob_content(&first.to_string(), Path::new("f.txt"))
+                .unwrap(),
+            Some("v1".to_string())
+        );
+        assert_eq!(
+            repo.commit_blob_content(&second.to_string(), Path::new("f.txt"))
+                .unwrap(),
+            Some("v2".to_string())
+        );
+        assert_eq!(
+            repo.commit_parent(&second.to_string()).unwrap(),
+            Some(first.to_string())
+        );
+        assert_eq!(repo.commit_parent(&first.to_string()).unwrap(), None);
     }
 
     #[test]

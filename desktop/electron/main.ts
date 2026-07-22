@@ -169,6 +169,8 @@ app.whenReady().then(() => {
     "git_checkout",
     "git_create_branch",
     "git_log",
+    "git_commit_files",
+    "git_commit_diff",
     "settings_get",
     "settings_set",
     "check_for_updates",

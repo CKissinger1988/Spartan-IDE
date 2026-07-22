@@ -3066,6 +3066,50 @@ fn git_log(project_root: &str, max: usize) -> Result<serde_json::Value, String> 
     Ok(serde_json::json!({ "commits": commits }))
 }
 
+/// Every file a real commit changed, relative to its first parent (a
+/// root commit reports everything as added -- the real, correct answer).
+fn git_commit_files(project_root: &str, oid: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let files = repo
+        .commit_changed_files(oid)
+        .map_err(|e| format!("git commit files: {e}"))?
+        .into_iter()
+        .map(|(path, status)| {
+            serde_json::json!({ "path": path, "status": file_status_json(status) })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "files": files }))
+}
+
+/// One file's real diff within one real commit -- the commit's own blob
+/// for `path` against its first parent's blob (a root commit, or a path
+/// the parent doesn't have, diffs against empty content -- the same
+/// missing-half-is-empty convention `git_diff` already established).
+/// Reuses the same already-tested `compute_diff`.
+fn git_commit_diff(project_root: &str, oid: &str, path: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let rel_path = std::path::Path::new(path);
+    let new_content = repo
+        .commit_blob_content(oid, rel_path)
+        .map_err(|e| format!("git commit diff: {e}"))?
+        .unwrap_or_default();
+    let old_content = match repo
+        .commit_parent(oid)
+        .map_err(|e| format!("git commit diff (parent): {e}"))?
+    {
+        Some(parent_oid) => repo
+            .commit_blob_content(&parent_oid, rel_path)
+            .map_err(|e| format!("git commit diff (parent blob): {e}"))?
+            .unwrap_or_default(),
+        None => String::new(),
+    };
+    Ok(serde_json::json!({
+        "diff": compute_diff(&old_content, &new_content),
+    }))
+}
+
 /// Real `git branch <name>` from the current `HEAD` -- does not switch to
 /// the new branch (matching the real command's own behavior); an existing
 /// branch of the same name is a real, relayed error.
@@ -3712,6 +3756,17 @@ pub fn handle_request(
             let root = get_str_param(&req.params, "project_root")?;
             let max = req.params.get("max").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
             git_log(&root, max)
+        })(),
+        "git_commit_files" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let oid = get_str_param(&req.params, "oid")?;
+            git_commit_files(&root, &oid)
+        })(),
+        "git_commit_diff" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let oid = get_str_param(&req.params, "oid")?;
+            let path = get_str_param(&req.params, "path")?;
+            git_commit_diff(&root, &oid, &path)
         })(),
         "settings_get" => settings_get(),
         "settings_set" => (|| {
@@ -5050,6 +5105,91 @@ mod tests {
         assert_eq!(commits[0]["author"], "Spartan Test");
         assert_eq!(commits[0]["oid"].as_str().unwrap().len(), 40);
         assert!(commits[0]["time"].as_i64().unwrap() > 0);
+    }
+
+    #[test]
+    fn git_commit_files_and_diff_round_trip_through_the_real_dispatch() {
+        let tmp = TempRepo::new("commit_detail_dispatch");
+        std::fs::write(tmp.dir.join("a.txt"), "a v1\n").unwrap();
+        std::fs::write(tmp.dir.join("b.txt"), "b v1\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        for (i, p) in ["a.txt", "b.txt"].iter().enumerate() {
+            call(
+                &state,
+                (i + 1) as u64,
+                "git_stage",
+                serde_json::json!({ "project_root": root, "path": p }),
+            );
+        }
+        call(
+            &state,
+            3,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "first" }),
+        );
+        std::fs::write(tmp.dir.join("a.txt"), "a v2\n").unwrap();
+        call(
+            &state,
+            4,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "a.txt" }),
+        );
+        let commit_resp = call(
+            &state,
+            5,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "second" }),
+        );
+        let oid = commit_resp.result.unwrap()["oid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let files_resp = call(
+            &state,
+            6,
+            "git_commit_files",
+            serde_json::json!({ "project_root": root, "oid": oid }),
+        );
+        let files = files_resp.result.unwrap()["files"]
+            .as_array()
+            .unwrap()
+            .clone();
+        // Only a.txt was touched by the second commit -- b.txt must not
+        // appear.
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["path"], "a.txt");
+        assert_eq!(files[0]["status"], "modified");
+
+        let diff_resp = call(
+            &state,
+            7,
+            "git_commit_diff",
+            serde_json::json!({ "project_root": root, "oid": oid, "path": "a.txt" }),
+        );
+        let diff = diff_resp.result.unwrap()["diff"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(diff.contains("-a v1\n"), "diff was: {diff}");
+        assert!(diff.contains("+a v2\n"), "diff was: {diff}");
+    }
+
+    #[test]
+    fn git_commit_files_on_a_bogus_oid_errors_honestly() {
+        let tmp = TempRepo::new("commit_detail_bad_oid");
+        std::fs::write(tmp.dir.join("f.txt"), "x").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        let resp = call(
+            &state,
+            1,
+            "git_commit_files",
+            serde_json::json!({ "project_root": root, "oid": "not-a-real-oid" }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("git commit files"));
     }
 
     #[test]

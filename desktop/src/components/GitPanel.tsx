@@ -42,6 +42,11 @@ interface CommitInfo {
   time: number;
 }
 
+interface ChangedFile {
+  path: string;
+  status: string;
+}
+
 /** Real relative-age formatting for the history list -- coarse on
  * purpose (a source-control sidebar, not a timestamp report). */
 function formatAge(unixSeconds: number): string {
@@ -106,6 +111,13 @@ function DiffView({ diff }: { diff: string }): React.ReactElement {
  * -- plus a new-branch input creating a real branch from `HEAD` without
  * switching to it (matching `git branch`'s own behavior).
  *
+ * Real commit history (task #236) with a per-commit detail view (task
+ * #237): clicking a History row expands the real list of files that
+ * commit changed (relative to its first parent), and clicking a file
+ * within it drills into that file's real per-commit diff (its blob vs.
+ * the parent's blob), reusing the same `DiffView` the working-tree diff
+ * already uses.
+ *
  * A deliberate, named v1 scope cut, matching this whole `desktop/`
  * effort's own established pattern of naming what's deferred rather than
  * silently omitting it: no per-hunk staging, no stash, no branch
@@ -129,6 +141,17 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [showHistory, setShowHistory] = useState(false);
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  // At most one commit expanded at a time (like the diff view), keyed by
+  // oid; `commitFiles`/`commitDiff` hold the currently-expanded commit's
+  // real changed-file list and the one file within it the user drilled
+  // into (if any).
+  const [expandedCommit, setExpandedCommit] = useState<string | null>(null);
+  const [commitFiles, setCommitFiles] = useState<ChangedFile[] | null>(null);
+  const [commitFilesError, setCommitFilesError] = useState<string | null>(null);
+  const [expandedCommitFile, setExpandedCommitFile] = useState<string | null>(null);
+  const [commitFileDiff, setCommitFileDiff] = useState<string | null>(null);
+  const [commitFileDiffLoading, setCommitFileDiffLoading] = useState(false);
+  const [commitFileDiffError, setCommitFileDiffError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     window.spartan
@@ -272,6 +295,53 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
       .then((result) => setCommits((result as { commits: CommitInfo[] }).commits))
       .catch((e: Error) => setHistoryError(e.message));
   }, [root, showHistory]);
+
+  const toggleCommit = useCallback(
+    (oid: string) => {
+      // Collapsing the open commit; also clears any drilled-into file.
+      if (expandedCommit === oid) {
+        setExpandedCommit(null);
+        setCommitFiles(null);
+        setCommitFilesError(null);
+        setExpandedCommitFile(null);
+        setCommitFileDiff(null);
+        setCommitFileDiffError(null);
+        return;
+      }
+      setExpandedCommit(oid);
+      setCommitFiles(null);
+      setCommitFilesError(null);
+      setExpandedCommitFile(null);
+      setCommitFileDiff(null);
+      setCommitFileDiffError(null);
+      window.spartan
+        .call("git_commit_files", { project_root: root, oid })
+        .then((result) => setCommitFiles((result as { files: ChangedFile[] }).files))
+        .catch((e: Error) => setCommitFilesError(e.message));
+    },
+    [root, expandedCommit]
+  );
+
+  const toggleCommitFile = useCallback(
+    (oid: string, path: string) => {
+      if (expandedCommitFile === path) {
+        setExpandedCommitFile(null);
+        setCommitFileDiff(null);
+        setCommitFileDiffError(null);
+        return;
+      }
+      setExpandedCommitFile(path);
+      setCommitFileDiff(null);
+      setCommitFileDiffError(null);
+      setCommitFileDiffLoading(true);
+      window.spartan
+        .call("git_commit_diff", { project_root: root, oid, path })
+        .then((result) => setCommitFileDiff((result as { diff: string }).diff))
+        .catch((e: Error) => setCommitFileDiffError(e.message))
+        .finally(() => setCommitFileDiffLoading(false));
+    },
+    [root, expandedCommitFile]
+  );
 
   if (error) {
     return <div className="git-panel git-panel-empty mono">{error}</div>;
@@ -424,22 +494,67 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
           )}
           {commits?.length === 0 && <div className="git-panel-empty mono">No commits yet.</div>}
           {commits?.map((c) => (
-            <div
-              key={c.oid}
-              className="git-row"
-              title={`${c.oid}\n${c.author} — ${new Date(c.time * 1000).toLocaleString()}`}
-            >
-              <span
-                className="mono"
-                style={{ color: "var(--accent)", fontSize: 11, flexShrink: 0 }}
+            <React.Fragment key={c.oid}>
+              <div
+                className="git-row"
+                onClick={() => toggleCommit(c.oid)}
+                style={{ cursor: "pointer" }}
+                title={`${c.oid}\n${c.author} — ${new Date(c.time * 1000).toLocaleString()}`}
               >
-                {c.oid.slice(0, 7)}
-              </span>
-              <span className="mono git-row-path">{c.summary}</span>
-              <span className="mono" style={{ opacity: 0.6, whiteSpace: "nowrap", fontSize: 11 }}>
-                {formatAge(c.time)}
-              </span>
-            </div>
+                <span
+                  className="mono"
+                  style={{ color: "var(--accent)", fontSize: 11, flexShrink: 0 }}
+                >
+                  {c.oid.slice(0, 7)}
+                </span>
+                <span className="mono git-row-path">{c.summary}</span>
+                <span
+                  className="mono"
+                  style={{ opacity: 0.6, whiteSpace: "nowrap", fontSize: 11 }}
+                >
+                  {formatAge(c.time)}
+                </span>
+              </div>
+              {expandedCommit === c.oid && (
+                <div style={{ paddingLeft: 12 }}>
+                  {commitFilesError && (
+                    <div className="git-panel-empty mono">{commitFilesError}</div>
+                  )}
+                  {commitFiles === null && !commitFilesError && (
+                    <div className="git-panel-empty mono">Loading files…</div>
+                  )}
+                  {commitFiles?.length === 0 && (
+                    <div className="git-panel-empty mono">No file changes.</div>
+                  )}
+                  {commitFiles?.map((f) => (
+                    <React.Fragment key={f.path}>
+                      <div
+                        className="git-row"
+                        onClick={() => toggleCommitFile(c.oid, f.path)}
+                        style={{ cursor: "pointer" }}
+                        title={`${f.status}: ${f.path}`}
+                      >
+                        <span className="git-status-glyph mono">
+                          {STATUS_GLYPH[f.status] ?? "?"}
+                        </span>
+                        <span className="mono git-row-path">{f.path}</span>
+                      </div>
+                      {expandedCommitFile === f.path && (
+                        <div>
+                          {commitFileDiffLoading && (
+                            <div className="git-panel-empty mono">Loading diff…</div>
+                          )}
+                          {commitFileDiffError && (
+                            <div className="git-panel-empty mono">{commitFileDiffError}</div>
+                          )}
+                          {commitFileDiff !== null && <DiffView diff={commitFileDiff} />}
+                        </div>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </div>
+              )}
+            </React.Fragment>
           ))}
         </div>
       )}

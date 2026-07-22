@@ -5659,6 +5659,45 @@ first — it's the parity reference until each row there is actually reimplement
   pagination past the first `max` commits (fixed at 25 in the UI); no author
   filter/search; the real Electron window remains unlaunchable in this session (same
   standing gap since §75.59).
+- **Real, working code — per-commit detail view (changed files + per-file diff) in both shells'
+  Source Control panels, closing the "no per-commit detail view" follow-up §75's own commit-
+  history pass (task #236) named, task #237**: three new `spartan-git` methods --
+  `commit_changed_files(oid)` (a real tree-to-tree `git2::Diff` of the commit against its first
+  parent -- a root commit diffs against the empty tree, so everything reads as `Added`, the real
+  correct answer; not first-parent-only, the full delta list), `commit_blob_content(oid, path)`
+  (a specific commit's own version of a file, same `Ok(None)`-for-missing/non-UTF-8 contract as
+  `head_blob_content`), and `commit_parent(oid)` (first-parent oid, `None` for a root commit). 3
+  new `spartan-git` tests (24 total in that crate): a root commit reporting all files as added, a
+  second commit reporting *only* what it really touched (an unrelated earlier file must not
+  appear), and a real per-commit blob/parent round trip. Two new `spartan-backend` dispatch
+  methods -- `git_commit_files(project_root, oid)` and `git_commit_diff(project_root, oid, path)`
+  (the latter reusing the *same* already-tested `compute_diff` the working-tree diff (task #229)
+  and Leo's edit preview already use -- the commit's own blob vs. its first parent's blob, with a
+  missing half treated as empty content, the identical convention `git_diff` established). 2 new
+  dispatch-level tests (a real files+diff round trip confirming only the touched file appears and
+  its diff is the real `-`/`+` pair, plus an honest bogus-oid error). Both methods registered in
+  `main.ts`'s/`preload.ts`'s IPC allowlists at the identical position. **UI, both shells**: each
+  History commit row is now clickable, expanding an indented list of the real files that commit
+  changed (each with its real status glyph); clicking a file within it drills one level deeper
+  into that file's real per-commit diff, rendered by the same `DiffView` the working-tree diff
+  already uses. At most one commit expanded at a time, matching the diff view's own single-
+  `expandedDiff` simplification. Real, live, end-to-end Playwright verification in both shells
+  against a real 2-commit fixture (an initial 2-file commit, then a second commit that modifies
+  one file and adds a new one -- confirmed against `git show --stat`'s own output at fixture
+  creation): expanding the second commit showed exactly `M alpha.py` + `A gamma.py` and never the
+  untouched `beta.py`; drilling into `alpha.py` showed the real `-alpha v1`/`+alpha v2` diff;
+  collapsing worked -- `web/` against a real running `spartan-devserver` serving the real built
+  `web/dist`, `desktop/` via the established mocked-`window.spartan`-over-real-WebSocket technique,
+  byte-identical results, screenshotted (the web screenshot shows the real nested commit → file →
+  inline-diff rendering). Full `cargo fmt --all -- --check`/`cargo test -p spartan-git -p
+  spartan-backend --release -- --test-threads=1` clean (191 `spartan-backend` lib tests, 0
+  failures, including the full ~91s pyright integration suites); both shells' `tsc --noEmit`/`npm
+  run build` clean. **What this does not confirm**: no rename-detection in the changed-file list
+  (a rename shows as its raw delta status, no similarity threshold tuning); no whole-commit
+  combined diff (per-file only); no click-to-open a commit's file in the editor; the real Electron
+  window remains unlaunchable in this session (same standing gap since §75.59). With this pass,
+  the read-only git surface (status/diff/branches/log/per-commit detail) is complete in both
+  Electron-based shells.
 
 ## Build & test
 
