@@ -5698,6 +5698,57 @@ first — it's the parity reference until each row there is actually reimplement
   window remains unlaunchable in this session (same standing gap since §75.59). With this pass,
   the read-only git surface (status/diff/branches/log/per-commit detail) is complete in both
   Electron-based shells.
+- **Real, working code — production-hardening pass on `desktop/`'s Electron main process: three
+  real, packaged-only bugs found by review and fixed, two verified with real runtime tests (task
+  #238-#239)**: prompted by "complete a production build desktop IDE." A real assessment first,
+  reported honestly: the standing Electron-release-download `403` (unchanged since §75.59) was
+  re-confirmed directly (`curl` against the real release host still `403`s through the proxy; no
+  system Electron binary exists anywhere -- a full `find /` confirmed it), so the real Electron
+  window still cannot launch *in this session*. That block is settled and deliberately not routed
+  around. The productive work is everything *else* a production build needs -- and a review of the
+  main-process code found three real bugs that only manifest in a *packaged* install (which is
+  exactly why every prior dev-mode/mock-harness verification missed them):
+  **(1)** `createWindow`'s default file-tree root was `path.resolve(import.meta.dirname, "..",
+  "..")` -- correct in dev (`desktop/dist-electron/../..` = repo root) but in a packaged app
+  `main.js` lives inside `resources/app.asar/dist-electron/`, so `../..` resolves to the app's own
+  internal `resources/` directory: a shipped Spartan IDE would launch on first run showing its own
+  guts, not a place the user recognizes. Fixed to default to `os.homedir()` when `app.isPackaged`,
+  with `SPARTAN_ROOT` still overriding either way.
+  **(2)** `BackendClient` registered no `'error'` handler on the spawned `spartan-backend` process.
+  A spawn-level OS failure -- the bundled binary lost its `+x` bit during `extraResources` copying
+  (`EACCES`), or a wrong-arch/missing-shared-lib binary -- emits an asynchronous `'error'` event,
+  and Node throws an *uncaught exception* (crashing the entire main process) when that event has no
+  listener. `resolveBackendBinaryPath`'s `existsSync` check only catches a *missing* file, never a
+  present-but-non-executable one, so this was a real, uncaught, whole-app-crash path. Fixed with a
+  real `'error'` handler that records the failure, rejects all pending calls, and makes every
+  subsequent `call()` reject immediately with a clear message rather than writing to a dead stdin
+  (which would throw its own unhandled `EPIPE`).
+  **(3)** `app.whenReady`'s backend init could throw (missing binary) and reject the whole callback
+  silently -- a packaged app would launch showing *nothing at all*, no window, no error. Fixed by
+  catching it and showing a real OS error dialog (`dialog.showErrorBox`) then quitting cleanly; the
+  GUI Builder CLI, being a non-essential feature, is caught *separately* and left as a degraded
+  (Design-mode-only) gap rather than a hard exit, so a missing gui-builder never stops the editor
+  from opening.
+  **Real runtime verification of bug #2, not just a compile check**: plain Node triggers the exact
+  same spawn `'error'` path (no Electron needed), so a real test constructed a `BackendClient`
+  against (a) a genuinely-missing binary (`ENOENT`) and (b) a real present-but-`chmod 644`
+  non-executable file (`EACCES`, the case `existsSync` specifically doesn't catch) -- both confirmed
+  the process *survives* (no uncaught crash) and `call()` rejects cleanly with a clear
+  `spartan-backend failed to start: ...` message. A real `electron-builder --linux` packaging
+  attempt was re-run to confirm the fixes didn't regress the config: it got *further than ever* --
+  through `@electron/rebuild`, native-dependency install, `packaging platform=linux`, and
+  `downloaded label=electron progress=100%` -- before the same standing `403` on the final
+  distributable content fetch (§75.77/§75.81), proving the packaging config is otherwise valid and
+  the only remaining blocker is the network policy, not the build. `npm run typecheck`/`npm run
+  build` clean; full `cargo build --workspace --release` re-confirmed green; `cargo fmt --all --
+  check` clean (no Rust touched). **What this does not confirm**: the real Electron window still
+  cannot launch in this session (the standing, deliberately-not-circumvented network block); bugs
+  #1 and #3 are verified by structural reasoning + code review (they need a real packaged launch to
+  observe live, which this environment cannot produce), consistent with how every prior main-process
+  fix in this project (§75.73/§75.76 IPC registrations) has been verified; no unit-test runner was
+  added to `desktop/` (it has none by deliberate convention -- main-process glue is verified by
+  review + runtime scripts, as here), so bug #2's real ENOENT/EACCES verification lives as a
+  scratchpad runtime check, documented rather than committed as a bespoke test harness.
 
 ## Build & test
 

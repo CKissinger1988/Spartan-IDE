@@ -20,9 +20,29 @@ export class BackendClient {
   private nextId = 1;
   private pending = new Map<number, PendingRequest>();
   private eventListeners = new Set<EventListener>();
+  // Real, load-bearing for a packaged install: a spawn-level failure (the
+  // bundled binary lost its +x bit during packaging -> EACCES, or a wrong-
+  // arch/missing-shared-lib binary) surfaces here as a real `Error` rather
+  // than crashing the whole main process. `spawn` emits `'error'`
+  // asynchronously, and Node throws an *uncaught* exception if that event
+  // has no listener -- so the handler below is not optional hardening, it's
+  // what keeps a broken backend from taking the entire app down with no
+  // message. Once set, every `call()` rejects immediately with this.
+  private spawnError: Error | null = null;
 
   constructor(binaryPath: string) {
     this.proc = spawn(binaryPath, [], { stdio: ["pipe", "pipe", "pipe"] });
+    // MUST be registered before anything can await a `call()` -- an
+    // unhandled `'error'` event on a ChildProcess throws, crashing the
+    // main process, exactly the packaged-install failure this guards.
+    this.proc.on("error", (err) => {
+      this.spawnError = err instanceof Error ? err : new Error(String(err));
+      console.error(`[spartan-backend] failed to start: ${this.spawnError.message}`);
+      for (const [, pending] of this.pending) {
+        pending.reject(new Error(`spartan-backend failed to start: ${this.spawnError!.message}`));
+      }
+      this.pending.clear();
+    });
     const rl = readline.createInterface({ input: this.proc.stdout });
     rl.on("line", (line) => this.handleLine(line));
     this.proc.stderr.on("data", (chunk: Buffer) => {
@@ -70,6 +90,13 @@ export class BackendClient {
   }
 
   call(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    // Fail fast rather than writing to a dead stdin (which would itself
+    // throw an unhandled EPIPE once the process is gone).
+    if (this.spawnError) {
+      return Promise.reject(
+        new Error(`spartan-backend is not running: ${this.spawnError.message}`)
+      );
+    }
     const id = this.nextId++;
     const request = { id, method, params };
     return new Promise((resolve, reject) => {

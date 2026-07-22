@@ -105,16 +105,52 @@ function createWindow(): void {
     },
   });
 
-  // Real initial file-tree root -- the repo checkout itself in dev, so
-  // opening the app immediately shows real, familiar project files
-  // rather than an arbitrary empty directory.
-  const rootDir = process.env.SPARTAN_ROOT ?? path.resolve(import.meta.dirname, "..", "..");
+  // Real initial file-tree root. In dev, the repo checkout itself
+  // (`import.meta.dirname` is `desktop/dist-electron/`, so `../..` is the
+  // repo root) so opening the app immediately shows real, familiar
+  // project files. In a *packaged* app that same `../..` would resolve to
+  // the app's own internal `resources/` directory (`main.js` lives inside
+  // `resources/app.asar/dist-electron/`) -- a real, shipped-only bug: the
+  // user would launch Spartan IDE and see the app's own guts, not a place
+  // they recognize. So a packaged build defaults to the user's home
+  // directory, a real, writable, familiar location; `SPARTAN_ROOT` still
+  // overrides either way (used by tests and the New Project flow).
+  const rootDir =
+    process.env.SPARTAN_ROOT ??
+    (app.isPackaged ? os.homedir() : path.resolve(import.meta.dirname, "..", ".."));
   loadRootIntoWindow(win, rootDir);
 }
 
 app.whenReady().then(() => {
-  backend = new BackendClient(resolveBackendBinaryPath());
-  guiBuilder = new GuiBuilderClient(resolveGuiBuilderCliPath());
+  // Real production hardening: if the bundled `spartan-backend` binary is
+  // missing or unresolvable, `resolveBackendBinaryPath` throws. Without
+  // this guard the whole `whenReady` callback would reject silently and a
+  // packaged app would launch showing *nothing at all* -- no window, no
+  // error. Instead, surface a real OS error dialog naming the problem and
+  // quit cleanly. `resolveGuiBuilderCliPath` is treated the same way, but
+  // the GUI Builder is a non-essential feature -- a missing CLI must not
+  // stop the whole editor from opening, so its failure is caught
+  // separately below and left as a real, degraded (Design-mode-only) gap
+  // rather than a hard exit.
+  let backendPath: string;
+  try {
+    backendPath = resolveBackendBinaryPath();
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    dialog.showErrorBox("Spartan IDE could not start", message);
+    app.quit();
+    return;
+  }
+  backend = new BackendClient(backendPath);
+  try {
+    guiBuilder = new GuiBuilderClient(resolveGuiBuilderCliPath());
+  } catch (e) {
+    // Non-fatal: the editor still opens; only Design mode is unavailable.
+    console.error(
+      `[spartan] GUI Builder unavailable: ${e instanceof Error ? e.message : String(e)}`
+    );
+    guiBuilder = null;
+  }
 
   // Real, narrow set of IPC methods the renderer can invoke via
   // `preload.ts`'s `contextBridge` -- a 1:1 passthrough to the real
