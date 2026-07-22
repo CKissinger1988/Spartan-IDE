@@ -5780,6 +5780,41 @@ first — it's the parity reference until each row there is actually reimplement
   (`Editor.tsx` intercepts those keys and `preventDefault`s them), and distinguishing a safe menu
   from a regression there genuinely needs a live Electron launch this environment can't provide.
   Real future work, best done when the app can actually be launched.
+- **Real, working code — inline git blame, the first feature built from the `docs/FUTURE_FEATURES.md`
+  P1 backlog (task #245)**: user-requested ("Start building the P1 features from the backlog"). New
+  `spartan_git::blame_file` returns per-line commit attribution via a real `git2::Repository::
+  blame_file` -- one `BlameLine {oid, summary, author, time}` per committed line, commits looked up
+  once via a `HashMap` cache since blame hunks routinely share a commit. A real, honestly-named
+  alignment contract in its own doc comment: it blames the file *as committed in `HEAD`*, so it's
+  exact for an unedited buffer and drifts within edited regions until the next commit (the same
+  limitation every inline-blame tool has); an untracked/new path, or a repo with no commits, blames
+  to an empty vec -- a real, valid state, not an error, matching `head_blob_content`'s own
+  missing-path contract. New `spartan-backend::git_blame` dispatch resolves either an absolute
+  editor path or a repo-relative one (canonicalize-then-strip-workdir, falling back to the raw path)
+  before calling `blame_file`. Both Electron-based shells (`desktop/Editor.tsx`, `web/
+  BackendEditor.tsx`) gained an Alt+B toggle rendering a real per-line blame gutter left of the
+  line-number gutter -- author + coarse relative age per line, a `title` tooltip carrying the real
+  short oid/author/full-date/summary, scroll-synced to the textarea exactly like the line-number
+  gutter, empty rows (uncommitted lines beyond `HEAD`) rendered transparent. Re-fetches after a save
+  while on. `git_blame` added to `main.ts`'s/`preload.ts`'s IPC allowlists at the identical position
+  (the established drift-avoidance discipline). 5 new tests (3 in `spartan-git` -- basic two-author
+  attribution, untracked-file empty, no-commits empty; 2 dispatch-level in `spartan-backend` --
+  a real two-commit attribution round trip and an honest non-repo error), 27 `spartan-git` lib tests
+  and 193 `spartan-backend` lib tests total, full `cargo fmt --all -- --check`/`cargo clippy`/`cargo
+  test` clean for both crates; both shells' `tsc --noEmit`/`build` clean. **Real, live, end-to-end
+  Playwright verification against the actual compiled `web/dist` served by a real running
+  `spartan-devserver` binary** (not a mock): a real 2-commit, 2-author fixture (`Alice Dev` committed
+  line 1, `Bob Coder` changed line 2) opened in the backend editor, Alt+B toggled the blame gutter
+  on, and the rendered per-line attribution -- line 1 `Alice Dev`, line 2 `Bob Coder`, with the first
+  row's tooltip carrying the real short oid + author + "add greet function" summary -- was confirmed
+  to match the native `git blame` output exactly (cross-checked), toggling off cleanly with a second
+  Alt+B, zero page errors. **What this does not confirm**: no live Electron-window verification of
+  `desktop/` (the same standing gap since §75.59 -- verified via typecheck + the identical shared
+  component logic the web live run exercises end to end); no blame in the pure client-side `web/
+  Editor.tsx` (File System Access + WASM, no backend git access -- matching that file's own
+  already-documented no-LSP/no-git scope); blame is committed-file-relative and drifts within
+  unsaved edits (the named alignment contract above), re-fetched on save rather than live per
+  keystroke.
 
 ## Build & test
 

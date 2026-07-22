@@ -1145,6 +1145,33 @@ interface EditorProps {
  * wgpu shell's own coalesced-typing-run undo (§75.25) -- real follow-up
  * work, not attempted in this pass.
  */
+/** One line's real git blame, as returned by the backend `git_blame`
+ * (spartan-git's `blame_file`). */
+interface BlameLineInfo {
+  oid: string;
+  summary: string;
+  author: string;
+  time: number;
+}
+
+/** Coarse relative age for a unix-seconds commit time -- deliberately
+ * coarse (a blame gutter, not a timestamp report), matching `GitPanel`'s
+ * own `formatAge` convention. */
+function formatBlameAge(unixSeconds: number): string {
+  if (!unixSeconds) return "";
+  const secs = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
+  const mins = Math.floor(secs / 60);
+  if (mins < 1) return "now";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo`;
+  return `${Math.floor(months / 12)}y`;
+}
+
 export default function Editor({
   file,
   onContentChange,
@@ -1164,6 +1191,39 @@ export default function Editor({
   const symbolHighlightRef = useRef<HTMLDivElement>(null);
   const [lineCount, setLineCount] = useState(1);
   const prevContentRef = useRef(file.content);
+
+  /** Real inline git blame (P1 backlog) -- per-line commit attribution
+   * from the real backend `git_blame` (spartan-git). Alt+B toggles it.
+   * `blameOn` is the real on/off; `blameLines` is the fetched data
+   * (empty is a valid "no blame" state: not a git repo, or an
+   * untracked/uncommitted file). Blame is aligned by line index to the
+   * *committed* file, so it's exact for an unedited buffer and drifts
+   * within edited regions until the next commit -- the same limitation
+   * every inline-blame tool has, named in `blame_file`'s own doc comment. */
+  const [blameOn, setBlameOn] = useState(false);
+  const [blameLines, setBlameLines] = useState<BlameLineInfo[]>([]);
+  const blameGutterRef = useRef<HTMLDivElement>(null);
+
+  const fetchBlame = useCallback(() => {
+    // project_root: the file's own parent directory -- `git_blame`'s own
+    // discover() walks upward to find the repo, and it accepts the file's
+    // absolute path directly (resolving it to a repo-relative path).
+    const parent = file.path.replace(/[/\\][^/\\]*$/, "") || file.path;
+    window.spartan
+      .call("git_blame", { project_root: parent, path: file.path })
+      .then((r) => {
+        const lines = ((r as { lines?: BlameLineInfo[] }).lines ?? []) as BlameLineInfo[];
+        setBlameLines(lines);
+      })
+      .catch(() => setBlameLines([])); // not a git repo / untracked -> no blame
+  }, [file.path]);
+
+  // Fetch blame when it's toggled on and whenever the active file changes
+  // while it stays on (fetchBlame's identity tracks file.path).
+  useEffect(() => {
+    if (blameOn) fetchBlame();
+    else setBlameLines([]);
+  }, [blameOn, fetchBlame]);
 
   /** Real, live font-size zoom (Ctrl+=/Ctrl+-/Ctrl+0) -- a session-only
    * delta layered on top of `prefs.fontSize` (the real, persisted
@@ -2110,6 +2170,7 @@ export default function Editor({
     const el = textareaRef.current;
     if (!el) return;
     if (gutterRef.current) gutterRef.current.scrollTop = el.scrollTop;
+    if (blameGutterRef.current) blameGutterRef.current.scrollTop = el.scrollTop;
     if (highlightRef.current) {
       highlightRef.current.scrollTop = el.scrollTop;
       highlightRef.current.scrollLeft = el.scrollLeft;
@@ -2401,6 +2462,13 @@ export default function Editor({
         triggerFormatDocument();
         return;
       }
+      // Real inline git blame toggle (Alt+B). `e.code` (not `e.key`) since
+      // Alt+letter can produce a special character on some keyboard layouts.
+      if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === "KeyB") {
+        e.preventDefault();
+        setBlameOn((v) => !v);
+        return;
+      }
       // Real "Toggle Line Comment" (Ctrl+/) -- see `toggleLineComment`'s
       // own doc comment. A real, honest no-op for a language with no
       // known single-line comment token (JSON/CSS/XML/Markdown) rather
@@ -2559,7 +2627,13 @@ export default function Editor({
         const doSave = () => {
           window.spartan
             .call("save_file", { doc_id: file.docId })
-            .then(() => onContentChange(file.path, prevContentRef.current, true))
+            .then(() => {
+              onContentChange(file.path, prevContentRef.current, true);
+              // Blame is committed-file-relative; a save may have committed
+              // nothing, but re-fetch so the just-saved buffer's line count
+              // and any new commit are reflected without a manual re-toggle.
+              if (blameOn) fetchBlame();
+            })
             .catch((err: Error) => console.error("save failed:", err));
         };
         // Real Format on Save (task #187): await the real format cycle
@@ -2635,6 +2709,38 @@ export default function Editor({
 
   return (
     <div className="editor-root">
+      {blameOn && (
+        <div
+          className="editor-blame-gutter mono"
+          ref={blameGutterRef}
+          style={textStyle}
+          aria-hidden="true"
+        >
+          {lineNumbers.map((n) => {
+            const b = blameLines[n - 1];
+            if (!b || !b.oid || /^0+$/.test(b.oid)) {
+              return (
+                <div key={n} className="editor-blame-line editor-blame-line-empty">
+                  {" "}
+                </div>
+              );
+            }
+            const short = b.oid.slice(0, 7);
+            const age = formatBlameAge(b.time);
+            const dateStr = b.time ? new Date(b.time * 1000).toLocaleString() : "";
+            return (
+              <div
+                key={n}
+                className="editor-blame-line"
+                title={`${short} • ${b.author}${dateStr ? ` • ${dateStr}` : ""}${b.summary ? `\n${b.summary}` : ""}`}
+              >
+                <span className="editor-blame-author">{b.author || short}</span>
+                {age && <span className="editor-blame-age"> {age}</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div className="editor-gutter mono" ref={gutterRef} style={textStyle}>
         {lineNumbers.map((n) => {
           // Real LSP positions are 0-indexed; `n` (the displayed line

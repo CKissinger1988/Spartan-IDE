@@ -3066,6 +3066,43 @@ fn git_log(project_root: &str, max: usize) -> Result<serde_json::Value, String> 
     Ok(serde_json::json!({ "commits": commits }))
 }
 
+/// Per-line blame for a file as committed in `HEAD`: for each line, in
+/// file order, the real commit that last touched it. `path` may be
+/// absolute (the editor's open-file path) or repo-relative (the Git
+/// panel's convention); both resolve to the repo-workdir-relative path
+/// `spartan_git::blame_file` needs. An untracked/new file, or a repo with
+/// no commits, returns an empty line list -- a real, valid state.
+fn git_blame(project_root: &str, path: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let workdir = repo
+        .workdir()
+        .ok_or("repository has no working directory")?;
+    let raw = std::path::Path::new(path);
+    // Canonicalize both sides before stripping so a symlinked or
+    // non-normalized absolute path still resolves; fall back to the raw
+    // path (treated as already repo-relative) if stripping doesn't apply.
+    let canon_workdir = workdir
+        .canonicalize()
+        .unwrap_or_else(|_| workdir.to_path_buf());
+    let canon_raw = raw.canonicalize().unwrap_or_else(|_| raw.to_path_buf());
+    let rel_path = canon_raw.strip_prefix(&canon_workdir).unwrap_or(raw);
+    let lines = repo
+        .blame_file(rel_path)
+        .map_err(|e| format!("git blame: {e}"))?
+        .into_iter()
+        .map(|b| {
+            serde_json::json!({
+                "oid": b.oid,
+                "summary": b.summary,
+                "author": b.author,
+                "time": b.time,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "lines": lines }))
+}
+
 /// Every file a real commit changed, relative to its first parent (a
 /// root commit reports everything as added -- the real, correct answer).
 fn git_commit_files(project_root: &str, oid: &str) -> Result<serde_json::Value, String> {
@@ -3756,6 +3793,11 @@ pub fn handle_request(
             let root = get_str_param(&req.params, "project_root")?;
             let max = req.params.get("max").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
             git_log(&root, max)
+        })(),
+        "git_blame" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let path = get_str_param(&req.params, "path")?;
+            git_blame(&root, &path)
         })(),
         "git_commit_files" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
@@ -4963,6 +5005,73 @@ mod tests {
             diff.contains("+edited but not staged\n"),
             "diff was: {diff}"
         );
+    }
+
+    #[test]
+    fn git_blame_attributes_each_line_through_the_dispatch_path() {
+        let tmp = TempRepo::new("blame_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "line one\nline two\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "first" }),
+        );
+        // Change only line two, then commit again.
+        std::fs::write(tmp.dir.join("f.txt"), "line one\nline two changed\n").unwrap();
+        call(
+            &state,
+            3,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            4,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "second" }),
+        );
+        let resp = call(
+            &state,
+            5,
+            "git_blame",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        let lines = resp.result.unwrap()["lines"].as_array().unwrap().clone();
+        assert_eq!(lines.len(), 2, "one blame entry per committed line");
+        assert_eq!(lines[0]["summary"], "first", "line 1 unchanged");
+        assert_eq!(lines[1]["summary"], "second", "line 2 changed");
+        // The two lines were touched by two different real commits.
+        assert_ne!(lines[0]["oid"], lines[1]["oid"]);
+    }
+
+    #[test]
+    fn git_blame_on_a_real_non_repo_path_errors_honestly() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-git-blame-non-repo-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "git_blame",
+            serde_json::json!({ "project_root": dir.to_string_lossy(), "path": "f.txt" }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

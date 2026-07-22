@@ -58,6 +58,7 @@ const ALLOWED_METHODS = new Set([
   "git_log",
   "git_commit_files",
   "git_commit_diff",
+  "git_blame",
   "settings_get",
   "settings_set",
   "check_for_updates",

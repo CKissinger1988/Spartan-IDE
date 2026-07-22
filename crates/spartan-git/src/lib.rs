@@ -73,6 +73,18 @@ pub struct CommitInfo {
     pub time: i64,
 }
 
+/// One line's real blame in `blame_file()`'s output -- the commit that
+/// last touched that line, in file order. See that method's own doc
+/// comment for the committed-vs-working-buffer alignment contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlameLine {
+    pub oid: String,
+    pub summary: String,
+    pub author: String,
+    /// Real commit time, unix seconds.
+    pub time: i64,
+}
+
 /// A real, open local git repository. Every method here is a thin,
 /// honest wrapper over a real `git2` call -- no simulated state.
 pub struct GitRepo {
@@ -387,6 +399,59 @@ impl GitRepo {
         };
         let blob = self.repo.find_blob(entry.id)?;
         Ok(std::str::from_utf8(blob.content()).ok().map(str::to_string))
+    }
+
+    /// Per-line blame for `path` as committed in `HEAD`: for each line, in
+    /// file order, the real commit that last touched it (full oid -- the
+    /// frontend shortens), its author, summary, and time. A real
+    /// `git2::Repository::blame_file`, not a hand-rolled walk.
+    ///
+    /// Alignment contract, named honestly: this blames the file *as
+    /// committed in `HEAD`*, so the returned vec has one entry per line of
+    /// the committed version. The editor's live buffer may have unsaved
+    /// edits; the UI aligns blame by line index, so blame is exact for an
+    /// unedited buffer and drifts within edited regions until the next
+    /// commit -- the same limitation every inline-blame tool has. An
+    /// untracked/new path (not in `HEAD`) blames to an empty vec: a real,
+    /// valid state, not an error, matching `head_blob_content`'s own
+    /// missing-path contract. A repo with no commits yet also returns empty.
+    pub fn blame_file(&self, path: &Path) -> Result<Vec<BlameLine>, git2::Error> {
+        if self.repo.head().is_err() {
+            return Ok(Vec::new());
+        }
+        // Untracked/new path -> no blame (a valid state, not an error).
+        let head_tree = self.repo.head()?.peel_to_tree()?;
+        if head_tree.get_path(path).is_err() {
+            return Ok(Vec::new());
+        }
+        let blame = self.repo.blame_file(path, None)?;
+        // Multiple hunks routinely share one commit -- look each up once.
+        let mut cache: std::collections::HashMap<git2::Oid, (String, String, i64)> =
+            std::collections::HashMap::new();
+        let mut out: Vec<BlameLine> = Vec::new();
+        for hunk in blame.iter() {
+            let oid = hunk.final_commit_id();
+            let (summary, author, time) = cache
+                .entry(oid)
+                .or_insert_with(|| match self.repo.find_commit(oid) {
+                    Ok(c) => (
+                        c.summary().unwrap_or("").to_string(),
+                        c.author().name().unwrap_or("").to_string(),
+                        c.time().seconds(),
+                    ),
+                    Err(_) => (String::new(), String::new(), 0),
+                })
+                .clone();
+            for _ in 0..hunk.lines_in_hunk() {
+                out.push(BlameLine {
+                    oid: oid.to_string(),
+                    summary: summary.clone(),
+                    author: author.clone(),
+                    time,
+                });
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -782,5 +847,54 @@ mod tests {
         repo.commit("second").unwrap();
         let head = repo.repo.head().unwrap().peel_to_commit().unwrap();
         assert_eq!(head.parent_id(0).unwrap(), first);
+    }
+
+    #[test]
+    fn blame_attributes_each_line_to_the_commit_that_last_touched_it() {
+        let (tmp, repo) = TempRepo::new("blame_basic");
+        // Commit 1: two lines.
+        tmp.write("f.txt", "line one\nline two\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        let c1 = repo.commit("first commit").unwrap();
+        // Commit 2: change only line two.
+        tmp.write("f.txt", "line one\nline two CHANGED\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        let c2 = repo.commit("second commit").unwrap();
+        assert_ne!(c1, c2);
+
+        let blame = repo.blame_file(Path::new("f.txt")).unwrap();
+        assert_eq!(blame.len(), 2, "one blame entry per committed line");
+        assert_eq!(
+            blame[0].oid,
+            c1.to_string(),
+            "line 1 unchanged -> first commit"
+        );
+        assert_eq!(blame[0].summary, "first commit");
+        assert_eq!(blame[0].author, "Spartan Test");
+        assert_eq!(
+            blame[1].oid,
+            c2.to_string(),
+            "line 2 changed -> second commit"
+        );
+        assert_eq!(blame[1].summary, "second commit");
+    }
+
+    #[test]
+    fn blame_on_an_untracked_file_is_empty_not_an_error() {
+        let (tmp, repo) = TempRepo::new("blame_untracked");
+        tmp.write("committed.txt", "x\n");
+        repo.stage(Path::new("committed.txt")).unwrap();
+        repo.commit("init").unwrap();
+        tmp.write("untracked.txt", "y\n");
+        let blame = repo.blame_file(Path::new("untracked.txt")).unwrap();
+        assert!(blame.is_empty());
+    }
+
+    #[test]
+    fn blame_on_a_repo_with_no_commits_is_empty() {
+        let (tmp, repo) = TempRepo::new("blame_nocommits");
+        tmp.write("f.txt", "hello\n");
+        let blame = repo.blame_file(Path::new("f.txt")).unwrap();
+        assert!(blame.is_empty());
     }
 }

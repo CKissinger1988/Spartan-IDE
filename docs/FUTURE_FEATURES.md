@@ -29,8 +29,8 @@ Priority key:
    feature not yet present.
 4. **Git: remote push/pull/fetch + clone** (P1) — `spartan-git` is local-only today; adding the
    remote layer (§56.2) is the biggest single source-control gap.
-5. **Inline git blame** (P1) — high-value, read-only, builds on the existing `spartan-git` +
-   `compute_diff` surface.
+5. ~~**Inline git blame** (P1)~~ — ✅ **Shipped** (Alt+B blame gutter in both shells, backed by
+   `spartan_git::blame_file`). See CLAUDE.md's own status entry.
 6. **Snippets / tab-completion expansion** (P1) — common, self-contained, no backend needed.
 7. **tree-sitter syntax highlighting in the Electron shells** (P2) — replace the current
    `highlight.js` lexical pass with the real tree-sitter engine already used in the wgpu shell
@@ -75,7 +75,7 @@ Priority key:
 | Feature | Priority | Notes / grounding |
 |---|---|---|
 | Remote push / pull / fetch / clone + auth | P1 | `spartan-git` is entirely local today (§56.2–56.4 unstarted). The single biggest SCM gap. |
-| Inline blame | P1 | Read-only, high value, builds on existing surface. |
+| ~~Inline blame~~ | ✅ done | Shipped — Alt+B per-line blame gutter in both shells (`spartan_git::blame_file`). |
 | GitHub layer (PRs, issues, review) | P2 | §56.3–56.4, unstarted in both shells. |
 | Per-hunk / partial staging | P2 | File-level staging only. |
 | Stash UI | P2 | No stash surface. |

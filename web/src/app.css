@@ -569,6 +569,45 @@
   user-select: none;
 }
 
+/* Real inline git blame gutter (P1 backlog), byte-identical to
+ * desktop/src/app.css's own copy -- one row per line, aligned to the
+ * editor's 20px line-height + 8px top padding, scroll-synced. */
+.editor-blame-gutter {
+  width: 150px;
+  padding: 8px 8px 8px 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 20px;
+  overflow: hidden;
+  white-space: pre;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  user-select: none;
+  text-align: left;
+}
+
+.editor-blame-line {
+  height: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.editor-blame-author {
+  color: var(--text);
+  opacity: 0.75;
+}
+
+.editor-blame-age {
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+.editor-blame-line-empty {
+  color: transparent;
+}
+
 /* Real LSP diagnostics (BackendEditor.tsx, mirroring desktop/'s own
  * gutter treatment verbatim) -- one real block per line so each row can
  * carry its own severity-tinted background + a real hover tooltip. */

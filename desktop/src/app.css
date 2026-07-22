@@ -775,6 +775,46 @@
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+/* Real inline git blame gutter (P1 backlog) -- one row per line, aligned
+ * to the editor's own 20px line-height + 8px top padding exactly like
+ * `.editor-gutter`, scroll-synced with the textarea. Muted so it reads as
+ * annotation, never competing with the code. Fixed width, clipped. */
+.editor-blame-gutter {
+  width: 150px;
+  padding: 8px 8px 8px 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 20px;
+  overflow: hidden;
+  white-space: pre;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  user-select: none;
+  text-align: left;
+}
+
+.editor-blame-line {
+  height: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.editor-blame-author {
+  color: var(--text);
+  opacity: 0.75;
+}
+
+.editor-blame-age {
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+.editor-blame-line-empty {
+  color: transparent;
+}
+
 /* Real DAP breakpoint gutter (§132) -- one small dot per line, filled
  * only for lines with an active breakpoint; the whole line is clickable
  * to toggle (see `Editor.tsx`'s `onClick={() => onToggleBreakpoint?.(n)}`

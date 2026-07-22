@@ -924,6 +924,32 @@ interface BackendEditorProps {
  * on every keystroke, no syntax-aware editing beyond `syntax.ts`'s
  * lexical highlighter, one file at a time (no tabs).
  */
+/** One line's real git blame, as returned by the backend `git_blame`
+ * (spartan-git's `blame_file`). Mirrors `desktop/`'s own copy. */
+interface BlameLineInfo {
+  oid: string;
+  summary: string;
+  author: string;
+  time: number;
+}
+
+/** Coarse relative age for a unix-seconds commit time -- a blame gutter,
+ * not a timestamp report. Mirrors `desktop/`'s own `formatBlameAge`. */
+function formatBlameAge(unixSeconds: number): string {
+  if (!unixSeconds) return "";
+  const secs = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
+  const mins = Math.floor(secs / 60);
+  if (mins < 1) return "now";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo`;
+  return `${Math.floor(months / 12)}y`;
+}
+
 export default function BackendEditor({
   client,
   file,
@@ -944,6 +970,35 @@ export default function BackendEditor({
   const symbolHighlightRef = useRef<HTMLDivElement>(null);
   const [lineCount, setLineCount] = useState(1);
   const prevContentRef = useRef(file.content);
+
+  /** Real inline git blame (P1 backlog) -- per-line commit attribution
+   * from the real backend `git_blame` (spartan-git), reached over
+   * `client.call` instead of `window.spartan.call`. Alt+B toggles it.
+   * Mirrors `desktop/src/components/Editor.tsx`'s own wiring; see
+   * `blame_file`'s own doc comment for the committed-vs-live alignment
+   * contract (blame drifts within unsaved edits until the next commit). */
+  const [blameOn, setBlameOn] = useState(false);
+  const [blameLines, setBlameLines] = useState<BlameLineInfo[]>([]);
+  const blameGutterRef = useRef<HTMLDivElement>(null);
+
+  const fetchBlame = useCallback(() => {
+    // The devserver's own resolved project root, or the file's parent dir
+    // as a fallback -- either way `git_blame`'s discover() finds the repo.
+    const parent = file.path.replace(/[/\\][^/\\]*$/, "") || file.path;
+    const root = client.projectRoot ?? parent;
+    client
+      .call("git_blame", { project_root: root, path: file.path })
+      .then((r) => {
+        const lines = ((r as { lines?: BlameLineInfo[] }).lines ?? []) as BlameLineInfo[];
+        setBlameLines(lines);
+      })
+      .catch(() => setBlameLines([])); // not a git repo / untracked -> no blame
+  }, [client, file.path]);
+
+  useEffect(() => {
+    if (blameOn) fetchBlame();
+    else setBlameLines([]);
+  }, [blameOn, fetchBlame]);
 
   /** Real, live font-size zoom (Ctrl+=/Ctrl+-/Ctrl+0), ported verbatim
    * from `desktop/`'s own identical wiring -- this component has no
@@ -1735,6 +1790,7 @@ export default function BackendEditor({
     const el = textareaRef.current;
     if (!el) return;
     if (gutterRef.current) gutterRef.current.scrollTop = el.scrollTop;
+    if (blameGutterRef.current) blameGutterRef.current.scrollTop = el.scrollTop;
     if (highlightRef.current) {
       highlightRef.current.scrollTop = el.scrollTop;
       highlightRef.current.scrollLeft = el.scrollLeft;
@@ -1974,6 +2030,12 @@ export default function BackendEditor({
         triggerFormatDocument();
         return;
       }
+      // Real inline git blame toggle (Alt+B), mirroring `desktop/`'s own.
+      if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === "KeyB") {
+        e.preventDefault();
+        setBlameOn((v) => !v);
+        return;
+      }
       // Real "Toggle Line Comment" (Ctrl+/), ported verbatim from
       // `desktop/Editor.tsx`'s own identical wiring.
       if ((e.ctrlKey || e.metaKey) && e.key === "/") {
@@ -2109,7 +2171,10 @@ export default function BackendEditor({
         const doSave = () => {
           client
             .call("save_file", { doc_id: file.docId })
-            .then(() => onContentChange(file.path, prevContentRef.current, true))
+            .then(() => {
+              onContentChange(file.path, prevContentRef.current, true);
+              if (blameOn) fetchBlame();
+            })
             .catch((err: Error) => console.error("save failed:", err));
         };
         // Real Format on Save (task #187), ported verbatim from
@@ -2171,6 +2236,38 @@ export default function BackendEditor({
 
   return (
     <div className="editor-root">
+      {blameOn && (
+        <div
+          className="editor-blame-gutter mono"
+          ref={blameGutterRef}
+          style={textStyle}
+          aria-hidden="true"
+        >
+          {lineNumbers.map((n) => {
+            const b = blameLines[n - 1];
+            if (!b || !b.oid || /^0+$/.test(b.oid)) {
+              return (
+                <div key={n} className="editor-blame-line editor-blame-line-empty">
+                  {" "}
+                </div>
+              );
+            }
+            const short = b.oid.slice(0, 7);
+            const age = formatBlameAge(b.time);
+            const dateStr = b.time ? new Date(b.time * 1000).toLocaleString() : "";
+            return (
+              <div
+                key={n}
+                className="editor-blame-line"
+                title={`${short} • ${b.author}${dateStr ? ` • ${dateStr}` : ""}${b.summary ? `\n${b.summary}` : ""}`}
+              >
+                <span className="editor-blame-author">{b.author || short}</span>
+                {age && <span className="editor-blame-age"> {age}</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div className="editor-gutter mono" ref={gutterRef} style={textStyle}>
         {lineNumbers.map((n) => {
           const lineDiags = diagnosticsByLine.get(n - 1);
