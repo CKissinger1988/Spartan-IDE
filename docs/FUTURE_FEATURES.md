@@ -1,0 +1,192 @@
+# Spartan IDE — Future Features Backlog
+
+This is a curated, prioritized list of **useful features to add later**. Every item here is a
+*real, already-named gap* — drawn from the "What this does not confirm" / deferred-scope notes
+that each implemented feature in `CLAUDE.md` records honestly, plus the roadmap tiers in
+`docs/architecture-spec.md` (§35). Nothing here is speculative marketing; each is a concrete,
+grounded next step against the code that already exists.
+
+It is **not** a list of things that are broken. The shipped feature set is production-verified
+(builds green across every project, security surfaces confirmed live, editor/git/LSP/DAP flows
+exercised end-to-end). These are additive capabilities the architecture is already shaped to
+accept.
+
+Priority key:
+- **P1** — high user value, near-term, builds directly on existing infrastructure.
+- **P2** — meaningful value, moderate effort, or depends on a P1 first.
+- **P3** — larger initiatives, infrastructure, or blocked on an external prerequisite
+  (real hardware, a paid service, a network capability this dev environment lacks).
+
+---
+
+## Recommended next 10 (the highest value-to-effort items)
+
+1. **Code folding** in the editor (P1) — standard editor affordance, pure client-side, fits the
+   existing overlay-layer model.
+2. **LSP code actions / quick fixes** (P1) — the `codeAction` capability; wire the lightbulb UI.
+   Real servers (rust-analyzer, typescript-language-server) implement it richly.
+3. **Multi-cursor / multi-selection editing** (P1) — the single most-requested modern-editor
+   feature not yet present.
+4. **Git: remote push/pull/fetch + clone** (P1) — `spartan-git` is local-only today; adding the
+   remote layer (§56.2) is the biggest single source-control gap.
+5. **Inline git blame** (P1) — high-value, read-only, builds on the existing `spartan-git` +
+   `compute_diff` surface.
+6. **Snippets / tab-completion expansion** (P1) — common, self-contained, no backend needed.
+7. **tree-sitter syntax highlighting in the Electron shells** (P2) — replace the current
+   `highlight.js` lexical pass with the real tree-sitter engine already used in the wgpu shell
+   (via `web-tree-sitter`), for correctness parity.
+8. **Conditional breakpoints + logpoints** (P2) — extends the already-real DAP surface.
+9. **Web app: LSP/DAP/Leo/git in the pure client-side mode** (P2) — currently these only work in
+   backend-connected mode; wiring them to the WebSocket transport closes the biggest `web/` gap.
+10. **Auto-update download + install + restart** (P2) — the checker exists (§75.49); completing
+    the apply path (once code signing lands) makes updates real, not just detected.
+
+---
+
+## Editor & language intelligence
+
+| Feature | Priority | Notes / grounding |
+|---|---|---|
+| Code folding | P1 | No folding anywhere yet. Pure client-side. |
+| Multi-cursor / column selection | P1 | Not present in any shell. |
+| Snippets / template expansion | P1 | No snippet system yet. |
+| LSP code actions / quick fixes | P1 | `codeAction` capability unwired (pyright returned empty in dev; other servers implement it — verify against rust-analyzer/tsserver). |
+| LSP inlay hints | P2 | Not wired. |
+| LSP semantic tokens (semantic highlighting) | P2 | Electron shells use lexical `highlight.js`; semantic coloring needs `textDocument/semanticTokens`. |
+| tree-sitter highlighting in Electron shells | P2 | Reuse the wgpu shell's tree-sitter engine via `web-tree-sitter` (spike already proven, §75.86). |
+| Incremental/windowed re-highlight | P2 | Current highlight re-tokenizes the whole document per keystroke; unmeasured cost at very large files. |
+| LSP call hierarchy / type hierarchy | P2 | Not wired (rename/references/definition/hover/completion/symbols/highlight are). |
+| Bracket-pair colorization | P3 | Matching-bracket highlight exists; full pair colorization does not. |
+| Minimap | P3 | Not present. |
+| Formatter coverage: Kotlin (ktlint), C# (`dotnet format`), Java | P2 | No stdin/stdout filter-mode wired for ktlint/`dotnet format`; Java has no formatter configured at all (§186). |
+
+## Debugging (DAP)
+
+| Feature | Priority | Notes / grounding |
+|---|---|---|
+| DAP for C#/Kotlin/Java/Go/TS in the shells | P2 | Registry-configured; needs a program-path collection UI (only Rust/Python launch today). |
+| Conditional breakpoints + logpoints | P2 | Line breakpoints only. |
+| Watch expressions / REPL eval | P2 | Stack + variables shown; no watch/eval. |
+| Data breakpoints | P3 | Not present. |
+| Rope-anchored breakpoints | P3 | Line-number only; edits above a breakpoint shift it (§75.8). |
+
+## Git & source control
+
+| Feature | Priority | Notes / grounding |
+|---|---|---|
+| Remote push / pull / fetch / clone + auth | P1 | `spartan-git` is entirely local today (§56.2–56.4 unstarted). The single biggest SCM gap. |
+| Inline blame | P1 | Read-only, high value, builds on existing surface. |
+| GitHub layer (PRs, issues, review) | P2 | §56.3–56.4, unstarted in both shells. |
+| Per-hunk / partial staging | P2 | File-level staging only. |
+| Stash UI | P2 | No stash surface. |
+| Merge-conflict resolution UI | P2 | None. |
+| Side-by-side + word-level diff | P2 | Diff is line-level (`+`/`-`/context) only. |
+| Remote-branch listing | P2 | Branch switcher is local-only. |
+| Rebase / cherry-pick UI | P3 | None. |
+
+## Web app (`web/`)
+
+| Feature | Priority | Notes / grounding |
+|---|---|---|
+| LSP/DAP/Leo/git in pure client-side mode | P2 | Only backend-connected mode has them; wire to the WebSocket transport. |
+| Multi-file tabs | P2 | Single open file at a time (§75.89). |
+| Redo in the WASM buffer | P2 | `spartan-buffer-wasm` deliberately ships no redo yet (§75.89). |
+| Firefox/Safari support | P3 | File System Access API is Chromium-only; needs a fallback storage backend (OPFS/`lightning-fs`). |
+
+## Leo (agent)
+
+| Feature | Priority | Notes / grounding |
+|---|---|---|
+| Automated verification commands | P2 | `Verifying` is a momentary waypoint; no real test/lint command runs (§75.66). |
+| Multi-turn conversation history | P2 | Chat panel is task-scoped, no history. |
+| Cooperative cancellation of in-flight model calls | P2 | Cancel discards late results but doesn't kill the background thread (§75.73). |
+| Sub-agent delegation | P3 | §4.4, unstarted. |
+| Team / global memory tiers + compaction | P3 | Project-tier memory only, unsummarized (§75.67). |
+| Live `ClaudeProvider` / `LiteLLMProvider` verification | P2 | Both structurally complete; never run against a real key/proxy in this project's history. |
+
+## Android (task #11)
+
+| Feature | Priority | Notes / grounding |
+|---|---|---|
+| Emulator / system-image management | P2 | Blocked on `/dev/kvm` in this dev env; real on a KVM-capable machine. |
+| JDWP debugging | P2 | Not present (build/install/logcat are). |
+| Kotlin + Jetpack Compose LSP | P2 | Only plain-Kotlin LSP today. |
+| Compose preview | P3 | None. |
+| Device-picker UI (multi-device) | P3 | Auto-picks first ready device. |
+| logcat filtering / search / level coloring | P3 | Raw verbatim stream only. |
+| Signing / release (AAB) tooling | P3 | Debug-APK build only. |
+
+## Production, packaging & distribution
+
+| Feature | Priority | Notes / grounding |
+|---|---|---|
+| Code signing (Windows/macOS/Linux) | P1 | Named unresolved on every packaging pass. Gates trustworthy installers + auto-update apply. |
+| Auto-update download + install + restart | P2 | Checker exists (§75.49); apply path deferred behind signing. |
+| Native application menu (File/Edit/View/Help + About) | P2 | Deliberately deferred (§240) over Edit-accelerator conflict risk; needs a live Electron launch to validate safely. |
+| Renderer bundle code-splitting | P3 | Desktop renderer is a single >500 KB chunk. |
+| macOS / iOS builds | P3 | No Apple-platform build in project history. |
+
+## GUI Builder
+
+| Feature | Priority | Notes / grounding |
+|---|---|---|
+| Visual style editing (color/spacing/typography controls) | P2 | Raw key/value form today. |
+| Drag-and-drop on the visual canvas | P2 | Click-to-select only. |
+| Component-library browser | P2 | The one remaining named MVP gap (§75.90). |
+| Live-reload while typing | P3 | Refreshes on file-switch/edit-apply only. |
+| Responsive / breakpoint preview | P3 | Single viewport. |
+| Asset management | P3 | None. |
+
+## Model management
+
+| Feature | Priority | Notes / grounding |
+|---|---|---|
+| Cancel/stop for in-flight downloads | P2 | No cancel on HF/Ollama/LM Studio/llama.cpp pulls. |
+| `desktop/` Models panel parity via a devserver connection | P2 | Some Track-A model methods live only where a devserver connects (`web/`). |
+| Live Hugging Face search API | P3 | Curated list only (broad, but fixed). |
+| LiteLLM proxy restart-on-crash | P3 | Detect-only; no auto-restart. |
+
+## Terminal & sessions
+
+| Feature | Priority | Notes / grounding |
+|---|---|---|
+| Concurrent multi-session monitoring | P2 | Sessions mounts one active PTY at a time. |
+| UTF-8 chunk-boundary reassembly | P3 | A multi-byte char split across OS reads can drop a replacement char (§75.64). |
+| PTY resize verified against a real reader | P3 | Resize IPC works; unverified against a `$COLUMNS`-reading process. |
+
+## Accessibility
+
+| Feature | Priority | Notes / grounding |
+|---|---|---|
+| Screen-reader content reading (AT-SPI Text interface) | P2 | AccessKit tree is built; the Text interface gap means content isn't read aloud (§75.34). |
+| High-contrast / reduce-motion in the wgpu shell | P3 | Present in Electron shells' theme system; not the wgpu shell. |
+| File-tree / Source-Control a11y nodes | P3 | Tab list + document node exist; panels don't. |
+
+## Spartan Cloud (Track B — separate, optional)
+
+| Feature | Priority | Notes / grounding |
+|---|---|---|
+| gVisor / microVM-strength isolation verified on KVM hardware | P1 (for that track) | `runc` baseline only in this env; `/api/allocate` refuses until verified (`cloud/README.md`). |
+| Real Stripe billing | P2 | `EntitlementProvider` seam ready for the swap. |
+| Egress allowlist proxy | P2 | Named open policy decision. |
+| Multi-node worker fleet + routing | P3 | MVP is single-node. |
+| Image / registry caching | P3 | Cold-start speed. |
+| Org / team features, SSO/RBAC | P3 | None. |
+
+## Mobile (`mobile/`)
+
+| Feature | Priority | Notes / grounding |
+|---|---|---|
+| Backend connectivity | P2 | No backend at all yet; a real editing/agent surface needs one. |
+| True backdrop blur | P3 | Needs `expo-blur` native module + a custom dev build. |
+| Font customization | P3 | Scoped out (no code-editing surface yet, §75.93). |
+
+---
+
+## How to use this list
+
+- Pick from **P1** first — each is high value and lands on infrastructure that already exists.
+- Follow the same discipline the rest of this project uses: real implementation, `desktop/` then
+  `web/`, verify via typecheck/build/clippy/tests **and** a live Playwright run with genuine
+  input, document the pass, commit per feature.
+- When a feature closes a gap named in `CLAUDE.md`, update that note so the two stay in sync.

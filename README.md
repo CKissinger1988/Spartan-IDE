@@ -151,8 +151,10 @@ legacy/agent-deck-console/  This repo's prior product, preserved for feature-par
 - **Real rope-based buffer** (not a text-diffing hack) with branching undo/redo, real
   save-to-disk, a real file tree, tabs, and click-to-select/drag-select
 - **Real syntax highlighting** across the languages `spartan-languages` knows about
-- **Real Git panel**: stage/unstage/commit against the actual repository on disk, wired to
-  the same `spartan-git` crate Leo's own checkpointing uses
+- **Real Git panel**: stage/unstage/commit against the actual repository on disk, plus
+  per-file diffs, a branch switcher (list/switch/create), commit history, and per-commit
+  detail (changed files + per-file diff) — all wired to the same `spartan-git` crate Leo's
+  own checkpointing uses
 - **Real integrated terminal** (Console) and a **real multi-CLI session manager**
   (Sessions) — spawn `claude`/`codex`/`gemini`/any named CLI as a real PTY, streamed live
   over IPC via `xterm.js`
@@ -168,9 +170,15 @@ legacy/agent-deck-console/  This repo's prior product, preserved for feature-par
   interactive shell into it — test a project's Linux environment in isolation without touching
   your host machine. Not a VM — genuinely different OS *families* (Windows/macOS guests) are out
   of scope by design; see [`crates/spartan-devcontainer`](crates/spartan-devcontainer)
-- **Real LSP diagnostics, hover, and autocomplete**, and **real DAP breakpoint/step
-  debugging** — both live, driven by real language servers/debug adapters over
-  `crates/spartan-lsp`/`crates/spartan-dap`, in both the desktop shell and `web/`
+- **Real LSP language intelligence** — diagnostics, hover, autocomplete, go-to-definition,
+  find references, rename, document symbols, signature help, and occurrence highlighting —
+  plus **real DAP breakpoint/step debugging**, both live, driven by real language
+  servers/debug adapters over `crates/spartan-lsp`/`crates/spartan-dap`, in both the desktop
+  shell and `web/`
+- **A full editor-ergonomics suite**: multi-line comment toggle, indent/outdent, duplicate,
+  move, and delete line, font-size zoom, auto-closing brackets, matching-bracket highlight,
+  Go to Line, in-buffer Find & Replace, Find/Replace in Files, and Format Document (with
+  format-on-save)
 - **Seven real, live, user-selectable themes** (Spartan Dark/Light plus five distinct
   design concepts — Minimalist Zen, Neon Aftergrid, Warm Paper, Command Deck, Glass
   Native) — switch instantly from Settings, no restart required, in every real shell
@@ -373,7 +381,9 @@ Cargo.toml / Cargo.lock      Rust workspace (spikes/ + crates/, excluding crates
 1. Read [`CLAUDE.md`](CLAUDE.md) in full — it's short, and it's the contract, not a
    suggestion.
 2. Check [`docs/architecture-spec.md`](docs/architecture-spec.md) §35 for what's actually
-   next in the build order before picking up new scope.
+   next in the build order before picking up new scope, and
+   [`docs/FUTURE_FEATURES.md`](docs/FUTURE_FEATURES.md) for a prioritized backlog of
+   grounded, additive next features.
 3. If you're touching security, sandboxing, or approval flows, read §9 and §36 first —
    they exist because of documented, named failures in comparable tools, not
    hypothetically.
