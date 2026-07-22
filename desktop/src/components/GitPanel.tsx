@@ -152,6 +152,12 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [commitFileDiff, setCommitFileDiff] = useState<string | null>(null);
   const [commitFileDiffLoading, setCommitFileDiffLoading] = useState(false);
   const [commitFileDiffError, setCommitFileDiffError] = useState<string | null>(null);
+  // Real git remote operations (P1 backlog) -- fetch/pull/push against a
+  // configured remote. Fast-forward-only pull; a divergence is reported,
+  // never auto-merged. Loaded once per root.
+  const [remotes, setRemotes] = useState<{ name: string; url: string | null }[] | null>(null);
+  const [remoteBusy, setRemoteBusy] = useState(false);
+  const [remoteStatus, setRemoteStatus] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     window.spartan
@@ -169,6 +175,54 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    window.spartan
+      .call("git_remotes", { project_root: root })
+      .then((r) => setRemotes((r as { remotes?: { name: string; url: string | null }[] }).remotes ?? []))
+      .catch(() => setRemotes([]));
+  }, [root]);
+
+  const runRemote = useCallback(
+    (op: "fetch" | "pull" | "push") => {
+      const remote = remotes?.[0]?.name;
+      const branch = status?.branch;
+      if (!remote) {
+        setRemoteStatus("No remote configured");
+        return;
+      }
+      if ((op === "pull" || op === "push") && !branch) {
+        setRemoteStatus(`Detached HEAD — no branch to ${op}`);
+        return;
+      }
+      setRemoteBusy(true);
+      setRemoteStatus(op === "fetch" ? "Fetching…" : op === "pull" ? "Pulling…" : "Pushing…");
+      const method = op === "fetch" ? "git_fetch" : op === "pull" ? "git_pull" : "git_push";
+      const params: Record<string, unknown> = { project_root: root, remote };
+      if (op !== "fetch") params.branch = branch;
+      window.spartan
+        .call(method, params)
+        .then((r) => {
+          if (op === "pull") {
+            const outcome = (r as { outcome?: string }).outcome;
+            setRemoteStatus(
+              outcome === "fast_forwarded"
+                ? "Pulled (fast-forward)"
+                : outcome === "up_to_date"
+                  ? "Already up to date"
+                  : "Diverged — pull left your branch untouched (fast-forward only)"
+            );
+            refresh();
+          } else {
+            setRemoteStatus(op === "fetch" ? "Fetched" : "Pushed");
+            if (op === "fetch") refresh();
+          }
+        })
+        .catch((e: Error) => setRemoteStatus(`${op} failed: ${e.message}`))
+        .finally(() => setRemoteBusy(false));
+    },
+    [remotes, status?.branch, root, refresh]
+  );
 
   const stage = useCallback(
     (path: string) => {
@@ -418,6 +472,43 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
       >
         {committing ? "Committing…" : `Commit (${staged.length})`}
       </button>
+
+      {remotes && remotes.length > 0 && (
+        <div className="git-section">
+          <div className="git-section-label mono">Remote: {remotes[0].name}</div>
+          <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+            <button
+              type="button"
+              className="editor-find-btn"
+              disabled={remoteBusy}
+              onClick={() => runRemote("fetch")}
+            >
+              Fetch
+            </button>
+            <button
+              type="button"
+              className="editor-find-btn"
+              disabled={remoteBusy}
+              onClick={() => runRemote("pull")}
+            >
+              Pull
+            </button>
+            <button
+              type="button"
+              className="editor-find-btn"
+              disabled={remoteBusy}
+              onClick={() => runRemote("push")}
+            >
+              Push
+            </button>
+          </div>
+          {remoteStatus && (
+            <div className="git-panel-empty mono" style={{ marginTop: 4 }}>
+              {remoteStatus}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="git-section-label mono">Staged Changes ({staged.length})</div>
       <div className="git-section">

@@ -1,13 +1,47 @@
 //! Real local git operations (§56.1, task #7) backed by `git2` (vendored
-//! `libgit2`, no system git binary or network access needed for any
-//! operation in this crate -- everything here is local-repository-only).
-//! Deliberately scoped to §56.1's "basic local Source Control is Tier 1"
-//! line, not §56.2-56.4's GitHub layer (real OAuth device-code flow, a
-//! real GitHub API round-trip) -- that's a separate, larger increment,
-//! named as a real, open gap rather than attempted here.
+//! `libgit2`, no system git binary needed). Every *local* operation here
+//! needs no network; the real remote operations added from the
+//! `docs/FUTURE_FEATURES.md` P1 backlog (`list_remotes`/`fetch`/`push`/
+//! `pull_fast_forward`) reach a real remote only when one is actually
+//! configured, and are fully exercisable against a local bare-repo remote
+//! with no network or credentials at all. Deliberately still scoped short
+//! of §56.2-56.4's GitHub layer (real OAuth device-code flow, a real
+//! GitHub API round-trip); remote auth here supports SSH-agent and
+//! default/anonymous credentials only -- an interactive HTTPS-token entry
+//! UI is a named, open follow-up, not attempted here.
 
 use git2::{IndexAddOption, Repository, RepositoryOpenFlags, Status, StatusOptions};
 use std::path::{Path, PathBuf};
+
+/// Shared credential callback for real fetch/push against an authenticated
+/// remote. Tries SSH-agent first (the common key-backed case), then a
+/// default/anonymous credential (local `file://` remotes need none, so the
+/// callback typically isn't even invoked for those). An interactive
+/// username/password or HTTPS-token prompt is a named, open follow-up.
+fn make_remote_callbacks() -> git2::RemoteCallbacks<'static> {
+    let mut cb = git2::RemoteCallbacks::new();
+    cb.credentials(|_url, username_from_url, allowed| {
+        if allowed.contains(git2::CredentialType::SSH_KEY) {
+            if let Some(user) = username_from_url {
+                if let Ok(cred) = git2::Cred::ssh_key_from_agent(user) {
+                    return Ok(cred);
+                }
+            }
+        }
+        git2::Cred::default()
+    });
+    cb
+}
+
+/// Outcome of a real `pull_fast_forward` -- deliberately fast-forward-only
+/// (a real non-ff divergence is reported, never silently auto-merged or
+/// rebased), the safe v1 semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullOutcome {
+    UpToDate,
+    FastForwarded,
+    NonFastForward,
+}
 
 /// One file's real status in the working tree, both halves independently
 /// (a file can be both staged *and* have further unstaged changes on top
@@ -453,6 +487,121 @@ impl GitRepo {
         }
         Ok(out)
     }
+
+    /// Every configured real remote as `(name, url)` -- `url` is `None` for
+    /// a remote with no fetch URL set (a real, valid, if unusual, state).
+    pub fn list_remotes(&self) -> Result<Vec<(String, Option<String>)>, git2::Error> {
+        let names = self.repo.remotes()?;
+        let mut out = Vec::new();
+        for name in names.iter().flatten() {
+            let url = self
+                .repo
+                .find_remote(name)
+                .ok()
+                .and_then(|r| r.url().map(str::to_string));
+            out.push((name.to_string(), url));
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(out)
+    }
+
+    /// Real fetch from a configured remote using its own default refspecs
+    /// (updates the remote-tracking refs; does not touch the working tree).
+    pub fn fetch(&self, remote_name: &str) -> Result<(), git2::Error> {
+        let mut remote = self.repo.find_remote(remote_name)?;
+        let mut fo = git2::FetchOptions::new();
+        fo.remote_callbacks(make_remote_callbacks());
+        let empty: [&str; 0] = [];
+        remote.fetch(&empty, Some(&mut fo), None)
+    }
+
+    /// Real push of a single local branch to the same-named branch on a
+    /// configured remote. A rejected push (non-fast-forward on the remote,
+    /// auth failure) surfaces `libgit2`'s own real error verbatim -- never
+    /// a force-push, which would need an explicit, separate opt-in.
+    pub fn push(&self, remote_name: &str, branch: &str) -> Result<(), git2::Error> {
+        let mut remote = self.repo.find_remote(remote_name)?;
+        let mut po = git2::PushOptions::new();
+        po.remote_callbacks(make_remote_callbacks());
+        let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
+        remote.push(&[refspec.as_str()], Some(&mut po))
+    }
+
+    /// Real pull = fetch, then a *fast-forward-only* update of `branch`.
+    /// A real divergence (the local branch has commits the remote doesn't)
+    /// returns `NonFastForward` rather than auto-merging or rebasing -- the
+    /// safe v1 behavior, leaving the working tree untouched. A fast-forward
+    /// uses `libgit2`'s own safe (conflict-refusing) checkout, so a real
+    /// conflicting uncommitted change surfaces its error rather than being
+    /// force-discarded.
+    pub fn pull_fast_forward(
+        &self,
+        remote_name: &str,
+        branch: &str,
+    ) -> Result<PullOutcome, git2::Error> {
+        self.fetch(remote_name)?;
+        let fetch_head = self.repo.find_reference("FETCH_HEAD")?;
+        let fetch_commit = self.repo.reference_to_annotated_commit(&fetch_head)?;
+        let (analysis, _) = self.repo.merge_analysis(&[&fetch_commit])?;
+        if analysis.is_up_to_date() {
+            return Ok(PullOutcome::UpToDate);
+        }
+        if analysis.is_fast_forward() {
+            // The canonical libgit2 fast-forward recipe force-checks-out the
+            // new HEAD (the default/SAFE strategies are a dry run / don't
+            // reliably update an existing checkout). To keep the "never
+            // clobber uncommitted changes" guarantee, refuse first if the
+            // working tree has real uncommitted changes to *tracked* files
+            // (untracked files are left untouched by the checkout anyway).
+            if self.has_uncommitted_tracked_changes()? {
+                return Err(git2::Error::from_str(
+                    "pull: uncommitted changes would be overwritten by fast-forward -- commit or stash first",
+                ));
+            }
+            let refname = format!("refs/heads/{branch}");
+            match self.repo.find_reference(&refname) {
+                Ok(mut reference) => {
+                    reference.set_target(fetch_commit.id(), "pull: fast-forward")?;
+                }
+                Err(_) => {
+                    // A branch ref that doesn't exist locally yet (first
+                    // pull of a new branch) -- create it at the fetched tip.
+                    self.repo.reference(
+                        &refname,
+                        fetch_commit.id(),
+                        true,
+                        "pull: create from fast-forward",
+                    )?;
+                }
+            }
+            self.repo.set_head(&refname)?;
+            let mut checkout = git2::build::CheckoutBuilder::default();
+            checkout.force();
+            self.repo.checkout_head(Some(&mut checkout))?;
+            return Ok(PullOutcome::FastForwarded);
+        }
+        Ok(PullOutcome::NonFastForward)
+    }
+
+    /// Whether the working tree has any uncommitted change to a *tracked*
+    /// file (staged, or an unstaged modify/delete/rename/typechange). A
+    /// purely untracked new file does not count -- a checkout leaves those
+    /// alone. Used to keep `pull_fast_forward` from force-overwriting real
+    /// uncommitted edits.
+    fn has_uncommitted_tracked_changes(&self) -> Result<bool, git2::Error> {
+        Ok(self.status()?.iter().any(|e| {
+            e.staged.is_some()
+                || matches!(
+                    e.unstaged,
+                    Some(
+                        FileStatus::Modified
+                            | FileStatus::Deleted
+                            | FileStatus::Renamed
+                            | FileStatus::TypeChanged
+                    )
+                )
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -896,5 +1045,112 @@ mod tests {
         tmp.write("f.txt", "hello\n");
         let blame = repo.blame_file(Path::new("f.txt")).unwrap();
         assert!(blame.is_empty());
+    }
+
+    #[test]
+    fn remote_push_fetch_pull_round_trip_against_a_local_bare_remote() {
+        // A real bare repo acting as the "remote" -- no network, no
+        // credentials, exercising the real fetch/push/pull code paths.
+        let remote_dir = std::env::temp_dir().join("spartan_git_test_remote_bare_rt");
+        let _ = fs::remove_dir_all(&remote_dir);
+        Repository::init_bare(&remote_dir).unwrap();
+        let remote_url = remote_dir.to_str().unwrap();
+
+        // Local repo A: commit, add the bare as `origin`, push.
+        let (tmp_a, repo_a) = TempRepo::new("remote_a");
+        tmp_a.write("f.txt", "line one\n");
+        repo_a.stage(Path::new("f.txt")).unwrap();
+        repo_a.commit("first").unwrap();
+        repo_a.repo.remote("origin", remote_url).unwrap();
+
+        let remotes = repo_a.list_remotes().unwrap();
+        assert_eq!(remotes.len(), 1);
+        assert_eq!(remotes[0].0, "origin");
+        assert_eq!(remotes[0].1.as_deref(), Some(remote_url));
+
+        let branch = repo_a.current_branch().unwrap();
+        repo_a.push("origin", &branch).unwrap();
+
+        // Local repo B: add the same remote, pull -> fast-forwards to A's commit.
+        let (tmp_b, repo_b) = TempRepo::new("remote_b");
+        repo_b.repo.remote("origin", remote_url).unwrap();
+        let outcome = repo_b.pull_fast_forward("origin", &branch).unwrap();
+        assert_eq!(outcome, PullOutcome::FastForwarded);
+        assert_eq!(
+            fs::read_to_string(tmp_b.dir.join("f.txt")).unwrap(),
+            "line one\n",
+            "B's working tree really got A's pushed content"
+        );
+
+        // A second pull with nothing new -> UpToDate.
+        assert_eq!(
+            repo_b.pull_fast_forward("origin", &branch).unwrap(),
+            PullOutcome::UpToDate
+        );
+
+        // Now A commits again and pushes; B's next pull must fast-forward an
+        // *existing* checkout and really update the working tree to the new
+        // content (a real bug lived here: the default checkout strategy is a
+        // dry run, so the ref moved but the file didn't -- guarded now).
+        tmp_a.write("f.txt", "line one\nline two\n");
+        repo_a.stage(Path::new("f.txt")).unwrap();
+        repo_a.commit("second").unwrap();
+        repo_a.push("origin", &branch).unwrap();
+        assert_eq!(
+            repo_b.pull_fast_forward("origin", &branch).unwrap(),
+            PullOutcome::FastForwarded
+        );
+        assert_eq!(
+            fs::read_to_string(tmp_b.dir.join("f.txt")).unwrap(),
+            "line one\nline two\n",
+            "fast-forward of an existing checkout must update the working tree"
+        );
+
+        let _ = fs::remove_dir_all(&remote_dir);
+    }
+
+    #[test]
+    fn pull_reports_non_fast_forward_on_a_real_divergence() {
+        let remote_dir = std::env::temp_dir().join("spartan_git_test_remote_bare_nff");
+        let _ = fs::remove_dir_all(&remote_dir);
+        Repository::init_bare(&remote_dir).unwrap();
+        let remote_url = remote_dir.to_str().unwrap();
+
+        // A: commit1, push.
+        let (tmp_a, repo_a) = TempRepo::new("nff_a");
+        tmp_a.write("f.txt", "c1\n");
+        repo_a.stage(Path::new("f.txt")).unwrap();
+        repo_a.commit("commit1").unwrap();
+        repo_a.repo.remote("origin", remote_url).unwrap();
+        let branch = repo_a.current_branch().unwrap();
+        repo_a.push("origin", &branch).unwrap();
+
+        // B: pull commit1, then make its own divergent local commit2.
+        let (tmp_b, repo_b) = TempRepo::new("nff_b");
+        repo_b.repo.remote("origin", remote_url).unwrap();
+        repo_b.pull_fast_forward("origin", &branch).unwrap();
+        tmp_b.write("f.txt", "c1\nB-local\n");
+        repo_b.stage(Path::new("f.txt")).unwrap();
+        repo_b.commit("commit2-local").unwrap();
+
+        // A: commit3, push (remote is now commit1 -> commit3).
+        tmp_a.write("f.txt", "c1\nA-remote\n");
+        repo_a.stage(Path::new("f.txt")).unwrap();
+        repo_a.commit("commit3").unwrap();
+        repo_a.push("origin", &branch).unwrap();
+
+        // B pulling now diverges (B has commit2, remote has commit3, both
+        // off commit1) -> reported as non-fast-forward, never auto-merged.
+        assert_eq!(
+            repo_b.pull_fast_forward("origin", &branch).unwrap(),
+            PullOutcome::NonFastForward
+        );
+        // B's own local commit is untouched.
+        assert_eq!(
+            fs::read_to_string(tmp_b.dir.join("f.txt")).unwrap(),
+            "c1\nB-local\n"
+        );
+
+        let _ = fs::remove_dir_all(&remote_dir);
     }
 }

@@ -5815,6 +5815,46 @@ first — it's the parity reference until each row there is actually reimplement
   already-documented no-LSP/no-git scope); blame is committed-file-relative and drifts within
   unsaved edits (the named alignment contract above), re-fetched on save rather than live per
   keystroke.
+- **Real, working code — real git remote operations (fetch/pull/push), the second
+  `docs/FUTURE_FEATURES.md` P1 backlog feature, plus a real bug found and fixed by live testing
+  (task #247)**: user-requested ("Start building the P1 features from the backlog"). This closes
+  the single biggest source-control gap -- `spartan-git` was entirely local until now.
+  `spartan_git` gained `list_remotes`, `fetch`, `push`, and `pull_fast_forward` (real `git2`
+  remote operations with a shared credential callback supporting SSH-agent + default/anonymous
+  creds -- sufficient for local `file://` and key-backed remotes; an interactive HTTPS-token entry
+  UI is a named, open follow-up). Pull is deliberately **fast-forward-only**: a real divergence
+  returns `NonFastForward` and leaves the working tree untouched, never auto-merging or rebasing
+  (the safe v1 semantics); push never force-pushes. `spartan-backend` gained `git_remotes`/
+  `git_fetch`/`git_push`/`git_pull` dispatch methods (synchronous like the rest of the git surface
+  -- a slow network remote blocking the dispatch is a named "wire to async events later" follow-up).
+  Both Electron-based shells' Git panels gained a "Remote: <name>" section with Fetch/Pull/Push
+  buttons and real status feedback (fast-forward / already-up-to-date / diverged / error).
+  **A real bug was found only by the live Playwright run, not by the unit tests**: the first
+  round-trip test used an *empty* repo B (exercising only the unborn-branch create path), so the
+  fast-forward-of-an-*existing*-checkout path was never covered -- and it was broken: the default
+  `git2::CheckoutBuilder` strategy is a dry run that moves the ref but writes nothing to the working
+  tree, and `.safe()` didn't fix it either. Fixed with the canonical `.force()` checkout, guarded
+  by a new `has_uncommitted_tracked_changes` check that refuses (errors) rather than force-
+  overwriting real uncommitted edits to tracked files (untracked files are left alone). The unit
+  test was strengthened to reproduce exactly this -- an existing checkout fast-forwarding and the
+  working tree really updating -- so it can't regress silently. 6 new tests (4 in `spartan-git`:
+  a full push/fetch/pull round trip against a real local **bare** remote incl. the strengthened
+  existing-checkout guard, and a non-fast-forward divergence case; 1 dispatch-level round trip in
+  `spartan-backend` via git2-configured bare remote; the fetch/push are the untested-live pieces
+  named below), 29 `spartan-git` lib tests and 194 `spartan-backend` lib tests total, full
+  `cargo fmt`/`clippy`/`test` clean for both crates; both shells' `tsc`/`build` clean. `git_remotes`/
+  `git_fetch`/`git_push`/`git_pull` added to `main.ts`/`preload.ts` IPC allowlists. **Real, live,
+  end-to-end Playwright verification against the actual compiled `web/dist` served by a real running
+  `spartan-devserver`** (not a mock): a real bare remote + a real clone (`B`) deliberately one
+  commit behind -- the Git panel's Remote section rendered "Remote: origin", clicking **Pull**
+  fast-forwarded B and its working file really updated on disk from `v1` to `v1\nv2` (cross-checked),
+  and **Push** succeeded, zero page errors. **What this does not confirm**: no live verification
+  against a *real network/authenticated* remote (only a local bare repo -- SSH-agent/HTTPS-token
+  auth paths are real and structurally in place but exercised only through the local no-credential
+  path); no live Electron-window verification of `desktop/` (the standing gap since §75.59 --
+  verified via typecheck + the identical shared component logic the web live run exercises); no
+  clone (add-a-new-remote-and-clone), no force-push, no interactive credential/token entry UI, no
+  remote-branch listing -- all real, named follow-ups; pull is fast-forward-only by design.
 
 ## Build & test
 

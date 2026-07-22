@@ -3103,6 +3103,58 @@ fn git_blame(project_root: &str, path: &str) -> Result<serde_json::Value, String
     Ok(serde_json::json!({ "lines": lines }))
 }
 
+/// Every configured real remote as `{name, url}`.
+fn git_remotes(project_root: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let remotes = repo
+        .list_remotes()
+        .map_err(|e| format!("git remotes: {e}"))?
+        .into_iter()
+        .map(|(name, url)| serde_json::json!({ "name": name, "url": url }))
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "remotes": remotes }))
+}
+
+/// Real fetch from a configured remote (updates remote-tracking refs; the
+/// working tree is untouched). Synchronous like the rest of this crate's
+/// git dispatch -- a real network remote can make this slow; wiring it to
+/// the "ack now, event later" async pattern is a named follow-up.
+fn git_fetch(project_root: &str, remote: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.fetch(remote).map_err(|e| format!("git fetch: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// Real push of a local branch to the same-named branch on a remote. A
+/// rejected push (non-fast-forward remote, auth failure) surfaces the real
+/// error verbatim -- never a force-push.
+fn git_push(project_root: &str, remote: &str, branch: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.push(remote, branch)
+        .map_err(|e| format!("git push: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// Real pull = fetch + fast-forward-only. A real divergence is reported as
+/// `non_fast_forward` rather than auto-merged/rebased -- the safe v1
+/// behavior, leaving the working tree untouched.
+fn git_pull(project_root: &str, remote: &str, branch: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let outcome = repo
+        .pull_fast_forward(remote, branch)
+        .map_err(|e| format!("git pull: {e}"))?;
+    let s = match outcome {
+        spartan_git::PullOutcome::UpToDate => "up_to_date",
+        spartan_git::PullOutcome::FastForwarded => "fast_forwarded",
+        spartan_git::PullOutcome::NonFastForward => "non_fast_forward",
+    };
+    Ok(serde_json::json!({ "outcome": s }))
+}
+
 /// Every file a real commit changed, relative to its first parent (a
 /// root commit reports everything as added -- the real, correct answer).
 fn git_commit_files(project_root: &str, oid: &str) -> Result<serde_json::Value, String> {
@@ -3798,6 +3850,27 @@ pub fn handle_request(
             let root = get_str_param(&req.params, "project_root")?;
             let path = get_str_param(&req.params, "path")?;
             git_blame(&root, &path)
+        })(),
+        "git_remotes" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            git_remotes(&root)
+        })(),
+        "git_fetch" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let remote = get_str_param(&req.params, "remote")?;
+            git_fetch(&root, &remote)
+        })(),
+        "git_push" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let remote = get_str_param(&req.params, "remote")?;
+            let branch = get_str_param(&req.params, "branch")?;
+            git_push(&root, &remote, &branch)
+        })(),
+        "git_pull" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let remote = get_str_param(&req.params, "remote")?;
+            let branch = get_str_param(&req.params, "branch")?;
+            git_pull(&root, &remote, &branch)
         })(),
         "git_commit_files" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
@@ -5072,6 +5145,88 @@ mod tests {
         assert!(resp.result.is_none());
         assert!(resp.error.is_some());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_remote_round_trip_through_the_dispatch_path() {
+        // A real bare repo as the "remote" -- no network, no credentials.
+        let remote_dir = std::env::temp_dir().join(format!(
+            "spartan-backend-git-remote-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&remote_dir);
+        git2::Repository::init_bare(&remote_dir).unwrap();
+        let remote_url = remote_dir.to_str().unwrap();
+
+        // Repo A: commit through dispatch, add remote (via git2 -- there's
+        // no remote-add dispatch method yet), then list + push through
+        // dispatch.
+        let tmp = TempRepo::new("remote_dispatch_a");
+        std::fs::write(tmp.dir.join("f.txt"), "one\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "first" }),
+        );
+        git2::Repository::open(&tmp.dir)
+            .unwrap()
+            .remote("origin", remote_url)
+            .unwrap();
+        let branch = spartan_git::GitRepo::discover(&tmp.dir)
+            .unwrap()
+            .current_branch()
+            .unwrap();
+
+        let resp = call(
+            &state,
+            3,
+            "git_remotes",
+            serde_json::json!({ "project_root": root }),
+        );
+        let remotes = resp.result.unwrap()["remotes"].as_array().unwrap().clone();
+        assert_eq!(remotes.len(), 1);
+        assert_eq!(remotes[0]["name"], "origin");
+        assert_eq!(remotes[0]["url"], remote_url);
+
+        let resp = call(
+            &state,
+            4,
+            "git_push",
+            serde_json::json!({ "project_root": root, "remote": "origin", "branch": branch }),
+        );
+        assert_eq!(resp.result.unwrap()["ok"], true);
+
+        // Repo B: add the same remote, pull through dispatch -> fast-forwards
+        // and really gets A's pushed file.
+        let tmp_b = TempRepo::new("remote_dispatch_b");
+        git2::Repository::open(&tmp_b.dir)
+            .unwrap()
+            .remote("origin", remote_url)
+            .unwrap();
+        let root_b = tmp_b.dir.to_string_lossy().into_owned();
+        let resp = call(
+            &state,
+            5,
+            "git_pull",
+            serde_json::json!({ "project_root": root_b, "remote": "origin", "branch": branch }),
+        );
+        assert_eq!(resp.result.unwrap()["outcome"], "fast_forwarded");
+        assert_eq!(
+            std::fs::read_to_string(tmp_b.dir.join("f.txt")).unwrap(),
+            "one\n"
+        );
+
+        let _ = std::fs::remove_dir_all(&remote_dir);
     }
 
     #[test]

@@ -27,8 +27,9 @@ Priority key:
    Real servers (rust-analyzer, typescript-language-server) implement it richly.
 3. **Multi-cursor / multi-selection editing** (P1) — the single most-requested modern-editor
    feature not yet present.
-4. **Git: remote push/pull/fetch + clone** (P1) — `spartan-git` is local-only today; adding the
-   remote layer (§56.2) is the biggest single source-control gap.
+4. ~~**Git: remote push/pull/fetch + clone** (P1)~~ — ✅ **Shipped** (fetch/pull/push in both
+   shells' Git panels; `spartan_git` remote ops against real remotes). Clone + auth-token UI
+   remain follow-ups. See CLAUDE.md's own status entry.
 5. ~~**Inline git blame** (P1)~~ — ✅ **Shipped** (Alt+B blame gutter in both shells, backed by
    `spartan_git::blame_file`). See CLAUDE.md's own status entry.
 6. **Snippets / tab-completion expansion** (P1) — common, self-contained, no backend needed.
@@ -74,7 +75,7 @@ Priority key:
 
 | Feature | Priority | Notes / grounding |
 |---|---|---|
-| Remote push / pull / fetch / clone + auth | P1 | `spartan-git` is entirely local today (§56.2–56.4 unstarted). The single biggest SCM gap. |
+| ~~Remote push / pull / fetch~~ | ✅ done | Shipped — Fetch/Pull/Push in both Git panels (`spartan_git` remote ops, fast-forward-only pull). Clone + interactive auth-token UI + remote-branch listing remain follow-ups. |
 | ~~Inline blame~~ | ✅ done | Shipped — Alt+B per-line blame gutter in both shells (`spartan_git::blame_file`). |
 | GitHub layer (PRs, issues, review) | P2 | §56.3–56.4, unstarted in both shells. |
 | Per-hunk / partial staging | P2 | File-level staging only. |
