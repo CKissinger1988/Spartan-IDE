@@ -55,6 +55,7 @@ const ALLOWED_METHODS = new Set([
   "git_discard",
   "git_commit",
   "git_commit_amend",
+  "git_revert_commit",
   "git_diff",
   "git_branches",
   "git_checkout",

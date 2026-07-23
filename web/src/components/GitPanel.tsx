@@ -432,6 +432,32 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
       .finally(() => setAmending(false));
   }, [client, root, message, refresh]);
 
+  // Revert creates a NEW commit undoing the named one (never rewrites
+  // history), so it's safe on already-pushed commits -- but it's still a
+  // real commit, so confirm before running. Refreshes both status and the
+  // history list afterward.
+  const revert = useCallback(
+    (oid: string, summary: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (
+        !window.confirm(
+          `Revert commit ${oid.slice(0, 7)} ("${summary}")? This adds a new commit that undoes it.`
+        )
+      )
+        return;
+      client
+        .call("git_revert_commit", { project_root: root, oid })
+        .then(() => {
+          refresh();
+          // Re-fetch the history so the new revert commit appears.
+          return client.call("git_log", { project_root: root, max: 25 });
+        })
+        .then((result) => setCommits((result as { commits: CommitInfo[] }).commits))
+        .catch((err: Error) => setError(err.message));
+    },
+    [client, root, refresh]
+  );
+
   const toggleDiff = useCallback(
     (path: string, staged: boolean, e: React.MouseEvent) => {
       e.stopPropagation();
@@ -903,6 +929,14 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
                 >
                   {formatAge(c.time)}
                 </span>
+                <button
+                  type="button"
+                  className="editor-find-btn"
+                  title="Revert this commit (adds a new commit undoing it)"
+                  onClick={(e) => revert(c.oid, c.summary, e)}
+                >
+                  ⟲
+                </button>
               </div>
               {expandedCommit === c.oid && (
                 <div style={{ paddingLeft: 12 }}>

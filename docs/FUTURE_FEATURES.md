@@ -97,6 +97,7 @@ Priority key:
 | ~~Word-level diff~~ / side-by-side | ✅ word-level done; side-by-side P3 | Word-level (intra-line) highlighting shipped in both Git panels' `DiffView` (client-side LCS token diff pairs adjacent `-`/`+` runs and emphasizes only the changed words). Side-by-side layout remains a P3 follow-up. |
 | ~~Remote-branch listing~~ | ✅ done | Shipped — the branch switcher now lists `refs/remotes/*` (as of the last fetch) under "Remote branches"; clicking one creates a local tracking branch and safe-checks it out (`spartan_git::checkout_remote_branch`). Live-verified with a bare remote, cross-checked against the git CLI. |
 | ~~Commit amend~~ | ✅ done | Shipped — an "Amend" button (with a confirm) beside Commit in both Git panels rewrites the last commit's message and folds in staged changes without adding a commit (`spartan_git::commit_amend` via `git2`'s `Commit::amend`). Live-verified + cross-checked against the git CLI (oid changed, commit count stayed 1, staged change folded in). |
+| ~~Commit revert~~ | ✅ done | Shipped — a ⟲ "Revert" button (with a confirm) on each commit in both Git panels' History view creates a *new* commit undoing that commit's changes without rewriting history (`spartan_git::revert_commit` via `git2`'s `revert`; a conflicting revert is reported honestly and the repo is left unchanged). Live-verified + cross-checked against the git CLI (commit count +1, a `Revert "…"` commit added, file reverted). |
 | Rebase / cherry-pick UI | P3 | None. |
 
 ## Web app (`web/`)

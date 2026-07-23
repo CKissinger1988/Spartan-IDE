@@ -6270,6 +6270,37 @@ first — it's the parity reference until each row there is actually reimplement
   `window.confirm`, not a custom themed modal; amending an already-pushed commit will diverge from
   the remote (real `git --amend` behavior, the same caveat any amend carries -- no force-push help
   is offered).
+- **Real, working code — git revert (undo a commit as a new commit) from both Git panels' history
+  view (task #260)**: user-requested ("Continue without stopping"). `spartan_git::revert_commit
+  (oid_hex)` uses `git2`'s own `revert` to apply the reverse of a named commit's changes to the
+  index + working tree, then -- unlike commit amend (task #259) -- commits the result as a **new**
+  commit (`Revert "<summary>"`) rather than rewriting history, so it's safe on already-pushed
+  commits (exactly `git revert`). A revert that produces conflicts is a real, honest error: the
+  in-progress REVERT state is cleaned up (`repo.cleanup_state()`) so the repo isn't left
+  half-reverted, and the caller is told, rather than silently committing a broken tree. New
+  `git_revert_commit(project_root, oid)` backend dispatch + IPC allowlist entry in both `main.ts`/
+  `preload.ts` at the identical position. Both Git panels gained a ⟲ "Revert" button on each commit
+  row in the History view (`stopPropagation`-isolated from the row's own expand-to-detail click,
+  matching the git-diff ±-button precedent), gated behind a `window.confirm` and re-fetching both
+  status and the history list afterward so the new revert commit appears. 4 new tests (3 in
+  `spartan-git`: a revert adds a commit and restores the file with the repo left in a `Clean`
+  state, an unknown oid errors; 1 dispatch-level in `spartan-backend`: the full round trip through
+  `handle_request` confirming the commit count went from 2 to 3 with a `Revert "…"` at the top and
+  the file reverted), 41 `spartan-git` lib tests and 199 `spartan-backend` lib tests total, full
+  `cargo fmt --all -- --check`/`cargo clippy -p spartan-git -p spartan-backend --release
+  --all-targets`/`cargo test` clean; both shells' `tsc --noEmit`/`build` clean. **Real, live,
+  end-to-end Playwright verification against the actual compiled `web/dist` served by a real
+  running `spartan-devserver`** (not a mock): a real fixture ("first commit" + "add line two") --
+  opening History, clicking the ⟲ on "add line two" (accepting the confirm) **cross-checked against
+  the real `git` CLI**: the commit count went 2 → 3, a `Revert "add line two"` commit appeared at
+  the top, the original "add line two" commit stayed in history (not rewritten), and `f.txt`
+  reverted to just "line one". **What this does not confirm**: no cherry-pick or interactive
+  rebase (revert only); a conflicting revert is reported but offers no in-app conflict-resolution
+  UI (the working tree is left unchanged, resolution is the user's -- there is no merge-conflict UI
+  in either shell yet, a real, named P2 gap); no live Electron-window verification of `desktop/`
+  (same standing gap since §75.59 -- verified via typecheck + the identical shared component logic
+  the web live run exercises, same `git_revert_commit` Rust path both shells send through); the
+  confirm is a browser-native `window.confirm`, not a custom themed modal.
 
 ## Build & test
 

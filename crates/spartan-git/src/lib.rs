@@ -289,6 +289,49 @@ impl GitRepo {
         )
     }
 
+    /// Real revert of a commit by its hex `oid` -- creates a *new* commit on
+    /// `HEAD` that undoes the named commit's changes (exactly `git revert`),
+    /// rather than rewriting history. Applies the reverse changes to the index
+    /// and working tree via `git2`'s own `revert`, and if that produces no
+    /// conflicts, commits the result with a real `Revert "<summary>"` message
+    /// and clears the in-progress REVERT state. A revert that conflicts is a
+    /// real, honest error: the in-progress state is cleaned up (so the repo
+    /// isn't left half-reverted) and the caller is told, rather than silently
+    /// committing a broken tree. Errors honestly if the oid is unknown or there
+    /// is no `HEAD` commit to revert onto.
+    pub fn revert_commit(&self, oid_hex: &str) -> Result<git2::Oid, git2::Error> {
+        let oid = git2::Oid::from_str(oid_hex)?;
+        let commit = self.repo.find_commit(oid)?;
+        let head_commit = self.repo.head()?.peel_to_commit()?;
+        // Apply the reverse changes to index + working tree (like
+        // `git revert --no-commit`); this also sets the repo's REVERT state.
+        self.repo.revert(&commit, None)?;
+        let mut index = self.repo.index()?;
+        if index.has_conflicts() {
+            // Don't leave the repo half-reverted -- clean up and report.
+            let _ = self.repo.cleanup_state();
+            return Err(git2::Error::from_str(
+                "revert produced conflicts; the working tree was left unchanged",
+            ));
+        }
+        let tree_oid = index.write_tree()?;
+        let tree = self.repo.find_tree(tree_oid)?;
+        let signature = self.repo.signature()?;
+        let summary = commit.summary().unwrap_or("");
+        let message = format!("Revert \"{summary}\"\n\nThis reverts commit {oid}.\n");
+        let new_oid = self.repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            &message,
+            &tree,
+            &[&head_commit],
+        )?;
+        // Clear REVERT_HEAD now that the revert is committed.
+        let _ = self.repo.cleanup_state();
+        Ok(new_oid)
+    }
+
     /// The real current branch name, or `None` for a detached `HEAD` (a
     /// real, valid git state, not an error).
     pub fn current_branch(&self) -> Option<String> {
@@ -1313,6 +1356,42 @@ mod tests {
         repo.stage(Path::new("f.txt")).unwrap();
         // No commit yet -- there is nothing to amend.
         assert!(repo.commit_amend("nope").is_err());
+    }
+
+    #[test]
+    fn revert_commit_undoes_a_change_as_a_new_commit() {
+        let (tmp, repo) = TempRepo::new("revert_basic");
+        tmp.write("f.txt", "line one\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("first").unwrap();
+        // A second commit adds a line we will revert.
+        tmp.write("f.txt", "line one\nline two\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        let bad = repo.commit("add line two").unwrap();
+        assert_eq!(repo.log(10).unwrap().len(), 2);
+        // Revert the second commit -> a NEW commit that removes line two.
+        repo.revert_commit(&bad.to_string()).unwrap();
+        let log = repo.log(10).unwrap();
+        assert_eq!(log.len(), 3, "revert must add a commit, not rewrite history");
+        assert_eq!(log[0].summary, "Revert \"add line two\"");
+        // The working file content is back to the first-commit state.
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "line one\n"
+        );
+        // The repo is not left in an in-progress REVERT state.
+        assert_eq!(repo.repo.state(), git2::RepositoryState::Clean);
+    }
+
+    #[test]
+    fn revert_commit_with_an_unknown_oid_errors() {
+        let (tmp, repo) = TempRepo::new("revert_bad_oid");
+        tmp.write("f.txt", "v1\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("init").unwrap();
+        assert!(repo
+            .revert_commit("0000000000000000000000000000000000000000")
+            .is_err());
     }
 
     #[test]

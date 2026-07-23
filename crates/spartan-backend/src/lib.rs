@@ -3114,6 +3114,18 @@ fn git_commit_amend(project_root: &str, message: &str) -> Result<serde_json::Val
     Ok(serde_json::json!({ "ok": true, "oid": oid.to_string() }))
 }
 
+/// Real revert of a commit by its hex `oid` -- creates a new commit undoing
+/// that commit's changes (exactly `git revert`), never rewriting history. A
+/// revert that conflicts is reported honestly rather than committed.
+fn git_revert_commit(project_root: &str, oid: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let new_oid = repo
+        .revert_commit(oid)
+        .map_err(|e| format!("git revert: {e}"))?;
+    Ok(serde_json::json!({ "ok": true, "oid": new_oid.to_string() }))
+}
+
 /// Real staged/unstaged diff for one file, reusing the already-tested
 /// `compute_diff` (§75.68) -- real git semantics, not a simplified
 /// approximation. `staged: true` diffs `HEAD`'s own blob against the
@@ -4057,6 +4069,11 @@ pub fn handle_request(
             let root = get_str_param(&req.params, "project_root")?;
             let message = get_str_param(&req.params, "message")?;
             git_commit_amend(&root, &message)
+        })(),
+        "git_revert_commit" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let oid = get_str_param(&req.params, "oid")?;
+            git_revert_commit(&root, &oid)
         })(),
         "git_diff" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
@@ -5684,6 +5701,62 @@ mod tests {
         let commits = resp.result.unwrap()["commits"].as_array().unwrap().clone();
         assert_eq!(commits.len(), 1, "amend must not add a commit");
         assert_eq!(commits[0]["summary"], "amended");
+    }
+
+    #[test]
+    fn git_revert_commit_adds_an_undo_commit_through_the_dispatch_path() {
+        let tmp = TempRepo::new("revert_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "line one\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "first" }),
+        );
+        std::fs::write(tmp.dir.join("f.txt"), "line one\nline two\n").unwrap();
+        call(
+            &state,
+            3,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        let commit_resp = call(
+            &state,
+            4,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "add line two" }),
+        );
+        let bad_oid = commit_resp.result.unwrap()["oid"].as_str().unwrap().to_string();
+        // Revert the second commit -> a new commit that removes line two.
+        let resp = call(
+            &state,
+            5,
+            "git_revert_commit",
+            serde_json::json!({ "project_root": root, "oid": bad_oid }),
+        );
+        assert_eq!(resp.result.unwrap()["ok"], true);
+        // Three commits now; the newest is a "Revert" commit; file back to v1.
+        let resp = call(
+            &state,
+            6,
+            "git_log",
+            serde_json::json!({ "project_root": root, "max": 10 }),
+        );
+        let commits = resp.result.unwrap()["commits"].as_array().unwrap().clone();
+        assert_eq!(commits.len(), 3, "revert must add a commit, not rewrite history");
+        assert_eq!(commits[0]["summary"], "Revert \"add line two\"");
+        assert_eq!(
+            std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "line one\n"
+        );
     }
 
     #[test]
