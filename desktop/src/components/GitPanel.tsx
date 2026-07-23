@@ -57,24 +57,117 @@ function formatAge(unixSeconds: number): string {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
-/** Real diff rendering -- ported verbatim from `LeoChatPanel.tsx`'s own
- * `DiffView` (one `<div>` per real line, colored by its real `+`/`-`/` `
- * prefix). Deliberately duplicated rather than extracted into a shared
- * component -- the two call sites (Leo's own generated-edit preview here,
- * a real git diff) have nothing else in common, and this is small enough
- * that a shared abstraction would cost more than it saves. */
+/** Split a line's content into word/whitespace/punctuation tokens for
+ * word-level (intra-line) diffing. */
+function tokenizeForDiff(s: string): string[] {
+  return s.match(/[A-Za-z0-9_]+|\s+|[^A-Za-z0-9_\s]/g) ?? [];
+}
+
+/** LCS-based token diff: returns which tokens of each side are *changed*
+ * (i.e. not part of the longest common subsequence). */
+function tokenDiff(a: string[], b: string[]): [boolean[], boolean[]] {
+  const n = a.length;
+  const m = b.length;
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const aChanged = new Array(n).fill(true);
+  const bChanged = new Array(m).fill(true);
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      aChanged[i] = false;
+      bChanged[j] = false;
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+  return [aChanged, bChanged];
+}
+
+/** Merge adjacent same-flag tokens into contiguous rendered segments. */
+function toSegments(tokens: string[], changed: boolean[]): { text: string; changed: boolean }[] {
+  const out: { text: string; changed: boolean }[] = [];
+  for (let k = 0; k < tokens.length; k++) {
+    const last = out[out.length - 1];
+    if (last && last.changed === changed[k]) last.text += tokens[k];
+    else out.push({ text: tokens[k], changed: changed[k] });
+  }
+  return out;
+}
+
+/** Real diff rendering -- one `<div>` per real line, colored by its real
+ * `+`/`-`/` ` prefix, now with word-level (intra-line) highlighting: a run
+ * of removed lines immediately followed by added lines is paired up and the
+ * changed *words* within each pair are emphasized, so a one-token edit no
+ * longer reads as a whole line replaced. Deliberately duplicated rather than
+ * extracted into a shared component -- the two call sites (Leo's own
+ * generated-edit preview, a real git diff) have nothing else in common. */
 function DiffView({ diff }: { diff: string }): React.ReactElement {
-  const lines = diff.split("\n").filter((_, i, arr) => !(i === arr.length - 1 && arr[i] === ""));
-  if (lines.length === 0) {
+  const raw = diff.split("\n").filter((_, i, arr) => !(i === arr.length - 1 && arr[i] === ""));
+  if (raw.length === 0) {
     return <div className="leo-diff mono git-panel-empty">No changes.</div>;
   }
+  const lines = raw.map((line) => {
+    const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "ctx";
+    return { kind, prefix: line ? line[0] : " ", content: line ? line.slice(1) : "", raw: line };
+  });
+
+  // Pair adjacent removed/added runs and compute word-level segments per paired line.
+  const wordSegs = new Map<number, { text: string; changed: boolean }[]>();
+  let idx = 0;
+  while (idx < lines.length) {
+    if (lines[idx].kind !== "del") {
+      idx++;
+      continue;
+    }
+    let d = idx;
+    while (d < lines.length && lines[d].kind === "del") d++;
+    let a = d;
+    while (a < lines.length && lines[a].kind === "add") a++;
+    const pairs = Math.min(d - idx, a - d);
+    for (let k = 0; k < pairs; k++) {
+      const delIdx = idx + k;
+      const addIdx = d + k;
+      const at = tokenizeForDiff(lines[delIdx].content);
+      const bt = tokenizeForDiff(lines[addIdx].content);
+      const [ac, bc] = tokenDiff(at, bt);
+      wordSegs.set(delIdx, toSegments(at, ac));
+      wordSegs.set(addIdx, toSegments(bt, bc));
+    }
+    idx = a; // always > current idx (a >= d >= idx + 1)
+  }
+
   return (
     <pre className="leo-diff mono">
       {lines.map((line, i) => {
-        const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "ctx";
+        const segs = wordSegs.get(i);
         return (
-          <div key={i} className={`leo-diff-line leo-diff-${kind}`}>
-            {line || " "}
+          <div key={i} className={`leo-diff-line leo-diff-${line.kind}`}>
+            {segs ? (
+              <>
+                {line.prefix}
+                {segs.map((s, si) =>
+                  s.changed ? (
+                    <span key={si} className={`leo-diff-word leo-diff-word-${line.kind}`}>
+                      {s.text}
+                    </span>
+                  ) : (
+                    <React.Fragment key={si}>{s.text}</React.Fragment>
+                  )
+                )}
+              </>
+            ) : (
+              line.raw || " "
+            )}
           </div>
         );
       })}

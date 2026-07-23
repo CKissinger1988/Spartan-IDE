@@ -93,7 +93,7 @@ Priority key:
 | Per-hunk / partial staging | P2 | File-level staging only. |
 | ~~Stash UI~~ | ✅ done | Shipped — Stash (with optional message) / Pop / Apply / Drop in both Git panels (`spartan_git` stash ops). `apply` (keep-and-apply, distinct from pop which drops) + stash-message entry now landed too. |
 | Merge-conflict resolution UI | P2 | None. |
-| Side-by-side + word-level diff | P2 | Diff is line-level (`+`/`-`/context) only. |
+| ~~Word-level diff~~ / side-by-side | ✅ word-level done; side-by-side P3 | Word-level (intra-line) highlighting shipped in both Git panels' `DiffView` (client-side LCS token diff pairs adjacent `-`/`+` runs and emphasizes only the changed words). Side-by-side layout remains a P3 follow-up. |
 | ~~Remote-branch listing~~ | ✅ done | Shipped — the branch switcher now lists `refs/remotes/*` (as of the last fetch) under "Remote branches"; clicking one creates a local tracking branch and safe-checks it out (`spartan_git::checkout_remote_branch`). Live-verified with a bare remote, cross-checked against the git CLI. |
 | Rebase / cherry-pick UI | P3 | None. |
 

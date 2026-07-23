@@ -6070,6 +6070,32 @@ first — it's the parity reference until each row there is actually reimplement
   same `git_stash_apply` Rust path both shells send through); no partial/selective stash, no
   stash-includes-untracked option (matches git's own default and the Stash UI's own existing v1
   scope). This closes both of task #248's own explicitly-named follow-ups.
+- **Real, working code — word-level (intra-line) diff highlighting, a P2 Git backlog item
+  enhancing the already-shipped line-level diff view (task #253)**: user-requested ("Continue the
+  roadmap and do not stop"). The Git diff view (tasks #229-237) rendered a real line-level `+`/`-`/
+  context diff but a one-word change read as a whole line replaced. The shared `DiffView` (both
+  shells' `GitPanel.tsx`, deliberately duplicated per the established convention) now pairs each run
+  of removed lines with the immediately-following run of added lines and, for each `-`/`+` pair,
+  computes a real client-side **LCS token diff** (`tokenizeForDiff` splits into word/whitespace/
+  punctuation tokens; `tokenDiff` walks the LCS DP table to mark which tokens of each side are *not*
+  in the longest common subsequence; `toSegments` merges adjacent same-flag tokens) and emphasizes
+  only the genuinely-changed words with a stronger accent background, leaving the shared surrounding
+  text plain. Pure client-side -- no backend/protocol change, reusing the existing `compute_diff`
+  output unchanged. New `.leo-diff-word`/`.leo-diff-word-add`/`.leo-diff-word-del` CSS in both
+  shells' `app.css`. **Real, live, end-to-end Playwright verification against the actual compiled
+  `web/dist` served by a real running `spartan-devserver`** (not a mock): a real fixture with a
+  single-word change on one line (`the quick brown fox` -> `the quick RED fox`) -- clicking the ±
+  diff button rendered the real diff, and a DOM assertion confirmed *only* `brown` carried the
+  del-word highlight and *only* `RED` carried the add-word highlight, while the shared `the quick `/
+  ` fox` were provably not inside any word span. Full `cargo fmt --all -- --check` clean (zero Rust
+  changes -- pure TypeScript/React/CSS feature); both shells' `tsc --noEmit`/`vite build` clean.
+  **What this does not confirm**: no live Electron-window verification of `desktop/` (the standing
+  gap since §75.59 -- `DiffView` is pure client-side rendering with zero IPC difference between the
+  shells, so the web live run exercises byte-identical component logic; verified additionally via
+  `desktop/`'s own typecheck); no side-by-side (split) layout (a real, named P3 follow-up -- this is
+  the higher-value inline-emphasis half); no character-level (sub-token) diff (word/token granularity
+  only); no word-level diff in the reference wgpu shell (that shell has no `DiffView`/git diff UI --
+  same established "Electron-shells-only" scope every recent Git pass has carried).
 
 ## Build & test
 
