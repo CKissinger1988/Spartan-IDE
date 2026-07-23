@@ -90,7 +90,7 @@ fn dap_update_event(doc_id: u64, update: DapUpdate) -> Event {
 pub fn dap_launch(
     doc_id: u64,
     path: &Path,
-    break_lines: &[i64],
+    breakpoints: &[spartan_dap::Breakpoint],
     out_tx: Sender<String>,
 ) -> Result<Arc<DapSession>, String> {
     let registry = LanguageRegistry::curated_default();
@@ -128,7 +128,7 @@ pub fn dap_launch(
         &program_path,
         &project_root,
         path,
-        break_lines,
+        breakpoints,
     );
     let session = Arc::new(session);
 
@@ -198,7 +198,7 @@ mod tests {
         std::fs::write(&file, "hello").unwrap();
 
         let (tx, _rx) = std::sync::mpsc::channel();
-        match dap_launch(0, &file, &[1], tx) {
+        match dap_launch(0, &file, &[spartan_dap::Breakpoint::line(1)], tx) {
             Err(message) => assert!(message.contains("no language profile")),
             Ok(_) => panic!("expected a real Err, got Ok"),
         }
@@ -218,7 +218,7 @@ mod tests {
         std::fs::write(&file, "package main\nfunc main() {}\n").unwrap();
 
         let (tx, _rx) = std::sync::mpsc::channel();
-        match dap_launch(0, &file, &[1], tx) {
+        match dap_launch(0, &file, &[spartan_dap::Breakpoint::line(1)], tx) {
             Err(message) => {
                 assert!(
                     message.contains("go"),
@@ -246,7 +246,7 @@ mod tests {
         std::fs::write(&file, "print('hi')\n").unwrap();
 
         let (tx, _rx) = std::sync::mpsc::channel();
-        match dap_launch(0, &file, &[1], tx) {
+        match dap_launch(0, &file, &[spartan_dap::Breakpoint::line(1)], tx) {
             Err(message) => assert!(message.contains("no real project root")),
             Ok(_) => panic!("expected a real Err, got Ok"),
         }

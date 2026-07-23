@@ -2254,6 +2254,48 @@ fn pty_close(
     Ok(serde_json::json!({ "ok": true }))
 }
 
+/// Parses the `dap_launch` breakpoint list from request params. Accepts a
+/// real `breakpoints: [{line, condition?, logMessage?}]` array (the shape
+/// both shells now send, carrying conditional-breakpoint/logpoint info),
+/// and falls back to the older plain `break_lines: [<int>]` numeric array
+/// (an ordinary line breakpoint each) so a client that hasn't been updated
+/// still works. A malformed entry with no numeric `line` is skipped.
+fn parse_breakpoints(params: &serde_json::Value) -> Vec<spartan_dap::Breakpoint> {
+    if let Some(arr) = params.get("breakpoints").and_then(|v| v.as_array()) {
+        return arr
+            .iter()
+            .filter_map(|entry| {
+                let line = entry.get("line").and_then(|v| v.as_i64())?;
+                let condition = entry
+                    .get("condition")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .filter(|s| !s.trim().is_empty());
+                let log_message = entry
+                    .get("logMessage")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .filter(|s| !s.trim().is_empty());
+                Some(spartan_dap::Breakpoint {
+                    line,
+                    condition,
+                    log_message,
+                })
+            })
+            .collect();
+    }
+    params
+        .get("break_lines")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_i64())
+                .map(spartan_dap::Breakpoint::line)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Real DAP launch (§132) -- looks up the already-open document's real
 /// on-disk path (a debug session targets a real file, not raw text a
 /// client might be mid-editing unsaved), then hands off to
@@ -2266,7 +2308,7 @@ fn dap_launch(
     state: &Arc<Mutex<BackendState>>,
     out_tx: Sender<String>,
     doc_id: u64,
-    break_lines: &[i64],
+    breakpoints: &[spartan_dap::Breakpoint],
 ) -> Result<serde_json::Value, String> {
     let path = {
         let guard = state.lock().map_err(|_| "backend state poisoned")?;
@@ -2276,7 +2318,7 @@ fn dap_launch(
             .ok_or_else(|| format!("no open document with id {doc_id}"))?;
         doc.path.clone()
     };
-    let session = dap_integration::dap_launch(doc_id, &path, break_lines, out_tx)?;
+    let session = dap_integration::dap_launch(doc_id, &path, breakpoints, out_tx)?;
     let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
     let session_id = guard.next_dap_id;
     guard.next_dap_id += 1;
@@ -3776,13 +3818,8 @@ pub fn handle_request(
         "pty_close" => get_u64_param(&req.params, "session_id").and_then(|id| pty_close(state, id)),
         "dap_launch" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;
-            let break_lines: Vec<i64> = req
-                .params
-                .get("break_lines")
-                .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
-                .unwrap_or_default();
-            dap_launch(state, out_tx.clone(), doc_id, &break_lines)
+            let breakpoints = parse_breakpoints(&req.params);
+            dap_launch(state, out_tx.clone(), doc_id, &breakpoints)
         })(),
         "dap_continue" => get_u64_param(&req.params, "session_id")
             .and_then(|id| dap_command(state, id, spartan_dap::DapCommand::Continue)),

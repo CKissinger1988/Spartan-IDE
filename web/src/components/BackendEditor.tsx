@@ -28,6 +28,17 @@ export interface LspDiagnostic {
   message: string;
 }
 
+/** One real source breakpoint, 1-indexed `line`. `condition` is a real
+ * DAP conditional-breakpoint expression (stops only when truthy) and
+ * `logMessage` turns it into a real logpoint (logs, never stops) -- both
+ * optional; a bare `{ line }` is an ordinary breakpoint. Serialized into
+ * `dap_launch`'s `breakpoints: [{line, condition?, logMessage?}]` param. */
+export interface BreakpointSpec {
+  line: number;
+  condition?: string;
+  logMessage?: string;
+}
+
 const SEVERITY_RANK: Record<string, number> = {
   error: 0,
   warning: 1,
@@ -885,13 +896,18 @@ interface BackendEditorProps {
   file: BackendOpenFile;
   onContentChange: (path: string, content: string, saved?: boolean) => void;
   diagnostics?: LspDiagnostic[];
-  /** Real, 1-indexed breakpoint line numbers for this file -- matches
+  /** Real, 1-indexed breakpoint specs for this file -- matches
    * `desktop/src/components/Editor.tsx`'s own convention exactly (the
-   * gutter's own displayed line numbers, and the real DAP `break_lines`
-   * param `App.tsx` sends to `dap_launch` directly, no translation). */
-  breakpoints?: number[];
-  /** Real click-to-toggle -- `App.tsx` owns the actual breakpoint set. */
+   * gutter's own displayed line numbers, and the real DAP `breakpoints`
+   * param `App.tsx` sends to `dap_launch` directly, no translation). Each
+   * carries an optional `condition`/`logMessage`. */
+  breakpoints?: BreakpointSpec[];
+  /** Real click-to-toggle -- `App.tsx` owns the actual breakpoint set.
+   * Always creates a plain breakpoint or removes whatever is there. */
   onToggleBreakpoint?: (line: number) => void;
+  /** Real edit of a breakpoint's condition/log message (right-click a
+   * gutter line). Empty strings for both clears them back to plain. */
+  onEditBreakpoint?: (line: number, condition: string, logMessage: string) => void;
   /** Real, 1-indexed line the active DAP session is currently stopped
    * at for this file, or `null`/`undefined` when nothing is stopped. */
   stoppedLine?: number | null;
@@ -963,6 +979,7 @@ export default function BackendEditor({
   diagnostics = [],
   breakpoints = [],
   onToggleBreakpoint,
+  onEditBreakpoint,
   stoppedLine = null,
   onJumpToDefinition,
   pendingJump = null,
@@ -1040,7 +1057,20 @@ export default function BackendEditor({
     return map;
   }, [diagnostics]);
 
-  const breakpointSet = useMemo(() => new Set(breakpoints), [breakpoints]);
+  const breakpointMap = useMemo(() => {
+    const m = new Map<number, BreakpointSpec>();
+    for (const bp of breakpoints) m.set(bp.line, bp);
+    return m;
+  }, [breakpoints]);
+
+  // Real inline breakpoint condition/logpoint editor (right-click a gutter
+  // line), ported verbatim from `desktop/src/components/Editor.tsx`.
+  const [breakpointEdit, setBreakpointEdit] = useState<{
+    line: number;
+    condition: string;
+    logMessage: string;
+    top: number;
+  } | null>(null);
 
   const [hoverState, setHoverState] = useState<HoverState | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2334,18 +2364,43 @@ export default function BackendEditor({
         {lineNumbers.map((n) => {
           const lineDiags = diagnosticsByLine.get(n - 1);
           const severity = lineDiags ? worstSeverity(lineDiags) : null;
-          const hasBreakpoint = breakpointSet.has(n);
+          const bp = breakpointMap.get(n);
+          const hasBreakpoint = bp !== undefined;
+          const isConditional = !!(bp && (bp.condition || bp.logMessage));
+          const isLogpoint = !!(bp && bp.logMessage);
           const isStopped = stoppedLine === n;
+          const bpTitle = bp
+            ? isLogpoint
+              ? `Logpoint: ${bp.logMessage}${bp.condition ? `\nCondition: ${bp.condition}` : ""}\n(right-click to edit)`
+              : bp.condition
+                ? `Conditional breakpoint: ${bp.condition}\n(right-click to edit)`
+                : "Breakpoint (right-click to add a condition/logpoint)"
+            : undefined;
           return (
             <div
               key={n}
               className={`editor-gutter-line${severity ? ` editor-gutter-line-${severity}` : ""}${isStopped ? " editor-gutter-line-stopped" : ""}`}
-              title={lineDiags?.map((d) => `${d.severity}: ${d.message}`).join("\n")}
+              title={
+                bpTitle ?? lineDiags?.map((d) => `${d.severity}: ${d.message}`).join("\n")
+              }
               onClick={() => onToggleBreakpoint?.(n)}
+              onContextMenu={
+                onEditBreakpoint
+                  ? (e) => {
+                      e.preventDefault();
+                      setBreakpointEdit({
+                        line: n,
+                        condition: bp?.condition ?? "",
+                        logMessage: bp?.logMessage ?? "",
+                        top: e.clientY,
+                      });
+                    }
+                  : undefined
+              }
             >
               {onToggleBreakpoint && (
                 <span
-                  className={`editor-gutter-breakpoint-dot${hasBreakpoint ? " editor-gutter-breakpoint-dot-active" : ""}`}
+                  className={`editor-gutter-breakpoint-dot${hasBreakpoint ? " editor-gutter-breakpoint-dot-active" : ""}${isConditional ? " editor-gutter-breakpoint-dot-conditional" : ""}${isLogpoint ? " editor-gutter-breakpoint-dot-logpoint" : ""}`}
                 />
               )}
               {n}
@@ -2503,6 +2558,103 @@ export default function BackendEditor({
             onBlur={() => setGotoLineState(null)}
             placeholder={`Go to line (1-${lineCount})…`}
           />
+        </div>
+      )}
+      {breakpointEdit && onEditBreakpoint && (
+        <div
+          className="editor-breakpoint-edit-box mono"
+          style={{ top: breakpointEdit.top }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="editor-breakpoint-edit-title">
+            Breakpoint · line {breakpointEdit.line}
+          </div>
+          <label className="editor-breakpoint-edit-field">
+            <span>Condition</span>
+            <input
+              autoFocus
+              className="editor-breakpoint-edit-input"
+              value={breakpointEdit.condition}
+              placeholder="e.g. i == 3"
+              onChange={(e) =>
+                setBreakpointEdit((prev) => (prev ? { ...prev, condition: e.target.value } : prev))
+              }
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  onEditBreakpoint(
+                    breakpointEdit.line,
+                    breakpointEdit.condition.trim(),
+                    breakpointEdit.logMessage.trim()
+                  );
+                  setBreakpointEdit(null);
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setBreakpointEdit(null);
+                }
+              }}
+            />
+          </label>
+          <label className="editor-breakpoint-edit-field">
+            <span>Log message</span>
+            <input
+              className="editor-breakpoint-edit-input"
+              value={breakpointEdit.logMessage}
+              placeholder="e.g. hit with x={x}"
+              onChange={(e) =>
+                setBreakpointEdit((prev) => (prev ? { ...prev, logMessage: e.target.value } : prev))
+              }
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  onEditBreakpoint(
+                    breakpointEdit.line,
+                    breakpointEdit.condition.trim(),
+                    breakpointEdit.logMessage.trim()
+                  );
+                  setBreakpointEdit(null);
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setBreakpointEdit(null);
+                }
+              }}
+            />
+          </label>
+          <div className="editor-breakpoint-edit-actions">
+            <button
+              type="button"
+              className="editor-find-btn"
+              onClick={() => {
+                onEditBreakpoint(
+                  breakpointEdit.line,
+                  breakpointEdit.condition.trim(),
+                  breakpointEdit.logMessage.trim()
+                );
+                setBreakpointEdit(null);
+              }}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              className="editor-find-btn"
+              onClick={() => {
+                onEditBreakpoint(breakpointEdit.line, "", "");
+                setBreakpointEdit(null);
+              }}
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              className="editor-find-btn"
+              onClick={() => setBreakpointEdit(null)}
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       )}
       {findState && (

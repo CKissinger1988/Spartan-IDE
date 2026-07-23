@@ -7,6 +7,40 @@
 
 use serde_json::{json, Value};
 use std::collections::VecDeque;
+
+/// One real source breakpoint for `setBreakpoints`. `condition` is a real
+/// DAP conditional-breakpoint expression (the adapter only stops when it
+/// evaluates truthy); `log_message` turns it into a real *logpoint* (the
+/// adapter logs the interpolated message and does not stop). Both optional
+/// -- a bare `Breakpoint::line(n)` is an ordinary line breakpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Breakpoint {
+    pub line: i64,
+    pub condition: Option<String>,
+    pub log_message: Option<String>,
+}
+
+impl Breakpoint {
+    pub fn line(line: i64) -> Self {
+        Self {
+            line,
+            condition: None,
+            log_message: None,
+        }
+    }
+
+    fn to_dap(&self) -> Value {
+        let mut obj = serde_json::Map::new();
+        obj.insert("line".to_string(), json!(self.line));
+        if let Some(c) = self.condition.as_ref().filter(|s| !s.trim().is_empty()) {
+            obj.insert("condition".to_string(), json!(c));
+        }
+        if let Some(m) = self.log_message.as_ref().filter(|s| !s.trim().is_empty()) {
+            obj.insert("logMessage".to_string(), json!(m));
+        }
+        Value::Object(obj)
+    }
+}
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -185,7 +219,7 @@ impl DapClient {
         program: &str,
         cwd: &str,
         source_path: &str,
-        break_lines: &[i64],
+        breakpoints: &[Breakpoint],
     ) -> Option<Value> {
         self.launch_and_break_with_body(
             json!({
@@ -195,7 +229,7 @@ impl DapClient {
                 "stopOnEntry": false,
             }),
             source_path,
-            break_lines,
+            breakpoints,
         )
     }
 
@@ -203,7 +237,7 @@ impl DapClient {
         &mut self,
         launch_body: Value,
         source_path: &str,
-        break_lines: &[i64],
+        breakpoints: &[Breakpoint],
     ) -> Option<Value> {
         let init_resp = self.request(
             "initialize",
@@ -229,7 +263,7 @@ impl DapClient {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or(source_path);
-        let bp_lines: Vec<Value> = break_lines.iter().map(|l| json!({"line": l})).collect();
+        let bp_lines: Vec<Value> = breakpoints.iter().map(Breakpoint::to_dap).collect();
         let set_bp_resp = self.request(
             "setBreakpoints",
             json!({

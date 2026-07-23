@@ -5922,6 +5922,48 @@ first — it's the parity reference until each row there is actually reimplement
   stash message entry UI (auto-generated `WIP on <branch>` message only -- a real, minor, named
   follow-up); no `stash apply` (keep-and-apply) distinct from `pop`, no untracked-file stashing
   (matches git's own default), no partial/selective stash.
+- **Real, working code — conditional breakpoints + logpoints, a `docs/FUTURE_FEATURES.md` roadmap
+  feature (task #249)**: user-requested ("Work on implementing the future features"). Extends the
+  already-real DAP surface (§132/§133) from plain line breakpoints to real DAP conditional
+  breakpoints (the adapter stops only when a condition expression evaluates truthy) and logpoints
+  (the adapter logs an interpolated message and does *not* stop). `spartan_dap::client::Breakpoint`
+  became a real struct `{ line, condition: Option<String>, log_message: Option<String> }` with a
+  `to_dap()` that emits the real DAP `{"line", "condition"?, "logMessage"?}` per-breakpoint shape
+  (trimmed-empty fields omitted); `launch_and_break`/`launch_and_break_with_body`/`DapSession::
+  launch` and `spartan-backend::dap_integration::dap_launch` all thread `&[Breakpoint]` instead of
+  the old `&[i64]` line list. `spartan-backend`'s `dap_launch` dispatch gained a real
+  `parse_breakpoints` accepting the new `breakpoints: [{line, condition?, logMessage?}]` param
+  **with a backward-compat fallback** to the older plain `break_lines: [<int>]` numeric array (so
+  an un-updated client still works -- the existing `dap_debugpy_integration.rs` test exercises that
+  fallback path unchanged). Both Electron-based shells' editor breakpoint model changed from
+  `number[]` to a real `BreakpointSpec[]` (`{ line, condition?, logMessage? }`): left-click still
+  toggles a plain breakpoint, **right-click a gutter line opens a real inline condition/log-message
+  editor** (Save/Clear/Cancel); a conditional breakpoint renders as a diamond, a logpoint gold.
+  `App.tsx` in both shells owns the set (survives tab switch), sends the real `breakpoints` param on
+  `dap_launch`. **A real bug found only by running the tests**: the new conditional-breakpoint
+  integration test formatted `DapUpdate` with `{:?}` but the enum had no `Debug` derive -- fixed by
+  deriving it. 1 new Rust unit test (`parse_breakpoints`' new + fallback shapes covered by dispatch)
+  plus a real, live, self-skipping **conditional-breakpoint integration test** against a real
+  `debugpy` session in `dap_python_integration.rs` -- a `for i in range(10): total += i` loop with a
+  `condition: "i == 3"` breakpoint, asserting the adapter runs i=0,1,2 *without stopping* and stops
+  only on the real iteration where `i == 3` (confirmed passing, 8.28s, not skipped). Full `cargo fmt
+  --all -- --check`/`cargo clippy -p spartan-dap -p spartan-backend --release --all-targets`/`cargo
+  test -p spartan-dap --release`/`cargo test -p spartan-backend --release --lib` (195 lib tests) all
+  clean; both shells' `tsc --noEmit`/`build` clean. **Real, live, end-to-end Playwright verification
+  against the actual compiled `web/dist` served by a real running `spartan-devserver`** (not a mock):
+  opened a real `loop.py`, set a breakpoint on the loop body (line 3), right-clicked it and set the
+  condition `i == 3` (the diamond conditional dot rendered), clicked Debug -- a real `dap_launch`
+  spawned a real `debugpy.adapter` session, and it **stopped with `i = 3, total = 3`** (screenshot-
+  confirmed "Stopped: breakpoint at line 3"), proving the condition genuinely skipped i=0,1,2;
+  Continue then ran to a real "Program exited". **What this does not confirm**: no live
+  Electron-window verification of `desktop/` (the standing gap since §75.59 -- verified via typecheck
+  + the identical shared component logic the web live run exercises, and the same `parse_breakpoints`
+  Rust path both shells send through); logpoints are wired end-to-end (the `logMessage` field flows
+  through `to_dap` into the real `setBreakpoints` request) but the *log-output display* of a
+  logpoint's message isn't surfaced in either shell's UI yet -- a real, named follow-up (the debug
+  panel shows stop/variable state, not a DAP `output` event stream); no data breakpoints, no
+  rope-anchored breakpoints (line-number only, matching §75.8's own named v1 scope); no conditional
+  breakpoint exercised against any adapter beyond debugpy in this pass's live run.
 
 ## Build & test
 

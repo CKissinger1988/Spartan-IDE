@@ -90,7 +90,7 @@ fn real_breakpoint_hits_then_continue_runs_to_a_real_exit() {
         &bin_path,
         &dir,
         &src_path,
-        &[2],
+        &[spartan_dap::Breakpoint::line(2)],
     );
 
     let initial = session
@@ -148,7 +148,7 @@ fn real_step_over_advances_to_the_real_next_line() {
         &bin_path,
         &dir,
         &src_path,
-        &[2],
+        &[spartan_dap::Breakpoint::line(2)],
     );
 
     let initial = session.recv_update().expect("expected a real initial stop");

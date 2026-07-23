@@ -21,7 +21,7 @@
 //!    channel every other command already uses.
 
 use crate::build::{self, BuildResult};
-use crate::client::{DapClient, DEFAULT_TIMEOUT};
+use crate::client::{Breakpoint, DapClient, DEFAULT_TIMEOUT};
 use serde::Serialize;
 use spartan_languages::CommandSpec;
 use std::path::Path;
@@ -57,6 +57,7 @@ pub struct DapStopped {
     pub variables: Vec<DapVariable>,
 }
 
+#[derive(Debug)]
 pub enum DapUpdate {
     /// A real Cargo (or other configured build system) compile error --
     /// reported before any debug adapter is even spawned.
@@ -84,7 +85,7 @@ impl DapSession {
         program_path: &Path,
         cwd: &Path,
         source_path: &Path,
-        break_lines: &[i64],
+        breakpoints: &[Breakpoint],
     ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<DapCommand>();
         let (updates_tx, updates_rx) = mpsc::channel::<DapUpdate>();
@@ -95,7 +96,7 @@ impl DapSession {
         let mut program_path = program_path.to_path_buf();
         let cwd = cwd.to_string_lossy().to_string();
         let source_path = source_path.to_string_lossy().to_string();
-        let break_lines = break_lines.to_vec();
+        let breakpoints = breakpoints.to_vec();
 
         thread::spawn(move || {
             if needs_build {
@@ -121,7 +122,7 @@ impl DapSession {
             };
 
             let mut thread_id =
-                match client.launch_and_break(&program, &cwd, &source_path, &break_lines) {
+                match client.launch_and_break(&program, &cwd, &source_path, &breakpoints) {
                     Some(result) => {
                         let tid = result["stopped"]["body"]["threadId"].as_i64().unwrap_or(0);
                         let reason = result["stopped"]["body"]["reason"]

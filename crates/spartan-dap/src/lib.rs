@@ -11,5 +11,5 @@ mod client;
 mod session;
 
 pub use build::{build_debug_binary, BuildResult};
-pub use client::{DapClient, DEFAULT_TIMEOUT};
+pub use client::{Breakpoint, DapClient, DEFAULT_TIMEOUT};
 pub use session::{DapCommand, DapFrame, DapSession, DapStopped, DapUpdate, DapVariable};

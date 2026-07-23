@@ -64,7 +64,7 @@ fn real_debugpy_breakpoint_hits_then_continue_runs_to_a_real_exit() {
         &src_path,
         &dir,
         &src_path,
-        &[2],
+        &[spartan_dap::Breakpoint::line(2)],
     );
 
     let initial = session
@@ -94,6 +94,75 @@ fn real_debugpy_breakpoint_hits_then_continue_runs_to_a_real_exit() {
     assert!(
         matches!(after_continue, DapUpdate::Exited),
         "expected the program to run to a real exit after Continue"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// A loop, so a *conditional* breakpoint has something to skip past: the
+// adapter must only stop when the condition is truthy, not on every hit.
+const LOOP_FIXTURE: &str = "total = 0\nfor i in range(10):\n    total += i\nprint(total)\n";
+
+#[test]
+fn real_debugpy_conditional_breakpoint_only_stops_when_the_condition_is_true() {
+    if !debugpy_adapter_available() {
+        eprintln!("SKIP: python3 -c 'import debugpy.adapter' failed -- debugpy not installed");
+        return;
+    }
+    let dir = work_dir("spartan-dap-debugpy-cond-test");
+    let src_path = dir.join("loop.py");
+    std::fs::write(&src_path, LOOP_FIXTURE).unwrap();
+
+    let adapter_command = CommandSpec {
+        program: "python3".to_string(),
+        args: vec!["-m".to_string(), "debugpy.adapter".to_string()],
+    };
+    // `total += i` is line 3 (1-indexed). The condition `i == 3` means the
+    // adapter runs the loop body for i=0,1,2 without stopping and only
+    // stops on the real iteration where i == 3.
+    let breakpoint = spartan_dap::Breakpoint {
+        line: 3,
+        condition: Some("i == 3".to_string()),
+        log_message: None,
+    };
+    let session = DapSession::launch(
+        &adapter_command,
+        false,
+        &dir,
+        &src_path,
+        &dir,
+        &src_path,
+        std::slice::from_ref(&breakpoint),
+    );
+
+    let initial = session
+        .recv_update()
+        .expect("expected a real initial update after launching");
+    let DapUpdate::Stopped(stopped) = initial else {
+        panic!("expected the first update to be Stopped, got {initial:?}");
+    };
+    let frame = stopped.frame.expect("expected a real stack frame");
+    assert_eq!(
+        frame.line, 3,
+        "expected the stop at the loop body: {frame:?}"
+    );
+    // The whole point: it stopped on the iteration where the condition held.
+    assert!(
+        stopped
+            .variables
+            .iter()
+            .any(|v| v.name == "i" && v.value == "3"),
+        "conditional breakpoint should stop only when i == 3, got: {:?}",
+        stopped.variables
+    );
+
+    session.send_command(DapCommand::Continue);
+    let after = session
+        .recv_update()
+        .expect("expected a real update after Continue");
+    assert!(
+        matches!(after, DapUpdate::Exited),
+        "expected a real exit after Continue (i never equals 3 again): {after:?}"
     );
 
     std::fs::remove_dir_all(&dir).ok();

@@ -44,7 +44,11 @@ Priority key:
 7. **tree-sitter syntax highlighting in the Electron shells** (P2) — replace the current
    `highlight.js` lexical pass with the real tree-sitter engine already used in the wgpu shell
    (via `web-tree-sitter`), for correctness parity.
-8. **Conditional breakpoints + logpoints** (P2) — extends the already-real DAP surface.
+8. ~~**Conditional breakpoints + logpoints** (P2)~~ — ✅ **done**. `spartan_dap::Breakpoint`
+   carries `condition`/`log_message`, threaded through `dap_launch`'s `breakpoints:
+   [{line, condition?, logMessage?}]` param (with a backward-compat `break_lines` fallback);
+   right-click a gutter line in either shell to set a condition/logpoint. Live-verified against a
+   real `debugpy` session — a conditional breakpoint on a loop correctly stopped only when `i == 3`.
 9. **Web app: LSP/DAP/Leo/git in the pure client-side mode** (P2) — currently these only work in
    backend-connected mode; wiring them to the WebSocket transport closes the biggest `web/` gap.
 10. **Auto-update download + install + restart** (P2) — the checker exists (§75.49); completing
@@ -74,7 +78,7 @@ Priority key:
 | Feature | Priority | Notes / grounding |
 |---|---|---|
 | DAP for C#/Kotlin/Java/Go/TS in the shells | P2 | Registry-configured; needs a program-path collection UI (only Rust/Python launch today). |
-| Conditional breakpoints + logpoints | P2 | Line breakpoints only. |
+| ~~Conditional breakpoints + logpoints~~ | ✅ done | Shipped — right-click a gutter line to set a DAP `condition`/`logMessage`; live-verified against real debugpy. |
 | Watch expressions / REPL eval | P2 | Stack + variables shown; no watch/eval. |
 | Data breakpoints | P3 | Not present. |
 | Rope-anchored breakpoints | P3 | Line-number only; edits above a breakpoint shift it (§75.8). |

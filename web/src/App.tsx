@@ -9,6 +9,7 @@ import BackendEditor, {
   type BackendOpenFile,
   type LspDiagnostic,
   type WorkspaceTextEdit,
+  type BreakpointSpec,
 } from "./components/BackendEditor";
 import DebugPanel, { type DapSessionState } from "./components/DebugPanel";
 import LogcatPanel from "./components/LogcatPanel";
@@ -188,7 +189,7 @@ export default function App(): React.ReactElement {
   // file is live or has just finished (exited/errored), so the toolbar
   // can show its final state before the user dismisses it via Stop or
   // relaunches.
-  const [breakpointsByDoc, setBreakpointsByDoc] = useState<Record<number, number[]>>({});
+  const [breakpointsByDoc, setBreakpointsByDoc] = useState<Record<number, BreakpointSpec[]>>({});
   const [dapSessionByDoc, setDapSessionByDoc] = useState<Record<number, DapSessionState>>({});
   // Real android_detect/android_build_apk state (task #146), the web/
   // sibling of desktop/'s own StatusBar wiring (tasks #142/#144) -- these
@@ -561,9 +562,29 @@ export default function App(): React.ReactElement {
       const docId = activeBackendDocId;
       setBreakpointsByDoc((prev) => {
         const existing = prev[docId] ?? [];
-        const next = existing.includes(line)
-          ? existing.filter((l) => l !== line)
-          : [...existing, line].sort((a, b) => a - b);
+        const next = existing.some((b) => b.line === line)
+          ? existing.filter((b) => b.line !== line)
+          : [...existing, { line }].sort((a, b) => a.line - b.line);
+        return { ...prev, [docId]: next };
+      });
+    },
+    [activeBackendDocId]
+  );
+
+  // Real right-click condition/logpoint edit -- sets the given line's
+  // condition/log message (creating a breakpoint there if none exists);
+  // empty strings for both clears it back to a plain breakpoint.
+  const editBreakpoint = useCallback(
+    (line: number, condition: string, logMessage: string) => {
+      if (activeBackendDocId === null) return;
+      const docId = activeBackendDocId;
+      setBreakpointsByDoc((prev) => {
+        const existing = prev[docId] ?? [];
+        const spec: BreakpointSpec = { line };
+        if (condition) spec.condition = condition;
+        if (logMessage) spec.logMessage = logMessage;
+        const others = existing.filter((b) => b.line !== line);
+        const next = [...others, spec].sort((a, b) => a.line - b.line);
         return { ...prev, [docId]: next };
       });
     },
@@ -576,13 +597,20 @@ export default function App(): React.ReactElement {
   const dapLaunch = useCallback(() => {
     if (activeBackendDocId === null || !backendClient) return;
     const docId = activeBackendDocId;
-    const breakLines = breakpointsByDoc[docId] ?? [];
+    const breakpoints = breakpointsByDoc[docId] ?? [];
     setDapSessionByDoc((prev) => ({
       ...prev,
       [docId]: { sessionId: -1, status: "launching" },
     }));
     backendClient
-      .call("dap_launch", { doc_id: docId, break_lines: breakLines })
+      .call("dap_launch", {
+        doc_id: docId,
+        breakpoints: breakpoints.map((b) => ({
+          line: b.line,
+          condition: b.condition,
+          logMessage: b.logMessage,
+        })),
+      })
       .then((result) => {
         const { session_id } = result as { session_id: number };
         setDapSessionByDoc((prev) => ({
@@ -919,6 +947,7 @@ export default function App(): React.ReactElement {
                 diagnostics={diagnosticsByDoc[activeContent.file.docId]}
                 breakpoints={breakpointsByDoc[activeContent.file.docId] ?? []}
                 onToggleBreakpoint={toggleBreakpoint}
+                onEditBreakpoint={editBreakpoint}
                 stoppedLine={
                   dapSessionByDoc[activeContent.file.docId]?.status === "stopped"
                     ? (dapSessionByDoc[activeContent.file.docId]?.stopped?.frame?.line ?? null)
