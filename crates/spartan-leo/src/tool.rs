@@ -15,8 +15,18 @@
 //! here is unconditional.
 
 use std::fmt;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+/// Real default wall-clock bound for a Leo-driven `run_terminal` call. Chosen
+/// generous enough for a real build/test command (`cargo build`, `npm ci`) to
+/// finish, but finite so a genuinely hung command can never freeze the agent's
+/// execute loop forever (§75.66). Overridable per call via
+/// `Sandbox::run_terminal_with_timeout`.
+pub const DEFAULT_RUN_TERMINAL_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone)]
 pub enum ToolCall {
@@ -227,17 +237,145 @@ impl Sandbox {
     /// a real, separate, named limitation -- see this crate's own
     /// top-level doc comment).
     pub fn run_terminal(&self, command: &str) -> Result<ToolResult, SandboxError> {
+        self.run_terminal_with_timeout(command, DEFAULT_RUN_TERMINAL_TIMEOUT)
+    }
+
+    /// Real, timeout-bounded terminal execution -- closes the "the sandbox
+    /// method has no timeout" gap named on §75.66. A model-driven agent will
+    /// occasionally emit a command that never returns (an infinite loop, a
+    /// process blocking on stdin, a hung network fetch); without a bound that
+    /// freezes the entire execute loop forever. Three real, deliberate
+    /// hardening choices here, none of which the old `.output()` had:
+    ///   1. **stdin is `/dev/null`** (`Stdio::null()`), so a command that reads
+    ///      stdin gets an immediate EOF and exits rather than blocking on input
+    ///      no agent is there to type -- the single most common real "hang."
+    ///   2. **stdout/stderr are drained on their own threads**, so a command
+    ///      that produces a lot of output can't deadlock by filling a pipe
+    ///      buffer while the main thread is busy polling -- the classic
+    ///      spawn-then-wait pipe-buffer deadlock, avoided the same way this
+    ///      project's PTY/subprocess code already does elsewhere.
+    ///   3. **a wall-clock deadline** -- past it the child is `kill()`ed and a
+    ///      real, honest `exit_code: -1` plus a clear "[timed out after Ns...]"
+    ///      note appended to stderr is returned, so the model *sees* that its
+    ///      command was killed and can react, rather than the whole call
+    ///      erroring or (worse) hanging.
+    pub fn run_terminal_with_timeout(
+        &self,
+        command: &str,
+        timeout: Duration,
+    ) -> Result<ToolResult, SandboxError> {
         let canonical_root = self.project_root.canonicalize().map_err(SandboxError::Io)?;
-        let output = Command::new("sh")
-            .arg("-c")
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
             .arg(command)
             .current_dir(&canonical_root)
-            .output()
-            .map_err(SandboxError::Io)?;
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // Run the child in its own process group so a timeout can kill the
+        // *whole tree* (`sh` plus any grandchildren it spawned), not just `sh`.
+        // Critical for correctness here: an orphaned grandchild would otherwise
+        // keep the stdout/stderr pipe write-ends open, so the reader threads'
+        // `read_to_end` never hits EOF and their `join()` below would block
+        // until the grandchild finally exits -- defeating the timeout entirely.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+        let mut child = cmd.spawn().map_err(SandboxError::Io)?;
+
+        // Drain stdout/stderr concurrently (so a chatty command can't deadlock
+        // against a full pipe buffer while we poll for exit), delivering each
+        // buffer over a channel. Using a channel + `recv_timeout` rather than a
+        // blocking `join` is what makes the timeout *actually* bounded: if a
+        // killed process leaves an orphaned grandchild still holding a pipe
+        // write-end, the reader thread's `read_to_end` won't hit EOF, but we
+        // simply stop waiting for it after a short grace period instead of
+        // hanging on its join.
+        let (tx, rx) = std::sync::mpsc::channel::<(bool, Vec<u8>)>();
+        {
+            let tx_out = tx.clone();
+            let mut s = child.stdout.take();
+            thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(ref mut r) = s {
+                    let _ = r.read_to_end(&mut buf);
+                }
+                let _ = tx_out.send((true, buf));
+            });
+            let mut s = child.stderr.take();
+            thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(ref mut r) = s {
+                    let _ = r.read_to_end(&mut buf);
+                }
+                let _ = tx.send((false, buf));
+            });
+        }
+
+        let deadline = Instant::now() + timeout;
+        let mut timed_out = false;
+        let exit_code = loop {
+            match child.try_wait().map_err(SandboxError::Io)? {
+                Some(status) => break status.code().unwrap_or(-1),
+                None => {
+                    if Instant::now() >= deadline {
+                        // Best-effort kill of the whole process group so
+                        // grandchildren die too (see the `process_group(0)`
+                        // note above). A negative pid targets the group whose
+                        // pgid == the child's pid.
+                        #[cfg(unix)]
+                        {
+                            let _ = Command::new("kill")
+                                .arg("-KILL")
+                                .arg(format!("-{}", child.id()))
+                                .output();
+                        }
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        timed_out = true;
+                        break -1;
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+            }
+        };
+
+        // Collect the two reader buffers. On a clean exit the child is gone so
+        // both arrive at once; on a timeout we allow only a short grace period
+        // so a still-lingering pipe writer can never make this call hang.
+        let mut stdout_buf = Vec::new();
+        let mut stderr_buf = Vec::new();
+        let recv_deadline = Instant::now()
+            + if timed_out {
+                Duration::from_millis(500)
+            } else {
+                Duration::from_secs(10)
+            };
+        for _ in 0..2 {
+            let remaining = recv_deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(remaining) {
+                Ok((true, b)) => stdout_buf = b,
+                Ok((false, b)) => stderr_buf = b,
+                Err(_) => break,
+            }
+        }
+        let stdout = String::from_utf8_lossy(&stdout_buf).into_owned();
+        let mut stderr = String::from_utf8_lossy(&stderr_buf).into_owned();
+        if timed_out {
+            if !stderr.is_empty() && !stderr.ends_with('\n') {
+                stderr.push('\n');
+            }
+            stderr.push_str(&format!(
+                "[command timed out after {}s and was killed]",
+                timeout.as_secs()
+            ));
+        }
         Ok(ToolResult::TerminalOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            exit_code: output.status.code().unwrap_or(-1),
+            stdout,
+            stderr,
+            exit_code,
         })
     }
 
@@ -468,6 +606,73 @@ mod tests {
         };
         assert_eq!(exit_code, 0);
         assert!(stdout.contains("marker.txt"));
+    }
+
+    #[test]
+    fn run_terminal_kills_a_command_that_exceeds_the_timeout() {
+        let root = temp_project("terminal-timeout");
+        let sandbox = Sandbox::new(&root);
+        let start = Instant::now();
+        // `sleep 30` would run far past the bound; a short timeout must kill it.
+        let result = sandbox
+            .run_terminal_with_timeout("sleep 30", Duration::from_millis(300))
+            .unwrap();
+        let elapsed = start.elapsed();
+        // Must return quickly (killed near the deadline), not wait 30s.
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "timed-out command should return promptly, took {elapsed:?}"
+        );
+        let ToolResult::TerminalOutput {
+            stderr, exit_code, ..
+        } = result
+        else {
+            panic!("expected TerminalOutput");
+        };
+        assert_eq!(exit_code, -1);
+        assert!(
+            stderr.contains("timed out"),
+            "stderr should note the timeout: {stderr:?}"
+        );
+    }
+
+    #[test]
+    fn run_terminal_gives_stdin_eof_so_a_reader_does_not_hang() {
+        let root = temp_project("terminal-stdin");
+        let sandbox = Sandbox::new(&root);
+        let start = Instant::now();
+        // `cat` with no args reads stdin forever on a TTY; with stdin=null it
+        // hits immediate EOF and exits 0, well within the timeout.
+        let result = sandbox
+            .run_terminal_with_timeout("cat", Duration::from_secs(5))
+            .unwrap();
+        assert!(start.elapsed() < Duration::from_secs(3));
+        let ToolResult::TerminalOutput { exit_code, .. } = result else {
+            panic!("expected TerminalOutput");
+        };
+        assert_eq!(exit_code, 0, "cat with stdin=null should exit cleanly");
+    }
+
+    #[test]
+    fn run_terminal_captures_large_output_without_deadlock() {
+        let root = temp_project("terminal-bigout");
+        let sandbox = Sandbox::new(&root);
+        // ~200 KB of output would overflow a pipe buffer if not drained
+        // concurrently; the reader threads must prevent a deadlock.
+        let result = sandbox
+            .run_terminal_with_timeout(
+                "for i in $(seq 1 5000); do echo 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; done",
+                Duration::from_secs(10),
+            )
+            .unwrap();
+        let ToolResult::TerminalOutput {
+            stdout, exit_code, ..
+        } = result
+        else {
+            panic!("expected TerminalOutput");
+        };
+        assert_eq!(exit_code, 0);
+        assert_eq!(stdout.lines().count(), 5000);
     }
 
     #[test]

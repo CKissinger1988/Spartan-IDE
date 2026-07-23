@@ -6397,6 +6397,40 @@ first — it's the parity reference until each row there is actually reimplement
   own established scope decision for that file); no Join Lines in the reference wgpu shell (same
   "Electron-shell-only feature" scope every recent editor-ergonomics pass has carried); the real
   Electron window remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — a real timeout for Leo's `run_terminal` tool, closing the §75.66-named
+  "the sandbox method has no timeout" gap (task #264)**: user-requested ("Began working on the Leo
+  agent features"). The Leo execute loop lets a model propose a `run_terminal` command; before this
+  pass `Sandbox::run_terminal` used a plain `Command::output()` with no bound, so a model-emitted
+  command that never returns (an infinite loop, a process blocking on stdin, a hung fetch) would
+  freeze the entire agent loop forever. New `run_terminal_with_timeout(command, Duration)` (with
+  `run_terminal` now a thin wrapper passing a real `DEFAULT_RUN_TERMINAL_TIMEOUT = 120s`, generous
+  enough for a real `cargo build`/`npm ci` but finite) hardens three real hang vectors none of which
+  the old code covered: (1) **`stdin = /dev/null`** so a command reading stdin gets immediate EOF
+  and exits rather than blocking on input no agent will type -- the single most common real hang;
+  (2) **stdout/stderr drained on their own threads** delivered over an `mpsc` channel, so a chatty
+  command can't deadlock against a full pipe buffer while the main thread polls for exit; (3) a real
+  **wall-clock deadline** -- past it the child is killed and a real `exit_code: -1` plus a clear
+  `[command timed out after Ns and was killed]` note appended to stderr is returned, so the model
+  *sees* the kill and can react rather than the call hanging or erroring. **A real bug found only by
+  running the test, not by inspection**: a first version `join()`ed the reader threads after killing
+  the child, but `sh -c "sleep 30"` leaves an orphaned grandchild `sleep` still holding the pipe
+  write-end, so `read_to_end` never hit EOF and the join blocked the full 30s -- the timeout test
+  took 30.07s and failed. Fixed two ways together: the child now runs in its own **process group**
+  (`CommandExt::process_group(0)`, Unix) so a timeout can best-effort-kill the *whole* tree (a
+  negative-pid `kill -KILL`), and -- the load-bearing correctness fix -- the reader buffers are
+  collected via `recv_timeout` (a 500ms grace on timeout) rather than a blocking `join`, so even a
+  still-lingering pipe writer can never make the call hang. Re-run: the sleep-30 test now returns in
+  <1s. 3 new tests (a `sleep 30` killed at a 300ms bound returning promptly with the timeout note; a
+  `cat` with `stdin=null` exiting cleanly at EOF instead of hanging; ~200KB of output captured
+  without a pipe-buffer deadlock), 76 `spartan-leo` tests total, full `cargo fmt --all -- --check`/
+  `cargo clippy -p spartan-leo -p spartan-backend --release --all-targets`/`cargo test` clean.
+  **What this does not confirm**: no live model-driven exercise of the timeout through a real Leo
+  task (Ollama unreachable this session, unchanged since §75.56 -- verified instead against real
+  `sh`/`sleep`/`cat`/`seq` subprocesses, which is exactly what the tool spawns); the process-group
+  kill is Unix-only (`run_terminal` already assumes `sh -c`, so this is not a new platform
+  narrowing); the recv_timeout grace can in a pathological case leave a detached reader thread alive
+  until its orphaned writer finally exits, a real, named, bounded-elsewhere cost, not a hang of the
+  agent call itself.
 
 ## Build & test
 

@@ -116,6 +116,7 @@ Priority key:
 | Feature | Priority | Notes / grounding |
 |---|---|---|
 | Automated verification commands | P2 | `Verifying` is a momentary waypoint; no real test/lint command runs (§75.66). |
+| ~~`run_terminal` timeout~~ | ✅ done | Shipped — `Sandbox::run_terminal` now runs with a bounded wall-clock timeout (120s default, per-call overridable), `stdin=/dev/null` (no hang on stdin), concurrent output draining (no pipe-buffer deadlock), and a process-group kill on timeout; a killed command returns `exit_code -1` + a clear "[timed out…]" note. Closes the §75.66 gap. Unit-tested (sleep-30 killed at 300ms, cat gets EOF, 200KB output captured). |
 | Multi-turn conversation history | P2 | Chat panel is task-scoped, no history. |
 | Cooperative cancellation of in-flight model calls | P2 | Cancel discards late results but doesn't kill the background thread (§75.73). |
 | Sub-agent delegation | P3 | §4.4, unstarted. |
