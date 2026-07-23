@@ -6042,6 +6042,34 @@ first — it's the parity reference until each row there is actually reimplement
   clone (add-a-new-remote-and-clone), no interactive credential/token entry UI, no branch delete/
   rename (all real, named, still-open Git follow-ups); the remote list reflects the last fetch, not
   a live network query (a Fetch button already exists in the same panel to refresh it).
+- **Real, working code — git stash `apply` (vs. pop) + stash-message entry, closing task #248's own
+  two named follow-ups (task #252)**: user-requested ("Continue the roadmap and do not stop"). The
+  Stash UI (task #248) shipped Stash/Pop/Drop but auto-generated the stash message and had no
+  keep-and-apply. `spartan_git::stash_apply(index)` is a real `git2` `stash_apply` -- applies the
+  stash onto the working tree but *keeps* it in the list, unlike `stash_pop` which drops it after
+  applying; same conflict-refusing semantics (`libgit2`'s own apply errors on a real conflict rather
+  than force-overwriting, surfaced verbatim). New `spartan-backend::git_stash_apply` dispatch,
+  registered in `main.ts`/`preload.ts` allowlists at the identical position. Both shells' Git panels
+  gained a real stash-message `<input>` (threaded into `git_stash_save`'s already-existing `message`
+  param -- an empty message still falls back to git's own `WIP on <branch>` default, unchanged) and
+  an "Apply" button on each stash row alongside Pop/Drop. 2 new tests (1 in `spartan-git`: a real
+  round trip confirming apply restores the change but leaves exactly one stash in the list; 1
+  dispatch-level in `spartan-backend`: the same through the full `handle_request` path). Full
+  `cargo fmt --all`/`cargo clippy -p spartan-git -p spartan-backend --release --all-targets`/`cargo
+  test -p spartan-git --release` (34 tests)/`cargo test -p spartan-backend --release --lib` (196
+  tests) all clean; both shells' `tsc --noEmit`/`build` clean. **Real, live, end-to-end Playwright
+  verification against the actual compiled `web/dist` served by a real running `spartan-devserver`**
+  (not a mock): a real fixture (a committed file plus a real uncommitted change) -- typing
+  "my-wip-message" and clicking Stash reverted the working file on disk to the committed content and
+  listed a stash row reading `On master: my-wip-message` (message entry works); clicking **Apply**
+  restored the change on disk *and kept the stash* (STASHES still 1, **cross-checked against the real
+  `git stash list` CLI** still showing `stash@{0}: On master: my-wip-message`); a subsequent Pop
+  correctly applied-and-dropped (stash list emptied, cross-confirmed against the CLI). **What this
+  does not confirm**: no live Electron-window verification of `desktop/` (the standing gap since
+  §75.59 -- verified via typecheck + the identical shared component logic the web live run exercises,
+  same `git_stash_apply` Rust path both shells send through); no partial/selective stash, no
+  stash-includes-untracked option (matches git's own default and the Stash UI's own existing v1
+  scope). This closes both of task #248's own explicitly-named follow-ups.
 
 ## Build & test
 

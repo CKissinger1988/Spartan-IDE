@@ -705,6 +705,15 @@ impl GitRepo {
         self.repo.stash_pop(index, None)
     }
 
+    /// Real `git stash apply <index>` -- applies the stash back onto the
+    /// working tree but *keeps* it in the stash list (unlike `stash_pop`,
+    /// which drops it after applying). Same conflict-refusing semantics as
+    /// `stash_pop`: `libgit2`'s own apply errors on a real conflict rather
+    /// than force-overwriting, surfaced verbatim.
+    pub fn stash_apply(&mut self, index: usize) -> Result<(), git2::Error> {
+        self.repo.stash_apply(index, None)
+    }
+
     /// Real `git stash drop <index>` -- discards a stash without applying.
     pub fn stash_drop(&mut self, index: usize) -> Result<(), git2::Error> {
         self.repo.stash_drop(index)
@@ -1182,6 +1191,32 @@ mod tests {
             "modified\n"
         );
         assert!(repo.stash_list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn stash_apply_restores_the_change_but_keeps_the_stash() {
+        let (tmp, mut repo) = TempRepo::new("stash_apply");
+        tmp.write("f.txt", "original\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("init").unwrap();
+        tmp.write("f.txt", "modified\n");
+        repo.stash_save("wip").unwrap();
+        // Working tree reverted after stashing.
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "original\n"
+        );
+        // Apply restores the change but leaves the stash in place (unlike pop).
+        repo.stash_apply(0).unwrap();
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "modified\n"
+        );
+        assert_eq!(
+            repo.stash_list().unwrap().len(),
+            1,
+            "apply must keep the stash, not drop it"
+        );
     }
 
     #[test]

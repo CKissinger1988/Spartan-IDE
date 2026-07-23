@@ -3279,6 +3279,16 @@ fn git_stash_pop(project_root: &str, index: usize) -> Result<serde_json::Value, 
     Ok(serde_json::json!({ "ok": true }))
 }
 
+/// Real `git stash apply <index>` -- applies the stash but keeps it in the
+/// list (unlike pop). A real conflict surfaces `libgit2`'s own error verbatim.
+fn git_stash_apply(project_root: &str, index: usize) -> Result<serde_json::Value, String> {
+    let mut repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.stash_apply(index)
+        .map_err(|e| format!("git stash apply: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 /// Real `git stash drop <index>` -- discards a stash without applying.
 fn git_stash_drop(project_root: &str, index: usize) -> Result<serde_json::Value, String> {
     let mut repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
@@ -4034,6 +4044,15 @@ pub fn handle_request(
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as usize;
             git_stash_pop(&root, index)
+        })(),
+        "git_stash_apply" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let index = req
+                .params
+                .get("index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            git_stash_apply(&root, index)
         })(),
         "git_stash_drop" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
@@ -5454,6 +5473,53 @@ mod tests {
             std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
             "modified\n"
         );
+    }
+
+    #[test]
+    fn git_stash_apply_keeps_the_stash_through_the_dispatch_path() {
+        let tmp = TempRepo::new("stash_apply_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "original\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "init" }),
+        );
+        std::fs::write(tmp.dir.join("f.txt"), "modified\n").unwrap();
+        call(
+            &state,
+            3,
+            "git_stash_save",
+            serde_json::json!({ "project_root": root, "message": "wip" }),
+        );
+        // Apply restores the change but keeps the stash.
+        let resp = call(
+            &state,
+            4,
+            "git_stash_apply",
+            serde_json::json!({ "project_root": root, "index": 0 }),
+        );
+        assert_eq!(resp.result.unwrap()["ok"], true);
+        assert_eq!(
+            std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "modified\n"
+        );
+        let resp = call(
+            &state,
+            5,
+            "git_stash_list",
+            serde_json::json!({ "project_root": root }),
+        );
+        let stashes = resp.result.unwrap()["stashes"].as_array().unwrap().clone();
+        assert_eq!(stashes.len(), 1, "apply must keep the stash, not drop it");
     }
 
     #[test]

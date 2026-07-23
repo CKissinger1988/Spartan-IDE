@@ -165,6 +165,7 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [stashes, setStashes] = useState<{ index: number; message: string; oid: string }[]>([]);
   const [stashBusy, setStashBusy] = useState(false);
   const [stashError, setStashError] = useState<string | null>(null);
+  const [stashMessage, setStashMessage] = useState("");
 
   const refresh = useCallback(() => {
     window.spartan
@@ -246,18 +247,19 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
     setStashBusy(true);
     setStashError(null);
     window.spartan
-      .call("git_stash_save", { project_root: root, message: "" })
+      .call("git_stash_save", { project_root: root, message: stashMessage.trim() })
       .then((r) => {
         if (!(r as { stashed?: boolean }).stashed) setStashError("Nothing to stash");
+        else setStashMessage("");
         refresh();
         refreshStashes();
       })
       .catch((e: Error) => setStashError(e.message))
       .finally(() => setStashBusy(false));
-  }, [root, refresh, refreshStashes]);
+  }, [root, stashMessage, refresh, refreshStashes]);
 
   const stashAction = useCallback(
-    (method: "git_stash_pop" | "git_stash_drop", index: number) => {
+    (method: "git_stash_pop" | "git_stash_apply" | "git_stash_drop", index: number) => {
       setStashBusy(true);
       setStashError(null);
       window.spartan
@@ -607,6 +609,15 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
           <div className="git-section-label mono" style={{ flex: 1 }}>
             Stashes ({stashes.length})
           </div>
+          <input
+            type="text"
+            className="git-commit-input mono"
+            style={{ flex: 2, minWidth: 0 }}
+            placeholder="Stash message (optional)"
+            value={stashMessage}
+            disabled={stashBusy}
+            onChange={(e) => setStashMessage(e.target.value)}
+          />
           <button
             type="button"
             className="editor-find-btn"
@@ -627,8 +638,18 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
               className="editor-find-btn"
               disabled={stashBusy}
               onClick={() => stashAction("git_stash_pop", s.index)}
+              title="Apply and drop this stash"
             >
               Pop
+            </button>
+            <button
+              type="button"
+              className="editor-find-btn"
+              disabled={stashBusy}
+              onClick={() => stashAction("git_stash_apply", s.index)}
+              title="Apply this stash but keep it in the list"
+            >
+              Apply
             </button>
             <button
               type="button"

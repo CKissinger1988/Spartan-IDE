@@ -69,6 +69,7 @@ const ALLOWED_METHODS = new Set([
   "git_stash_save",
   "git_stash_list",
   "git_stash_pop",
+  "git_stash_apply",
   "git_stash_drop",
   "settings_get",
   "settings_set",

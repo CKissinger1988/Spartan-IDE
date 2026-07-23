@@ -91,7 +91,7 @@ Priority key:
 | ~~Inline blame~~ | ✅ done | Shipped — Alt+B per-line blame gutter in both shells (`spartan_git::blame_file`). |
 | GitHub layer (PRs, issues, review) | P2 | §56.3–56.4, unstarted in both shells. |
 | Per-hunk / partial staging | P2 | File-level staging only. |
-| ~~Stash UI~~ | ✅ done | Shipped — Stash / Pop / Drop in both Git panels (`spartan_git` stash ops). Stash-message entry + `apply` (vs. pop) remain follow-ups. |
+| ~~Stash UI~~ | ✅ done | Shipped — Stash (with optional message) / Pop / Apply / Drop in both Git panels (`spartan_git` stash ops). `apply` (keep-and-apply, distinct from pop which drops) + stash-message entry now landed too. |
 | Merge-conflict resolution UI | P2 | None. |
 | Side-by-side + word-level diff | P2 | Diff is line-level (`+`/`-`/context) only. |
 | ~~Remote-branch listing~~ | ✅ done | Shipped — the branch switcher now lists `refs/remotes/*` (as of the last fetch) under "Remote branches"; clicking one creates a local tracking branch and safe-checks it out (`spartan_git::checkout_remote_branch`). Live-verified with a bare remote, cross-checked against the git CLI. |
