@@ -457,12 +457,11 @@ interface EditorProps {
  * System Access API instead of a real local `std::fs::write` behind an
  * IPC call.
  *
- * Real, deliberate, named scope cut carried over directly from
- * `spartan-buffer-wasm`'s own doc comment: **no redo yet**. Ctrl+Z calls
- * the real `Document::undo()`; Ctrl+Shift+Z/Ctrl+Y are not wired to
- * anything real here (a real `redo_stack` layered above `Document`,
- * matching how every other real UI surface in this project already
- * builds it, is separate, unstarted follow-up work).
+ * Real undo (Ctrl+Z) and redo (Ctrl+Shift+Z / Ctrl+Y), both backed by
+ * `WasmDocument`'s own real `undo`/`redo` -- the crate now builds redo as a
+ * thin `redo_stack` layer above `Document`, matching how every other real
+ * UI surface in this project already does it (§75.19/§75.62). The former
+ * "no redo yet" scope cut is closed.
  */
 export default function Editor({ file, onContentChange }: EditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -962,11 +961,23 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
           .then(() => onContentChange(file.path, prevContentRef.current, true))
           .catch((err: Error) => console.error("real save via File System Access API failed:", err));
       }
-      // Real undo only -- see this component's own doc comment for why
-      // redo is a real, named, separate follow-up piece.
+      // Real undo (Ctrl+Z) and redo (Ctrl+Shift+Z / Ctrl+Y), both backed by
+      // `WasmDocument`'s own real `undo`/`redo` (§75.89's own named "no redo
+      // yet" gap is now closed at the crate level).
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
         e.preventDefault();
         const changed = file.doc.undo();
+        if (changed) {
+          const restored = file.doc.text();
+          prevContentRef.current = restored;
+          onContentChange(file.path, restored);
+        }
+      } else if (
+        (e.ctrlKey || e.metaKey) &&
+        ((e.shiftKey && e.key.toLowerCase() === "z") || (!e.shiftKey && e.key.toLowerCase() === "y"))
+      ) {
+        e.preventDefault();
+        const changed = file.doc.redo();
         if (changed) {
           const restored = file.doc.text();
           prevContentRef.current = restored;

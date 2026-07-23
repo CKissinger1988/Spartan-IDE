@@ -6155,6 +6155,33 @@ first — it's the parity reference until each row there is actually reimplement
   queried (same v1 scope as incoming); no live Electron-window verification of `desktop/` (same
   standing gap); no outgoing calls for any language beyond Python in this specific live verification.
   With this pass, both directions of LSP call hierarchy are real and wired in both shells.
+- **Real, working code — redo in the WASM buffer, closing §75.89's own named "no redo yet" gap
+  (task #256)**: user-requested ("Continue"). `spartan-buffer-wasm`'s `WasmDocument` deliberately
+  shipped no redo (§75.89) because `spartan_buffer::Document`'s branching undo tree has no single
+  well-defined redo of its own. This pass builds it the exact same way every other real UI surface
+  in this project already does -- a thin `redo_stack: Vec<CheckpointId>` layer above `Document`
+  (`spartan-editor-core::EditorView` §75.19, `spartan-backend::BackendState` §75.62, ported here
+  verbatim): `undo` pushes the pre-undo checkpoint (only when it really changed), a new `redo` pops
+  and `jump_to_checkpoint`s forward to it (returning `false` gracefully when there's nothing to
+  redo or the checkpoint aged out of the bounded ring), and every real edit (`insert`/`delete`/
+  `replace`) clears the stack. Wired into `web/Editor.tsx` (the pure client-side File System Access
+  + WASM path, the one surface that drives `WasmDocument` directly): Ctrl+Shift+Z / Ctrl+Y now call
+  the real `WasmDocument.redo()` alongside Ctrl+Z's existing undo, applying the restored text
+  through the same `onContentChange` path. 3 new Rust unit tests (8 total in the crate -- redo
+  restores an undone edit, redo-with-nothing is `false`, a new edit after undo clears the stack).
+  **Real verification through the actual compiled WASM module, not just the host-target Rust tests**
+  (matching §75.85's own spike discipline for this crate): a real `wasm-bindgen --target nodejs`
+  build of `spartan-buffer-wasm` was driven in Node -- `insert` → `undo` → `redo` restored the
+  exact edit, and a real new-edit-after-undo correctly returned `false` from `redo` with the stack
+  cleared. Full `cargo fmt --all -- --check`/`cargo clippy -p spartan-buffer-wasm --release
+  --all-targets`/`cargo test -p spartan-buffer-wasm --release` (8 tests) all clean; `web/`'s own
+  `build:wasm`/`tsc --noEmit`/`vite build` all clean. **What this does not confirm**: no live
+  Playwright browser verification of the redo keybinding in `web/Editor.tsx` specifically (this is
+  the pure client-side File System Access path, which this project's own established convention
+  verifies via typecheck + the real WASM-through-Node check rather than a headless browser harness,
+  the same scope decision every prior `web/Editor.tsx` editor-feature pass has made); no redo in
+  `web/BackendEditor.tsx` (that path uses `spartan-backend`'s own already-real IPC redo, §75.62, not
+  `WasmDocument` -- untouched here). §75.89's own named gap is now closed at the crate level.
 
 ## Build & test
 

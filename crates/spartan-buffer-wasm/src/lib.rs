@@ -10,22 +10,25 @@
 //! A fuller real API than the spike's own minimal proof-of-concept
 //! (`new`/`text`/`insert`/`delete`/`undo`/`len_chars`) -- this crate also
 //! exposes `replace`/`text_between`/`len_lines`/`char_to_line`/
-//! `line_to_char`/`line`, the real set a real editor UI needs. Real,
-//! deliberate scope cut, named honestly: no `redo` yet. `Document` itself
-//! has no built-in redo (its own branching undo tree has no single
-//! well-defined "redo" -- see `spartan-buffer`'s own doc comment); every
-//! other real UI surface in this project builds redo as a thin
-//! `redo_stack` one layer above `Document` (`spartan-editor-core::
-//! EditorView`, §75.19; `spartan-backend::BackendState`, §75.62) rather
-//! than inside it -- the same real, separate follow-up piece here, not
-//! attempted in this pass.
+//! `line_to_char`/`line`, the real set a real editor UI needs. **Redo** is
+//! now real too: `Document` itself has no built-in redo (its own branching
+//! undo tree has no single well-defined "redo" -- see `spartan-buffer`'s
+//! own doc comment), so this crate builds it as a thin `redo_stack` one
+//! layer above `Document` -- the exact same real pattern
+//! `spartan-editor-core::EditorView` (§75.19) and
+//! `spartan-backend::BackendState` (§75.62) already established, ported
+//! here verbatim: `undo` pushes the pre-undo checkpoint, `redo` pops and
+//! jumps forward to it, and any real edit clears the stack.
 
-use spartan_buffer::Document;
+use spartan_buffer::{CheckpointId, Document};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct WasmDocument {
     inner: Document,
+    /// Real redo stack -- pre-undo checkpoints `undo` pushes, popped by
+    /// `redo`. Matches `spartan-backend::BackendState::redo_stack` exactly.
+    redo_stack: Vec<CheckpointId>,
 }
 
 #[wasm_bindgen]
@@ -34,6 +37,7 @@ impl WasmDocument {
     pub fn new(initial_text: &str) -> WasmDocument {
         WasmDocument {
             inner: Document::new(initial_text),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -50,11 +54,19 @@ impl WasmDocument {
     }
 
     pub fn insert(&mut self, char_idx: usize, text: &str) -> Result<(), String> {
-        self.inner.insert(char_idx, text).map_err(|e| e.to_string())
+        let r = self.inner.insert(char_idx, text).map_err(|e| e.to_string());
+        if r.is_ok() {
+            self.redo_stack.clear();
+        }
+        r
     }
 
     pub fn delete(&mut self, start: usize, end: usize) -> Result<(), String> {
-        self.inner.delete(start..end).map_err(|e| e.to_string())
+        let r = self.inner.delete(start..end).map_err(|e| e.to_string());
+        if r.is_ok() {
+            self.redo_stack.clear();
+        }
+        r
     }
 
     /// Real, single-checkpoint replace of a char range with new text --
@@ -62,9 +74,14 @@ impl WasmDocument {
     /// for insert/delete/selection-replace alike, matching that same
     /// established pattern here rather than special-casing each shape.
     pub fn replace(&mut self, start: usize, end: usize, text: &str) -> Result<(), String> {
-        self.inner
+        let r = self
+            .inner
             .replace(start..end, text)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+        if r.is_ok() {
+            self.redo_stack.clear();
+        }
+        r
     }
 
     pub fn text_between(&self, start: usize, end: usize) -> Result<String, String> {
@@ -74,7 +91,25 @@ impl WasmDocument {
     }
 
     pub fn undo(&mut self) -> bool {
-        self.inner.undo()
+        let pre_undo = self.inner.current_checkpoint();
+        let changed = self.inner.undo();
+        if changed {
+            self.redo_stack.push(pre_undo);
+        }
+        changed
+    }
+
+    /// Real redo -- pops the pre-undo checkpoint `undo` pushed and jumps
+    /// forward to it (`Document` has no single well-defined redo on its own
+    /// branching tree). Returns `false` when there's nothing to redo, or if
+    /// the checkpoint aged out of `Document`'s bounded ring since the undo
+    /// -- the same graceful "skip an evicted checkpoint" fallback
+    /// `spartan-backend::redo` (§75.62) already uses.
+    pub fn redo(&mut self) -> bool {
+        match self.redo_stack.pop() {
+            Some(checkpoint) => self.inner.jump_to_checkpoint(checkpoint).is_ok(),
+            None => false,
+        }
     }
 
     pub fn char_to_line(&self, char_idx: usize) -> Result<usize, String> {
@@ -111,6 +146,38 @@ mod tests {
         doc.insert(5, ",").unwrap();
         assert!(doc.undo());
         assert_eq!(doc.text(), "hello world");
+    }
+
+    #[test]
+    fn redo_restores_a_real_undone_edit() {
+        let mut doc = WasmDocument::new("hello world");
+        doc.insert(5, ",").unwrap();
+        assert!(doc.undo());
+        assert_eq!(doc.text(), "hello world");
+        assert!(doc.redo());
+        assert_eq!(doc.text(), "hello, world");
+    }
+
+    #[test]
+    fn redo_with_nothing_to_redo_is_false() {
+        let mut doc = WasmDocument::new("hi");
+        assert!(!doc.redo());
+        // A real edit with no prior undo still has nothing to redo.
+        doc.insert(2, "!").unwrap();
+        assert!(!doc.redo());
+    }
+
+    #[test]
+    fn a_real_new_edit_after_undo_clears_the_redo_stack() {
+        let mut doc = WasmDocument::new("hello");
+        doc.insert(5, " world").unwrap();
+        assert!(doc.undo());
+        assert_eq!(doc.text(), "hello");
+        // A real new edit must invalidate the redo stack (matching every
+        // other real UI surface in this project).
+        doc.insert(5, "!").unwrap();
+        assert!(!doc.redo());
+        assert_eq!(doc.text(), "hello!");
     }
 
     #[test]

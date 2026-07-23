@@ -103,7 +103,7 @@ Priority key:
 |---|---|---|
 | LSP/DAP/Leo/git in pure client-side mode | P2 | Only backend-connected mode has them; wire to the WebSocket transport. |
 | Multi-file tabs | P2 | Single open file at a time (§75.89). |
-| Redo in the WASM buffer | P2 | `spartan-buffer-wasm` deliberately ships no redo yet (§75.89). |
+| ~~Redo in the WASM buffer~~ | ✅ done | Shipped — `WasmDocument` now builds a real `redo_stack` layer above `Document` (same pattern as `spartan-backend`/wgpu shell); Ctrl+Shift+Z/Ctrl+Y wired into `web/Editor.tsx`, verified through the real compiled WASM module in Node. |
 | Firefox/Safari support | P3 | File System Access API is Chromium-only; needs a fallback storage backend (OPFS/`lightning-fs`). |
 
 ## Leo (agent)
