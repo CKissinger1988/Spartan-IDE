@@ -135,6 +135,9 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [diffError, setDiffError] = useState<string | null>(null);
   const [showBranches, setShowBranches] = useState(false);
   const [branches, setBranches] = useState<BranchInfo[] | null>(null);
+  // Real remote-tracking branches (`origin/feature`) as of the last fetch
+  // (task #251) -- null until the branch list is opened.
+  const [remoteBranches, setRemoteBranches] = useState<string[] | null>(null);
   const [branchError, setBranchError] = useState<string | null>(null);
   const [newBranchName, setNewBranchName] = useState("");
   const [switching, setSwitching] = useState(false);
@@ -339,6 +342,12 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
       .call("git_branches", { project_root: root })
       .then((result) => setBranches((result as { branches: BranchInfo[] }).branches))
       .catch((e: Error) => setBranchError(e.message));
+    // Remote-tracking branches (task #251) -- a repo with no remotes just
+    // returns an empty list, never an error.
+    window.spartan
+      .call("git_remote_branches", { project_root: root })
+      .then((result) => setRemoteBranches((result as { branches: string[] }).branches))
+      .catch(() => setRemoteBranches([]));
   }, [root, showBranches]);
 
   const checkoutBranch = useCallback(
@@ -355,6 +364,26 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
         // A real safe-checkout refusal (a conflicting dirty change)
         // surfaces libgit2's own real error here, with the repository
         // untouched -- shown, never force-resolved.
+        .catch((e: Error) => setBranchError(e.message))
+        .finally(() => setSwitching(false));
+    },
+    [root, refresh]
+  );
+
+  // Real check out of a remote branch (task #251): creates a local tracking
+  // branch if needed, then a safe checkout (same refusal-on-conflict rule).
+  const checkoutRemoteBranch = useCallback(
+    (remoteBranch: string) => {
+      setSwitching(true);
+      setBranchError(null);
+      window.spartan
+        .call("git_checkout_remote", { project_root: root, branch: remoteBranch })
+        .then(() => {
+          setShowBranches(false);
+          setBranches(null);
+          setRemoteBranches(null);
+          refresh();
+        })
         .catch((e: Error) => setBranchError(e.message))
         .finally(() => setSwitching(false));
     },
@@ -481,6 +510,24 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
               <span className="mono git-row-path">{b.name}</span>
             </div>
           ))}
+          {remoteBranches && remoteBranches.length > 0 && (
+            <>
+              <div className="git-section-label mono">Remote branches</div>
+              {remoteBranches.map((rb) => (
+                <div
+                  key={rb}
+                  className="git-row"
+                  onClick={() => {
+                    if (!switching) checkoutRemoteBranch(rb);
+                  }}
+                  title={`Check out ${rb} (creates a local tracking branch)`}
+                >
+                  <span className="git-status-glyph mono">⑃</span>
+                  <span className="mono git-row-path">{rb}</span>
+                </div>
+              ))}
+            </>
+          )}
           <div style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4 }}>
             <input
               className="git-commit-input mono"

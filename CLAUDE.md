@@ -6009,6 +6009,39 @@ first — it's the parity reference until each row there is actually reimplement
   panel hides watches when no session is live, matching the debugger's own "watches belong to a
   session" convention); no watch exercised against any adapter beyond debugpy in this pass's live
   run.
+- **Real, working code — remote-branch listing + checkout, closing the branch switcher's own named
+  follow-up (task #251)**: user-requested ("Continue the roadmap and do not stop"). Completes the
+  branch switcher (task #233-235, which was local-only) by listing remote-tracking branches and
+  checking them out. `spartan_git::list_remote_branches` returns every `refs/remotes/*` branch as
+  of the last fetch (e.g. `origin/feature`), sorted, skipping the symbolic `origin/HEAD`;
+  `checkout_remote_branch(remote_branch)` creates a local tracking branch from the remote ref's
+  commit (best-effort `set_upstream`) if none exists, then switches via the same *safe*
+  `checkout_branch` (a conflicting dirty change is refused, not clobbered), reusing that method
+  rather than a second checkout path. New `spartan-backend::git_remote_branches`/
+  `git_checkout_remote` dispatch methods, registered in `main.ts`/`preload.ts` allowlists at the
+  identical position. Both shells' Git panels gained a "Remote branches" subsection in the branch
+  list (fetched alongside the local list on open, never cached) -- clicking a remote branch checks
+  it out. 2 new tests (1 in `spartan-git`: a real bare-remote round trip -- A pushes `main` + a
+  `feature` branch, B fetches, lists `origin/feature`, checks it out, and its real content lands in
+  B's working tree with a real local `feature` branch created; 1 dispatch-level in `spartan-backend`:
+  a repo with no remotes returns a real empty list, never an error -- the full round trip is proven
+  in `spartan-git`'s own integration test). A real clippy `manual_split_once` lint on the
+  local-name derivation was caught and fixed (`split_once('/')` over `splitn(2, '/').nth(1)`). Full
+  `cargo fmt --all -- --check`/`cargo clippy -p spartan-git -p spartan-backend --release
+  --all-targets`/`cargo test -p spartan-git --release` (33 tests)/`cargo test -p spartan-backend
+  --release --lib` (195 tests) all clean; both shells' `tsc --noEmit`/`build` clean. **Real, live,
+  end-to-end Playwright verification against the actual compiled `web/dist` served by a real running
+  `spartan-devserver`** (not a mock): a real fixture (a local repo on `main`, a bare remote carrying
+  a remote-only `origin/feature` with different content) -- the Git panel's branch list showed a
+  "Remote branches" section with `origin/feature`/`origin/main`; clicking `origin/feature` switched
+  the working tree from `main line` to `feature line`, and the result was **cross-checked against
+  the real `git` CLI** (`HEAD` now `feature`, a real local `feature` branch created), screenshot-
+  confirmed. **What this does not confirm**: no live Electron-window verification of `desktop/` (the
+  standing gap since §75.59 -- verified via typecheck + the identical shared component logic the web
+  live run exercises, and the same `git_checkout_remote` Rust path both shells send through); no
+  clone (add-a-new-remote-and-clone), no interactive credential/token entry UI, no branch delete/
+  rename (all real, named, still-open Git follow-ups); the remote list reflects the last fetch, not
+  a live network query (a Fetch button already exists in the same panel to refresh it).
 
 ## Build & test
 

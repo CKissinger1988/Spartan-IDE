@@ -261,6 +261,8 @@ app.whenReady().then(() => {
     "git_branches",
     "git_checkout",
     "git_create_branch",
+    "git_remote_branches",
+    "git_checkout_remote",
     "git_log",
     "git_commit_files",
     "git_commit_diff",

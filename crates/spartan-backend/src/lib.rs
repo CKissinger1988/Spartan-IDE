@@ -3108,6 +3108,32 @@ fn git_checkout(project_root: &str, branch: &str) -> Result<serde_json::Value, S
     Ok(serde_json::json!({ "ok": true }))
 }
 
+/// Real remote-tracking branch list (`refs/remotes/*` as of the last
+/// fetch), e.g. `origin/feature`. The symbolic `origin/HEAD` is skipped.
+fn git_remote_branches(project_root: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let branches = repo
+        .list_remote_branches()
+        .map_err(|e| format!("git remote branches: {e}"))?;
+    Ok(serde_json::json!({ "branches": branches }))
+}
+
+/// Real check out of a remote-tracking branch (e.g. `origin/feature`):
+/// creates a local tracking branch if needed, then switches via the same
+/// *safe* checkout `git_checkout` uses (a conflicting dirty change is
+/// refused, not clobbered).
+fn git_checkout_remote(
+    project_root: &str,
+    remote_branch: &str,
+) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.checkout_remote_branch(remote_branch)
+        .map_err(|e| format!("git checkout remote: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 /// Real `git log` -- the most recent commits reachable from `HEAD`,
 /// newest first, bounded by a caller-supplied (or default 50) `max`. A
 /// repo with no commits returns an honest empty list.
@@ -3947,6 +3973,14 @@ pub fn handle_request(
             let root = get_str_param(&req.params, "project_root")?;
             let branch = get_str_param(&req.params, "branch")?;
             git_create_branch(&root, &branch)
+        })(),
+        "git_remote_branches" => {
+            get_str_param(&req.params, "project_root").and_then(|r| git_remote_branches(&r))
+        }
+        "git_checkout_remote" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let branch = get_str_param(&req.params, "branch")?;
+            git_checkout_remote(&root, &branch)
         })(),
         "git_log" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
@@ -5516,6 +5550,28 @@ mod tests {
             serde_json::json!({ "project_root": root }),
         );
         assert_eq!(status.result.unwrap()["branch"], "feature");
+
+        // A repo with no remotes: git_remote_branches returns a real empty
+        // list, never an error (task #251). The full remote round trip is
+        // proven in spartan-git's own bare-remote integration test.
+        let remotes = call(
+            &state,
+            8,
+            "git_remote_branches",
+            serde_json::json!({ "project_root": root }),
+        );
+        assert!(
+            remotes.error.is_none(),
+            "git_remote_branches errored: {:?}",
+            remotes.error
+        );
+        assert_eq!(
+            remotes.result.unwrap()["branches"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
     }
 
     #[test]

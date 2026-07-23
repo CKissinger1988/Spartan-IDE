@@ -87,14 +87,14 @@ Priority key:
 
 | Feature | Priority | Notes / grounding |
 |---|---|---|
-| ~~Remote push / pull / fetch~~ | ✅ done | Shipped — Fetch/Pull/Push in both Git panels (`spartan_git` remote ops, fast-forward-only pull). Clone + interactive auth-token UI + remote-branch listing remain follow-ups. |
+| ~~Remote push / pull / fetch~~ | ✅ done | Shipped — Fetch/Pull/Push in both Git panels (`spartan_git` remote ops, fast-forward-only pull). Clone + interactive auth-token UI remain follow-ups (remote-branch listing is now also done, see below). |
 | ~~Inline blame~~ | ✅ done | Shipped — Alt+B per-line blame gutter in both shells (`spartan_git::blame_file`). |
 | GitHub layer (PRs, issues, review) | P2 | §56.3–56.4, unstarted in both shells. |
 | Per-hunk / partial staging | P2 | File-level staging only. |
 | ~~Stash UI~~ | ✅ done | Shipped — Stash / Pop / Drop in both Git panels (`spartan_git` stash ops). Stash-message entry + `apply` (vs. pop) remain follow-ups. |
 | Merge-conflict resolution UI | P2 | None. |
 | Side-by-side + word-level diff | P2 | Diff is line-level (`+`/`-`/context) only. |
-| Remote-branch listing | P2 | Branch switcher is local-only. |
+| ~~Remote-branch listing~~ | ✅ done | Shipped — the branch switcher now lists `refs/remotes/*` (as of the last fetch) under "Remote branches"; clicking one creates a local tracking branch and safe-checks it out (`spartan_git::checkout_remote_branch`). Live-verified with a bare remote, cross-checked against the git CLI. |
 | Rebase / cherry-pick UI | P3 | None. |
 
 ## Web app (`web/`)

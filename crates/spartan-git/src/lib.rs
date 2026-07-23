@@ -429,6 +429,58 @@ impl GitRepo {
         Ok(())
     }
 
+    /// Every real remote-tracking branch (e.g. `origin/feature`), sorted.
+    /// These are the `refs/remotes/*` refs a real `fetch` populates -- so
+    /// they reflect the last fetch, not a live network query. The symbolic
+    /// `origin/HEAD` pointer is skipped (it's not a real branch to check
+    /// out). A repo with no remotes returns an empty list.
+    pub fn list_remote_branches(&self) -> Result<Vec<String>, git2::Error> {
+        let mut names: Vec<String> = self
+            .repo
+            .branches(Some(git2::BranchType::Remote))?
+            .filter_map(|b| {
+                let (branch, _) = b.ok()?;
+                let name = branch.name().ok()??.to_string();
+                // Skip the symbolic `<remote>/HEAD` alias -- not a real branch.
+                if name.ends_with("/HEAD") {
+                    return None;
+                }
+                Some(name)
+            })
+            .collect();
+        names.sort();
+        Ok(names)
+    }
+
+    /// Check out a remote-tracking branch (e.g. `origin/feature`): if no
+    /// local branch of that name exists yet, create one from the remote
+    /// ref's commit with the remote set as its upstream (real `git checkout
+    /// -b feature --track origin/feature` behavior), then switch to it via
+    /// the same *safe* `checkout_branch` (so a conflicting dirty change is
+    /// refused, not clobbered). If the local branch already exists, just
+    /// switches to it. The local name is the part after the first `/`
+    /// (`origin/feature` -> `feature`).
+    pub fn checkout_remote_branch(&self, remote_branch: &str) -> Result<(), git2::Error> {
+        let local_name = remote_branch
+            .split_once('/')
+            .map(|(_, rest)| rest)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(remote_branch);
+        if self
+            .repo
+            .find_branch(local_name, git2::BranchType::Local)
+            .is_err()
+        {
+            let remote_ref = format!("refs/remotes/{remote_branch}");
+            let commit = self.repo.revparse_single(&remote_ref)?.peel_to_commit()?;
+            let mut b = self.repo.branch(local_name, &commit, false)?;
+            // Best-effort upstream tracking -- a real checkout still succeeds
+            // even if the upstream config can't be written.
+            let _ = b.set_upstream(Some(remote_branch));
+        }
+        self.checkout_branch(local_name)
+    }
+
     /// Real index's own version of `path`'s content, as real UTF-8 text --
     /// the "after" half of a real staged diff, and the "before" half of a
     /// real unstaged diff. `Ok(None)` covers a path with no index entry at
@@ -1263,6 +1315,63 @@ mod tests {
         assert_eq!(
             fs::read_to_string(tmp_b.dir.join("f.txt")).unwrap(),
             "c1\nB-local\n"
+        );
+
+        let _ = fs::remove_dir_all(&remote_dir);
+    }
+
+    #[test]
+    fn list_and_checkout_remote_branches_against_a_local_bare_remote() {
+        let remote_dir = std::env::temp_dir().join("spartan_git_test_remote_bare_branches");
+        let _ = fs::remove_dir_all(&remote_dir);
+        Repository::init_bare(&remote_dir).unwrap();
+        let remote_url = remote_dir.to_str().unwrap();
+
+        // A: commit on the default branch and push it; then a real `feature`
+        // branch with its own commit, pushed too.
+        let (tmp_a, repo_a) = TempRepo::new("rbranch_a");
+        tmp_a.write("f.txt", "main-content\n");
+        repo_a.stage(Path::new("f.txt")).unwrap();
+        repo_a.commit("main").unwrap();
+        repo_a.repo.remote("origin", remote_url).unwrap();
+        let default_branch = repo_a.current_branch().unwrap();
+        repo_a.push("origin", &default_branch).unwrap();
+
+        repo_a.create_branch("feature").unwrap();
+        repo_a.checkout_branch("feature").unwrap();
+        tmp_a.write("f.txt", "feature-content\n");
+        repo_a.stage(Path::new("f.txt")).unwrap();
+        repo_a.commit("feature work").unwrap();
+        repo_a.push("origin", "feature").unwrap();
+
+        // B: add the remote, fetch -> its remote-tracking refs populate.
+        let (tmp_b, repo_b) = TempRepo::new("rbranch_b");
+        repo_b.repo.remote("origin", remote_url).unwrap();
+        repo_b.fetch("origin").unwrap();
+
+        let remotes = repo_b.list_remote_branches().unwrap();
+        assert!(
+            remotes.contains(&"origin/feature".to_string()),
+            "expected origin/feature in remote branches: {remotes:?}"
+        );
+        assert!(
+            remotes.iter().all(|b| !b.ends_with("/HEAD")),
+            "the symbolic origin/HEAD must be skipped: {remotes:?}"
+        );
+
+        // Checking out the remote branch creates a real local tracking branch
+        // and lands its real content in the working tree.
+        repo_b.checkout_remote_branch("origin/feature").unwrap();
+        assert_eq!(repo_b.current_branch().as_deref(), Some("feature"));
+        assert_eq!(
+            fs::read_to_string(tmp_b.dir.join("f.txt")).unwrap(),
+            "feature-content\n",
+            "checkout of origin/feature must land its real content"
+        );
+        let locals = repo_b.list_branches().unwrap();
+        assert!(
+            locals.iter().any(|(n, _)| n == "feature"),
+            "a real local `feature` branch must now exist: {locals:?}"
         );
 
         let _ = fs::remove_dir_all(&remote_dir);
