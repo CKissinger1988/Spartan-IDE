@@ -156,6 +156,10 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
   const [remotes, setRemotes] = useState<{ name: string; url: string | null }[] | null>(null);
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [remoteStatus, setRemoteStatus] = useState<string | null>(null);
+  // Real git stash (roadmap), mirroring desktop/'s own.
+  const [stashes, setStashes] = useState<{ index: number; message: string; oid: string }[]>([]);
+  const [stashBusy, setStashBusy] = useState(false);
+  const [stashError, setStashError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     client
@@ -220,6 +224,47 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
         .finally(() => setRemoteBusy(false));
     },
     [remotes, status?.branch, client, root, refresh]
+  );
+
+  const refreshStashes = useCallback(() => {
+    client
+      .call("git_stash_list", { project_root: root })
+      .then((r) => setStashes((r as { stashes?: typeof stashes }).stashes ?? []))
+      .catch(() => setStashes([]));
+  }, [client, root]);
+
+  useEffect(() => {
+    refreshStashes();
+  }, [refreshStashes]);
+
+  const stashSave = useCallback(() => {
+    setStashBusy(true);
+    setStashError(null);
+    client
+      .call("git_stash_save", { project_root: root, message: "" })
+      .then((r) => {
+        if (!(r as { stashed?: boolean }).stashed) setStashError("Nothing to stash");
+        refresh();
+        refreshStashes();
+      })
+      .catch((e: Error) => setStashError(e.message))
+      .finally(() => setStashBusy(false));
+  }, [client, root, refresh, refreshStashes]);
+
+  const stashAction = useCallback(
+    (method: "git_stash_pop" | "git_stash_drop", index: number) => {
+      setStashBusy(true);
+      setStashError(null);
+      client
+        .call(method, { project_root: root, index })
+        .then(() => {
+          refresh();
+          refreshStashes();
+        })
+        .catch((e: Error) => setStashError(e.message))
+        .finally(() => setStashBusy(false));
+    },
+    [client, root, refresh, refreshStashes]
   );
 
   const stage = useCallback(
@@ -501,6 +546,51 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
           )}
         </div>
       )}
+
+      <div className="git-section">
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <div className="git-section-label mono" style={{ flex: 1 }}>
+            Stashes ({stashes.length})
+          </div>
+          <button
+            type="button"
+            className="editor-find-btn"
+            disabled={stashBusy}
+            onClick={stashSave}
+            title="Stash working changes"
+          >
+            Stash
+          </button>
+        </div>
+        {stashes.map((s) => (
+          <div key={s.index} className="git-row" style={{ cursor: "default" }}>
+            <span className="mono git-row-path" title={s.oid}>
+              {s.message}
+            </span>
+            <button
+              type="button"
+              className="editor-find-btn"
+              disabled={stashBusy}
+              onClick={() => stashAction("git_stash_pop", s.index)}
+            >
+              Pop
+            </button>
+            <button
+              type="button"
+              className="editor-find-btn"
+              disabled={stashBusy}
+              onClick={() => stashAction("git_stash_drop", s.index)}
+            >
+              Drop
+            </button>
+          </div>
+        ))}
+        {stashError && (
+          <div className="git-panel-empty mono" style={{ marginTop: 4 }}>
+            {stashError}
+          </div>
+        )}
+      </div>
 
       <div className="git-section-label mono">Staged Changes ({staged.length})</div>
       <div className="git-section">

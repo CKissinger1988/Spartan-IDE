@@ -21,12 +21,18 @@ Priority key:
 
 ## Recommended next 10 (the highest value-to-effort items)
 
-1. **Code folding** in the editor (P1) — standard editor affordance, pure client-side, fits the
-   existing overlay-layer model.
+1. **Code folding** in the editor (P1) — ⚠️ **architecturally blocked** by the current
+   `<textarea>`-backed editor: a textarea renders all its content and can't hide lines. A real
+   implementation needs a from-scratch canvas/DOM-line editor (a large, separate initiative), or a
+   hacky "remove folded text from the value, store it aside" scheme that fights every other edit
+   operation. Deferred honestly, not "pure client-side, easy."
 2. **LSP code actions / quick fixes** (P1) — the `codeAction` capability; wire the lightbulb UI.
-   Real servers (rust-analyzer, typescript-language-server) implement it richly.
-3. **Multi-cursor / multi-selection editing** (P1) — the single most-requested modern-editor
-   feature not yet present.
+   Real servers (rust-analyzer, typescript-language-server) implement it richly, **but this dev
+   env only has pyright, which returns empty code-actions**, so it can't be strongly live-verified
+   here — build it when a richer server is installable.
+3. **Multi-cursor / multi-selection editing** (P1) — ⚠️ **architecturally blocked** by the
+   `<textarea>` (native single caret/selection only); needs the same from-scratch editing-surface
+   rewrite as code folding.
 4. ~~**Git: remote push/pull/fetch + clone** (P1)~~ — ✅ **Shipped** (fetch/pull/push in both
    shells' Git panels; `spartan_git` remote ops against real remotes). Clone + auth-token UI
    remain follow-ups. See CLAUDE.md's own status entry.
@@ -50,8 +56,8 @@ Priority key:
 
 | Feature | Priority | Notes / grounding |
 |---|---|---|
-| Code folding | P1 | No folding anywhere yet. Pure client-side. |
-| Multi-cursor / column selection | P1 | Not present in any shell. |
+| Code folding | P1 (blocked) | Architecturally blocked by the `<textarea>` editor — needs a from-scratch editing surface to hide lines. |
+| Multi-cursor / column selection | P1 (blocked) | Same `<textarea>` block — native single caret only. |
 | ~~Snippets / template expansion~~ | ✅ done | Shipped — curated per-language snippets, prefix+Tab expansion with tab-stop navigation, in all three editing surfaces. User-defined snippets remain a follow-up. |
 | LSP code actions / quick fixes | P1 | `codeAction` capability unwired (pyright returned empty in dev; other servers implement it — verify against rust-analyzer/tsserver). |
 | LSP inlay hints | P2 | Not wired. |
@@ -81,7 +87,7 @@ Priority key:
 | ~~Inline blame~~ | ✅ done | Shipped — Alt+B per-line blame gutter in both shells (`spartan_git::blame_file`). |
 | GitHub layer (PRs, issues, review) | P2 | §56.3–56.4, unstarted in both shells. |
 | Per-hunk / partial staging | P2 | File-level staging only. |
-| Stash UI | P2 | No stash surface. |
+| ~~Stash UI~~ | ✅ done | Shipped — Stash / Pop / Drop in both Git panels (`spartan_git` stash ops). Stash-message entry + `apply` (vs. pop) remain follow-ups. |
 | Merge-conflict resolution UI | P2 | None. |
 | Side-by-side + word-level diff | P2 | Diff is line-level (`+`/`-`/context) only. |
 | Remote-branch listing | P2 | Branch switcher is local-only. |

@@ -3155,6 +3155,49 @@ fn git_pull(project_root: &str, remote: &str, branch: &str) -> Result<serde_json
     Ok(serde_json::json!({ "outcome": s }))
 }
 
+/// Real `git stash` of the working changes to tracked files. Reports
+/// `stashed: false` when there was nothing to stash (a clean tree).
+fn git_stash_save(project_root: &str, message: &str) -> Result<serde_json::Value, String> {
+    let mut repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let oid = repo
+        .stash_save(message)
+        .map_err(|e| format!("git stash: {e}"))?;
+    Ok(serde_json::json!({ "stashed": oid.is_some() }))
+}
+
+/// Every real stash entry, newest first.
+fn git_stash_list(project_root: &str) -> Result<serde_json::Value, String> {
+    let mut repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let stashes = repo
+        .stash_list()
+        .map_err(|e| format!("git stash list: {e}"))?
+        .into_iter()
+        .map(|s| serde_json::json!({ "index": s.index, "message": s.message, "oid": s.oid }))
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "stashes": stashes }))
+}
+
+/// Real `git stash pop <index>` -- applies the stash and drops it. A real
+/// conflict surfaces `libgit2`'s own error verbatim, never force-applied.
+fn git_stash_pop(project_root: &str, index: usize) -> Result<serde_json::Value, String> {
+    let mut repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.stash_pop(index)
+        .map_err(|e| format!("git stash pop: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// Real `git stash drop <index>` -- discards a stash without applying.
+fn git_stash_drop(project_root: &str, index: usize) -> Result<serde_json::Value, String> {
+    let mut repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.stash_drop(index)
+        .map_err(|e| format!("git stash drop: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 /// Every file a real commit changed, relative to its first parent (a
 /// root commit reports everything as added -- the real, correct answer).
 fn git_commit_files(project_root: &str, oid: &str) -> Result<serde_json::Value, String> {
@@ -3871,6 +3914,37 @@ pub fn handle_request(
             let remote = get_str_param(&req.params, "remote")?;
             let branch = get_str_param(&req.params, "branch")?;
             git_pull(&root, &remote, &branch)
+        })(),
+        "git_stash_save" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let message = req
+                .params
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            git_stash_save(&root, message)
+        })(),
+        "git_stash_list" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            git_stash_list(&root)
+        })(),
+        "git_stash_pop" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let index = req
+                .params
+                .get("index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            git_stash_pop(&root, index)
+        })(),
+        "git_stash_drop" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let index = req
+                .params
+                .get("index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            git_stash_drop(&root, index)
         })(),
         "git_commit_files" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
@@ -5227,6 +5301,61 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&remote_dir);
+    }
+
+    #[test]
+    fn git_stash_round_trip_through_the_dispatch_path() {
+        let tmp = TempRepo::new("stash_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "original\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "init" }),
+        );
+        // A real uncommitted change, then stash it.
+        std::fs::write(tmp.dir.join("f.txt"), "modified\n").unwrap();
+        let resp = call(
+            &state,
+            3,
+            "git_stash_save",
+            serde_json::json!({ "project_root": root, "message": "wip" }),
+        );
+        assert_eq!(resp.result.unwrap()["stashed"], true);
+        // Working tree reverted; the stash is listed.
+        assert_eq!(
+            std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "original\n"
+        );
+        let resp = call(
+            &state,
+            4,
+            "git_stash_list",
+            serde_json::json!({ "project_root": root }),
+        );
+        let stashes = resp.result.unwrap()["stashes"].as_array().unwrap().clone();
+        assert_eq!(stashes.len(), 1);
+        assert_eq!(stashes[0]["index"], 0);
+        // Pop restores the change.
+        let resp = call(
+            &state,
+            5,
+            "git_stash_pop",
+            serde_json::json!({ "project_root": root, "index": 0 }),
+        );
+        assert_eq!(resp.result.unwrap()["ok"], true);
+        assert_eq!(
+            std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "modified\n"
+        );
     }
 
     #[test]

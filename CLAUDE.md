@@ -5894,6 +5894,34 @@ first — it's the parity reference until each row there is actually reimplement
   reference wgpu shell (same established "Electron-shell-only feature" scope every recent
   editor-ergonomics pass has carried); the real Electron window remains unlaunchable in this
   session (same standing gap since §75.59).
+- **Real, working code — Git Stash UI, a `docs/FUTURE_FEATURES.md` backlog feature (task #248)**:
+  user-requested ("Continue with the roadmap"). Picked as the highest-value fully-buildable-and-
+  verifiable next item after finding the remaining P1 editor items architecturally blocked (code
+  folding and multi-cursor can't work in a `<textarea>`-backed editor without a full editor
+  rewrite; LSP code actions can't be strongly live-verified here since only pyright is installed
+  and it returns empty code-actions in this env -- both notes corrected honestly in the backlog).
+  `spartan_git` gained `stash_save`/`stash_list`/`stash_pop`/`stash_drop` (real `git2` stash
+  plumbing -- the same `stash_save2`/apply plumbing Leo's checkpointing already proves works,
+  §75.47). `stash_save` matches git's own default (tracked changes only, untracked left in place)
+  and returns `Ok(None)` on a clean tree (a valid state, not an error, reusing the same
+  `has_uncommitted_tracked_changes` guard the remote-pull work added). `spartan-backend` gained
+  `git_stash_save`/`git_stash_list`/`git_stash_pop`/`git_stash_drop` dispatch. Both Electron-based
+  shells' Git panels gained a "Stashes (N)" section: a Stash button (stashes the working changes)
+  and a list of stashes each with Pop/Drop. 4 new tests (3 `spartan-git`: a full save/list/pop
+  round trip confirming the working tree reverts then restores, a clean-tree `None`, and a drop
+  that discards without applying; 1 dispatch-level round trip in `spartan-backend`), 32 `spartan-git`
+  lib tests and 195 `spartan-backend` lib tests total, full `cargo fmt`/`clippy`/`test` clean;
+  both shells' `tsc`/`build` clean. `git_stash_*` added to `main.ts`/`preload.ts` allowlists.
+  **Real, live, end-to-end Playwright verification against the actual compiled `web/dist` served
+  by a real running `spartan-devserver`** (not a mock, 8/8): a repo with one real uncommitted
+  change -- clicking Stash reverted the working file on disk (`modified` -> `original`, cross-
+  checked) and showed "Stashes (1)"; clicking Pop restored the change on disk (`original` ->
+  `modified`, cross-checked) and returned to "Stashes (0)", zero page errors. **What this does not
+  confirm**: no live Electron-window verification of `desktop/` (the standing gap since §75.59 --
+  verified via typecheck + the identical shared component logic the web live run exercises); no
+  stash message entry UI (auto-generated `WIP on <branch>` message only -- a real, minor, named
+  follow-up); no `stash apply` (keep-and-apply) distinct from `pop`, no untracked-file stashing
+  (matches git's own default), no partial/selective stash.
 
 ## Build & test
 

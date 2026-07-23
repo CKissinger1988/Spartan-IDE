@@ -119,6 +119,15 @@ pub struct BlameLine {
     pub time: i64,
 }
 
+/// One real stash entry in `stash_list()`'s output -- `index` 0 is the
+/// most recent (`stash@{0}`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StashEntry {
+    pub index: usize,
+    pub message: String,
+    pub oid: String,
+}
+
 /// A real, open local git repository. Every method here is a thin,
 /// honest wrapper over a real `git2` call -- no simulated state.
 pub struct GitRepo {
@@ -602,6 +611,52 @@ impl GitRepo {
                 )
         }))
     }
+
+    /// Real `git stash` of the current working changes to tracked files
+    /// (matches git's own default -- untracked files are left in place, so
+    /// the same `stash` a user gets from the CLI). Returns `Ok(None)` if
+    /// there's nothing to stash (a clean tree, or only untracked files) --
+    /// a real, valid state, not an error.
+    pub fn stash_save(&mut self, message: &str) -> Result<Option<String>, git2::Error> {
+        if !self.has_uncommitted_tracked_changes()? {
+            return Ok(None);
+        }
+        let sig = self.repo.signature()?;
+        let msg = if message.trim().is_empty() {
+            None
+        } else {
+            Some(message)
+        };
+        let oid = self.repo.stash_save2(&sig, msg, None)?;
+        Ok(Some(oid.to_string()))
+    }
+
+    /// Every real stash entry, newest first (index 0 is `stash@{0}`, the
+    /// most recent).
+    pub fn stash_list(&mut self) -> Result<Vec<StashEntry>, git2::Error> {
+        let mut out = Vec::new();
+        self.repo.stash_foreach(|index, message, oid| {
+            out.push(StashEntry {
+                index,
+                message: message.to_string(),
+                oid: oid.to_string(),
+            });
+            true
+        })?;
+        Ok(out)
+    }
+
+    /// Real `git stash pop <index>` -- applies the stash back onto the
+    /// working tree and drops it. `libgit2`'s own apply refuses (errors)
+    /// on a real conflict rather than force-overwriting, surfaced verbatim.
+    pub fn stash_pop(&mut self, index: usize) -> Result<(), git2::Error> {
+        self.repo.stash_pop(index, None)
+    }
+
+    /// Real `git stash drop <index>` -- discards a stash without applying.
+    pub fn stash_drop(&mut self, index: usize) -> Result<(), git2::Error> {
+        self.repo.stash_drop(index)
+    }
 }
 
 #[cfg(test)]
@@ -1045,6 +1100,65 @@ mod tests {
         tmp.write("f.txt", "hello\n");
         let blame = repo.blame_file(Path::new("f.txt")).unwrap();
         assert!(blame.is_empty());
+    }
+
+    #[test]
+    fn stash_save_list_pop_round_trip() {
+        let (tmp, mut repo) = TempRepo::new("stash_rt");
+        // Commit an initial version.
+        tmp.write("f.txt", "original\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("init").unwrap();
+        // Make a real uncommitted change, then stash it.
+        tmp.write("f.txt", "modified\n");
+        let oid = repo.stash_save("wip").unwrap();
+        assert!(oid.is_some(), "a real change should produce a stash");
+        // Working tree is reverted to the committed version.
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "original\n"
+        );
+        // The stash is listed.
+        let list = repo.stash_list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].index, 0);
+        assert!(list[0].message.contains("wip"));
+        // Pop restores the change and clears the stash.
+        repo.stash_pop(0).unwrap();
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "modified\n"
+        );
+        assert!(repo.stash_list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn stash_on_a_clean_tree_is_none_not_an_error() {
+        let (tmp, mut repo) = TempRepo::new("stash_clean");
+        tmp.write("f.txt", "x\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("init").unwrap();
+        assert_eq!(repo.stash_save("nothing").unwrap(), None);
+        assert!(repo.stash_list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn stash_drop_discards_without_applying() {
+        let (tmp, mut repo) = TempRepo::new("stash_drop");
+        tmp.write("f.txt", "original\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("init").unwrap();
+        tmp.write("f.txt", "modified\n");
+        repo.stash_save("wip").unwrap();
+        assert_eq!(repo.stash_list().unwrap().len(), 1);
+        repo.stash_drop(0).unwrap();
+        // Stash gone; working tree still at the reverted content (drop does
+        // not re-apply).
+        assert!(repo.stash_list().unwrap().is_empty());
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "original\n"
+        );
     }
 
     #[test]
