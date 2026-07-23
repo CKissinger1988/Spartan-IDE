@@ -91,6 +91,7 @@ Priority key:
 | ~~Inline blame~~ | ✅ done | Shipped — Alt+B per-line blame gutter in both shells (`spartan_git::blame_file`). |
 | GitHub layer (PRs, issues, review) | P2 | §56.3–56.4, unstarted in both shells. |
 | Per-hunk / partial staging | P2 | File-level staging only. |
+| ~~Discard changes~~ | ✅ done | Shipped — a ⤺ "Discard changes" action (with a confirm) on each unstaged row in both Git panels (`spartan_git::discard_changes` = `git checkout -- <path>`, restores to the index version, keeps staged changes). Live-verified + cross-checked against the git CLI. |
 | ~~Stash UI~~ | ✅ done | Shipped — Stash (with optional message) / Pop / Apply / Drop in both Git panels (`spartan_git` stash ops). `apply` (keep-and-apply, distinct from pop which drops) + stash-message entry now landed too. |
 | Merge-conflict resolution UI | P2 | None. |
 | ~~Word-level diff~~ / side-by-side | ✅ word-level done; side-by-side P3 | Word-level (intra-line) highlighting shipped in both Git panels' `DiffView` (client-side LCS token diff pairs adjacent `-`/`+` runs and emphasizes only the changed words). Side-by-side layout remains a P3 follow-up. |

@@ -6209,6 +6209,37 @@ first — it's the parity reference until each row there is actually reimplement
   in-memory buffer isn't updated in place, so it shows stale content until reopened -- named in
   `applyRename`'s own doc comment); `desktop/` already had multi-tab support, untouched here.
   §75.89's single-file scope cut is closed.
+- **Real, working code — git "Discard changes" in both shells, plus an honest "type hierarchy is
+  unverifiable here" finding (task #258)**: user-requested ("Continue"). First, a real, live probe
+  (a hand-rolled JSON-RPC client, matching the earlier codeAction/documentHighlight investigation
+  discipline) confirmed `pyright-langserver` implements no type hierarchy at all
+  (`typeHierarchyProvider: undefined`, `prepareTypeHierarchy` returns undefined) -- so LSP type
+  hierarchy (the natural sibling of the call hierarchy just shipped) is *not* live-verifiable in
+  this environment, and per this project's "don't ship unverifiable features" rule it was
+  deliberately not built, the same honest call the codeAction probe led to. Pivoted to a fully-
+  verifiable git feature instead. New `spartan_git::discard_changes(path)` = a real `git checkout
+  -- <path>` (`git2` `checkout_index` with `force().path()`), restoring the working-tree file to
+  the *index* version -- it drops unstaged edits but keeps whatever is staged (confirmed by a
+  dedicated test: staging v2 then discarding a v3-unstaged edit restores to v2, not the HEAD v1).
+  New `spartan-backend::git_discard` dispatch + IPC allowlist entries. Both shells' Git panels
+  gained a ⤺ "Discard changes" button on each unstaged (Changes) row, gated behind a real
+  `window.confirm` ("...This cannot be undone.") -- a real destructive action, so it confirms first
+  per this session's own "confirm hard-to-reverse actions" rule; the click is `stopPropagation`-
+  isolated from the row's own stage-on-click. 4 new tests (2 in `spartan-git` -- reverts an unstaged
+  modification, and keeps staged changes; 1 dispatch-level in `spartan-backend`; 197 lib tests
+  total). Full `cargo fmt --all`/`cargo clippy -p spartan-git -p spartan-backend --release
+  --all-targets` clean; both shells' `tsc --noEmit`/`build` clean. **Real, live, end-to-end
+  Playwright verification against the actual compiled `web/dist` served by a real running
+  `spartan-devserver`** (not a mock): a real fixture (a committed file with an uncommitted "dirty"
+  edit) -- clicking ⤺ fired the real `window.confirm` (auto-accepted, message asserted), reverted
+  the working file on disk from `"dirty unstaged edit"` back to `"committed content"`
+  (cross-checked by reading the file directly), and emptied the Changes section. **What this does
+  not confirm**: no LSP type hierarchy (the honest unverifiable-here finding above); no
+  discard-of-a-whole-directory or discard-all-at-once (per-file only); no live Electron-window
+  verification of `desktop/` (same standing gap since §75.59 -- verified via typecheck + the
+  identical shared component logic the web live run exercises, same `git_discard` Rust path both
+  shells send through); the confirm is a browser-native `window.confirm` (fine in both a browser
+  and Electron), not a custom themed modal.
 
 ## Build & test
 

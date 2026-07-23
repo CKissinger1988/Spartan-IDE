@@ -224,6 +224,20 @@ impl GitRepo {
         }
     }
 
+    /// Real "discard changes" -- restores this one path's working-tree file
+    /// to the version in the index (a `git checkout -- <path>`, i.e. it
+    /// discards *unstaged* modifications but keeps whatever is staged). A
+    /// real, destructive operation by design; the caller is responsible for
+    /// confirming with the user first. Force-overwrites the working file.
+    pub fn discard_changes(&self, path: &Path) -> Result<(), git2::Error> {
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force().path(path);
+        // Checking out the index (not the HEAD tree) matches `git checkout
+        // -- <path>` semantics: unstaged changes are discarded, staged ones
+        // are preserved.
+        self.repo.checkout_index(None, Some(&mut checkout))
+    }
+
     /// Real commit of the current index against `HEAD` (or as the repo's
     /// first commit if there is no `HEAD` yet), using the real
     /// `user.name`/`user.email` from git config (repo-level, falling back
@@ -1191,6 +1205,44 @@ mod tests {
             "modified\n"
         );
         assert!(repo.stash_list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn discard_changes_reverts_an_unstaged_modification() {
+        let (tmp, repo) = TempRepo::new("discard");
+        tmp.write("f.txt", "committed\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("init").unwrap();
+        // Real unstaged modification.
+        tmp.write("f.txt", "dirty edit\n");
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "dirty edit\n"
+        );
+        // Discard restores the working file to the committed (== index) version.
+        repo.discard_changes(Path::new("f.txt")).unwrap();
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "committed\n"
+        );
+    }
+
+    #[test]
+    fn discard_changes_keeps_staged_changes() {
+        let (tmp, repo) = TempRepo::new("discard_keep_staged");
+        tmp.write("f.txt", "v1\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("init").unwrap();
+        // Stage a change, then make a further unstaged change on top.
+        tmp.write("f.txt", "v2-staged\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        tmp.write("f.txt", "v3-unstaged\n");
+        // Discard drops only the unstaged part, restoring to the staged version.
+        repo.discard_changes(Path::new("f.txt")).unwrap();
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "v2-staged\n"
+        );
     }
 
     #[test]

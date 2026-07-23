@@ -3082,6 +3082,17 @@ fn git_unstage(project_root: &str, path: &str) -> Result<serde_json::Value, Stri
     Ok(serde_json::json!({ "ok": true }))
 }
 
+/// Real "discard changes" -- restores one path's working-tree file to the
+/// index version (a `git checkout -- <path>`), dropping unstaged edits. A
+/// destructive operation; the UI confirms with the user before calling it.
+fn git_discard(project_root: &str, path: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.discard_changes(std::path::Path::new(path))
+        .map_err(|e| format!("git discard: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 fn git_commit(project_root: &str, message: &str) -> Result<serde_json::Value, String> {
     let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
         .ok_or("no git repository found at or above this path")?;
@@ -4019,6 +4030,11 @@ pub fn handle_request(
             let root = get_str_param(&req.params, "project_root")?;
             let path = get_str_param(&req.params, "path")?;
             git_unstage(&root, &path)
+        })(),
+        "git_discard" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let path = get_str_param(&req.params, "path")?;
+            git_discard(&root, &path)
         })(),
         "git_commit" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
@@ -5534,6 +5550,38 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
             "modified\n"
+        );
+    }
+
+    #[test]
+    fn git_discard_reverts_an_unstaged_edit_through_the_dispatch_path() {
+        let tmp = TempRepo::new("discard_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "committed\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "init" }),
+        );
+        std::fs::write(tmp.dir.join("f.txt"), "dirty\n").unwrap();
+        let resp = call(
+            &state,
+            3,
+            "git_discard",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        assert_eq!(resp.result.unwrap()["ok"], true);
+        assert_eq!(
+            std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "committed\n"
         );
     }
 

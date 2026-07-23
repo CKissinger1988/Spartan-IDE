@@ -52,6 +52,7 @@ const ALLOWED_METHODS = new Set([
   "git_status",
   "git_stage",
   "git_unstage",
+  "git_discard",
   "git_commit",
   "git_diff",
   "git_branches",

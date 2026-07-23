@@ -384,6 +384,18 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
     [client, root, refresh]
   );
 
+  // Real "discard changes" -- destructive, so confirm first.
+  const discard = useCallback(
+    (path: string) => {
+      if (!window.confirm(`Discard all unstaged changes to ${path}? This cannot be undone.`)) return;
+      client
+        .call("git_discard", { project_root: root, path })
+        .then(refresh)
+        .catch((e: Error) => setError(e.message));
+    },
+    [client, root, refresh]
+  );
+
   const commit = useCallback(() => {
     if (!message.trim()) return;
     setCommitting(true);
@@ -794,6 +806,17 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
                 onClick={(e) => toggleDiff(entry.path, false, e)}
               >
                 ±
+              </button>
+              <button
+                type="button"
+                className="editor-find-btn"
+                title="Discard changes"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  discard(entry.path);
+                }}
+              >
+                ⤺
               </button>
             </div>
             {expandedDiff?.path === entry.path && expandedDiff.staged === false && (
