@@ -6301,6 +6301,36 @@ first — it's the parity reference until each row there is actually reimplement
   (same standing gap since §75.59 -- verified via typecheck + the identical shared component logic
   the web live run exercises, same `git_revert_commit` Rust path both shells send through); the
   confirm is a browser-native `window.confirm`, not a custom themed modal.
+- **Real, working code — git tags (create/list/delete) in both Git panels (task #261)**:
+  user-requested ("Continue without stopping"). `spartan_git` gained `list_tags` (each `TagInfo`
+  carries the tag name, its target commit oid peeled through any annotated tag object, and an
+  `annotated` flag), `create_tag(name, oid, message)` (annotated tag -- its own tag object +
+  signature + message -- when `message` is a non-empty string, else a lightweight tag; `force =
+  false` so a duplicate name is a real error, never silently moved), and `delete_tag(name)`. Three
+  new backend dispatch methods (`git_tags`/`git_create_tag`/`git_delete_tag`) + IPC allowlist
+  entries in both `main.ts`/`preload.ts` at identical positions. Both Git panels gained a 🏷 button
+  on each commit row in the History view (prompts via `window.prompt` for a name, tags that
+  specific commit lightweight, `stopPropagation`-isolated from the row's expand click) and a "Tags"
+  section listing every tag (name + short target oid + a 🏷 badge for annotated tags) with a ✕
+  delete button (confirmed). 6 new tests (4 in `spartan-git`: a full create-both-kinds → list →
+  delete round trip asserting the annotated flag and target oid, a duplicate-name error, a
+  delete-missing error; 1 dispatch-level in `spartan-backend`: an annotated-tag create → list →
+  delete round trip through `handle_request`), 45 `spartan-git` lib tests and 200 `spartan-backend`
+  lib tests total, full `cargo fmt --all -- --check`/`cargo clippy -p spartan-git -p spartan-backend
+  --release --all-targets`/`cargo test` clean; both shells' `tsc --noEmit`/`build` clean. **Real,
+  live, end-to-end Playwright verification against the actual compiled `web/dist` served by a real
+  running `spartan-devserver`** (not a mock): a real 2-commit fixture -- opening History, clicking
+  the 🏷 on the top commit and entering "v1.0" via the real prompt created the tag (the Tags section
+  rendered `Tags (1) v1.0 <shortoid> ✕`), and clicking ✕ (accepting the confirm) deleted it -- all
+  three steps **cross-checked against the real `git` CLI** (`git tag` empty → `v1.0` present →
+  empty). **What this does not confirm**: no push-tags-to-remote (local tags only -- a real, named
+  follow-up alongside the existing local-only git scope); the commit-row 🏷 always creates a
+  lightweight tag (annotated creation is wired and tested at the backend/`spartan-git` level, but
+  the UI's prompt path doesn't collect a message -- a real, minor, named UI simplification); no live
+  Electron-window verification of `desktop/` (same standing gap since §75.59 -- verified via
+  typecheck + the identical shared component logic the web live run exercises, same
+  `git_tags`/`git_create_tag`/`git_delete_tag` Rust paths both shells send through); the name prompt
+  and delete confirm are browser-native `window.prompt`/`window.confirm`, not custom themed modals.
 
 ## Build & test
 

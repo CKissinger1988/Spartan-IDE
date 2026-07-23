@@ -3126,6 +3126,49 @@ fn git_revert_commit(project_root: &str, oid: &str) -> Result<serde_json::Value,
     Ok(serde_json::json!({ "ok": true, "oid": new_oid.to_string() }))
 }
 
+/// Real list of tags, each with its target commit oid and annotated flag.
+fn git_tags(project_root: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let tags = repo
+        .list_tags()
+        .map_err(|e| format!("git tag list: {e}"))?
+        .into_iter()
+        .map(|t| {
+            serde_json::json!({
+                "name": t.name,
+                "target": t.target,
+                "annotated": t.annotated,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "tags": tags }))
+}
+
+/// Real tag creation on a commit `oid` -- annotated if `message` is a
+/// non-empty string, else lightweight. An existing name is a real error.
+fn git_create_tag(
+    project_root: &str,
+    name: &str,
+    oid: &str,
+    message: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.create_tag(name, oid, message)
+        .map_err(|e| format!("git tag: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// Real tag deletion by name.
+fn git_delete_tag(project_root: &str, name: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.delete_tag(name)
+        .map_err(|e| format!("git tag -d: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 /// Real staged/unstaged diff for one file, reusing the already-tested
 /// `compute_diff` (§75.68) -- real git semantics, not a simplified
 /// approximation. `staged: true` diffs `HEAD`'s own blob against the
@@ -4074,6 +4117,19 @@ pub fn handle_request(
             let root = get_str_param(&req.params, "project_root")?;
             let oid = get_str_param(&req.params, "oid")?;
             git_revert_commit(&root, &oid)
+        })(),
+        "git_tags" => get_str_param(&req.params, "project_root").and_then(|r| git_tags(&r)),
+        "git_create_tag" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let name = get_str_param(&req.params, "name")?;
+            let oid = get_str_param(&req.params, "oid")?;
+            let message = req.params.get("message").and_then(|v| v.as_str());
+            git_create_tag(&root, &name, &oid, message)
+        })(),
+        "git_delete_tag" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let name = get_str_param(&req.params, "name")?;
+            git_delete_tag(&root, &name)
         })(),
         "git_diff" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
@@ -5757,6 +5813,62 @@ mod tests {
             std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
             "line one\n"
         );
+    }
+
+    #[test]
+    fn git_tag_create_list_delete_round_trip_through_the_dispatch_path() {
+        let tmp = TempRepo::new("tags_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "v1\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        let commit_resp = call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "init" }),
+        );
+        let head = commit_resp.result.unwrap()["oid"].as_str().unwrap().to_string();
+        // Create an annotated tag on HEAD.
+        let resp = call(
+            &state,
+            3,
+            "git_create_tag",
+            serde_json::json!({ "project_root": root, "name": "v1.0", "oid": head, "message": "first release" }),
+        );
+        assert_eq!(resp.result.unwrap()["ok"], true);
+        // List: exactly one annotated tag pointing at HEAD.
+        let resp = call(
+            &state,
+            4,
+            "git_tags",
+            serde_json::json!({ "project_root": root }),
+        );
+        let tags = resp.result.unwrap()["tags"].as_array().unwrap().clone();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0]["name"], "v1.0");
+        assert_eq!(tags[0]["annotated"], true);
+        assert_eq!(tags[0]["target"], head);
+        // Delete it -> empty list.
+        let resp = call(
+            &state,
+            5,
+            "git_delete_tag",
+            serde_json::json!({ "project_root": root, "name": "v1.0" }),
+        );
+        assert_eq!(resp.result.unwrap()["ok"], true);
+        let resp = call(
+            &state,
+            6,
+            "git_tags",
+            serde_json::json!({ "project_root": root }),
+        );
+        assert!(resp.result.unwrap()["tags"].as_array().unwrap().is_empty());
     }
 
     #[test]

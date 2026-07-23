@@ -260,6 +260,8 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [stashBusy, setStashBusy] = useState(false);
   const [stashError, setStashError] = useState<string | null>(null);
   const [stashMessage, setStashMessage] = useState("");
+  // Real git tags.
+  const [tags, setTags] = useState<{ name: string; target: string; annotated: boolean }[]>([]);
 
   const refresh = useCallback(() => {
     window.spartan
@@ -333,9 +335,42 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
       .catch(() => setStashes([]));
   }, [root]);
 
+  const refreshTags = useCallback(() => {
+    window.spartan
+      .call("git_tags", { project_root: root })
+      .then((r) => setTags((r as { tags?: typeof tags }).tags ?? []))
+      .catch(() => setTags([]));
+  }, [root]);
+
   useEffect(() => {
     refreshStashes();
-  }, [refreshStashes]);
+    refreshTags();
+  }, [refreshStashes, refreshTags]);
+
+  // Tag a specific commit (lightweight, via a prompt for the name).
+  const tagCommit = useCallback(
+    (oid: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      const name = window.prompt(`Tag name for commit ${oid.slice(0, 7)}:`);
+      if (!name || !name.trim()) return;
+      window.spartan
+        .call("git_create_tag", { project_root: root, name: name.trim(), oid })
+        .then(refreshTags)
+        .catch((err: Error) => setError(err.message));
+    },
+    [root, refreshTags]
+  );
+
+  const deleteTag = useCallback(
+    (name: string) => {
+      if (!window.confirm(`Delete tag "${name}"?`)) return;
+      window.spartan
+        .call("git_delete_tag", { project_root: root, name })
+        .then(refreshTags)
+        .catch((err: Error) => setError(err.message));
+    },
+    [root, refreshTags]
+  );
 
   const stashSave = useCallback(() => {
     setStashBusy(true);
@@ -834,6 +869,34 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
         )}
       </div>
 
+      {tags.length > 0 && (
+        <div className="git-section">
+          <div className="git-section-label mono">Tags ({tags.length})</div>
+          {tags.map((t) => (
+            <div key={t.name} className="git-row" style={{ cursor: "default" }}>
+              <span className="mono git-row-path" title={t.target}>
+                {t.annotated ? "🏷 " : ""}
+                {t.name}
+              </span>
+              <span
+                className="mono"
+                style={{ opacity: 0.6, fontSize: 11, whiteSpace: "nowrap" }}
+              >
+                {t.target.slice(0, 7)}
+              </span>
+              <button
+                type="button"
+                className="editor-find-btn"
+                onClick={() => deleteTag(t.name)}
+                title="Delete this tag"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="git-section-label mono">Staged Changes ({staged.length})</div>
       <div className="git-section">
         {staged.map((entry) => (
@@ -940,6 +1003,14 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
                 >
                   {formatAge(c.time)}
                 </span>
+                <button
+                  type="button"
+                  className="editor-find-btn"
+                  title="Tag this commit"
+                  onClick={(e) => tagCommit(c.oid, e)}
+                >
+                  🏷
+                </button>
                 <button
                   type="button"
                   className="editor-find-btn"

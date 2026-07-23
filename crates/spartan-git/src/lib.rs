@@ -128,6 +128,17 @@ pub struct StashEntry {
     pub oid: String,
 }
 
+/// One real tag in `list_tags()`'s output -- `target` is the hex oid of the
+/// commit the tag points at (resolved through an annotated tag object if the
+/// tag is annotated), and `annotated` distinguishes an annotated tag (its own
+/// tag object + message) from a lightweight one (just a ref).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagInfo {
+    pub name: String,
+    pub target: String,
+    pub annotated: bool,
+}
+
 /// A real, open local git repository. Every method here is a thin,
 /// honest wrapper over a real `git2` call -- no simulated state.
 pub struct GitRepo {
@@ -330,6 +341,62 @@ impl GitRepo {
         // Clear REVERT_HEAD now that the revert is committed.
         let _ = self.repo.cleanup_state();
         Ok(new_oid)
+    }
+
+    /// Real list of tags, sorted by name -- each with the hex oid of the
+    /// commit it points at (peeled through an annotated tag object where
+    /// needed) and whether it's annotated (its own tag object) or lightweight
+    /// (just a ref). A tag pointing at a non-commit object, or one that can't
+    /// be resolved, is skipped rather than failing the whole listing.
+    pub fn list_tags(&self) -> Result<Vec<TagInfo>, git2::Error> {
+        let names = self.repo.tag_names(None)?;
+        let mut tags: Vec<TagInfo> = Vec::new();
+        for name in names.iter().flatten() {
+            let refname = format!("refs/tags/{name}");
+            let Ok(obj) = self.repo.revparse_single(&refname) else {
+                continue;
+            };
+            let annotated = obj.kind() == Some(git2::ObjectType::Tag);
+            let Ok(commit) = obj.peel_to_commit() else {
+                continue;
+            };
+            tags.push(TagInfo {
+                name: name.to_string(),
+                target: commit.id().to_string(),
+                annotated,
+            });
+        }
+        tags.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(tags)
+    }
+
+    /// Real tag creation on a given commit `oid` (hex). If `message` is a
+    /// non-empty string an annotated tag is created (its own tag object,
+    /// tagger signature + message); otherwise a lightweight tag (just a ref)
+    /// is created. `force` is always false, so tagging an existing name is a
+    /// real, honest error rather than silently moving the tag. Errors if the
+    /// oid is unknown.
+    pub fn create_tag(
+        &self,
+        name: &str,
+        oid_hex: &str,
+        message: Option<&str>,
+    ) -> Result<git2::Oid, git2::Error> {
+        let oid = git2::Oid::from_str(oid_hex)?;
+        let target = self.repo.find_object(oid, None)?;
+        match message {
+            Some(msg) if !msg.trim().is_empty() => {
+                let signature = self.repo.signature()?;
+                self.repo.tag(name, &target, &signature, msg, false)
+            }
+            _ => self.repo.tag_lightweight(name, &target, false),
+        }
+    }
+
+    /// Real tag deletion by name (the bare tag name, e.g. `v1.0`, not the
+    /// full `refs/tags/...` ref). Errors honestly if no such tag exists.
+    pub fn delete_tag(&self, name: &str) -> Result<(), git2::Error> {
+        self.repo.tag_delete(name)
     }
 
     /// The real current branch name, or `None` for a detached `HEAD` (a
@@ -1392,6 +1459,53 @@ mod tests {
         assert!(repo
             .revert_commit("0000000000000000000000000000000000000000")
             .is_err());
+    }
+
+    #[test]
+    fn create_list_and_delete_tags() {
+        let (tmp, repo) = TempRepo::new("tags");
+        tmp.write("f.txt", "v1\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        let head = repo.commit("init").unwrap();
+        assert!(repo.list_tags().unwrap().is_empty());
+        // A lightweight tag and an annotated tag on the same commit.
+        repo.create_tag("v1.0", &head.to_string(), None).unwrap();
+        repo.create_tag("v1.0-annotated", &head.to_string(), Some("release one"))
+            .unwrap();
+        let tags = repo.list_tags().unwrap();
+        assert_eq!(tags.len(), 2);
+        // Sorted by name: "v1.0" then "v1.0-annotated".
+        assert_eq!(tags[0].name, "v1.0");
+        assert!(!tags[0].annotated);
+        assert_eq!(tags[0].target, head.to_string());
+        assert_eq!(tags[1].name, "v1.0-annotated");
+        assert!(tags[1].annotated, "message-carrying tag must be annotated");
+        assert_eq!(tags[1].target, head.to_string());
+        // Deleting one leaves the other.
+        repo.delete_tag("v1.0").unwrap();
+        let tags = repo.list_tags().unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].name, "v1.0-annotated");
+    }
+
+    #[test]
+    fn create_tag_with_a_duplicate_name_errors() {
+        let (tmp, repo) = TempRepo::new("tag_dup");
+        tmp.write("f.txt", "v1\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        let head = repo.commit("init").unwrap();
+        repo.create_tag("v1", &head.to_string(), None).unwrap();
+        // A second tag with the same name must not silently move it.
+        assert!(repo.create_tag("v1", &head.to_string(), None).is_err());
+    }
+
+    #[test]
+    fn delete_nonexistent_tag_errors() {
+        let (tmp, repo) = TempRepo::new("tag_del_missing");
+        tmp.write("f.txt", "v1\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("init").unwrap();
+        assert!(repo.delete_tag("nope").is_err());
     }
 
     #[test]
