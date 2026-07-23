@@ -1,5 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { highlightSource, languageForPath } from "../syntax";
+import {
+  adjustSnippetStops,
+  expandSnippet,
+  findSnippet,
+  type SnippetSession,
+} from "../snippets";
 import { writeFileText } from "../fsAccess";
 import type { WasmDocument } from "../buffer";
 
@@ -465,6 +471,9 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
   const symbolHighlightRef = useRef<HTMLDivElement>(null);
   const [lineCount, setLineCount] = useState(1);
   const prevContentRef = useRef(file.content);
+  // Real snippet expansion (P1 backlog), mirroring the two backend-editor
+  // surfaces -- Tab navigates a just-expanded snippet's tab stops.
+  const snippetSessionRef = useRef<SnippetSession | null>(null);
 
   /** Real matching-bracket highlighting, ported verbatim from
    * `desktop/`'s own identical wiring -- see that file's own doc comment
@@ -553,6 +562,9 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
       el.value = newContent;
       el.setSelectionRange(selStart, selEnd);
       const oldLength = [...prevContentRef.current].length;
+      if (snippetSessionRef.current) {
+        adjustSnippetStops(snippetSessionRef.current, prevContentRef.current, newContent);
+      }
       prevContentRef.current = newContent;
       setLineCount(newContent.split("\n").length);
       try {
@@ -781,6 +793,15 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
         setFontSize(13);
         return;
       }
+      if (
+        snippetSessionRef.current &&
+        (e.key === "Escape" ||
+          e.key === "Home" ||
+          e.key === "End" ||
+          e.key.startsWith("Arrow"))
+      ) {
+        snippetSessionRef.current = null;
+      }
       if (e.key === "Tab") {
         e.preventDefault();
         const el = textareaRef.current;
@@ -789,6 +810,41 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
         const end = el.selectionEnd;
         const value = el.value;
         const indent = "  ";
+        // Real snippet tab-stop navigation (plain Tab while a session is
+        // active): jump to the next placeholder, selecting its text.
+        if (!e.shiftKey && snippetSessionRef.current) {
+          const session = snippetSessionRef.current;
+          session.index += 1;
+          const stop = session.stops[session.index];
+          if (stop) {
+            const s = Math.max(0, Math.min(stop.start, el.value.length));
+            const en = Math.max(s, Math.min(stop.end, el.value.length));
+            el.setSelectionRange(s, en);
+          }
+          if (session.index >= session.stops.length - 1) {
+            snippetSessionRef.current = null;
+          }
+          return;
+        }
+        // Real snippet expansion (plain Tab, collapsed caret, a prefix word
+        // matching a snippet for this language).
+        if (!e.shiftKey && start === end) {
+          const m = /([A-Za-z_]\w*)$/.exec(value.slice(0, start));
+          const snip = m ? findSnippet(languageForPath(file.path), m[1]) : null;
+          if (snip && m) {
+            const expanded = expandSnippet(snip.body);
+            const prefixStart = start - m[1].length;
+            const next = value.slice(0, prefixStart) + expanded.text + value.slice(end);
+            const abs = expanded.stops.map((st) => ({
+              start: prefixStart + st.start,
+              end: prefixStart + st.end,
+            }));
+            const first = abs[0];
+            applyProgrammaticEdit(el, next, first.start, first.end);
+            snippetSessionRef.current = abs.length > 1 ? { stops: abs, index: 0 } : null;
+            return;
+          }
+        }
         // Real multi-line indent/outdent, ported verbatim from
         // `desktop/`'s own identical wiring.
         if (e.shiftKey || start !== end) {

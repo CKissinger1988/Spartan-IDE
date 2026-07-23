@@ -32,7 +32,9 @@ Priority key:
    remain follow-ups. See CLAUDE.md's own status entry.
 5. ~~**Inline git blame** (P1)~~ — ✅ **Shipped** (Alt+B blame gutter in both shells, backed by
    `spartan_git::blame_file`). See CLAUDE.md's own status entry.
-6. **Snippets / tab-completion expansion** (P1) — common, self-contained, no backend needed.
+6. ~~**Snippets / tab-completion expansion** (P1)~~ — ✅ **Shipped** (curated per-language
+   snippets, prefix+Tab expansion, tab-stop navigation, in all three editing surfaces). See
+   CLAUDE.md's own status entry.
 7. **tree-sitter syntax highlighting in the Electron shells** (P2) — replace the current
    `highlight.js` lexical pass with the real tree-sitter engine already used in the wgpu shell
    (via `web-tree-sitter`), for correctness parity.
@@ -50,7 +52,7 @@ Priority key:
 |---|---|---|
 | Code folding | P1 | No folding anywhere yet. Pure client-side. |
 | Multi-cursor / column selection | P1 | Not present in any shell. |
-| Snippets / template expansion | P1 | No snippet system yet. |
+| ~~Snippets / template expansion~~ | ✅ done | Shipped — curated per-language snippets, prefix+Tab expansion with tab-stop navigation, in all three editing surfaces. User-defined snippets remain a follow-up. |
 | LSP code actions / quick fixes | P1 | `codeAction` capability unwired (pyright returned empty in dev; other servers implement it — verify against rust-analyzer/tsserver). |
 | LSP inlay hints | P2 | Not wired. |
 | LSP semantic tokens (semantic highlighting) | P2 | Electron shells use lexical `highlight.js`; semantic coloring needs `textDocument/semanticTokens`. |

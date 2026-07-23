@@ -5855,6 +5855,45 @@ first — it's the parity reference until each row there is actually reimplement
   verified via typecheck + the identical shared component logic the web live run exercises); no
   clone (add-a-new-remote-and-clone), no force-push, no interactive credential/token entry UI, no
   remote-branch listing -- all real, named follow-ups; pull is fast-forward-only by design.
+- **Real, working code — snippets / tab-completion expansion, the third `docs/FUTURE_FEATURES.md`
+  P1 backlog feature (task #246)**: user-requested ("Continue with snippets next"). A curated
+  per-language snippet set (Rust/TypeScript/JavaScript/Python/Go/Java/C#/Kotlin) expanded by typing
+  a prefix and pressing Tab, with real tab-stop navigation (Tab jumps between placeholders). New
+  shared `snippets.ts` (mirrored verbatim across `desktop/`/`web/`, the same convention
+  `applyTheme.ts`/`syntax.ts` already use -- the two shells don't share a package): a small,
+  self-contained subset of the VS Code snippet template syntax (`${N:default}`/`$N`/`$0`, no
+  mirroring/choices/variables -- the curated bodies avoid repeating any index so no mirroring is
+  needed), a pure `expandSnippet` (body -> literal text + ordered tab stops, `$0` last), and a pure
+  `adjustSnippetStops` that shifts a live session's recorded stop offsets by an edit's delta
+  (computed from a common-prefix diff of old vs. new text) so Tab still lands correctly after the
+  user types at a placeholder. Wired into all **three** real editing surfaces
+  (`desktop/Editor.tsx`, `web/BackendEditor.tsx`, `web/Editor.tsx`): a `snippetSessionRef` (no
+  re-render churn), the offset-adjustment hooked into each editor's own single `applyProgrammaticEdit`
+  choke point (the one place all edits -- typed and programmatic -- flow through, so both old and
+  new content are in hand there), and a Tab-handler that (1) navigates to the next stop when a
+  session is active, (2) otherwise expands a matching prefix word for the file's language, (3)
+  otherwise falls through to the existing multi-line indent behavior; the session clears on
+  Escape/arrows/Home/End. Pure client-side -- no backend round trip, no new IPC. **Real, live,
+  end-to-end verification in both shells**: `web/BackendEditor.tsx` was driven against the actual
+  compiled `web/dist` served by a real running `spartan-devserver` (8/8) -- `def`+Tab expanded to
+  `def name(args):\n    pass`, the first stop `name` was selected, typing `greet` over it then
+  Tab correctly landed on `args` (proving the offset-adjustment works: a +1-length replacement
+  didn't desync the later stop), Tab reached the final `pass` stop, the full expansion was exact,
+  and a non-snippet word + Tab correctly just inserted indent (no false expansion), zero page
+  errors. `desktop/Editor.tsx` was independently verified (4/4) via the established mocked-
+  `window.spartan` + `vite preview` technique for the still-unlaunchable real Electron window --
+  expansion, first-stop selection, and offset-adjusted Tab navigation all confirmed. Both shells'
+  `tsc --noEmit`/`build` clean; no Rust touched (pure TypeScript feature). **What this does not
+  confirm**: no live Playwright re-verification of `web/Editor.tsx` specifically (typechecked +
+  built clean, byte-identical snippet logic to the two verified surfaces, not independently
+  re-run -- matching the exact scope decision this whole editor-ergonomics family has made for
+  that file since the auto-closing-brackets pass); no snippet mirroring/choices/nested placeholders
+  (the curated bodies deliberately avoid needing them); no user-defined/custom snippets (curated
+  built-in set only -- a real, named follow-up); the click-away-mid-session case only clears on
+  Escape/arrow navigation, not a mouse click (a real, minor, named edge); no snippets in the
+  reference wgpu shell (same established "Electron-shell-only feature" scope every recent
+  editor-ergonomics pass has carried); the real Electron window remains unlaunchable in this
+  session (same standing gap since §75.59).
 
 ## Build & test
 
