@@ -156,15 +156,53 @@ const FONT_STORAGE_KEY = "spartan.fontFamily";
  * WASM (`FileTree`/`Editor`) works with no backend at all;
  * `BackendFileTree`/`BackendEditor` only appear once a devserver is
  * connected with a known project root, and operate on that root, not
- * necessarily the File System Access folder. Multi-file tabs are also not
- * built yet -- only one file open at a time (whichever kind was opened
- * most recently), the same real, narrow first-increment scoping this
- * project's own history already applies elsewhere (e.g. `gui-builder`'s
- * own real v1 cuts, §75.38).
+ * necessarily the File System Access folder. Real multi-file tabs are now
+ * built: `openTabs` holds every open file (of either kind), `activeIndex`
+ * selects the rendered one, and a real tab bar switches/closes them --
+ * §75.89's own "single open file at a time" scope cut is closed.
  */
 export default function App(): React.ReactElement {
   const [root, setRoot] = useState<FileSystemDirectoryHandle | null>(null);
-  const [activeContent, setActiveContent] = useState<ActiveContent>(null);
+  // Real multi-file tabs (§75.89's own "single open file at a time" gap
+  // closed): every open file is a tab; the active one is rendered. Read
+  // access still goes through the derived `activeContent` below, so every
+  // existing handler that read the single active file keeps working
+  // unchanged.
+  const [openTabs, setOpenTabs] = useState<NonNullable<ActiveContent>[]>([]);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const activeContent: ActiveContent =
+    activeIndex >= 0 && activeIndex < openTabs.length ? openTabs[activeIndex] : null;
+
+  /** Opens `entry` as a tab -- reusing an existing tab of the same
+   * kind+path (so a file already open isn't duplicated, and its live
+   * per-tab state, e.g. a backend `docId`, is preserved) rather than
+   * appending a second copy. Always makes it the active tab. */
+  const openOrActivateTab = useCallback((entry: NonNullable<ActiveContent>) => {
+    setOpenTabs((prev) => {
+      const existing = prev.findIndex((t) => t.kind === entry.kind && t.file.path === entry.file.path);
+      if (existing >= 0) {
+        setActiveIndex(existing);
+        return prev;
+      }
+      const next = [...prev, entry];
+      setActiveIndex(next.length - 1);
+      return next;
+    });
+  }, []);
+
+  /** Closes the tab at `index`, activating an adjacent one (or none). */
+  const closeTab = useCallback((index: number) => {
+    setOpenTabs((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      setActiveIndex((cur) => {
+        if (next.length === 0) return -1;
+        if (index < cur) return cur - 1; // a tab before the active one closed
+        if (index === cur) return Math.min(cur, next.length - 1); // active closed
+        return cur; // a tab after the active one closed
+      });
+      return next;
+    });
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [wasmReady, setWasmReady] = useState(false);
   const [theme, setTheme] = useState<ThemeName>(
@@ -509,7 +547,7 @@ export default function App(): React.ReactElement {
         }
         const content = await readFileText(handle);
         const doc = new WasmDocument(content);
-        setActiveContent({ kind: "local", file: { path, handle, doc, content, dirty: false } });
+        openOrActivateTab({ kind: "local", file: { path, handle, doc, content, dirty: false } });
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -521,12 +559,22 @@ export default function App(): React.ReactElement {
     async (path: string) => {
       if (!backendClient) return;
       setError(null);
+      // A real already-open backend tab is reused as-is (its live docId +
+      // any unsaved buffer state), never re-opened from disk.
+      const alreadyOpen = openTabs.some((t) => t.kind === "backend" && t.file.path === path);
+      if (alreadyOpen) {
+        openOrActivateTab({
+          kind: "backend",
+          file: { path, docId: -1, content: "", dirty: false },
+        });
+        return;
+      }
       try {
         const result = (await backendClient.call("open_file", { path })) as {
           doc_id: number;
           content: string;
         };
-        setActiveContent({
+        openOrActivateTab({
           kind: "backend",
           file: { path, docId: result.doc_id, content: result.content, dirty: false },
         });
@@ -534,7 +582,7 @@ export default function App(): React.ReactElement {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [backendClient]
+    [backendClient, openTabs, openOrActivateTab]
   );
 
   const activeBackendDocId =
@@ -726,24 +774,27 @@ export default function App(): React.ReactElement {
   }));
 
   const handleContentChange = useCallback((path: string, content: string, saved?: boolean) => {
-    setActiveContent((prev) => {
-      if (!prev || prev.file.path !== path) return prev;
-      return { ...prev, file: { ...prev.file, content, dirty: saved ? false : true } } as ActiveContent;
-    });
+    // Update whichever tab holds this path (normally the active one), so a
+    // real edit's content + dirty state stay per-tab correct.
+    setOpenTabs((prev) =>
+      prev.map((t) =>
+        t.file.path === path
+          ? ({ ...t, file: { ...t.file, content, dirty: saved ? false : true } } as NonNullable<ActiveContent>)
+          : t
+      )
+    );
   }, []);
 
-  /** Real F2 rename-symbol apply -- a real, deliberate difference from
-   * `desktop/`'s own identical-shaped `applyRename`, not a shortcut: `web/`
-   * tracks only one open file at a time (a real, already-documented scope
-   * cut, see web/README.md's own "no tabs" note), so a file this rename
-   * touches but isn't the currently displayed one has no tab to hold a
-   * pending, still-dirty edit the way `desktop/`'s multi-tab state does --
-   * a later `open_file` for it would re-read straight from disk and
-   * silently miss an edit left only in that abandoned backend document.
-   * Saved to disk immediately instead, so the real edit is never lost even
-   * though this UI has nowhere to show it as "pending." The currently
-   * active file (if touched) still gets the same dirty-until-Ctrl+S
-   * treatment `desktop/` uses, since the user has it open to review. */
+  /** Real F2 rename-symbol apply. The active file (if touched) gets the
+   * same dirty-until-Ctrl+S treatment `desktop/` uses, since the user has
+   * it open to review. A file this rename touches that is *not* the
+   * currently active one is saved to disk immediately -- a real, deliberate
+   * conservative choice kept even now that `web/` has real multi-file tabs:
+   * a background tab's own in-memory buffer isn't updated in place here
+   * (updating a non-active tab's `docId` buffer would need extra
+   * bookkeeping), so persisting the edit to disk guarantees it's never lost.
+   * A real, minor, named consequence: a background tab touched by a rename
+   * shows stale content until reopened. */
   const applyRename = useCallback(
     async (changes: Record<string, WorkspaceTextEdit[]>): Promise<number> => {
       if (!backendClient) return 0;
@@ -1010,6 +1061,33 @@ export default function App(): React.ReactElement {
             onClose={() => setLogcatOpen(false)}
           />
           <div className="content-area">
+            {openTabs.length > 0 && (
+              <div className="editor-tab-bar">
+                {openTabs.map((tab, i) => (
+                  <div
+                    key={`${tab.kind}:${tab.file.path}`}
+                    className={`editor-tab ${i === activeIndex ? "editor-tab-active" : ""}`}
+                    onClick={() => setActiveIndex(i)}
+                    title={tab.file.path}
+                  >
+                    <span className="editor-tab-name mono">
+                      {tab.file.path.split("/").pop()}
+                      {tab.file.dirty ? " ●" : ""}
+                    </span>
+                    <span
+                      className="editor-tab-close"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeTab(i);
+                      }}
+                      title="Close"
+                    >
+                      ×
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             {error && <div className="tree-error">{error}</div>}
             {!error && activeContent?.kind === "local" && (
               <Editor file={activeContent.file} onContentChange={handleContentChange} />

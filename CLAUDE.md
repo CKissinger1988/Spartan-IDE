@@ -6182,6 +6182,33 @@ first — it's the parity reference until each row there is actually reimplement
   the same scope decision every prior `web/Editor.tsx` editor-feature pass has made); no redo in
   `web/BackendEditor.tsx` (that path uses `spartan-backend`'s own already-real IPC redo, §75.62, not
   `WasmDocument` -- untouched here). §75.89's own named gap is now closed at the crate level.
+- **Real, working code — multi-file tabs in `web/`, closing §75.89's own "single open file at a
+  time" gap (task #257)**: user-requested ("Continue"). `web/App.tsx` was built around one
+  `activeContent` (either a File System Access + WASM local file or a backend file); this pass
+  converts it to a real derived-state tab model -- `openTabs: NonNullable<ActiveContent>[]` plus an
+  `activeIndex`, with `activeContent` now *derived* as `openTabs[activeIndex]` so every existing
+  handler that read the single active file (rename apply, replace-in-files, diagnostics,
+  breakpoints, DAP, jump-to-definition) keeps working unchanged. New `openOrActivateTab` (reuses an
+  existing tab of the same kind+path rather than duplicating -- and for a backend file already open,
+  never re-`open_file`s it, preserving its live `docId` + unsaved buffer) and `closeTab` (removes
+  the tab and activates an adjacent one, with correct index remapping for a tab closed before/at/
+  after the active one). `handleContentChange` now updates whichever tab holds the edited path, so
+  per-tab dirty/content state stays correct. A real tab bar (`.editor-tab-bar` in `web/app.css`,
+  `.content-area` made a flex column so tabs sit above the editor) renders each open file's basename
+  + a dirty dot, click-to-switch, and a click-`stopPropagation`-isolated × to close. **Real, live,
+  end-to-end Playwright verification against the actual compiled `web/dist` served by a real running
+  `spartan-devserver`** (not a mock): opened `alpha.py` then `beta.py` -> two real tabs; the active
+  editor showed beta's content; clicking the `alpha.py` tab switched the editor to alpha's content
+  (confirmed via the real textarea value, not just the tab highlight); clicking beta's × closed it,
+  leaving exactly one `alpha.py` tab -- screenshotted at each step, `WEBTABS PASS`. `web/`'s own
+  `tsc --noEmit`/`vite build` clean; no Rust changes. **What this does not confirm**: no tab
+  reorder/drag, no overflow scrolling beyond the CSS `overflow-x:auto` (many tabs aren't stress-
+  tested), no unsaved-close confirmation prompt (closing a dirty tab discards its in-memory buffer,
+  a real, named v1 gap -- the file on disk is untouched); a real, minor, named consequence of the
+  conservative rename-apply path (a background tab a rename touches is saved to disk but its
+  in-memory buffer isn't updated in place, so it shows stale content until reopened -- named in
+  `applyRename`'s own doc comment); `desktop/` already had multi-tab support, untouched here.
+  §75.89's single-file scope cut is closed.
 
 ## Build & test
 
