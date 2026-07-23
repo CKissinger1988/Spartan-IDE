@@ -6096,6 +6096,42 @@ first — it's the parity reference until each row there is actually reimplement
   the higher-value inline-emphasis half); no character-level (sub-token) diff (word/token granularity
   only); no word-level diff in the reference wgpu shell (that shell has no `DiffView`/git diff UI --
   same established "Electron-shells-only" scope every recent Git pass has carried).
+- **Real, working code — LSP call hierarchy (incoming calls), the eighth real spartan-lsp query
+  method, live-verified against pyright (task #254)**: user-requested ("Continue the roadmap and do
+  not stop"). Continues the LSP query-method family (hover/completion/definition/signatureHelp/
+  references/rename/documentSymbol/documentHighlight) with `callHierarchy/incomingCalls` -- "who
+  calls the symbol under the cursor". **Unlike every other query method here, this is a real
+  two-request LSP protocol**: `LspClient::incoming_calls` sends `textDocument/prepareCallHierarchy`
+  first, takes the first resolved `CallHierarchyItem`, then sends `callHierarchy/incomingCalls` for
+  it -- combined into one round trip from the session's perspective (a new `QueryKind::IncomingCalls`
+  sharing the identical query-priority mailbox and `INDEXING_TIMEOUT + DEFAULT_TIMEOUT` bound every
+  other query already uses); a cursor resolving to no callable symbol returns a synthesized
+  `{"result": []}`, never an error. A real `"callHierarchy": {}` client capability was added to
+  `open_project`'s init block. New `spartan-backend::lsp_call_hierarchy` mirrors `lsp_references`'
+  own exact "ack now, event later" + envelope-unwrapping shape, emitting a real
+  `lsp_call_hierarchy_result` event. `lsp_call_hierarchy` registered in `main.ts`/`preload.ts`
+  allowlists at the identical position. **UI, both shells** (`desktop/Editor.tsx`,
+  `web/BackendEditor.tsx`): Shift+Alt+H (matched via `e.code === "KeyH"` since Alt+H can produce a
+  non-"h" character on some layouts) shows a panel of callers near the cursor, each jumpable via the
+  same `goToTarget` machinery find-references already uses; the panel dismisses on Escape or a plain
+  click, mirroring find-references' own precedence exactly. 1 new live integration test
+  (`crates/spartan-backend/tests/lsp_call_hierarchy_integration.rs`) -- against a real
+  `pyright-langserver` session, a fixture where `greet` is called from within `caller`, asserting
+  the one real incoming call's `from.name` is `"caller"`; confirmed passing live (91.30s, the real
+  ~90s pyright indexing pass). Full `cargo fmt --all -- --check`/`cargo clippy -p spartan-lsp -p
+  spartan-backend --release --all-targets`/`cargo test -p spartan-backend --release --lib` (196
+  tests) all clean; both shells' `tsc --noEmit`/`build` clean. **Real, live, end-to-end Playwright
+  verification against the actual compiled `web/dist` served by a real running `spartan-devserver`**
+  (not a mock): opened a real `main.py`, placed the cursor on `greet`'s definition (line 0, char 4),
+  pressed Shift+Alt+H, and after the real pyright indexing wait the callers panel showed "1 caller"
+  with the real `caller` function listed, screenshotted. **What this does not confirm**: no outgoing
+  calls (`callHierarchy/outgoingCalls`) or type hierarchy (both real, named P2 follow-ups); only the
+  first resolved `CallHierarchyItem` is queried (a real, deliberate v1 scope for the common
+  single-symbol case); no live Electron-window verification of `desktop/` (the standing gap since
+  §75.59 -- verified via typecheck + the identical shared component logic the web live run exercises,
+  and the same `lsp_call_hierarchy` Rust path both shells send through); no call hierarchy for any
+  language beyond Python in this specific live verification (the code path is language-agnostic,
+  matching every other query method's own same caveat).
 
 ## Build & test
 

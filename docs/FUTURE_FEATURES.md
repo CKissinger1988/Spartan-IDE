@@ -68,7 +68,7 @@ Priority key:
 | LSP semantic tokens (semantic highlighting) | P2 | Electron shells use lexical `highlight.js`; semantic coloring needs `textDocument/semanticTokens`. |
 | tree-sitter highlighting in Electron shells | P2 | Reuse the wgpu shell's tree-sitter engine via `web-tree-sitter` (spike already proven, §75.86). |
 | Incremental/windowed re-highlight | P2 | Current highlight re-tokenizes the whole document per keystroke; unmeasured cost at very large files. |
-| LSP call hierarchy / type hierarchy | P2 | Not wired (rename/references/definition/hover/completion/symbols/highlight are). |
+| ~~LSP call hierarchy (incoming)~~ / type hierarchy | ✅ incoming done; outgoing + type hierarchy P2 | Incoming calls shipped (Shift+Alt+H in both shells, `prepareCallHierarchy` + `incomingCalls` combined in `LspClient::incoming_calls`, live-verified against pyright). Outgoing calls + type hierarchy remain P2 follow-ups. |
 | Bracket-pair colorization | P3 | Matching-bracket highlight exists; full pair colorization does not. |
 | Minimap | P3 | Not present. |
 | Formatter coverage: Kotlin (ktlint), C# (`dotnet format`), Java | P2 | No stdin/stdout filter-mode wired for ktlint/`dotnet format`; Java has no formatter configured at all (§186). |

@@ -303,6 +303,7 @@ impl LspClient {
                         // nested `children` only once this is declared.
                         "documentSymbol": {"hierarchicalDocumentSymbolSupport": true},
                         "documentHighlight": {},
+                        "callHierarchy": {},
                         "publishDiagnostics": {},
                     }
                 },
@@ -520,6 +521,44 @@ impl LspClient {
             })),
             DEFAULT_TIMEOUT,
         )
+    }
+
+    /// Real call hierarchy (incoming calls) -- unlike every other query
+    /// method here, this is a real *two-request* LSP protocol:
+    /// `textDocument/prepareCallHierarchy` resolves the symbol under the
+    /// cursor to one or more `CallHierarchyItem`s, then
+    /// `callHierarchy/incomingCalls` (which operates on an *item*, not a
+    /// `textDocument` position) returns each caller. Combined here into one
+    /// round trip from the session's perspective: prepare, take the first
+    /// resolved item, ask for its incoming calls. Returns an envelope whose
+    /// `result` is a real `CallHierarchyIncomingCall[]` (each
+    /// `{from: CallHierarchyItem, fromRanges: Range[]}`) so the backend
+    /// unwraps `.result` exactly as it does for every other query method; a
+    /// cursor that resolves to no callable symbol returns a synthesized
+    /// `{"result": []}`, never an error.
+    pub fn incoming_calls(&mut self, file_uri: &str, line: i64, character: i64) -> Option<Value> {
+        let prepared = self.request(
+            "textDocument/prepareCallHierarchy",
+            Some(json!({
+                "textDocument": {"uri": file_uri},
+                "position": {"line": line, "character": character},
+            })),
+            DEFAULT_TIMEOUT,
+        );
+        let item = prepared
+            .as_ref()
+            .and_then(|env| env.get("result"))
+            .and_then(|r| r.as_array())
+            .and_then(|items| items.first())
+            .cloned();
+        match item {
+            Some(item) => self.request(
+                "callHierarchy/incomingCalls",
+                Some(json!({ "item": item })),
+                DEFAULT_TIMEOUT,
+            ),
+            None => Some(json!({ "result": [] })),
+        }
     }
 
     pub fn did_change_full(

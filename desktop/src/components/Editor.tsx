@@ -180,6 +180,47 @@ function extractReferences(result: unknown): ReferenceItem[] {
     .filter((i): i is ReferenceItem => i !== null);
 }
 
+/** A real, normalized call-hierarchy incoming caller -- each is one
+ * `CallHierarchyIncomingCall` whose `from` is a `CallHierarchyItem`. The
+ * name is shown; the `selectionRange.start` is the jump target. */
+interface CallerItem {
+  name: string;
+  path: string;
+  line: number;
+  character: number;
+}
+
+/** Normalizes a real `callHierarchy/incomingCalls` result (a real
+ * `CallHierarchyIncomingCall[]`, or `null`) into a real, jump-ready caller
+ * list. Returns `[]` for a real, honest "no callers found" rather than
+ * throwing. */
+function extractCallers(result: unknown): CallerItem[] {
+  if (!Array.isArray(result)) return [];
+  return result
+    .map((entry) => {
+      const from = (entry as { from?: unknown }).from as
+        | {
+            name?: unknown;
+            uri?: unknown;
+            selectionRange?: { start?: { line?: unknown; character?: unknown } };
+          }
+        | undefined;
+      const line = from?.selectionRange?.start?.line;
+      const character = from?.selectionRange?.start?.character;
+      if (
+        !from ||
+        typeof from.name !== "string" ||
+        typeof from.uri !== "string" ||
+        typeof line !== "number" ||
+        typeof character !== "number"
+      ) {
+        return null;
+      }
+      return { name: from.name, path: fileUriToPath(from.uri), line, character };
+    })
+    .filter((i): i is CallerItem => i !== null);
+}
+
 /** A real, normalized LSP `TextEdit` -- `line`/`character` are real
  * 0-indexed LSP positions relative to whatever the document looked like
  * when the rename request was made, matching every other query result's
@@ -1608,6 +1649,7 @@ export default function Editor({
         // document-symbol outline panel.
         setReferencesState(null);
         setSymbolsState(null);
+        setCallHierarchyState(null);
         return;
       }
       const el = textareaRef.current;
@@ -1631,6 +1673,12 @@ export default function Editor({
     items: ReferenceItem[] | null;
   } | null>(null);
   const pendingReferencesRef = useRef<{ line: number; character: number } | null>(null);
+  const [callHierarchyState, setCallHierarchyState] = useState<{
+    x: number;
+    y: number;
+    items: CallerItem[] | null;
+  } | null>(null);
+  const pendingCallHierarchyRef = useRef<{ line: number; character: number } | null>(null);
 
   // Real find-references (Shift+F12) -- listens for this exact file's own
   // `lsp_references_result` events, following the same real query-request/
@@ -1665,6 +1713,39 @@ export default function Editor({
     window.spartan
       .call("lsp_references", { doc_id: file.docId, line, character })
       .catch((err: Error) => console.error("lsp_references failed:", err));
+  }, [charWidth, lineHeightPx, file.docId]);
+
+  // Real call hierarchy (Shift+Alt+H) -- listens for this exact file's own
+  // `lsp_call_hierarchy_result` events, the same real request/reply pattern
+  // find-references already established. `items: null` while in flight.
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event !== "lsp_call_hierarchy_result") return;
+      const d = data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      const pending = pendingCallHierarchyRef.current;
+      if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+      pendingCallHierarchyRef.current = null;
+      setCallHierarchyState((prev) => (prev ? { ...prev, items: extractCallers(d.result) } : prev));
+    });
+    return unsubscribe;
+  }, [file.docId]);
+
+  /** Real, manual call-hierarchy trigger (Shift+Alt+H, the standard
+   * "show incoming calls" convention) -- shows every real caller of the
+   * symbol under the cursor, each jumpable via the same `goToTarget`
+   * machinery find-references already uses. */
+  const triggerCallHierarchy = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const { line, character } = offsetToLineChar(el.value, el.selectionStart);
+    const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+    const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
+    pendingCallHierarchyRef.current = { line, character };
+    setCallHierarchyState({ x, y, items: null });
+    window.spartan
+      .call("lsp_call_hierarchy", { doc_id: file.docId, line, character })
+      .catch((err: Error) => console.error("lsp_call_hierarchy failed:", err));
   }, [charWidth, lineHeightPx, file.docId]);
 
   /** Real F2 rename-symbol -- the sixth real LSP-backed editor feature,
@@ -2422,6 +2503,10 @@ export default function Editor({
       if (e.key === "Escape" && symbolsState) {
         setSymbolsState(null);
       }
+      // Real call-hierarchy dismissal (Escape), same real precedence.
+      if (e.key === "Escape" && callHierarchyState) {
+        setCallHierarchyState(null);
+      }
       // Real Find & Replace dismissal (Escape) reached only if the user
       // clicked back into the main textarea while the find bar stayed
       // open (its own query/replace inputs handle Escape directly, see
@@ -2442,6 +2527,14 @@ export default function Editor({
       if (e.key === "F12" && e.shiftKey) {
         e.preventDefault();
         triggerReferences();
+        return;
+      }
+      // Real, manual call-hierarchy trigger (Shift+Alt+H, the standard
+      // "show incoming calls" convention). `e.code` (not `e.key`) since
+      // Alt+H can produce a non-"h" character on some keyboard layouts.
+      if (e.code === "KeyH" && e.shiftKey && e.altKey) {
+        e.preventDefault();
+        triggerCallHierarchy();
         return;
       }
       // Real, manual rename-symbol trigger (F2, the standard cross-editor
@@ -2785,6 +2878,8 @@ export default function Editor({
       symbolsState,
       triggerDocumentSymbols,
       triggerFormatDocument,
+      callHierarchyState,
+      triggerCallHierarchy,
       file.docId,
       file.path,
       onContentChange,
@@ -3365,6 +3460,41 @@ export default function Editor({
                 {item.path === file.path
                   ? `line ${item.line + 1}, col ${item.character + 1}`
                   : `${item.path}:${item.line + 1}`}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+      {callHierarchyState && (
+        <div
+          className="editor-references-panel mono"
+          style={{ left: callHierarchyState.x, top: callHierarchyState.y }}
+        >
+          <div className="editor-references-header">
+            {callHierarchyState.items === null
+              ? "Finding callers…"
+              : `${callHierarchyState.items.length} caller${callHierarchyState.items.length === 1 ? "" : "s"}`}
+          </div>
+          {callHierarchyState.items === null ? (
+            <div className="editor-references-item editor-references-item-empty">Loading…</div>
+          ) : callHierarchyState.items.length === 0 ? (
+            <div className="editor-references-item editor-references-item-empty">
+              No callers found
+            </div>
+          ) : (
+            callHierarchyState.items.map((item, i) => (
+              <div
+                key={`${item.name}:${item.path}:${item.line}:${item.character}:${i}`}
+                className="editor-references-item"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setCallHierarchyState(null);
+                  goToTarget(item);
+                }}
+              >
+                <span className="editor-symbol-kind">caller</span>
+                {item.name}
+                {item.path === file.path ? "" : ` — ${item.path}`}
               </div>
             ))
           )}

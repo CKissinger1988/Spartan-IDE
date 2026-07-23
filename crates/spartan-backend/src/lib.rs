@@ -676,6 +676,50 @@ fn lsp_document_highlight(
     Ok(serde_json::json!({ "status": "requested" }))
 }
 
+/// Real call hierarchy (incoming calls) -- the direct sibling of every other
+/// `lsp_*` query method above: identical never-blocks-the-caller shape,
+/// identical envelope-unwrapping. Unlike them it drives a real two-request
+/// LSP protocol under the hood (`prepareCallHierarchy` then
+/// `incomingCalls`, combined in `LspClient::incoming_calls`), but the result
+/// is a plain `CallHierarchyIncomingCall[]` the frontend renders as a list
+/// of callers, each jumpable via the same `goToTarget`/`jumpToLocalPosition`
+/// machinery go-to-definition/references already established.
+fn lsp_call_hierarchy(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+    line: i64,
+    character: i64,
+) -> Result<serde_json::Value, String> {
+    let session = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        doc.lsp_session
+            .clone()
+            .ok_or_else(|| "no live LSP session for this file".to_string())?
+    };
+    thread::spawn(move || {
+        let raw = session.request_incoming_calls(line, character);
+        let result = raw.and_then(|envelope| envelope.get("result").cloned());
+        let event = Event {
+            event: "lsp_call_hierarchy_result".to_string(),
+            data: serde_json::json!({
+                "doc_id": doc_id,
+                "line": line,
+                "character": character,
+                "result": result,
+            }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+    Ok(serde_json::json!({ "status": "requested" }))
+}
+
 /// Real "Format Document" -- the real, previously-unwired `formatter`
 /// field on every language's own registry entry (§20.1) finally gets a
 /// real caller. Formats the *live in-memory buffer*, not the file on
@@ -3800,6 +3844,12 @@ pub fn handle_request(
             let line = get_u64_param(&req.params, "line")? as i64;
             let character = get_u64_param(&req.params, "character")? as i64;
             lsp_document_highlight(state, out_tx.clone(), doc_id, line, character)
+        })(),
+        "lsp_call_hierarchy" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            let line = get_u64_param(&req.params, "line")? as i64;
+            let character = get_u64_param(&req.params, "character")? as i64;
+            lsp_call_hierarchy(state, out_tx.clone(), doc_id, line, character)
         })(),
         "format_document" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;

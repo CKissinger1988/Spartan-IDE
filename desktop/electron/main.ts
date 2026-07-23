@@ -232,6 +232,7 @@ app.whenReady().then(() => {
     "lsp_rename",
     "lsp_document_symbol",
     "lsp_document_highlight",
+    "lsp_call_hierarchy",
     "format_document",
     "search_project",
     "leo_status",

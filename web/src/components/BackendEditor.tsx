@@ -170,6 +170,42 @@ function extractReferences(result: unknown): ReferenceItem[] {
     .filter((i): i is ReferenceItem => i !== null);
 }
 
+/** A real, normalized call-hierarchy incoming caller, ported verbatim from
+ * `desktop/`'s own `CallerItem`. */
+interface CallerItem {
+  name: string;
+  path: string;
+  line: number;
+  character: number;
+}
+
+function extractCallers(result: unknown): CallerItem[] {
+  if (!Array.isArray(result)) return [];
+  return result
+    .map((entry) => {
+      const from = (entry as { from?: unknown }).from as
+        | {
+            name?: unknown;
+            uri?: unknown;
+            selectionRange?: { start?: { line?: unknown; character?: unknown } };
+          }
+        | undefined;
+      const line = from?.selectionRange?.start?.line;
+      const character = from?.selectionRange?.start?.character;
+      if (
+        !from ||
+        typeof from.name !== "string" ||
+        typeof from.uri !== "string" ||
+        typeof line !== "number" ||
+        typeof character !== "number"
+      ) {
+        return null;
+      }
+      return { name: from.name, path: fileUriToPath(from.uri), line, character };
+    })
+    .filter((i): i is CallerItem => i !== null);
+}
+
 /** A real, normalized LSP `TextEdit`, ported verbatim from `desktop/`'s
  * own `WorkspaceTextEdit` -- see that file's own doc comment for the full
  * real reasoning, including the real, live finding that a server may use
@@ -1370,6 +1406,41 @@ export default function BackendEditor({
       .catch((err: Error) => console.error("lsp_references failed:", err));
   }, [client, charWidth, lineHeightPx, file.docId]);
 
+  // Real call hierarchy (Shift+Alt+H), ported verbatim from `desktop/`'s
+  // own identical wiring.
+  const [callHierarchyState, setCallHierarchyState] = useState<{
+    x: number;
+    y: number;
+    items: CallerItem[] | null;
+  } | null>(null);
+  const pendingCallHierarchyRef = useRef<{ line: number; character: number } | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = client.onEvent((e) => {
+      if (e.event !== "lsp_call_hierarchy_result") return;
+      const d = e.data as { doc_id: number; line: number; character: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      const pending = pendingCallHierarchyRef.current;
+      if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+      pendingCallHierarchyRef.current = null;
+      setCallHierarchyState((prev) => (prev ? { ...prev, items: extractCallers(d.result) } : prev));
+    });
+    return unsubscribe;
+  }, [client, file.docId]);
+
+  const triggerCallHierarchy = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const { line, character } = offsetToLineChar(el.value, el.selectionStart);
+    const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+    const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
+    pendingCallHierarchyRef.current = { line, character };
+    setCallHierarchyState({ x, y, items: null });
+    client
+      .call("lsp_call_hierarchy", { doc_id: file.docId, line, character })
+      .catch((err: Error) => console.error("lsp_call_hierarchy failed:", err));
+  }, [client, charWidth, lineHeightPx, file.docId]);
+
   /** Real F2 rename-symbol, ported verbatim from `desktop/`'s own
    * identical wiring -- see that file's own doc comments for the full
    * real reasoning behind each phase. */
@@ -1809,6 +1880,7 @@ export default function BackendEditor({
       if (!(e.ctrlKey || e.metaKey)) {
         setReferencesState(null);
         setSymbolsState(null);
+        setCallHierarchyState(null);
         return;
       }
       const el = textareaRef.current;
@@ -1996,6 +2068,10 @@ export default function BackendEditor({
       if (e.key === "Escape" && symbolsState) {
         setSymbolsState(null);
       }
+      // Real call-hierarchy dismissal (Escape), ported verbatim.
+      if (e.key === "Escape" && callHierarchyState) {
+        setCallHierarchyState(null);
+      }
       // Real Find & Replace dismissal (Escape), ported verbatim from
       // `desktop/`'s own identical branch.
       if (e.key === "Escape" && findState) {
@@ -2011,6 +2087,12 @@ export default function BackendEditor({
       if (e.key === "F12" && e.shiftKey) {
         e.preventDefault();
         triggerReferences();
+        return;
+      }
+      // Real, manual call-hierarchy trigger (Shift+Alt+H), ported verbatim.
+      if (e.code === "KeyH" && e.shiftKey && e.altKey) {
+        e.preventDefault();
+        triggerCallHierarchy();
         return;
       }
       // Real, manual rename-symbol trigger (F2), ported verbatim from
@@ -2310,6 +2392,8 @@ export default function BackendEditor({
       symbolsState,
       triggerDocumentSymbols,
       triggerFormatDocument,
+      callHierarchyState,
+      triggerCallHierarchy,
       formatOnSave,
       client,
       file.docId,
@@ -2861,6 +2945,41 @@ export default function BackendEditor({
                 {item.path === file.path
                   ? `line ${item.line + 1}, col ${item.character + 1}`
                   : `${item.path}:${item.line + 1}`}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+      {callHierarchyState && (
+        <div
+          className="editor-references-panel mono"
+          style={{ left: callHierarchyState.x, top: callHierarchyState.y }}
+        >
+          <div className="editor-references-header">
+            {callHierarchyState.items === null
+              ? "Finding callers…"
+              : `${callHierarchyState.items.length} caller${callHierarchyState.items.length === 1 ? "" : "s"}`}
+          </div>
+          {callHierarchyState.items === null ? (
+            <div className="editor-references-item editor-references-item-empty">Loading…</div>
+          ) : callHierarchyState.items.length === 0 ? (
+            <div className="editor-references-item editor-references-item-empty">
+              No callers found
+            </div>
+          ) : (
+            callHierarchyState.items.map((item, i) => (
+              <div
+                key={`${item.name}:${item.path}:${item.line}:${item.character}:${i}`}
+                className="editor-references-item"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setCallHierarchyState(null);
+                  goToTarget(item);
+                }}
+              >
+                <span className="editor-symbol-kind">caller</span>
+                {item.name}
+                {item.path === file.path ? "" : ` — ${item.path}`}
               </div>
             ))
           )}
