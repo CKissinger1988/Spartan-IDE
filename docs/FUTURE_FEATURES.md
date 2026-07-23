@@ -63,6 +63,7 @@ Priority key:
 | Code folding | P1 (blocked) | Architecturally blocked by the `<textarea>` editor — needs a from-scratch editing surface to hide lines. |
 | Multi-cursor / column selection | P1 (blocked) | Same `<textarea>` block — native single caret only. |
 | ~~Snippets / template expansion~~ | ✅ done | Shipped — curated per-language snippets, prefix+Tab expansion with tab-stop navigation, in all three editing surfaces. User-defined snippets remain a follow-up. |
+| ~~Join Lines (Ctrl+J)~~ | ✅ done | Shipped — merges the touched lines (caret's line + next, or every selected line) into one, trimming leading whitespace and inserting a single space at each seam (VS Code behavior), in all three editing surfaces. Live-verified in `web/`. |
 | LSP code actions / quick fixes | P1 | `codeAction` capability unwired (pyright returned empty in dev; other servers implement it — verify against rust-analyzer/tsserver). |
 | LSP inlay hints | P2 | Not wired. |
 | LSP semantic tokens (semantic highlighting) | P2 | Electron shells use lexical `highlight.js`; semantic coloring needs `textDocument/semanticTokens`. |

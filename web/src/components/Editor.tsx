@@ -400,6 +400,61 @@ function deleteLines(
   return { content: newContent, selectionStart: newOffset, selectionEnd: newOffset };
 }
 
+/** Real, pure "join lines" (Ctrl+J): merges the touched lines (the caret's own
+ * line with the next one if there's no selection, or every line an active
+ * selection touches) into a single line -- leading whitespace of each joined
+ * line is trimmed and a single space inserted at the seam unless the running
+ * text already ends in whitespace or the joined segment is empty (matching
+ * VS Code's own Join Lines behavior). The caret lands at the first seam.
+ * Returns `null` when there is nothing to join (the caret is on the last line
+ * with no selection), so the caller can treat it as a no-op. */
+function joinLines(
+  content: string,
+  selStart: number,
+  selEnd: number
+): { content: string; selectionStart: number; selectionEnd: number } | null {
+  const lines = content.split("\n");
+  const lineStarts: number[] = new Array(lines.length);
+  {
+    let acc = 0;
+    for (let i = 0; i < lines.length; i++) {
+      lineStarts[i] = acc;
+      acc += lines[i].length + 1;
+    }
+  }
+  const lineIndexAt = (off: number): number => {
+    let idx = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lineStarts[i] <= off) idx = i;
+      else break;
+    }
+    return idx;
+  };
+  const firstLine = lineIndexAt(selStart);
+  let lastLine = lineIndexAt(selEnd);
+  if (selEnd > selStart && lastLine > firstLine && lineStarts[lastLine] === selEnd) {
+    lastLine -= 1;
+  }
+  const joinTo = lastLine > firstLine ? lastLine : firstLine + 1;
+  if (joinTo > lines.length - 1) return null;
+
+  let joined = lines[firstLine];
+  const seamOffset = joined.length;
+  for (let i = firstLine + 1; i <= joinTo; i++) {
+    const seg = lines[i].replace(/^\s+/, "");
+    if (joined.length > 0 && !/\s$/.test(joined) && seg.length > 0) {
+      joined += " " + seg;
+    } else {
+      joined += seg;
+    }
+  }
+
+  const newLines = [...lines.slice(0, firstLine), joined, ...lines.slice(joinTo + 1)];
+  const newContent = newLines.join("\n");
+  const caret = lineStarts[firstLine] + seamOffset;
+  return { content: newContent, selectionStart: caret, selectionEnd: caret };
+}
+
 interface FindMatch {
   start: number;
   end: number;
@@ -772,6 +827,18 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
         if (el) {
           const result = deleteLines(el.value, el.selectionStart, el.selectionEnd);
           applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
+        }
+        return;
+      }
+      // Real "Join Lines" (Ctrl+J): merge the touched lines into one.
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        const el = textareaRef.current;
+        if (el) {
+          const result = joinLines(el.value, el.selectionStart, el.selectionEnd);
+          if (result) {
+            applyProgrammaticEdit(el, result.content, result.selectionStart, result.selectionEnd);
+          }
         }
         return;
       }

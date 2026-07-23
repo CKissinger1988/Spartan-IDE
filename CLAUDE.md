@@ -6363,6 +6363,40 @@ first — it's the parity reference until each row there is actually reimplement
   `desktop/`'s own typecheck + build re-confirm it compiles); split view has no per-column
   independent scroll (both columns share the container's scroll, fine for the bounded 220px-max
   diff box).
+- **Real, working code — Join Lines (Ctrl+J) in all three editing surfaces (`desktop/Editor.tsx`,
+  `web/BackendEditor.tsx`, `web/Editor.tsx`), and a confirmation that CI now runs after the repo
+  was made public (task #263)**: user-requested ("Continue"). Merges the touched lines (the
+  caret's own line with the next when there's no selection, or every line an active selection
+  touches) into a single line -- leading whitespace of each joined line is trimmed and a single
+  space inserted at the seam unless the running text already ends in whitespace or the joined
+  segment is empty (matching VS Code's own Join Lines). The caret lands at the first seam; a caret
+  on the true last line with no selection is a real no-op (`joinLines` returns `null`, the caller
+  does nothing). Pure client-side, textarea-compatible, reusing the exact `lineStarts`/
+  `lineIndexAt` touched-line-range machinery + `applyProgrammaticEdit` choke point the
+  toggle-comment/indent/duplicate/move/delete-line family already established. Wired to Ctrl+J
+  (matched before the font-zoom arm, `!e.shiftKey`-gated so it never collides with Ctrl+Shift+*).
+  **Live-verified end-to-end** against a real `spartan-devserver` + a real Python fixture: Ctrl+J
+  with the caret on line 1 joined it with line 2 into `def greet(name): return name` through the
+  real backend `edit` round trip. **A real test-harness lesson, not a product bug**: the multi-line
+  case's keyboard `Shift+End` selection kept extending to include the blank line (the classic
+  "verify the real selection, don't assume it" pitfall this project has hit before) -- so the
+  multi-line/blank-collapse/last-line-no-op cases were verified deterministically against the pure
+  `joinLines` logic in isolation (single-line join with correct seam caret; a 2-line join
+  preserving the rest; the boundary rule that a selection ending exactly at a line's start excludes
+  that line; blank-line collapse; and a true trailing-empty-line no-op), all correct. Both shells'
+  `tsc --noEmit`/`build` clean; no Rust changed (`cargo fmt` re-confirmed clean anyway). **CI note**:
+  the red CI on `main` across the prior four passes was diagnosed to an account-infrastructure
+  cause, not the code -- the repo was **private** (confirmed via the GitHub API's own `"private":
+  true`) so a private-repo Actions minutes cap made every job instant-fail with no runner/logs;
+  after the user made the repo **public**, a re-run of the exact same commit dispatched to real
+  runners and went green (6/8 jobs immediately, the two Rust jobs passing `fmt`+`clippy` -- which
+  confirms §262's own fmt fix -- and proceeding into `cargo test`). The four prior features
+  (#259-#262) were always green locally; only the runner dispatch was blocked. **What this does not
+  confirm**: no live Playwright re-verification of `web/Editor.tsx` specifically (typechecked +
+  built clean, byte-identical logic to the two verified surfaces, matching this feature family's
+  own established scope decision for that file); no Join Lines in the reference wgpu shell (same
+  "Electron-shell-only feature" scope every recent editor-ergonomics pass has carried); the real
+  Electron window remains unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 
