@@ -5790,7 +5790,10 @@ mod tests {
             "git_commit",
             serde_json::json!({ "project_root": root, "message": "add line two" }),
         );
-        let bad_oid = commit_resp.result.unwrap()["oid"].as_str().unwrap().to_string();
+        let bad_oid = commit_resp.result.unwrap()["oid"]
+            .as_str()
+            .unwrap()
+            .to_string();
         // Revert the second commit -> a new commit that removes line two.
         let resp = call(
             &state,
@@ -5807,7 +5810,11 @@ mod tests {
             serde_json::json!({ "project_root": root, "max": 10 }),
         );
         let commits = resp.result.unwrap()["commits"].as_array().unwrap().clone();
-        assert_eq!(commits.len(), 3, "revert must add a commit, not rewrite history");
+        assert_eq!(
+            commits.len(),
+            3,
+            "revert must add a commit, not rewrite history"
+        );
         assert_eq!(commits[0]["summary"], "Revert \"add line two\"");
         assert_eq!(
             std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
@@ -5833,7 +5840,10 @@ mod tests {
             "git_commit",
             serde_json::json!({ "project_root": root, "message": "init" }),
         );
-        let head = commit_resp.result.unwrap()["oid"].as_str().unwrap().to_string();
+        let head = commit_resp.result.unwrap()["oid"]
+            .as_str()
+            .unwrap()
+            .to_string();
         // Create an annotated tag on HEAD.
         let resp = call(
             &state,

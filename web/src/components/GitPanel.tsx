@@ -109,21 +109,25 @@ function toSegments(tokens: string[], changed: boolean[]): { text: string; chang
   return out;
 }
 
-/** Real diff rendering -- ported verbatim from `desktop/`'s own copy in
- * `GitPanel.tsx`: one `<div>` per real line, colored by its real `+`/`-`/` `
- * prefix, with word-level (intra-line) highlighting for paired removed/added
- * line runs so a one-token edit no longer reads as a whole line replaced. */
-function DiffView({ diff }: { diff: string }): React.ReactElement {
+interface DiffLine {
+  kind: "add" | "del" | "ctx";
+  prefix: string;
+  content: string;
+  raw: string;
+}
+
+type Seg = { text: string; changed: boolean };
+
+/** Parse a unified diff string into per-line records plus the word-level
+ * change segments for paired removed/added runs. Shared by both the unified
+ * and split renderers below. */
+function parseDiff(diff: string): { lines: DiffLine[]; wordSegs: Map<number, Seg[]> } {
   const raw = diff.split("\n").filter((_, i, arr) => !(i === arr.length - 1 && arr[i] === ""));
-  if (raw.length === 0) {
-    return <div className="leo-diff mono git-panel-empty">No changes.</div>;
-  }
-  const lines = raw.map((line) => {
+  const lines: DiffLine[] = raw.map((line) => {
     const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "ctx";
     return { kind, prefix: line ? line[0] : " ", content: line ? line.slice(1) : "", raw: line };
   });
-
-  const wordSegs = new Map<number, { text: string; changed: boolean }[]>();
+  const wordSegs = new Map<number, Seg[]>();
   let idx = 0;
   while (idx < lines.length) {
     if (lines[idx].kind !== "del") {
@@ -146,33 +150,128 @@ function DiffView({ diff }: { diff: string }): React.ReactElement {
     }
     idx = a; // always > current idx (a >= d >= idx + 1)
   }
+  return { lines, wordSegs };
+}
+
+/** Render one diff line's content, applying word-level highlighting when the
+ * line has change segments (paired del/add), else the raw text. */
+function renderDiffContent(line: DiffLine, segs: Seg[] | undefined): React.ReactNode {
+  if (!segs) return line.content || "";
+  return segs.map((s, si) =>
+    s.changed ? (
+      <span key={si} className={`leo-diff-word leo-diff-word-${line.kind}`}>
+        {s.text}
+      </span>
+    ) : (
+      <React.Fragment key={si}>{s.text}</React.Fragment>
+    )
+  );
+}
+
+/** Turn the unified line list into side-by-side rows: paired del/add runs sit
+ * on the same row (left=del, right=add); a context line spans both columns;
+ * unpaired del/add lines get a blank cell on the other side. */
+function buildSplitRows(
+  lines: DiffLine[],
+  wordSegs: Map<number, Seg[]>
+): { left: number | null; right: number | null }[] {
+  const rows: { left: number | null; right: number | null }[] = [];
+  let idx = 0;
+  while (idx < lines.length) {
+    if (lines[idx].kind === "ctx") {
+      rows.push({ left: idx, right: idx });
+      idx++;
+      continue;
+    }
+    // Gather a run of dels then a run of adds.
+    let d = idx;
+    while (d < lines.length && lines[d].kind === "del") d++;
+    let a = d;
+    while (a < lines.length && lines[a].kind === "add") a++;
+    const dels: number[] = [];
+    for (let i = idx; i < d; i++) dels.push(i);
+    const adds: number[] = [];
+    for (let i = d; i < a; i++) adds.push(i);
+    const n = Math.max(dels.length, adds.length);
+    for (let k = 0; k < n; k++) {
+      rows.push({ left: dels[k] ?? null, right: adds[k] ?? null });
+    }
+    idx = a > idx ? a : idx + 1;
+  }
+  return rows;
+}
+
+/** Real diff rendering with a unified / side-by-side (split) toggle. Unified
+ * is one `<div>` per line colored by its `+`/`-`/` ` prefix; split lays paired
+ * removed/added lines in two columns. Both share word-level (intra-line)
+ * highlighting so a one-token edit doesn't read as a whole line replaced. */
+function DiffView({ diff }: { diff: string }): React.ReactElement {
+  const [split, setSplit] = useState(false);
+  const { lines, wordSegs } = parseDiff(diff);
+  if (lines.length === 0) {
+    return <div className="leo-diff mono git-panel-empty">No changes.</div>;
+  }
+
+  const toggle = (
+    <button
+      type="button"
+      className="editor-find-btn leo-diff-split-toggle"
+      title={split ? "Show unified diff" : "Show side-by-side diff"}
+      onClick={(e) => {
+        e.stopPropagation();
+        setSplit((s) => !s);
+      }}
+    >
+      {split ? "Unified" : "Split"}
+    </button>
+  );
+
+  if (split) {
+    const rows = buildSplitRows(lines, wordSegs);
+    return (
+      <div className="leo-diff-split-wrap">
+        {toggle}
+        <div className="leo-diff leo-diff-split mono">
+          {rows.map((row, i) => {
+            const l = row.left !== null ? lines[row.left] : null;
+            const r = row.right !== null ? lines[row.right] : null;
+            return (
+              <div key={i} className="leo-diff-split-row">
+                <div className={`leo-diff-split-cell leo-diff-${l ? l.kind : "blank"}`}>
+                  {l ? renderDiffContent(l, wordSegs.get(row.left as number)) : ""}
+                </div>
+                <div className={`leo-diff-split-cell leo-diff-${r ? r.kind : "blank"}`}>
+                  {r ? renderDiffContent(r, wordSegs.get(row.right as number)) : ""}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <pre className="leo-diff mono">
-      {lines.map((line, i) => {
-        const segs = wordSegs.get(i);
-        return (
-          <div key={i} className={`leo-diff-line leo-diff-${line.kind}`}>
-            {segs ? (
-              <>
-                {line.prefix}
-                {segs.map((s, si) =>
-                  s.changed ? (
-                    <span key={si} className={`leo-diff-word leo-diff-word-${line.kind}`}>
-                      {s.text}
-                    </span>
-                  ) : (
-                    <React.Fragment key={si}>{s.text}</React.Fragment>
-                  )
-                )}
-              </>
-            ) : (
-              line.raw || " "
-            )}
-          </div>
-        );
-      })}
-    </pre>
+    <div className="leo-diff-split-wrap">
+      {toggle}
+      <pre className="leo-diff mono">
+        {lines.map((line, i) => {
+          const segs = wordSegs.get(i);
+          return (
+            <div key={i} className={`leo-diff-line leo-diff-${line.kind}`}>
+              {segs ? (
+                <>
+                  {line.prefix}
+                  {renderDiffContent(line, segs)}
+                </>
+              ) : (
+                line.raw || " "
+              )}
+            </div>
+          );
+        })}
+      </pre>
+    </div>
   );
 }
 

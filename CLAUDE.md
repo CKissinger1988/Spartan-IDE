@@ -6331,6 +6331,38 @@ first — it's the parity reference until each row there is actually reimplement
   typecheck + the identical shared component logic the web live run exercises, same
   `git_tags`/`git_create_tag`/`git_delete_tag` Rust paths both shells send through); the name prompt
   and delete confirm are browser-native `window.prompt`/`window.confirm`, not custom themed modals.
+- **Real, working code — side-by-side (split) diff view toggle in both Git panels' `DiffView`, plus
+  a latent `cargo fmt` violation from §259/§260's own test code found and fixed (task #262)**:
+  user-requested ("Continue without stopping"). Closes the last named piece of the word-level-diff
+  backlog row. Pure client-side, no backend change: the `DiffView` component (shared by both Git
+  panels via a verbatim copy, this project's own established convention) was refactored to extract
+  `parseDiff`/`renderDiffContent` and gained a `buildSplitRows` helper (turns the unified line list
+  into side-by-side rows -- paired del/add runs share a row with left=del/right=add, context lines
+  span both columns, unpaired lines get a blank cell on the other side) plus a "Split"/"Unified"
+  toggle button. Both modes share the exact same word-level (intra-line) LCS highlighting the
+  unified view already had, so a one-token edit reads correctly in either. New `.leo-diff-split*`
+  CSS (a two-column grid) added byte-identically to both shells' `app.css`. **A real, latent
+  `cargo fmt` violation was found and fixed along the way, not by inspection**: §259's and §260's
+  own dispatch-test code (`.unwrap().to_string()` chains, long `assert_eq!` calls) had shipped
+  unformatted because those passes' `cargo fmt --all -- --check` was run through `| tail -3`, which
+  masked the non-zero exit and showed only innocuous-looking trailing diff lines -- a real
+  verification-methodology mistake, recorded here so a future pass checks the exit code, not just
+  the tail. Fixed with `cargo fmt --all`; re-confirmed clean (exit 0), and the full 200
+  `spartan-backend` + 44 `spartan-git` lib tests + clippy all re-run green afterward (the reformat
+  is whitespace-only, no logic change). Both shells' `tsc --noEmit`/`build` clean. **Real, live,
+  end-to-end Playwright verification against the actual compiled `web/dist` served by a real
+  running `spartan-devserver`** (not a mock): a real fixture with a single-word change (`brown` →
+  `RED`) plus an added line -- the ± diff opened in unified mode (0 split rows), clicking "Split"
+  produced a real two-column layout (4 rows × 2 = 8 cells) with the word-level highlight still
+  rendering on both sides (2 `.leo-diff-word` marks), and clicking "Unified" toggled cleanly back
+  (0 split rows). **What this does not confirm**: `LeoChatPanel.tsx`'s own DiffView is a
+  deliberately simpler edit-preview variant (no word-level highlighting) and was intentionally left
+  non-split-capable -- a real, named scope decision, not an oversight; no live Electron-window
+  verification of `desktop/` (same standing gap since §75.59 -- `DiffView` is pure client-side
+  rendering with zero IPC difference, so the web live run exercises byte-identical component logic;
+  `desktop/`'s own typecheck + build re-confirm it compiles); split view has no per-column
+  independent scroll (both columns share the container's scroll, fine for the bounded 220px-max
+  diff box).
 
 ## Build & test
 

@@ -1187,6 +1187,46 @@
   background: rgba(248, 113, 113, 0.35);
 }
 
+/* Side-by-side (split) diff view. */
+.leo-diff-split-wrap {
+  position: relative;
+}
+
+.leo-diff-split-toggle {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  z-index: 1;
+  font-size: 10px;
+  padding: 1px 6px;
+}
+
+.leo-diff-split {
+  padding: 4px 0;
+}
+
+.leo-diff-split-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+}
+
+.leo-diff-split-cell {
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 1.2em;
+  border-right: 1px solid var(--border);
+}
+
+.leo-diff-split-cell:last-child {
+  border-right: none;
+}
+
+.leo-diff-blank {
+  background: rgba(128, 128, 128, 0.06);
+}
+
 .editor-find-match-mark {
   position: absolute;
   background: rgba(var(--accent-rgb, 46, 125, 255), 0.16);

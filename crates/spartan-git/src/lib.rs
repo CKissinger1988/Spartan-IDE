@@ -1439,7 +1439,11 @@ mod tests {
         // Revert the second commit -> a NEW commit that removes line two.
         repo.revert_commit(&bad.to_string()).unwrap();
         let log = repo.log(10).unwrap();
-        assert_eq!(log.len(), 3, "revert must add a commit, not rewrite history");
+        assert_eq!(
+            log.len(),
+            3,
+            "revert must add a commit, not rewrite history"
+        );
         assert_eq!(log[0].summary, "Revert \"add line two\"");
         // The working file content is back to the first-commit state.
         assert_eq!(
