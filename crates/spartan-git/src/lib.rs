@@ -263,6 +263,32 @@ impl GitRepo {
         )
     }
 
+    /// Real amend of the last commit (`HEAD`) -- rewrites its message and
+    /// its tree to the current index, keeping the same parent(s) so the
+    /// commit count is unchanged (this replaces the last commit, it does
+    /// not add a new one). Uses `git2`'s own `Commit::amend` with the
+    /// current index tree and a fresh committer signature (matching the
+    /// real `git commit --amend` behavior of updating the committer). The
+    /// author is preserved by passing `None` for the author signature.
+    /// Errors honestly if there is no `HEAD` commit to amend yet.
+    pub fn commit_amend(&self, message: &str) -> Result<git2::Oid, git2::Error> {
+        let head_commit = self.repo.head()?.peel_to_commit()?;
+        let mut index = self.repo.index()?;
+        let tree_oid = index.write_tree()?;
+        let tree = self.repo.find_tree(tree_oid)?;
+        let signature = self.repo.signature()?;
+        // `amend` updates HEAD in place; author preserved (None), committer
+        // refreshed, message and tree replaced with the current ones.
+        head_commit.amend(
+            Some("HEAD"),
+            None,
+            Some(&signature),
+            None,
+            Some(message),
+            Some(&tree),
+        )
+    }
+
     /// The real current branch name, or `None` for a detached `HEAD` (a
     /// real, valid git state, not an error).
     pub fn current_branch(&self) -> Option<String> {
@@ -1243,6 +1269,50 @@ mod tests {
             fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
             "v2-staged\n"
         );
+    }
+
+    #[test]
+    fn commit_amend_rewrites_the_last_commit_message_without_adding_a_commit() {
+        let (tmp, repo) = TempRepo::new("amend_message");
+        tmp.write("f.txt", "v1\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("original message").unwrap();
+        assert_eq!(repo.log(10).unwrap().len(), 1);
+        // Amend rewrites the message; the commit count stays 1.
+        repo.commit_amend("amended message").unwrap();
+        let log = repo.log(10).unwrap();
+        assert_eq!(log.len(), 1, "amend must replace, not add, a commit");
+        assert_eq!(log[0].summary, "amended message");
+    }
+
+    #[test]
+    fn commit_amend_folds_the_current_index_into_the_last_commit() {
+        let (tmp, repo) = TempRepo::new("amend_tree");
+        tmp.write("f.txt", "v1\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("first").unwrap();
+        // Stage a further change, then amend -- it folds into the last commit.
+        tmp.write("g.txt", "new file\n");
+        repo.stage(Path::new("g.txt")).unwrap();
+        repo.commit_amend("first (amended)").unwrap();
+        let log = repo.log(10).unwrap();
+        assert_eq!(log.len(), 1, "amend must not create a second commit");
+        // The amended commit's tree now contains g.txt (a working-tree diff
+        // against HEAD would report nothing to commit for it).
+        let status = repo.status().unwrap();
+        assert!(
+            status.iter().all(|s| s.path != Path::new("g.txt")),
+            "g.txt should be committed via the amend, not left pending: {status:?}"
+        );
+    }
+
+    #[test]
+    fn commit_amend_with_no_head_commit_errors() {
+        let (tmp, repo) = TempRepo::new("amend_no_head");
+        tmp.write("f.txt", "v1\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        // No commit yet -- there is nothing to amend.
+        assert!(repo.commit_amend("nope").is_err());
     }
 
     #[test]

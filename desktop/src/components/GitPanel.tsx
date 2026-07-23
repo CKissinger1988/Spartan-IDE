@@ -222,6 +222,7 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [committing, setCommitting] = useState(false);
+  const [amending, setAmending] = useState(false);
   const [expandedDiff, setExpandedDiff] = useState<ExpandedDiff | null>(null);
   const [diffContent, setDiffContent] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
@@ -411,6 +412,28 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setCommitting(false));
+  }, [root, message, refresh]);
+
+  // Amend rewrites the last commit's message (and folds in any staged
+  // changes), rather than adding a new commit -- a real, destructive
+  // history rewrite, so it's confirmed before running.
+  const amend = useCallback(() => {
+    if (!message.trim()) return;
+    if (
+      !window.confirm(
+        "Amend the last commit? This rewrites its message and history and cannot be undone."
+      )
+    )
+      return;
+    setAmending(true);
+    window.spartan
+      .call("git_commit_amend", { project_root: root, message })
+      .then(() => {
+        setMessage("");
+        refresh();
+      })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setAmending(false));
   }, [root, message, refresh]);
 
   const toggleDiff = useCallback(
@@ -665,13 +688,25 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
         value={message}
         onChange={(e) => setMessage(e.target.value)}
       />
-      <button
-        className="git-commit-button"
-        disabled={staged.length === 0 || !message.trim() || committing}
-        onClick={commit}
-      >
-        {committing ? "Committing…" : `Commit (${staged.length})`}
-      </button>
+      <div style={{ display: "flex", gap: 4 }}>
+        <button
+          className="git-commit-button"
+          style={{ flex: 1 }}
+          disabled={staged.length === 0 || !message.trim() || committing || amending}
+          onClick={commit}
+        >
+          {committing ? "Committing…" : `Commit (${staged.length})`}
+        </button>
+        <button
+          className="git-commit-button"
+          type="button"
+          title="Rewrite the last commit's message (and fold in staged changes)"
+          disabled={!message.trim() || committing || amending}
+          onClick={amend}
+        >
+          {amending ? "Amending…" : "Amend"}
+        </button>
+      </div>
 
       {remotes && remotes.length > 0 && (
         <div className="git-section">

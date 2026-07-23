@@ -6240,6 +6240,36 @@ first — it's the parity reference until each row there is actually reimplement
   identical shared component logic the web live run exercises, same `git_discard` Rust path both
   shells send through); the confirm is a browser-native `window.confirm` (fine in both a browser
   and Electron), not a custom themed modal.
+- **Real, working code — git commit amend (rewrite the last commit) in both Git panels (task
+  #259)**: user-requested ("Continue without stopping"). `spartan_git::commit_amend(message)` uses
+  `git2`'s own `Commit::amend` with the current index tree -- it rewrites `HEAD`'s message and
+  folds any staged changes into the last commit rather than adding a new one (the author is
+  preserved via `None`, the committer refreshed, matching real `git commit --amend` behavior);
+  errors honestly if there is no `HEAD` commit to amend yet. New `git_commit_amend` backend
+  dispatch (`git_commit_amend(project_root, message)`) + IPC allowlist entry in both `main.ts`/
+  `preload.ts` at the identical position (the established drift-avoidance discipline). Both Git
+  panels gained an "Amend" button beside Commit: unlike Commit it doesn't require staged changes
+  (a message-only amend is valid), and -- since it's a real, destructive history rewrite -- it's
+  gated behind a `window.confirm` before running, matching the discard-changes precedent (task
+  #258). 4 new tests (3 in `spartan-git`: message rewrite keeps the commit count at 1, a staged
+  change folds into the amended commit's tree, an amend with no `HEAD` errors; 1 dispatch-level in
+  `spartan-backend`: the full round trip through `handle_request` confirming exactly one commit
+  remains with the amended message), 39 `spartan-git` lib tests and 198 `spartan-backend` lib
+  tests total, full `cargo fmt --all -- --check`/`cargo clippy -p spartan-git -p spartan-backend
+  --release --all-targets`/`cargo test` clean; both shells' `tsc --noEmit`/`build` clean. **Real,
+  live, end-to-end Playwright verification against the actual compiled `web/dist` served by a real
+  running `spartan-devserver`** (not a mock): a real fixture (one commit "original commit message"
+  plus a staged change) -- typing "amended via UI" and clicking Amend (accepting the confirm)
+  rewrote the last commit, **cross-checked against the real `git` CLI**: the commit count stayed 1,
+  the oid changed, the summary became "amended via UI", and `git show HEAD:f.txt` confirmed the
+  staged `STAGED-CHANGE` line folded in with a clean working tree. **What this does not confirm**:
+  no interactive rebase or amend-any-earlier-commit (last commit only, the safe common case); no
+  live Electron-window verification of `desktop/` (same standing gap since §75.59 -- verified via
+  typecheck + the identical shared component logic the web live run exercises, same
+  `git_commit_amend` Rust path both shells send through); the confirm is a browser-native
+  `window.confirm`, not a custom themed modal; amending an already-pushed commit will diverge from
+  the remote (real `git --amend` behavior, the same caveat any amend carries -- no force-push help
+  is offered).
 
 ## Build & test
 

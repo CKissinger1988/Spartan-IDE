@@ -3102,6 +3102,18 @@ fn git_commit(project_root: &str, message: &str) -> Result<serde_json::Value, St
     Ok(serde_json::json!({ "ok": true, "oid": oid.to_string() }))
 }
 
+/// Real amend of the last commit -- rewrites `HEAD`'s message and folds the
+/// current index into it, keeping the commit count unchanged (replaces, does
+/// not add). Errors honestly if there is no `HEAD` commit to amend yet.
+fn git_commit_amend(project_root: &str, message: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let oid = repo
+        .commit_amend(message)
+        .map_err(|e| format!("git commit --amend: {e}"))?;
+    Ok(serde_json::json!({ "ok": true, "oid": oid.to_string() }))
+}
+
 /// Real staged/unstaged diff for one file, reusing the already-tested
 /// `compute_diff` (§75.68) -- real git semantics, not a simplified
 /// approximation. `staged: true` diffs `HEAD`'s own blob against the
@@ -4040,6 +4052,11 @@ pub fn handle_request(
             let root = get_str_param(&req.params, "project_root")?;
             let message = get_str_param(&req.params, "message")?;
             git_commit(&root, &message)
+        })(),
+        "git_commit_amend" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let message = get_str_param(&req.params, "message")?;
+            git_commit_amend(&root, &message)
         })(),
         "git_diff" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
@@ -5630,6 +5647,43 @@ mod tests {
         );
         let stashes = resp.result.unwrap()["stashes"].as_array().unwrap().clone();
         assert_eq!(stashes.len(), 1, "apply must keep the stash, not drop it");
+    }
+
+    #[test]
+    fn git_commit_amend_rewrites_the_last_commit_through_the_dispatch_path() {
+        let tmp = TempRepo::new("amend_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "v1\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "original" }),
+        );
+        let resp = call(
+            &state,
+            3,
+            "git_commit_amend",
+            serde_json::json!({ "project_root": root, "message": "amended" }),
+        );
+        assert_eq!(resp.result.unwrap()["ok"], true);
+        // Exactly one commit remains, with the amended message.
+        let resp = call(
+            &state,
+            4,
+            "git_log",
+            serde_json::json!({ "project_root": root, "max": 10 }),
+        );
+        let commits = resp.result.unwrap()["commits"].as_array().unwrap().clone();
+        assert_eq!(commits.len(), 1, "amend must not add a commit");
+        assert_eq!(commits[0]["summary"], "amended");
     }
 
     #[test]
