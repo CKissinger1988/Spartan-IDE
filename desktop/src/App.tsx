@@ -18,7 +18,7 @@ import Editor, {
   type WorkspaceTextEdit,
   type BreakpointSpec,
 } from "./components/Editor";
-import DebugPanel, { type DapSessionState } from "./components/DebugPanel";
+import DebugPanel, { type DapSessionState, type WatchEntry } from "./components/DebugPanel";
 import LogcatPanel from "./components/LogcatPanel";
 import Placeholder from "./components/Placeholder";
 import WorkflowsScreen from "./components/WorkflowsScreen";
@@ -137,6 +137,13 @@ export default function App(): React.ReactElement {
   // its final state before the user dismisses it via Stop or relaunches.
   const [breakpointsByDoc, setBreakpointsByDoc] = useState<Record<number, BreakpointSpec[]>>({});
   const [dapSessionByDoc, setDapSessionByDoc] = useState<Record<number, DapSessionState>>({});
+  // Real DAP watch/REPL expressions (§250) -- a debugger-wide list (not
+  // per-doc), re-evaluated against the active session on every stop.
+  // `watchResults` is keyed by expression; empty while not stopped.
+  const [watchExpressions, setWatchExpressions] = useState<string[]>([]);
+  const [watchResults, setWatchResults] = useState<
+    Record<string, { value?: string; error?: string; pending?: boolean }>
+  >({});
   const [androidInfo, setAndroidInfo] = useState<AndroidDetectResult | null>(null);
   // Real build state for task #144's "Build APK" action -- `idle` (never
   // triggered this session) is represented by `undefined`, not a real
@@ -656,6 +663,70 @@ export default function App(): React.ReactElement {
       return next;
     });
   }, [activeFile, dapSessionByDoc]);
+
+  // Real watch/REPL evaluation (§250) -- evaluates one expression against a
+  // stopped session and records its value or a real error.
+  const evaluateWatch = useCallback((sessionId: number, expression: string) => {
+    setWatchResults((prev) => ({ ...prev, [expression]: { pending: true } }));
+    window.spartan
+      .call("dap_evaluate", { session_id: sessionId, expression })
+      .then((res) => {
+        const { result } = res as { result: string };
+        setWatchResults((prev) => ({ ...prev, [expression]: { value: result } }));
+      })
+      .catch((err: Error) => {
+        setWatchResults((prev) => ({ ...prev, [expression]: { error: err.message } }));
+      });
+  }, []);
+
+  const addWatch = useCallback(
+    (expression: string) => {
+      setWatchExpressions((prev) => (prev.includes(expression) ? prev : [...prev, expression]));
+      // Evaluate immediately if a session is currently stopped.
+      if (activeFile) {
+        const session = dapSessionByDoc[activeFile.docId];
+        if (session && session.sessionId >= 0 && session.status === "stopped") {
+          evaluateWatch(session.sessionId, expression);
+        }
+      }
+    },
+    [activeFile, dapSessionByDoc, evaluateWatch]
+  );
+
+  const removeWatch = useCallback((expression: string) => {
+    setWatchExpressions((prev) => prev.filter((e) => e !== expression));
+    setWatchResults((prev) => {
+      const next = { ...prev };
+      delete next[expression];
+      return next;
+    });
+  }, []);
+
+  const activeSession = activeFile ? (dapSessionByDoc[activeFile.docId] ?? null) : null;
+  const activeSessionId = activeSession?.sessionId ?? -1;
+  const activeSessionStatus = activeSession?.status;
+  // A fresh `stopped` object arrives on every real stop event (even one that
+  // lands on the same line, e.g. a loop breakpoint) -- keying the effect on
+  // its reference re-evaluates watches against each new frame's real values.
+  const activeStopped = activeSession?.stopped;
+  useEffect(() => {
+    if (activeSessionStatus === "stopped" && activeSessionId >= 0) {
+      watchExpressions.forEach((expr) => evaluateWatch(activeSessionId, expr));
+    } else {
+      // Not stopped -- prior results are stale; clear them rather than show
+      // values that no longer reflect any live frame.
+      setWatchResults((prev) => (Object.keys(prev).length ? {} : prev));
+    }
+    // watchExpressions is intentionally excluded: a newly-added watch is
+    // evaluated eagerly in `addWatch`; this effect only re-evaluates the
+    // whole set on a real stop transition.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId, activeSessionStatus, activeStopped, evaluateWatch]);
+
+  const watchEntries: WatchEntry[] = watchExpressions.map((expression) => ({
+    expression,
+    ...watchResults[expression],
+  }));
   const screenLabel = NAV.flatMap((g) => g.items).find((i) => i.id === screen)?.label ?? screen;
 
   // Real §75.76 first-run onboarding gate -- deliberately blank (not the
@@ -735,6 +806,9 @@ export default function App(): React.ReactElement {
                   onStepOver={() => dapSendCommand("dap_step_over")}
                   onStepInto={() => dapSendCommand("dap_step_into")}
                   onStop={dapStop}
+                  watches={watchEntries}
+                  onAddWatch={addWatch}
+                  onRemoveWatch={removeWatch}
                 />
                 <LogcatPanel
                   visible={logcatOpen}

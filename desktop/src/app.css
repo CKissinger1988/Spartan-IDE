@@ -1213,6 +1213,90 @@
   color: var(--text);
 }
 
+/* Real DAP watch/REPL expressions (§250) -- a small list below the
+ * variables strip, each row an expression + its live evaluation result. */
+.debug-watches {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.debug-watches-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.debug-watches-title {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+.debug-watch-input {
+  flex: 1;
+  min-width: 120px;
+  padding: 3px 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.debug-watch-input:focus {
+  outline: none;
+  border-color: rgb(var(--accent-rgb));
+}
+
+.debug-watch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.debug-watch-row {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.debug-watch-expr {
+  color: var(--accent);
+}
+
+.debug-watch-eq {
+  color: var(--text-dim);
+}
+
+.debug-watch-result {
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.debug-watch-error {
+  color: rgb(var(--status-critical-rgb));
+}
+
+.debug-watch-remove {
+  margin-left: auto;
+  padding: 0 6px;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.debug-watch-remove:hover {
+  color: rgb(var(--status-critical-rgb));
+}
+
 .logcat-panel {
   max-height: 220px;
 }

@@ -79,7 +79,7 @@ Priority key:
 |---|---|---|
 | DAP for C#/Kotlin/Java/Go/TS in the shells | P2 | Registry-configured; needs a program-path collection UI (only Rust/Python launch today). |
 | ~~Conditional breakpoints + logpoints~~ | ✅ done | Shipped — right-click a gutter line to set a DAP `condition`/`logMessage`; live-verified against real debugpy. |
-| Watch expressions / REPL eval | P2 | Stack + variables shown; no watch/eval. |
+| ~~Watch expressions / REPL eval~~ | ✅ done | Shipped — a WATCH panel in both shells' DebugPanel; add an expression, it evaluates in the stopped frame via a real DAP `evaluate` (`spartan_dap::DapSession::evaluate`), re-evaluated on every stop. Live-verified against real debugpy (`total * 2` → 6, `i + 100` → 103, a bad name → a real error). |
 | Data breakpoints | P3 | Not present. |
 | Rope-anchored breakpoints | P3 | Line-number only; edits above a breakpoint shift it (§75.8). |
 

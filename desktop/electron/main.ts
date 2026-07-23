@@ -250,6 +250,7 @@ app.whenReady().then(() => {
     "dap_continue",
     "dap_step_over",
     "dap_step_into",
+    "dap_evaluate",
     "dap_disconnect",
     "leo_cancel",
     "git_status",

@@ -322,6 +322,23 @@ impl DapClient {
         self.request("stepIn", json!({"threadId": thread_id}), DEFAULT_TIMEOUT)
     }
 
+    /// Real DAP `evaluate` request -- evaluates an arbitrary expression in
+    /// the context of a given stack frame (the current top frame, for a
+    /// watch expression or a REPL eval). `context: "watch"` is the DAP
+    /// spec's own hint for a watch-panel evaluation. Returns the raw
+    /// response; `body.result` is the real display string.
+    pub fn evaluate(&mut self, expression: &str, frame_id: i64) -> Option<Value> {
+        self.request(
+            "evaluate",
+            json!({
+                "expression": expression,
+                "frameId": frame_id,
+                "context": "watch",
+            }),
+            DEFAULT_TIMEOUT,
+        )
+    }
+
     /// Shuts down the adapter -- never trusts the subprocess's own
     /// shutdown, matching `spartan_lsp::LspClient::shutdown`'s identical
     /// discipline and the original `spartan-editor-core::dap::DapClient`'s

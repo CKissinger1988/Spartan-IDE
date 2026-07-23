@@ -35,6 +35,14 @@ pub enum DapCommand {
     StepOver,
     StepInto,
     Disconnect,
+    /// Evaluate an expression in the current top stack frame (a watch
+    /// expression or a REPL eval). Only meaningful while stopped -- the
+    /// real result (or an error string) is returned over `reply`, out of
+    /// band from the one-way `DapUpdate` stream.
+    Evaluate {
+        expression: String,
+        reply: Sender<Result<String, String>>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -147,6 +155,14 @@ impl DapSession {
                     DapCommand::StepOver => client.step_over(thread_id),
                     DapCommand::StepInto => client.step_into(thread_id),
                     DapCommand::Disconnect => break,
+                    DapCommand::Evaluate { expression, reply } => {
+                        // Evaluate is a discrete request/response against the
+                        // stopped adapter -- it never steps or continues, so
+                        // it deliberately skips `wait_for_stop_or_exit`.
+                        let result = evaluate_in_current_frame(&mut client, thread_id, &expression);
+                        let _ = reply.send(result);
+                        continue;
+                    }
                 };
                 if resp.is_none() {
                     let _ = updates_tx.send(DapUpdate::Error("command request failed".to_string()));
@@ -195,6 +211,61 @@ impl DapSession {
     /// recv_update`.
     pub fn recv_update(&self) -> Option<DapUpdate> {
         self.updates_rx.lock().unwrap().recv().ok()
+    }
+
+    /// Evaluate an expression in the current top stack frame and block for
+    /// the real result. Only meaningful while the session is stopped at a
+    /// breakpoint; a caller that evaluates a running/ended session gets a
+    /// real, honest error rather than a hang (bounded by a 10s reply
+    /// timeout). Sends the command over the same ordered channel every
+    /// other command uses, then waits on a one-shot reply channel.
+    pub fn evaluate(&self, expression: &str) -> Result<String, String> {
+        let (tx, rx) = mpsc::channel();
+        self.cmd_tx
+            .send(DapCommand::Evaluate {
+                expression: expression.to_string(),
+                reply: tx,
+            })
+            .map_err(|_| "debug session is no longer running".to_string())?;
+        rx.recv_timeout(Duration::from_secs(10))
+            .map_err(|_| "no evaluate response (session may have ended)".to_string())?
+    }
+}
+
+/// Fetches the current top stack frame and evaluates `expression` in it.
+/// Returns the real DAP `body.result` display string, or an honest error
+/// (no frame, adapter failure, or a real evaluation error the adapter
+/// itself reports).
+fn evaluate_in_current_frame(
+    client: &mut DapClient,
+    thread_id: i64,
+    expression: &str,
+) -> Result<String, String> {
+    let frame_id = client
+        .stack_trace(thread_id)
+        .and_then(|f| {
+            f["body"]["stackFrames"]
+                .as_array()
+                .and_then(|a| a.first())
+                .and_then(|fr| fr["id"].as_i64())
+        })
+        .ok_or_else(|| "no active stack frame to evaluate in".to_string())?;
+    match client.evaluate(expression, frame_id) {
+        Some(resp) if resp["success"].as_bool() == Some(true) => {
+            Ok(resp["body"]["result"].as_str().unwrap_or("").to_string())
+        }
+        Some(resp) => {
+            // A real evaluation error (bad expression, name error, etc.) --
+            // the adapter reports it in `message` or `body.result`.
+            let msg = resp["message"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .or_else(|| resp["body"]["result"].as_str())
+                .unwrap_or("evaluation failed")
+                .to_string();
+            Err(msg)
+        }
+        None => Err("no response from the debug adapter".to_string()),
     }
 }
 

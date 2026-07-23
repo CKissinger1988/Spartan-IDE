@@ -11,7 +11,7 @@ import BackendEditor, {
   type WorkspaceTextEdit,
   type BreakpointSpec,
 } from "./components/BackendEditor";
-import DebugPanel, { type DapSessionState } from "./components/DebugPanel";
+import DebugPanel, { type DapSessionState, type WatchEntry } from "./components/DebugPanel";
 import LogcatPanel from "./components/LogcatPanel";
 import { ensureBufferWasmInit, Document as WasmDocument } from "./buffer";
 import { isFileSystemAccessSupported, pickProjectDirectory, readFileText } from "./fsAccess";
@@ -191,6 +191,12 @@ export default function App(): React.ReactElement {
   // relaunches.
   const [breakpointsByDoc, setBreakpointsByDoc] = useState<Record<number, BreakpointSpec[]>>({});
   const [dapSessionByDoc, setDapSessionByDoc] = useState<Record<number, DapSessionState>>({});
+  // Real DAP watch/REPL expressions (§250) -- a debugger-wide list,
+  // re-evaluated against the active session on every stop.
+  const [watchExpressions, setWatchExpressions] = useState<string[]>([]);
+  const [watchResults, setWatchResults] = useState<
+    Record<string, { value?: string; error?: string; pending?: boolean }>
+  >({});
   // Real android_detect/android_build_apk state (task #146), the web/
   // sibling of desktop/'s own StatusBar wiring (tasks #142/#144) -- these
   // are real spartan-backend methods reached generically through
@@ -652,6 +658,73 @@ export default function App(): React.ReactElement {
     });
   }, [activeBackendDocId, backendClient, dapSessionByDoc]);
 
+  // Real watch/REPL evaluation (§250) -- evaluates one expression against a
+  // stopped session over the real WebSocket transport, recording its value
+  // or a real error.
+  const evaluateWatch = useCallback(
+    (sessionId: number, expression: string) => {
+      if (!backendClient) return;
+      setWatchResults((prev) => ({ ...prev, [expression]: { pending: true } }));
+      backendClient
+        .call("dap_evaluate", { session_id: sessionId, expression })
+        .then((res) => {
+          const { result } = res as { result: string };
+          setWatchResults((prev) => ({ ...prev, [expression]: { value: result } }));
+        })
+        .catch((err: Error) => {
+          setWatchResults((prev) => ({ ...prev, [expression]: { error: err.message } }));
+        });
+    },
+    [backendClient]
+  );
+
+  const addWatch = useCallback(
+    (expression: string) => {
+      setWatchExpressions((prev) => (prev.includes(expression) ? prev : [...prev, expression]));
+      if (activeBackendDocId !== null) {
+        const session = dapSessionByDoc[activeBackendDocId];
+        if (session && session.sessionId >= 0 && session.status === "stopped") {
+          evaluateWatch(session.sessionId, expression);
+        }
+      }
+    },
+    [activeBackendDocId, dapSessionByDoc, evaluateWatch]
+  );
+
+  const removeWatch = useCallback((expression: string) => {
+    setWatchExpressions((prev) => prev.filter((e) => e !== expression));
+    setWatchResults((prev) => {
+      const next = { ...prev };
+      delete next[expression];
+      return next;
+    });
+  }, []);
+
+  const activeDapSession =
+    activeBackendDocId !== null ? (dapSessionByDoc[activeBackendDocId] ?? null) : null;
+  const activeDapSessionId = activeDapSession?.sessionId ?? -1;
+  const activeDapStatus = activeDapSession?.status;
+  // A fresh `stopped` object arrives on every real stop (even one on the
+  // same line, e.g. a loop breakpoint) -- keying on its reference
+  // re-evaluates watches against each new frame's real values.
+  const activeDapStopped = activeDapSession?.stopped;
+  useEffect(() => {
+    if (activeDapStatus === "stopped" && activeDapSessionId >= 0) {
+      watchExpressions.forEach((expr) => evaluateWatch(activeDapSessionId, expr));
+    } else {
+      setWatchResults((prev) => (Object.keys(prev).length ? {} : prev));
+    }
+    // watchExpressions intentionally excluded -- a newly-added watch is
+    // evaluated eagerly in `addWatch`; this only re-runs the whole set on a
+    // real stop transition.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDapSessionId, activeDapStatus, activeDapStopped, evaluateWatch]);
+
+  const watchEntries: WatchEntry[] = watchExpressions.map((expression) => ({
+    expression,
+    ...watchResults[expression],
+  }));
+
   const handleContentChange = useCallback((path: string, content: string, saved?: boolean) => {
     setActiveContent((prev) => {
       if (!prev || prev.file.path !== path) return prev;
@@ -923,6 +996,9 @@ export default function App(): React.ReactElement {
               onStepOver={() => dapSendCommand("dap_step_over")}
               onStepInto={() => dapSendCommand("dap_step_into")}
               onStop={dapStop}
+              watches={watchEntries}
+              onAddWatch={addWatch}
+              onRemoveWatch={removeWatch}
             />
           )}
           <LogcatPanel

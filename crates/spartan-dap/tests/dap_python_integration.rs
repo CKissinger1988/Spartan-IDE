@@ -99,6 +99,65 @@ fn real_debugpy_breakpoint_hits_then_continue_runs_to_a_real_exit() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+#[test]
+fn real_debugpy_evaluate_computes_a_real_expression_in_the_stopped_frame() {
+    if !debugpy_adapter_available() {
+        eprintln!("SKIP: python3 -c 'import debugpy.adapter' failed -- debugpy not installed");
+        return;
+    }
+    let dir = work_dir("spartan-dap-debugpy-eval-test");
+    let src_path = dir.join("target.py");
+    std::fs::write(&src_path, FIXTURE_SOURCE).unwrap();
+
+    let adapter_command = CommandSpec {
+        program: "python3".to_string(),
+        args: vec!["-m".to_string(), "debugpy.adapter".to_string()],
+    };
+    // Stop on line 2 (`y = x * 2`), where `x == 21` is in scope.
+    let session = DapSession::launch(
+        &adapter_command,
+        false,
+        &dir,
+        &src_path,
+        &dir,
+        &src_path,
+        &[spartan_dap::Breakpoint::line(2)],
+    );
+
+    let initial = session
+        .recv_update()
+        .expect("expected a real initial update after launching");
+    let DapUpdate::Stopped(_) = initial else {
+        panic!("expected the first update to be Stopped, got {initial:?}");
+    };
+
+    // A real watch/REPL evaluation of an arbitrary expression against the
+    // real stopped frame -- `x * 2` where x == 21 must be exactly "42".
+    let result = session
+        .evaluate("x * 2")
+        .expect("expected a real evaluate result");
+    assert_eq!(result, "42", "expected x * 2 == 42 at the breakpoint");
+
+    // A real evaluation error (an undefined name) is reported as an Err,
+    // not silently swallowed or returned as a bogus value.
+    let bad = session.evaluate("this_name_does_not_exist");
+    assert!(
+        bad.is_err(),
+        "expected an undefined name to be a real evaluation error, got: {bad:?}"
+    );
+
+    session.send_command(DapCommand::Continue);
+    let after = session
+        .recv_update()
+        .expect("expected a real update after Continue");
+    assert!(
+        matches!(after, DapUpdate::Exited),
+        "expected a real exit after Continue: {after:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 // A loop, so a *conditional* breakpoint has something to skip past: the
 // adapter must only stop when the condition is truthy, not on every hit.
 const LOOP_FIXTURE: &str = "total = 0\nfor i in range(10):\n    total += i\nprint(total)\n";

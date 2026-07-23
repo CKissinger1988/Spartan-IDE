@@ -2340,6 +2340,28 @@ fn dap_command(
     Ok(serde_json::json!({ "ok": true }))
 }
 
+/// Real watch/REPL evaluation of an expression against a stopped DAP
+/// session (§250). Unlike `dap_command`, this needs the real result back,
+/// so it clones the session `Arc` and releases the lock before blocking on
+/// `DapSession::evaluate` (mirroring `dap_launch`'s own lock-release
+/// discipline) -- a slow adapter must never freeze every other request.
+fn dap_evaluate(
+    state: &Arc<Mutex<BackendState>>,
+    session_id: u64,
+    expression: &str,
+) -> Result<serde_json::Value, String> {
+    let session = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        guard
+            .dap_sessions
+            .get(&session_id)
+            .ok_or_else(|| format!("no dap session with id {session_id}"))?
+            .clone()
+    };
+    let result = session.evaluate(expression)?;
+    Ok(serde_json::json!({ "result": result }))
+}
+
 /// Real, explicit `Disconnect` (not a drop-triggered shutdown -- see
 /// `spartan-dap::session`'s own doc comment for why this crate's shared
 /// `Arc<DapSession>` needs an explicit command instead) plus removal
@@ -3827,6 +3849,11 @@ pub fn handle_request(
             .and_then(|id| dap_command(state, id, spartan_dap::DapCommand::StepOver)),
         "dap_step_into" => get_u64_param(&req.params, "session_id")
             .and_then(|id| dap_command(state, id, spartan_dap::DapCommand::StepInto)),
+        "dap_evaluate" => (|| {
+            let session_id = get_u64_param(&req.params, "session_id")?;
+            let expression = get_str_param(&req.params, "expression")?;
+            dap_evaluate(state, session_id, &expression)
+        })(),
         "dap_disconnect" => {
             get_u64_param(&req.params, "session_id").and_then(|id| dap_disconnect(state, id))
         }

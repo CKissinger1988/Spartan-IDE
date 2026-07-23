@@ -1,4 +1,16 @@
-import React from "react";
+import React, { useState } from "react";
+
+/** One watch/REPL expression plus its most recent evaluation result -- a
+ * direct port of `desktop/src/components/DebugPanel.tsx`'s own `WatchEntry`
+ * (duplicated, not shared, since these are two separate npm projects).
+ * `value`/`error` are mutually exclusive; `pending` means in flight; all
+ * absent means "not evaluated yet" (the session isn't stopped). */
+export interface WatchEntry {
+  expression: string;
+  value?: string;
+  error?: string;
+  pending?: boolean;
+}
 
 /** Mirrors `spartan_dap::{DapStopped, DapFrame, DapVariable}`'s real,
  * unmodified serde field names (no `rename_all` on the Rust side) --
@@ -30,6 +42,11 @@ interface DebugPanelProps {
   onStepOver: () => void;
   onStepInto: () => void;
   onStop: () => void;
+  /** Real watch/REPL expressions + latest results (§250); the App owns them
+   * and re-evaluates against the real session on every stop. */
+  watches?: WatchEntry[];
+  onAddWatch?: (expression: string) => void;
+  onRemoveWatch?: (expression: string) => void;
 }
 
 /**
@@ -50,11 +67,23 @@ export default function DebugPanel({
   onStepOver,
   onStepInto,
   onStop,
+  watches,
+  onAddWatch,
+  onRemoveWatch,
 }: DebugPanelProps): React.ReactElement | null {
+  const [watchDraft, setWatchDraft] = useState("");
   if (!hasFile) return null;
 
   const isStopped = session?.status === "stopped";
   const isLive = session?.status === "launching" || session?.status === "stopped";
+
+  const submitWatch = () => {
+    const expr = watchDraft.trim();
+    if (expr && onAddWatch) {
+      onAddWatch(expr);
+      setWatchDraft("");
+    }
+  };
 
   return (
     <div className="debug-panel mono">
@@ -114,6 +143,53 @@ export default function DebugPanel({
               <span className="debug-variable-value">{v.value}</span>
             </span>
           ))}
+        </div>
+      )}
+      {isLive && onAddWatch && (
+        <div className="debug-watches">
+          <div className="debug-watches-header">
+            <span className="debug-watches-title">WATCH</span>
+            <input
+              className="debug-watch-input"
+              value={watchDraft}
+              placeholder={isStopped ? "expression (e.g. total * 2)" : "add a watch…"}
+              onChange={(e) => setWatchDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  submitWatch();
+                }
+              }}
+            />
+          </div>
+          {watches && watches.length > 0 && (
+            <div className="debug-watch-list">
+              {watches.map((w) => (
+                <div key={w.expression} className="debug-watch-row">
+                  <span className="debug-watch-expr">{w.expression}</span>
+                  <span className="debug-watch-eq"> = </span>
+                  <span className={`debug-watch-result${w.error ? " debug-watch-error" : ""}`}>
+                    {w.pending
+                      ? "…"
+                      : w.error
+                        ? w.error
+                        : w.value !== undefined
+                          ? w.value
+                          : "—"}
+                  </span>
+                  {onRemoveWatch && (
+                    <button
+                      className="debug-watch-remove"
+                      title="Remove watch"
+                      onClick={() => onRemoveWatch(w.expression)}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

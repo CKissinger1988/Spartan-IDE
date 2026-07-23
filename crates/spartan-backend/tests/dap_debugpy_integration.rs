@@ -129,6 +129,28 @@ fn dap_launch_hits_a_real_breakpoint_then_continue_reaches_a_real_exit() {
         "expected a real local variable x = 21: {stopped}"
     );
 
+    // Real watch/REPL evaluation through the full dispatch (§250): `x * 2`
+    // in the stopped frame (x == 21) must be exactly "42".
+    let eval_resp = handle_request(
+        &state,
+        Request {
+            id: 5,
+            method: "dap_evaluate".to_string(),
+            params: serde_json::json!({ "session_id": session_id, "expression": "x * 2" }),
+        },
+        tx.clone(),
+    );
+    assert!(
+        eval_resp.error.is_none(),
+        "dap_evaluate errored: {:?}",
+        eval_resp.error
+    );
+    assert_eq!(
+        eval_resp.result.unwrap()["result"].as_str(),
+        Some("42"),
+        "expected x * 2 == 42 through the real dispatch"
+    );
+
     let continue_resp = handle_request(
         &state,
         Request {

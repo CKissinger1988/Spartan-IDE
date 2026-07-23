@@ -46,6 +46,7 @@ const ALLOWED_METHODS = new Set([
   "dap_continue",
   "dap_step_over",
   "dap_step_into",
+  "dap_evaluate",
   "dap_disconnect",
   "git_status",
   "git_stage",

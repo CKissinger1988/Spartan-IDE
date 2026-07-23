@@ -5964,6 +5964,51 @@ first — it's the parity reference until each row there is actually reimplement
   panel shows stop/variable state, not a DAP `output` event stream); no data breakpoints, no
   rope-anchored breakpoints (line-number only, matching §75.8's own named v1 scope); no conditional
   breakpoint exercised against any adapter beyond debugpy in this pass's live run.
+- **Real, working code — DAP watch expressions / REPL eval, a `docs/FUTURE_FEATURES.md` roadmap
+  feature (task #250)**: direct continuation of the conditional-breakpoints pass, same session.
+  Adds real, arbitrary-expression evaluation against a stopped DAP session -- a real debugger
+  "watch panel." `spartan_dap::client::DapClient::evaluate` issues the real DAP `evaluate` request
+  (`context: "watch"`); `DapCommand` gained an `Evaluate { expression, reply }` variant carrying a
+  one-shot `Sender<Result<String, String>>`, handled in the session's own command loop
+  (deliberately skipping `wait_for_stop_or_exit` -- an evaluate is a discrete request/response, it
+  never steps or continues) via a new `evaluate_in_current_frame` helper that fetches the current
+  top frame and evaluates in it. `DapSession::evaluate(expr)` sends over the same ordered channel
+  every other command uses, then blocks on the reply (bounded 10s). A real bug was found and fixed
+  by running the tests: the enum needed `#[derive(Debug)]` for the new integration test's `{:?}`
+  formatting. `spartan-backend::dap_evaluate` clones the session `Arc` and releases the backend
+  lock before blocking on the evaluate (mirroring `dap_launch`'s own discipline, so a slow adapter
+  can't freeze every other request), returning `{result}` synchronously; a new `dap_evaluate`
+  dispatch arm parses `{session_id, expression}`. Both shells' `DebugPanel` gained a WATCH section
+  (an add-expression input + a per-row `expr = value` list with remove buttons; errors rendered in
+  red); `App.tsx` in both owns a debugger-wide watch list and re-evaluates every watch against the
+  active session on each real stop (keyed on the `stopped` object's reference, so a loop breakpoint
+  landing on the same line still re-evaluates against the new frame's real values), clearing stale
+  results when not stopped, and evaluating a newly-added watch immediately if already stopped.
+  `dap_evaluate` added to `main.ts`/`preload.ts` allowlists. 1 new live integration test in
+  `spartan-dap`'s own `dap_python_integration.rs` (real debugpy: `x * 2` in the stopped frame
+  where x==21 is exactly "42"; an undefined name is a real `Err`, not a bogus value) plus the
+  existing `spartan-backend::dap_debugpy_integration` test extended to evaluate `x * 2 == 42`
+  through the full `handle_request` dispatch -- both confirmed passing (not skipped). Full
+  `cargo fmt --all -- --check`/`cargo clippy -p spartan-dap -p spartan-backend --release
+  --all-targets`/`cargo test -p spartan-dap --release`/`cargo test -p spartan-backend --release
+  --lib` (195 lib tests) all clean; both shells' `tsc --noEmit`/`build` clean. **A real,
+  correctly-diagnosed test flake, not a regression**: a first full `cargo test -p spartan-dap`
+  run showed the `dap_lldb_integration` tests failing under parallelism, then passing on an
+  isolated re-run -- the exact real-subprocess resource-contention flake this project's own
+  Build & test notes already document (re-run in isolation to confirm), not caused by this change
+  (the launch path is untouched). **Real, live, end-to-end Playwright verification against the
+  actual compiled `web/dist` served by a real running `spartan-devserver`** (not a mock): a real
+  `loop.py` stopped at a conditional breakpoint (`i == 3`, so `i = 3, total = 3`), then three real
+  watch expressions added through the WATCH input -- `total * 2` rendered `6`, `i + 100` rendered
+  `103`, and `this_name_does_not_exist` rendered the real red `NameError: name '...' is not
+  defined` -- all evaluated in the real stopped frame via real `dap_evaluate` round trips,
+  screenshot-confirmed; Continue-to-exit then cleared the panel. **What this does not confirm**:
+  no live Electron-window verification of `desktop/` (the standing gap since §75.59 -- verified via
+  typecheck + the identical shared component logic the web live run exercises, and the same
+  `dap_evaluate` Rust path both shells send through); no persistent watch list across sessions (the
+  panel hides watches when no session is live, matching the debugger's own "watches belong to a
+  session" convention); no watch exercised against any adapter beyond debugpy in this pass's live
+  run.
 
 ## Build & test
 
