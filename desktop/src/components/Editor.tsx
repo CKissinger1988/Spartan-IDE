@@ -180,9 +180,11 @@ function extractReferences(result: unknown): ReferenceItem[] {
     .filter((i): i is ReferenceItem => i !== null);
 }
 
-/** A real, normalized call-hierarchy incoming caller -- each is one
- * `CallHierarchyIncomingCall` whose `from` is a `CallHierarchyItem`. The
- * name is shown; the `selectionRange.start` is the jump target. */
+/** A real, normalized call-hierarchy entry -- for the incoming direction
+ * each is one `CallHierarchyIncomingCall` whose `from` is the caller; for
+ * the outgoing direction each is one `CallHierarchyOutgoingCall` whose `to`
+ * is the callee. The name is shown; the `selectionRange.start` is the jump
+ * target. */
 interface CallerItem {
   name: string;
   path: string;
@@ -190,33 +192,36 @@ interface CallerItem {
   character: number;
 }
 
-/** Normalizes a real `callHierarchy/incomingCalls` result (a real
- * `CallHierarchyIncomingCall[]`, or `null`) into a real, jump-ready caller
- * list. Returns `[]` for a real, honest "no callers found" rather than
- * throwing. */
-function extractCallers(result: unknown): CallerItem[] {
+type CallDirection = "incoming" | "outgoing";
+
+/** Normalizes a real `callHierarchy/incomingCalls` or `outgoingCalls`
+ * result into a real, jump-ready list. Returns `[]` for a real, honest
+ * "none found" rather than throwing. The relevant `CallHierarchyItem` is in
+ * `from` (incoming) or `to` (outgoing). */
+function extractCallers(result: unknown, direction: CallDirection): CallerItem[] {
   if (!Array.isArray(result)) return [];
+  const key = direction === "outgoing" ? "to" : "from";
   return result
     .map((entry) => {
-      const from = (entry as { from?: unknown }).from as
+      const item = (entry as Record<string, unknown>)[key] as
         | {
             name?: unknown;
             uri?: unknown;
             selectionRange?: { start?: { line?: unknown; character?: unknown } };
           }
         | undefined;
-      const line = from?.selectionRange?.start?.line;
-      const character = from?.selectionRange?.start?.character;
+      const line = item?.selectionRange?.start?.line;
+      const character = item?.selectionRange?.start?.character;
       if (
-        !from ||
-        typeof from.name !== "string" ||
-        typeof from.uri !== "string" ||
+        !item ||
+        typeof item.name !== "string" ||
+        typeof item.uri !== "string" ||
         typeof line !== "number" ||
         typeof character !== "number"
       ) {
         return null;
       }
-      return { name: from.name, path: fileUriToPath(from.uri), line, character };
+      return { name: item.name, path: fileUriToPath(item.uri), line, character };
     })
     .filter((i): i is CallerItem => i !== null);
 }
@@ -1676,9 +1681,14 @@ export default function Editor({
   const [callHierarchyState, setCallHierarchyState] = useState<{
     x: number;
     y: number;
+    direction: CallDirection;
     items: CallerItem[] | null;
   } | null>(null);
-  const pendingCallHierarchyRef = useRef<{ line: number; character: number } | null>(null);
+  const pendingCallHierarchyRef = useRef<{
+    line: number;
+    character: number;
+    direction: CallDirection;
+  } | null>(null);
 
   // Real find-references (Shift+F12) -- listens for this exact file's own
   // `lsp_references_result` events, following the same real query-request/
@@ -1715,38 +1725,58 @@ export default function Editor({
       .catch((err: Error) => console.error("lsp_references failed:", err));
   }, [charWidth, lineHeightPx, file.docId]);
 
-  // Real call hierarchy (Shift+Alt+H) -- listens for this exact file's own
-  // `lsp_call_hierarchy_result` events, the same real request/reply pattern
-  // find-references already established. `items: null` while in flight.
+  // Real call hierarchy (Shift+Alt+H incoming / Shift+Alt+O outgoing) --
+  // listens for this exact file's own `lsp_call_hierarchy_result` events, the
+  // same real request/reply pattern find-references already established.
+  // `items: null` while in flight.
   useEffect(() => {
     const unsubscribe = window.spartan.onEvent((event, data) => {
       if (event !== "lsp_call_hierarchy_result") return;
-      const d = data as { doc_id: number; line: number; character: number; result: unknown };
+      const d = data as {
+        doc_id: number;
+        line: number;
+        character: number;
+        direction?: string;
+        result: unknown;
+      };
       if (d.doc_id !== file.docId) return;
       const pending = pendingCallHierarchyRef.current;
-      if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+      const dir: CallDirection = d.direction === "outgoing" ? "outgoing" : "incoming";
+      if (
+        !pending ||
+        pending.line !== d.line ||
+        pending.character !== d.character ||
+        pending.direction !== dir
+      ) {
+        return;
+      }
       pendingCallHierarchyRef.current = null;
-      setCallHierarchyState((prev) => (prev ? { ...prev, items: extractCallers(d.result) } : prev));
+      setCallHierarchyState((prev) =>
+        prev ? { ...prev, items: extractCallers(d.result, dir) } : prev
+      );
     });
     return unsubscribe;
   }, [file.docId]);
 
-  /** Real, manual call-hierarchy trigger (Shift+Alt+H, the standard
-   * "show incoming calls" convention) -- shows every real caller of the
-   * symbol under the cursor, each jumpable via the same `goToTarget`
-   * machinery find-references already uses. */
-  const triggerCallHierarchy = useCallback(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    const { line, character } = offsetToLineChar(el.value, el.selectionStart);
-    const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
-    const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
-    pendingCallHierarchyRef.current = { line, character };
-    setCallHierarchyState({ x, y, items: null });
-    window.spartan
-      .call("lsp_call_hierarchy", { doc_id: file.docId, line, character })
-      .catch((err: Error) => console.error("lsp_call_hierarchy failed:", err));
-  }, [charWidth, lineHeightPx, file.docId]);
+  /** Real, manual call-hierarchy trigger (Shift+Alt+H incoming / Shift+Alt+O
+   * outgoing) -- shows every real caller of (or callee called by) the symbol
+   * under the cursor, each jumpable via the same `goToTarget` machinery
+   * find-references already uses. */
+  const triggerCallHierarchy = useCallback(
+    (direction: CallDirection) => {
+      const el = textareaRef.current;
+      if (!el) return;
+      const { line, character } = offsetToLineChar(el.value, el.selectionStart);
+      const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+      const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
+      pendingCallHierarchyRef.current = { line, character, direction };
+      setCallHierarchyState({ x, y, direction, items: null });
+      window.spartan
+        .call("lsp_call_hierarchy", { doc_id: file.docId, line, character, direction })
+        .catch((err: Error) => console.error("lsp_call_hierarchy failed:", err));
+    },
+    [charWidth, lineHeightPx, file.docId]
+  );
 
   /** Real F2 rename-symbol -- the sixth real LSP-backed editor feature,
    * following go-to-definition/signature-help/find-references' own
@@ -2529,12 +2559,18 @@ export default function Editor({
         triggerReferences();
         return;
       }
-      // Real, manual call-hierarchy trigger (Shift+Alt+H, the standard
-      // "show incoming calls" convention). `e.code` (not `e.key`) since
-      // Alt+H can produce a non-"h" character on some keyboard layouts.
+      // Real, manual call-hierarchy triggers: Shift+Alt+H (incoming, "who
+      // calls this") and Shift+Alt+O (outgoing, "what this calls"). `e.code`
+      // (not `e.key`) since Alt+letter can produce a non-letter char on some
+      // keyboard layouts.
       if (e.code === "KeyH" && e.shiftKey && e.altKey) {
         e.preventDefault();
-        triggerCallHierarchy();
+        triggerCallHierarchy("incoming");
+        return;
+      }
+      if (e.code === "KeyO" && e.shiftKey && e.altKey) {
+        e.preventDefault();
+        triggerCallHierarchy("outgoing");
         return;
       }
       // Real, manual rename-symbol trigger (F2, the standard cross-editor
@@ -3470,34 +3506,42 @@ export default function Editor({
           className="editor-references-panel mono"
           style={{ left: callHierarchyState.x, top: callHierarchyState.y }}
         >
-          <div className="editor-references-header">
-            {callHierarchyState.items === null
-              ? "Finding callers…"
-              : `${callHierarchyState.items.length} caller${callHierarchyState.items.length === 1 ? "" : "s"}`}
-          </div>
-          {callHierarchyState.items === null ? (
-            <div className="editor-references-item editor-references-item-empty">Loading…</div>
-          ) : callHierarchyState.items.length === 0 ? (
-            <div className="editor-references-item editor-references-item-empty">
-              No callers found
-            </div>
-          ) : (
-            callHierarchyState.items.map((item, i) => (
-              <div
-                key={`${item.name}:${item.path}:${item.line}:${item.character}:${i}`}
-                className="editor-references-item"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  setCallHierarchyState(null);
-                  goToTarget(item);
-                }}
-              >
-                <span className="editor-symbol-kind">caller</span>
-                {item.name}
-                {item.path === file.path ? "" : ` — ${item.path}`}
-              </div>
-            ))
-          )}
+          {(() => {
+            const noun = callHierarchyState.direction === "outgoing" ? "callee" : "caller";
+            const items = callHierarchyState.items;
+            return (
+              <>
+                <div className="editor-references-header">
+                  {items === null
+                    ? `Finding ${noun}s…`
+                    : `${items.length} ${noun}${items.length === 1 ? "" : "s"}`}
+                </div>
+                {items === null ? (
+                  <div className="editor-references-item editor-references-item-empty">Loading…</div>
+                ) : items.length === 0 ? (
+                  <div className="editor-references-item editor-references-item-empty">
+                    No {noun}s found
+                  </div>
+                ) : (
+                  items.map((item, i) => (
+                    <div
+                      key={`${item.name}:${item.path}:${item.line}:${item.character}:${i}`}
+                      className="editor-references-item"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setCallHierarchyState(null);
+                        goToTarget(item);
+                      }}
+                    >
+                      <span className="editor-symbol-kind">{noun}</span>
+                      {item.name}
+                      {item.path === file.path ? "" : ` — ${item.path}`}
+                    </div>
+                  ))
+                )}
+              </>
+            );
+          })()}
         </div>
       )}
       {completionState && (

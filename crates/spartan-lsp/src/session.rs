@@ -123,6 +123,10 @@ enum QueryKind {
         line: i64,
         character: i64,
     },
+    OutgoingCalls {
+        line: i64,
+        character: i64,
+    },
 }
 
 struct PendingQuery {
@@ -512,6 +516,25 @@ impl LspSession {
             .flatten()
     }
 
+    /// Real, synchronous call hierarchy (outgoing calls) -- the direct
+    /// sibling of `request_incoming_calls`, sharing the identical mailbox and
+    /// timeout reasoning.
+    pub fn request_outgoing_calls(&self, line: i64, character: i64) -> Option<serde_json::Value> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        {
+            let mut guard = self.mailbox.state.lock().unwrap();
+            guard.pending_queries.push_back(PendingQuery {
+                kind: QueryKind::OutgoingCalls { line, character },
+                reply: reply_tx,
+            });
+        }
+        self.mailbox.cvar.notify_one();
+        reply_rx
+            .recv_timeout(INDEXING_TIMEOUT + DEFAULT_TIMEOUT)
+            .ok()
+            .flatten()
+    }
+
     /// Signals the background thread to shut down and joins it. Blocks for
     /// up to ~7s worst case, matching `LspClient::shutdown`'s own bound.
     pub fn shutdown(self) {
@@ -623,6 +646,9 @@ fn dispatch_query(client: &mut LspClient, file_uri: &str, query: PendingQuery) {
         }
         QueryKind::IncomingCalls { line, character } => {
             client.incoming_calls(file_uri, line, character)
+        }
+        QueryKind::OutgoingCalls { line, character } => {
+            client.outgoing_calls(file_uri, line, character)
         }
     };
     let _ = query.reply.send(result);

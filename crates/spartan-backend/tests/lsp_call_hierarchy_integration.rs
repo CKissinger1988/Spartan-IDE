@@ -136,3 +136,63 @@ fn lsp_call_hierarchy_reports_the_real_incoming_caller() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn lsp_call_hierarchy_outgoing_reports_the_real_callee() {
+    if !pyright_available() {
+        eprintln!("SKIP: pyright-langserver not found on $PATH");
+        return;
+    }
+
+    let (dir, file) = make_fixture(CALL_HIERARCHY_PY);
+    let state: Arc<Mutex<BackendState>> = Arc::new(Mutex::new(BackendState::new()));
+    let (tx, rx) = mpsc::channel();
+
+    let open_resp = handle_request(
+        &state,
+        Request {
+            id: 1,
+            method: "open_file".to_string(),
+            params: serde_json::json!({ "path": file.to_string_lossy() }),
+        },
+        tx.clone(),
+    );
+    assert!(open_resp.error.is_none());
+    let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+    // Outgoing calls from the real "caller" definition (line 4, character 4)
+    // -- it calls `greet`, which must be the one real outgoing callee.
+    let ch_resp = handle_request(
+        &state,
+        Request {
+            id: 2,
+            method: "lsp_call_hierarchy".to_string(),
+            params: serde_json::json!({
+                "doc_id": doc_id, "line": 4, "character": 4, "direction": "outgoing"
+            }),
+        },
+        tx.clone(),
+    );
+    assert!(
+        ch_resp.error.is_none(),
+        "lsp_call_hierarchy (outgoing) errored: {:?}",
+        ch_resp.error
+    );
+
+    let ch_event = recv_event_matching(&rx, "lsp_call_hierarchy_result", Duration::from_secs(100));
+    assert_eq!(ch_event["data"]["direction"], "outgoing");
+    let result = &ch_event["data"]["result"];
+    let calls = result
+        .as_array()
+        .unwrap_or_else(|| panic!("expected a real CallHierarchyOutgoingCall[] array: {ch_event}"));
+    // The real callee is `greet` (each outgoing call carries the callee in
+    // `to`, not `from`).
+    assert!(
+        calls
+            .iter()
+            .any(|c| c["to"]["name"].as_str() == Some("greet")),
+        "the real outgoing callee of caller must include `greet`: {ch_event}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}

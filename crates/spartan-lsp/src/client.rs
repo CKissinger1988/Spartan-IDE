@@ -537,6 +537,29 @@ impl LspClient {
     /// cursor that resolves to no callable symbol returns a synthesized
     /// `{"result": []}`, never an error.
     pub fn incoming_calls(&mut self, file_uri: &str, line: i64, character: i64) -> Option<Value> {
+        self.call_hierarchy("callHierarchy/incomingCalls", file_uri, line, character)
+    }
+
+    /// Real call hierarchy (outgoing calls) -- the direct sibling of
+    /// `incoming_calls`, "what does the symbol under the cursor call". Same
+    /// two-request protocol (`prepareCallHierarchy` then
+    /// `callHierarchy/outgoingCalls`); the result is a real
+    /// `CallHierarchyOutgoingCall[]` (each `{to: CallHierarchyItem,
+    /// fromRanges: Range[]}`, the callee in `to` rather than the caller in
+    /// `from`).
+    pub fn outgoing_calls(&mut self, file_uri: &str, line: i64, character: i64) -> Option<Value> {
+        self.call_hierarchy("callHierarchy/outgoingCalls", file_uri, line, character)
+    }
+
+    /// Shared prepare-then-resolve for both call-hierarchy directions. See
+    /// `incoming_calls`' own doc comment for the full protocol reasoning.
+    fn call_hierarchy(
+        &mut self,
+        resolve_method: &str,
+        file_uri: &str,
+        line: i64,
+        character: i64,
+    ) -> Option<Value> {
         let prepared = self.request(
             "textDocument/prepareCallHierarchy",
             Some(json!({
@@ -553,7 +576,7 @@ impl LspClient {
             .cloned();
         match item {
             Some(item) => self.request(
-                "callHierarchy/incomingCalls",
+                resolve_method,
                 Some(json!({ "item": item })),
                 DEFAULT_TIMEOUT,
             ),

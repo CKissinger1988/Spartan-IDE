@@ -690,6 +690,7 @@ fn lsp_call_hierarchy(
     doc_id: u64,
     line: i64,
     character: i64,
+    outgoing: bool,
 ) -> Result<serde_json::Value, String> {
     let session = {
         let guard = state.lock().map_err(|_| "backend state poisoned")?;
@@ -702,7 +703,11 @@ fn lsp_call_hierarchy(
             .ok_or_else(|| "no live LSP session for this file".to_string())?
     };
     thread::spawn(move || {
-        let raw = session.request_incoming_calls(line, character);
+        let raw = if outgoing {
+            session.request_outgoing_calls(line, character)
+        } else {
+            session.request_incoming_calls(line, character)
+        };
         let result = raw.and_then(|envelope| envelope.get("result").cloned());
         let event = Event {
             event: "lsp_call_hierarchy_result".to_string(),
@@ -710,6 +715,7 @@ fn lsp_call_hierarchy(
                 "doc_id": doc_id,
                 "line": line,
                 "character": character,
+                "direction": if outgoing { "outgoing" } else { "incoming" },
                 "result": result,
             }),
         };
@@ -3849,7 +3855,13 @@ pub fn handle_request(
             let doc_id = get_u64_param(&req.params, "doc_id")?;
             let line = get_u64_param(&req.params, "line")? as i64;
             let character = get_u64_param(&req.params, "character")? as i64;
-            lsp_call_hierarchy(state, out_tx.clone(), doc_id, line, character)
+            let outgoing = req
+                .params
+                .get("direction")
+                .and_then(|v| v.as_str())
+                .map(|d| d == "outgoing")
+                .unwrap_or(false);
+            lsp_call_hierarchy(state, out_tx.clone(), doc_id, line, character, outgoing)
         })(),
         "format_document" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;

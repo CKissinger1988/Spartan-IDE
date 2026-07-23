@@ -6132,6 +6132,29 @@ first — it's the parity reference until each row there is actually reimplement
   and the same `lsp_call_hierarchy` Rust path both shells send through); no call hierarchy for any
   language beyond Python in this specific live verification (the code path is language-agnostic,
   matching every other query method's own same caveat).
+- **Real, working code — LSP call hierarchy outgoing calls, closing the incoming-calls pass's own
+  named follow-up (task #255)**: user-requested ("Continue"). Adds `callHierarchy/outgoingCalls`
+  ("what does this function call") as the direct pair to the just-shipped incoming calls.
+  `LspClient::incoming_calls`/`outgoing_calls` now share one private `call_hierarchy(resolve_method,
+  ...)` helper (prepare-then-resolve, the same two-request protocol); a new `QueryKind::OutgoingCalls`
+  + `request_outgoing_calls` mirror the incoming path exactly. `spartan-backend::lsp_call_hierarchy`
+  gained an `outgoing: bool` (parsed from a real `direction: "outgoing"` param, default incoming),
+  choosing the session method and tagging the `lsp_call_hierarchy_result` event with a real
+  `direction` field so the frontend distinguishes them. **Both shells**: Shift+Alt+O triggers
+  outgoing alongside Shift+Alt+H for incoming; `extractCallers` now reads the callee from `to`
+  (outgoing) or the caller from `from` (incoming); the panel header/labels switch between
+  "caller(s)"/"callee(s)". Zero new IPC allowlist entries needed (the `lsp_call_hierarchy` method was
+  already registered). 1 new live pyright integration test
+  (`lsp_call_hierarchy_outgoing_reports_the_real_callee` -- outgoing from `caller` finds callee
+  `greet`); both call-hierarchy integration tests confirmed passing live (182.56s for the pair). Full
+  `cargo fmt --all`/`cargo clippy -p spartan-lsp -p spartan-backend --release --all-targets` clean;
+  both shells' `tsc --noEmit`/`build` clean. **Real, live, end-to-end Playwright verification against
+  a real running `spartan-devserver`**: cursor on `caller`'s definition, Shift+Alt+O, the panel
+  showed "1 callee" listing the real `greet` function, screenshotted. **What this does not confirm**:
+  no type hierarchy (a real, named P2 follow-up); only the first resolved `CallHierarchyItem` is
+  queried (same v1 scope as incoming); no live Electron-window verification of `desktop/` (same
+  standing gap); no outgoing calls for any language beyond Python in this specific live verification.
+  With this pass, both directions of LSP call hierarchy are real and wired in both shells.
 
 ## Build & test
 

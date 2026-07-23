@@ -170,8 +170,8 @@ function extractReferences(result: unknown): ReferenceItem[] {
     .filter((i): i is ReferenceItem => i !== null);
 }
 
-/** A real, normalized call-hierarchy incoming caller, ported verbatim from
- * `desktop/`'s own `CallerItem`. */
+/** A real, normalized call-hierarchy entry, ported verbatim from `desktop/`'s
+ * own `CallerItem`. */
 interface CallerItem {
   name: string;
   path: string;
@@ -179,29 +179,32 @@ interface CallerItem {
   character: number;
 }
 
-function extractCallers(result: unknown): CallerItem[] {
+type CallDirection = "incoming" | "outgoing";
+
+function extractCallers(result: unknown, direction: CallDirection): CallerItem[] {
   if (!Array.isArray(result)) return [];
+  const key = direction === "outgoing" ? "to" : "from";
   return result
     .map((entry) => {
-      const from = (entry as { from?: unknown }).from as
+      const item = (entry as Record<string, unknown>)[key] as
         | {
             name?: unknown;
             uri?: unknown;
             selectionRange?: { start?: { line?: unknown; character?: unknown } };
           }
         | undefined;
-      const line = from?.selectionRange?.start?.line;
-      const character = from?.selectionRange?.start?.character;
+      const line = item?.selectionRange?.start?.line;
+      const character = item?.selectionRange?.start?.character;
       if (
-        !from ||
-        typeof from.name !== "string" ||
-        typeof from.uri !== "string" ||
+        !item ||
+        typeof item.name !== "string" ||
+        typeof item.uri !== "string" ||
         typeof line !== "number" ||
         typeof character !== "number"
       ) {
         return null;
       }
-      return { name: from.name, path: fileUriToPath(from.uri), line, character };
+      return { name: item.name, path: fileUriToPath(item.uri), line, character };
     })
     .filter((i): i is CallerItem => i !== null);
 }
@@ -1406,40 +1409,64 @@ export default function BackendEditor({
       .catch((err: Error) => console.error("lsp_references failed:", err));
   }, [client, charWidth, lineHeightPx, file.docId]);
 
-  // Real call hierarchy (Shift+Alt+H), ported verbatim from `desktop/`'s
-  // own identical wiring.
+  // Real call hierarchy (Shift+Alt+H incoming / Shift+Alt+O outgoing), ported
+  // verbatim from `desktop/`'s own identical wiring.
   const [callHierarchyState, setCallHierarchyState] = useState<{
     x: number;
     y: number;
+    direction: CallDirection;
     items: CallerItem[] | null;
   } | null>(null);
-  const pendingCallHierarchyRef = useRef<{ line: number; character: number } | null>(null);
+  const pendingCallHierarchyRef = useRef<{
+    line: number;
+    character: number;
+    direction: CallDirection;
+  } | null>(null);
 
   useEffect(() => {
     const unsubscribe = client.onEvent((e) => {
       if (e.event !== "lsp_call_hierarchy_result") return;
-      const d = e.data as { doc_id: number; line: number; character: number; result: unknown };
+      const d = e.data as {
+        doc_id: number;
+        line: number;
+        character: number;
+        direction?: string;
+        result: unknown;
+      };
       if (d.doc_id !== file.docId) return;
       const pending = pendingCallHierarchyRef.current;
-      if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+      const dir: CallDirection = d.direction === "outgoing" ? "outgoing" : "incoming";
+      if (
+        !pending ||
+        pending.line !== d.line ||
+        pending.character !== d.character ||
+        pending.direction !== dir
+      ) {
+        return;
+      }
       pendingCallHierarchyRef.current = null;
-      setCallHierarchyState((prev) => (prev ? { ...prev, items: extractCallers(d.result) } : prev));
+      setCallHierarchyState((prev) =>
+        prev ? { ...prev, items: extractCallers(d.result, dir) } : prev
+      );
     });
     return unsubscribe;
   }, [client, file.docId]);
 
-  const triggerCallHierarchy = useCallback(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    const { line, character } = offsetToLineChar(el.value, el.selectionStart);
-    const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
-    const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
-    pendingCallHierarchyRef.current = { line, character };
-    setCallHierarchyState({ x, y, items: null });
-    client
-      .call("lsp_call_hierarchy", { doc_id: file.docId, line, character })
-      .catch((err: Error) => console.error("lsp_call_hierarchy failed:", err));
-  }, [client, charWidth, lineHeightPx, file.docId]);
+  const triggerCallHierarchy = useCallback(
+    (direction: CallDirection) => {
+      const el = textareaRef.current;
+      if (!el) return;
+      const { line, character } = offsetToLineChar(el.value, el.selectionStart);
+      const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+      const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
+      pendingCallHierarchyRef.current = { line, character, direction };
+      setCallHierarchyState({ x, y, direction, items: null });
+      client
+        .call("lsp_call_hierarchy", { doc_id: file.docId, line, character, direction })
+        .catch((err: Error) => console.error("lsp_call_hierarchy failed:", err));
+    },
+    [client, charWidth, lineHeightPx, file.docId]
+  );
 
   /** Real F2 rename-symbol, ported verbatim from `desktop/`'s own
    * identical wiring -- see that file's own doc comments for the full
@@ -2089,10 +2116,16 @@ export default function BackendEditor({
         triggerReferences();
         return;
       }
-      // Real, manual call-hierarchy trigger (Shift+Alt+H), ported verbatim.
+      // Real, manual call-hierarchy triggers (Shift+Alt+H incoming /
+      // Shift+Alt+O outgoing), ported verbatim.
       if (e.code === "KeyH" && e.shiftKey && e.altKey) {
         e.preventDefault();
-        triggerCallHierarchy();
+        triggerCallHierarchy("incoming");
+        return;
+      }
+      if (e.code === "KeyO" && e.shiftKey && e.altKey) {
+        e.preventDefault();
+        triggerCallHierarchy("outgoing");
         return;
       }
       // Real, manual rename-symbol trigger (F2), ported verbatim from
@@ -2955,34 +2988,42 @@ export default function BackendEditor({
           className="editor-references-panel mono"
           style={{ left: callHierarchyState.x, top: callHierarchyState.y }}
         >
-          <div className="editor-references-header">
-            {callHierarchyState.items === null
-              ? "Finding callers…"
-              : `${callHierarchyState.items.length} caller${callHierarchyState.items.length === 1 ? "" : "s"}`}
-          </div>
-          {callHierarchyState.items === null ? (
-            <div className="editor-references-item editor-references-item-empty">Loading…</div>
-          ) : callHierarchyState.items.length === 0 ? (
-            <div className="editor-references-item editor-references-item-empty">
-              No callers found
-            </div>
-          ) : (
-            callHierarchyState.items.map((item, i) => (
-              <div
-                key={`${item.name}:${item.path}:${item.line}:${item.character}:${i}`}
-                className="editor-references-item"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  setCallHierarchyState(null);
-                  goToTarget(item);
-                }}
-              >
-                <span className="editor-symbol-kind">caller</span>
-                {item.name}
-                {item.path === file.path ? "" : ` — ${item.path}`}
-              </div>
-            ))
-          )}
+          {(() => {
+            const noun = callHierarchyState.direction === "outgoing" ? "callee" : "caller";
+            const items = callHierarchyState.items;
+            return (
+              <>
+                <div className="editor-references-header">
+                  {items === null
+                    ? `Finding ${noun}s…`
+                    : `${items.length} ${noun}${items.length === 1 ? "" : "s"}`}
+                </div>
+                {items === null ? (
+                  <div className="editor-references-item editor-references-item-empty">Loading…</div>
+                ) : items.length === 0 ? (
+                  <div className="editor-references-item editor-references-item-empty">
+                    No {noun}s found
+                  </div>
+                ) : (
+                  items.map((item, i) => (
+                    <div
+                      key={`${item.name}:${item.path}:${item.line}:${item.character}:${i}`}
+                      className="editor-references-item"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setCallHierarchyState(null);
+                        goToTarget(item);
+                      }}
+                    >
+                      <span className="editor-symbol-kind">{noun}</span>
+                      {item.name}
+                      {item.path === file.path ? "" : ` — ${item.path}`}
+                    </div>
+                  ))
+                )}
+              </>
+            );
+          })()}
         </div>
       )}
       {completionState && (
