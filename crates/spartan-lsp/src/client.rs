@@ -397,6 +397,33 @@ impl LspClient {
         )
     }
 
+    /// Real `textDocument/typeDefinition` -- "Go to Type Definition," the
+    /// real sibling of `definition` above: jumps to the definition of a
+    /// value's *type* rather than the value itself (e.g. from a variable to
+    /// its class, not to where that variable was assigned). Confirmed live
+    /// before wiring anything else: a real, hand-rolled capability probe
+    /// against `pyright-langserver` found `workspaceSymbolProvider`,
+    /// `semanticTokensProvider`, and `inlayHintProvider` either declared-
+    /// but-empty or absent in this environment (matching this crate's own
+    /// established "don't ship unverifiable features" discipline, the same
+    /// call `codeAction`/`documentHighlight`'s own investigations made) --
+    /// but `typeDefinitionProvider` genuinely works: a real query against
+    /// `x: int = 1` returned a real location inside pyright's own bundled
+    /// `typeshed-fallback/stdlib/builtins.pyi`, confirming this capability
+    /// is real and live-verifiable here, unlike those others. Same
+    /// `Location | Location[] | LocationLink[] | null` response shape as
+    /// `definition`, passed through unparsed for the same reason.
+    pub fn type_definition(&mut self, file_uri: &str, line: i64, character: i64) -> Option<Value> {
+        self.request(
+            "textDocument/typeDefinition",
+            Some(json!({
+                "textDocument": {"uri": file_uri},
+                "position": {"line": line, "character": character},
+            })),
+            DEFAULT_TIMEOUT,
+        )
+    }
+
     /// Real `textDocument/signatureHelp` -- the fourth real query method
     /// following `hover`/`completion`/`definition`'s exact shape. A real
     /// LSP `SignatureHelp` response (`{signatures, activeSignature,

@@ -100,6 +100,10 @@ enum QueryKind {
         line: i64,
         character: i64,
     },
+    TypeDefinition {
+        line: i64,
+        character: i64,
+    },
     SignatureHelp {
         line: i64,
         character: i64,
@@ -340,6 +344,28 @@ impl LspSession {
             let mut guard = self.mailbox.state.lock().unwrap();
             guard.pending_queries.push_back(PendingQuery {
                 kind: QueryKind::Definition { line, character },
+                reply: reply_tx,
+            });
+        }
+        self.mailbox.cvar.notify_one();
+        reply_rx
+            .recv_timeout(INDEXING_TIMEOUT + DEFAULT_TIMEOUT)
+            .ok()
+            .flatten()
+    }
+
+    /// Real, synchronous `textDocument/typeDefinition` -- "Go to Type
+    /// Definition," the direct sibling of `request_definition` above,
+    /// sharing the identical query-priority mailbox and the same real
+    /// timeout reasoning. Same calling discipline: callers must run this
+    /// from their own dedicated thread, never the single request-
+    /// processing thread every other IPC method shares.
+    pub fn request_type_definition(&self, line: i64, character: i64) -> Option<serde_json::Value> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        {
+            let mut guard = self.mailbox.state.lock().unwrap();
+            guard.pending_queries.push_back(PendingQuery {
+                kind: QueryKind::TypeDefinition { line, character },
                 reply: reply_tx,
             });
         }
@@ -627,6 +653,9 @@ fn dispatch_query(client: &mut LspClient, file_uri: &str, query: PendingQuery) {
         QueryKind::Hover { line, character } => client.hover(file_uri, line, character),
         QueryKind::Completion { line, character } => client.completion(file_uri, line, character),
         QueryKind::Definition { line, character } => client.definition(file_uri, line, character),
+        QueryKind::TypeDefinition { line, character } => {
+            client.type_definition(file_uri, line, character)
+        }
         QueryKind::SignatureHelp { line, character } => {
             client.signature_help(file_uri, line, character)
         }

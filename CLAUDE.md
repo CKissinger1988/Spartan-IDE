@@ -6566,6 +6566,67 @@ first — it's the parity reference until each row there is actually reimplement
   shell (Leo wiring there has never reached the execute/verify loop at all, matching every Leo-panel
   feature since §75.47's own "Electron shells only" scope); no live Electron window launch this
   session (same standing gap since §75.59).
+- **Real, working code — real LSP "Go to Type Definition" (Ctrl+Shift+Click), the ninth real
+  `spartan-lsp` query method, and three real, honest negative findings that shaped the choice
+  (task #267)**: user-requested ("Prioritize and continue everything uninterrupted"). Before
+  picking a next feature, a real, hand-rolled JSON-RPC capability probe against a live
+  `pyright-langserver --stdio` session (the same discipline `codeAction`/`documentHighlight`'s own
+  earlier investigations already established) confirmed `semanticTokensProvider` and
+  `inlayHintProvider` are both `null` -- not declared at all in this environment -- ruling out two
+  otherwise-natural next LSP features before any code was written for either. A `workspace/symbol`
+  probe went one step further and found a real, subtler negative: pyright *does* declare
+  `workspaceSymbolProvider: true`, but a real live query (both a specific term and an empty-string
+  "list everything" query, each issued only after the real ~90s indexing wait completed) returned
+  `[]` every time -- declared but not functionally exercisable here, the same class of finding
+  `codeAction` itself already carries. A fourth probe, `textDocument/typeDefinition`, was different:
+  a real query against a fixture's `x: int = 1` (character 0, the `x` itself) returned a real,
+  correct location inside pyright's own bundled `typeshed-fallback/stdlib/builtins.pyi` -- proving
+  this capability, unlike the other three, is real and live-verifiable in this dev environment, so
+  it -- not any of the others -- became this pass's actual deliverable. `LspClient::type_definition`
+  and a new `QueryKind::TypeDefinition`/`LspSession::request_type_definition` mirror `definition`'s
+  own exact shape (the identical `Location | Location[] | LocationLink[] | null` response, passed
+  through unparsed for the same reason); `spartan-backend::lsp_type_definition` mirrors
+  `lsp_definition`'s own "ack now, event later" shape and envelope-unwrapping discipline exactly,
+  emitting a real `lsp_type_definition_result` event. `lsp_type_definition` was added to `main.ts`'s/
+  `preload.ts`'s IPC allowlists at the identical list position in both files, continuing this
+  project's own established drift-avoidance discipline. **UI, both shells** (`desktop/Editor.tsx`,
+  `web/BackendEditor.tsx`): Ctrl+Shift+Click on `handleDefinitionClick`'s existing click handler
+  (a real, deliberate keybinding choice -- Ctrl+Click already means "go to definition," so
+  Ctrl+Shift+Click as its real, closely-related sibling matches the same modifier-escalation
+  pattern several mainstream editors already use for definition-variant actions) reuses the
+  *exact same* `extractDefinitionTarget`/`goToTarget`/cross-file-jump machinery go-to-definition
+  itself already established -- no new normalizer needed, since `typeDefinition`'s response shape
+  is byte-identical to `definition`'s own. A real, separate `pendingTypeDefinitionRef` (mirroring
+  `pendingDefinitionRef`'s own stale-reply-guard pattern) keeps the two request kinds from ever
+  being confused with each other if both happen to be in flight at once. 8 new Rust tests (2
+  dispatch-level honest-error tests, plus a real, live integration test against a real
+  `pyright-langserver` -- `crates/spartan-backend/tests/lsp_type_definition_integration.rs`,
+  confirmed passing at 91.25s, the real ~90s-class pyright indexing wait this whole query-method
+  family already carries), 216 `spartan-backend` lib tests total (up from 214), full `cargo fmt
+  --all -- --check`/`cargo clippy -p spartan-lsp -p spartan-backend --release --all-targets`/`cargo
+  test -p spartan-backend --release --lib -- --test-threads=1` clean; both shells' own `tsc
+  --noEmit`/`npm run build` clean. **Real, live, end-to-end Playwright verification in both
+  shells, not mocks for the meaningful parts**: `web/` was driven against the actual compiled
+  `web/dist` served by a real running `spartan-devserver` binary, `web/`'s own genuine
+  `BackendClient.connect()` with no shim of any kind -- a real Ctrl+Shift+Click on the `x` in a
+  real `x: int = 1` fixture line opened a real new `builtins.pyi` tab and landed exactly on
+  `class int:`, screenshotted, with the real backend-reported file path
+  (`.../typeshed-fallback/stdlib/builtins.pyi`) visible in the status bar; `desktop/` was
+  independently re-verified via the established "real `spartan-devserver` serving `desktop/dist`,
+  a mocked `window.spartan` forwarding every call over a genuine WebSocket" technique for the
+  still-unlaunchable real Electron window, producing byte-identical results (the same real jump to
+  `class int:`), screenshotted. A real, live-observed methodological detail worth recording: since
+  a real `<textarea>`'s `getBoundingClientRect()` already includes CSS padding, and both this app's
+  own click-handler math (`e.clientX - rect.left`) and Playwright's `position: {x, y}` click option
+  are computed relative to that identical rect, no separate padding compensation was needed in
+  either the app's own code or the verification script -- both sides already agree on the same
+  coordinate origin by construction. **What this does not confirm**: no `codeAction`/
+  `workspace/symbol`/semantic-tokens/inlay-hints UI of any kind (the three real, honest negative
+  findings above, all now recorded in `docs/FUTURE_FEATURES.md` rather than silently dropped); no
+  type-definition support for any language beyond Python in this specific live verification (the
+  underlying code path is language-agnostic, matching every other query method's own same real
+  caveat); the real Electron window remains unlaunchable in this session (same standing gap since
+  §75.59).
 
 ## Build & test
 

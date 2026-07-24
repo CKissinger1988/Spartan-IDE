@@ -1668,22 +1668,42 @@ export default function Editor({
   // user has since clicked elsewhere from is ignored rather than jumping
   // to the wrong place.
   const pendingDefinitionRef = useRef<{ line: number; character: number } | null>(null);
+  // Real go-to-type-definition (Ctrl+Shift+Click) -- "jump to a value's
+  // type," not the value itself (e.g. from a variable to its class rather
+  // than its assignment). A real, separate pending ref from
+  // `pendingDefinitionRef` above so the two requests can never be confused
+  // with each other if both happen to be in flight at once. Reuses the
+  // identical `Location | Location[] | LocationLink[] | null` response
+  // shape `extractDefinitionTarget` already normalizes -- no separate
+  // normalizer needed, `textDocument/typeDefinition` returns the same real
+  // shape `textDocument/definition` does.
+  const pendingTypeDefinitionRef = useRef<{ line: number; character: number } | null>(null);
 
   useEffect(() => {
     const unsubscribe = window.spartan.onEvent((event, data) => {
-      if (event !== "lsp_definition_result") return;
-      const d = data as { doc_id: number; line: number; character: number; result: unknown };
-      if (d.doc_id !== file.docId) return;
-      const pending = pendingDefinitionRef.current;
-      if (!pending || pending.line !== d.line || pending.character !== d.character) return;
-      pendingDefinitionRef.current = null;
-      const target = extractDefinitionTarget(d.result);
-      // A real, honest "no definition resolvable here" -- silent, matching
-      // how every real editor's own Ctrl+Click behaves at an unbound
-      // position rather than surfacing an error for a completely normal
-      // case.
-      if (!target) return;
-      goToTarget(target);
+      if (event === "lsp_definition_result") {
+        const d = data as { doc_id: number; line: number; character: number; result: unknown };
+        if (d.doc_id !== file.docId) return;
+        const pending = pendingDefinitionRef.current;
+        if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+        pendingDefinitionRef.current = null;
+        const target = extractDefinitionTarget(d.result);
+        // A real, honest "no definition resolvable here" -- silent,
+        // matching how every real editor's own Ctrl+Click behaves at an
+        // unbound position rather than surfacing an error for a
+        // completely normal case.
+        if (!target) return;
+        goToTarget(target);
+      } else if (event === "lsp_type_definition_result") {
+        const d = data as { doc_id: number; line: number; character: number; result: unknown };
+        if (d.doc_id !== file.docId) return;
+        const pending = pendingTypeDefinitionRef.current;
+        if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+        pendingTypeDefinitionRef.current = null;
+        const target = extractDefinitionTarget(d.result);
+        if (!target) return;
+        goToTarget(target);
+      }
     });
     return unsubscribe;
   }, [file.docId, goToTarget]);
@@ -1719,6 +1739,15 @@ export default function Editor({
       const y = e.clientY - rect.top + el.scrollTop;
       const line = Math.max(0, Math.floor(y / lineHeightPx));
       const character = Math.max(0, Math.round(x / charWidth));
+      if (e.shiftKey) {
+        // Real Ctrl+Shift+Click -- "Go to Type Definition," the real
+        // sibling of plain Ctrl+Click below.
+        pendingTypeDefinitionRef.current = { line, character };
+        window.spartan
+          .call("lsp_type_definition", { doc_id: file.docId, line, character })
+          .catch((err: Error) => console.error("lsp_type_definition failed:", err));
+        return;
+      }
       pendingDefinitionRef.current = { line, character };
       window.spartan
         .call("lsp_definition", { doc_id: file.docId, line, character })

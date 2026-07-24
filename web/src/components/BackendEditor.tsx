@@ -1407,18 +1407,33 @@ export default function BackendEditor({
   // `desktop/`'s own identical wiring, reached over `client.onEvent`
   // instead of `window.spartan.onEvent`.
   const pendingDefinitionRef = useRef<{ line: number; character: number } | null>(null);
+  // Real go-to-type-definition (Ctrl+Shift+Click) -- ported verbatim from
+  // `desktop/`'s own identical wiring; see that file's own doc comment for
+  // why this reuses `extractDefinitionTarget` directly (the same real
+  // `Location | Location[] | LocationLink[] | null` response shape).
+  const pendingTypeDefinitionRef = useRef<{ line: number; character: number } | null>(null);
 
   useEffect(() => {
     const unsubscribe = client.onEvent((e) => {
-      if (e.event !== "lsp_definition_result") return;
-      const d = e.data as { doc_id: number; line: number; character: number; result: unknown };
-      if (d.doc_id !== file.docId) return;
-      const pending = pendingDefinitionRef.current;
-      if (!pending || pending.line !== d.line || pending.character !== d.character) return;
-      pendingDefinitionRef.current = null;
-      const target = extractDefinitionTarget(d.result);
-      if (!target) return;
-      goToTarget(target);
+      if (e.event === "lsp_definition_result") {
+        const d = e.data as { doc_id: number; line: number; character: number; result: unknown };
+        if (d.doc_id !== file.docId) return;
+        const pending = pendingDefinitionRef.current;
+        if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+        pendingDefinitionRef.current = null;
+        const target = extractDefinitionTarget(d.result);
+        if (!target) return;
+        goToTarget(target);
+      } else if (e.event === "lsp_type_definition_result") {
+        const d = e.data as { doc_id: number; line: number; character: number; result: unknown };
+        if (d.doc_id !== file.docId) return;
+        const pending = pendingTypeDefinitionRef.current;
+        if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+        pendingTypeDefinitionRef.current = null;
+        const target = extractDefinitionTarget(d.result);
+        if (!target) return;
+        goToTarget(target);
+      }
     });
     return unsubscribe;
   }, [client, file.docId, goToTarget]);
@@ -1973,6 +1988,13 @@ export default function BackendEditor({
       const y = e.clientY - rect.top + el.scrollTop;
       const line = Math.max(0, Math.floor(y / lineHeightPx));
       const character = Math.max(0, Math.round(x / charWidth));
+      if (e.shiftKey) {
+        pendingTypeDefinitionRef.current = { line, character };
+        client
+          .call("lsp_type_definition", { doc_id: file.docId, line, character })
+          .catch((err: Error) => console.error("lsp_type_definition failed:", err));
+        return;
+      }
       pendingDefinitionRef.current = { line, character };
       client
         .call("lsp_definition", { doc_id: file.docId, line, character })
