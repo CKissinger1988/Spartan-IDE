@@ -244,6 +244,15 @@ pub struct BackendState {
     /// doc comments for why). Protected by the same top-level state lock
     /// every other field here already is, not a second inner mutex.
     litellm: Option<litellm_proxy::ProxyProcess>,
+    /// Real task #273 generation counter, the exact same discipline
+    /// `leo_generation` already established -- incremented on every real
+    /// `litellm_proxy_start` call. A restart-on-crash supervisor thread
+    /// (spawned only when a client opts in) captures the generation it
+    /// started with and checks it before ever touching `litellm` again;
+    /// a mismatch means an explicit stop or a fresh manual start happened
+    /// since, so the supervisor recognizes it's superseded and exits
+    /// quietly instead of respawning a proxy nobody asked for anymore.
+    litellm_generation: u64,
     /// Real, live `adb logcat` sessions (task #150), keyed the same way
     /// `pty_sessions` is -- an unbounded real stream the caller explicitly
     /// stops, not a bounded call that resolves on its own.
@@ -1280,8 +1289,9 @@ fn litellm_proxy_start(
     out_tx: Sender<String>,
     port: u16,
     config_path: Option<String>,
+    auto_restart: bool,
 ) -> Result<serde_json::Value, String> {
-    {
+    let my_generation = {
         let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
         if let Some(process) = guard.litellm.as_mut() {
             if process.is_running() {
@@ -1295,7 +1305,12 @@ fn litellm_proxy_start(
             // clear it so this fresh spawn can take its place.
             guard.litellm = None;
         }
-    }
+        // Real task #273 generation mint -- see `BackendState::
+        // litellm_generation`'s own doc comment for why every real new
+        // start (and only a real new start) gets a fresh one.
+        guard.litellm_generation = guard.litellm_generation.wrapping_add(1);
+        guard.litellm_generation
+    };
 
     if !litellm_proxy::is_litellm_available() {
         return Err(
@@ -1331,6 +1346,15 @@ fn litellm_proxy_start(
                     if let Ok(mut guard) = state.lock() {
                         guard.litellm = Some(process);
                     }
+                    if auto_restart {
+                        spawn_litellm_supervisor(
+                            Arc::clone(&state),
+                            my_generation,
+                            port,
+                            config_path.clone(),
+                            out_tx.clone(),
+                        );
+                    }
                     Event {
                         event: "litellm_ready".to_string(),
                         data: serde_json::json!({ "port": port, "pid": pid }),
@@ -1355,6 +1379,140 @@ fn litellm_proxy_start(
     });
 
     Ok(serde_json::json!({ "status": "starting" }))
+}
+
+const LITELLM_SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(300);
+const LITELLM_MAX_AUTO_RESTARTS: u32 = 3;
+
+/// Real, opt-in crash-detection + respawn loop (task #273), spawned only
+/// when `litellm_proxy_start`'s caller passes `auto_restart: true`.
+/// Generation-guarded exactly like Leo's own background threads
+/// (`leo_generation`'s own doc comment): every tick checks
+/// `guard.litellm_generation == my_generation` before touching anything,
+/// so an explicit `litellm_proxy_stop` or a fresh manual
+/// `litellm_proxy_start` (both of which change what `BackendState.litellm`
+/// refers to) makes this supervisor recognize it's superseded and exit
+/// quietly instead of respawning a proxy nobody asked for anymore. The
+/// real spawn+health-check mechanics themselves live in
+/// `litellm_proxy::attempt_restart` -- this function owns only the real
+/// polling cadence and the `BackendState`-specific generation check that
+/// crate has no access to.
+fn spawn_litellm_supervisor(
+    state: Arc<Mutex<BackendState>>,
+    my_generation: u64,
+    port: u16,
+    config_path: Option<String>,
+    out_tx: Sender<String>,
+) {
+    thread::spawn(move || {
+        let mut restarts = 0u32;
+        let mut args = vec!["--port".to_string(), port.to_string()];
+        if let Some(cfg) = &config_path {
+            args.push("--config".to_string());
+            args.push(cfg.clone());
+        }
+        loop {
+            thread::sleep(LITELLM_SUPERVISOR_POLL_INTERVAL);
+            let still_alive = {
+                let mut guard = match state.lock() {
+                    Ok(g) => g,
+                    Err(_) => return,
+                };
+                if guard.litellm_generation != my_generation {
+                    return; // superseded -- an explicit stop or a fresh start happened
+                }
+                match guard.litellm.as_mut() {
+                    Some(process) => process.is_running(),
+                    None => return, // explicit stop already cleared it
+                }
+            };
+            if still_alive {
+                continue;
+            }
+
+            // A real, unexpected exit -- attempt a real respawn.
+            let (line_tx, line_rx) = mpsc::channel::<String>();
+            let forward_out_tx = out_tx.clone();
+            thread::spawn(move || {
+                for line in line_rx {
+                    let event = Event {
+                        event: "litellm_progress".to_string(),
+                        data: serde_json::json!({ "line": line }),
+                    };
+                    if let Ok(l) = serde_json::to_string(&event) {
+                        let _ = forward_out_tx.send(l);
+                    }
+                }
+            });
+
+            match litellm_proxy::attempt_restart(
+                litellm_proxy::RestartAttempt {
+                    program: "litellm",
+                    args: &args,
+                    port,
+                    health_path: litellm_proxy::DEFAULT_HEALTH_PATH,
+                    health_timeout: LITELLM_HEALTH_TIMEOUT,
+                    restarts_so_far: restarts,
+                    max_restarts: LITELLM_MAX_AUTO_RESTARTS,
+                },
+                line_tx,
+            ) {
+                litellm_proxy::RestartOutcome::Restarted { process, pid } => {
+                    restarts += 1;
+                    let mut guard = match state.lock() {
+                        Ok(g) => g,
+                        Err(_) => return,
+                    };
+                    if guard.litellm_generation != my_generation {
+                        // Superseded while the respawn was in flight -- the
+                        // just-spawned process is now orphaned; stop it
+                        // rather than leaking it.
+                        drop(guard);
+                        let _ = process.stop();
+                        return;
+                    }
+                    guard.litellm = Some(process);
+                    drop(guard);
+                    let event = Event {
+                        event: "litellm_restarted".to_string(),
+                        data: serde_json::json!({ "port": port, "pid": pid, "restart_count": restarts }),
+                    };
+                    if let Ok(line) = serde_json::to_string(&event) {
+                        let _ = out_tx.send(line);
+                    }
+                }
+                litellm_proxy::RestartOutcome::Failed(e) => {
+                    restarts += 1;
+                    let event = Event {
+                        event: "litellm_progress".to_string(),
+                        data: serde_json::json!({ "line": format!("restart attempt failed: {e}") }),
+                    };
+                    if let Ok(line) = serde_json::to_string(&event) {
+                        let _ = out_tx.send(line);
+                    }
+                }
+                litellm_proxy::RestartOutcome::LimitReached => {
+                    if let Ok(mut guard) = state.lock() {
+                        if guard.litellm_generation == my_generation {
+                            guard.litellm = None;
+                        }
+                    }
+                    let event = Event {
+                        event: "litellm_failed".to_string(),
+                        data: serde_json::json!({
+                            "error": format!(
+                                "LiteLLM proxy crashed and the restart limit ({LITELLM_MAX_AUTO_RESTARTS}) was reached"
+                            )
+                        }),
+                    };
+                    if let Ok(line) = serde_json::to_string(&event) {
+                        let _ = out_tx.send(line);
+                    }
+                    return;
+                }
+            }
+        }
+    });
 }
 
 /// Stops the real currently-running proxy, if any. Stopping when nothing is
@@ -5066,7 +5224,12 @@ pub fn handle_request(
                 .get("config_path")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            litellm_proxy_start(state, out_tx.clone(), port, config_path)
+            let auto_restart = req
+                .params
+                .get("auto_restart")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            litellm_proxy_start(state, out_tx.clone(), port, config_path, auto_restart)
         })(),
         "litellm_proxy_stop" => litellm_proxy_stop(state),
         "litellm_proxy_status" => litellm_proxy_status(state),
@@ -10280,5 +10443,52 @@ mod tests {
         );
         assert!(result.contains("Always use the existing AuthContext"));
         assert!(result.ends_with("Task: add a login form"));
+    }
+
+    /// Real task #273 param threading: `auto_restart: true` reaches
+    /// `litellm_proxy_start` and, since no real `litellm` binary is
+    /// installed in this environment, still produces the same real,
+    /// honest "not on $PATH" error the pre-existing (no-`auto_restart`)
+    /// path already reported -- confirming the new param doesn't change
+    /// behavior on this early-exit branch, and (real, load-bearing) that
+    /// no supervisor thread was spawned for a start that never succeeded.
+    #[test]
+    fn litellm_proxy_start_with_auto_restart_still_reports_a_real_honest_not_installed_error() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "litellm_proxy_start",
+            serde_json::json!({ "port": 4999, "auto_restart": true }),
+        );
+        let err = resp
+            .error
+            .expect("litellm isn't installed in this environment");
+        assert!(err.to_lowercase().contains("litellm"));
+        assert!(err.to_lowercase().contains("$path") || err.to_lowercase().contains("path"));
+        // No process handle was ever created for a start that failed
+        // before spawning anything.
+        assert!(state.lock().unwrap().litellm.is_none());
+    }
+
+    /// Real task #273 generation minting: every real `litellm_proxy_start`
+    /// call increments `BackendState::litellm_generation`, the same
+    /// discipline `leo_generation` already established -- confirmed by
+    /// calling the (crate-private) function directly twice and inspecting
+    /// the real resulting counter value, since no dispatch response
+    /// exposes it directly.
+    #[test]
+    fn litellm_proxy_start_mints_a_real_fresh_generation_on_every_call() {
+        let state = new_state();
+        let (tx, _rx) = mpsc::channel();
+        assert_eq!(state.lock().unwrap().litellm_generation, 0);
+        let _ = litellm_proxy_start(&state, tx.clone(), 4998, None, false);
+        assert_eq!(state.lock().unwrap().litellm_generation, 1);
+        let _ = litellm_proxy_start(&state, tx, 4998, None, true);
+        assert_eq!(
+            state.lock().unwrap().litellm_generation,
+            2,
+            "a second real start call must mint a genuinely new generation"
+        );
     }
 }

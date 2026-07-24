@@ -7014,6 +7014,86 @@ first — it's the parity reference until each row there is actually reimplement
   the reference wgpu shell (that shell has no Git panel to extend, matching the established
   "Electron-shells-only" scope every recent Git pass has carried); the real Electron window
   remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — real LiteLLM proxy restart-on-crash, closing the last named row in the
+  Model management backlog table (task #273)**: continues the same "prioritize and continue with
+  future features" push. Before this pass, `litellm_proxy_start` spawned a real child process and
+  health-checked it once at startup, but a real crash any time afterward (an OOM kill, a segfault,
+  a manual `kill`) left `litellm_proxy_status` silently reporting a self-healed "not running" state
+  with no way to bring it back except a fully manual Start click -- named plainly as "detect-only;
+  no auto-restart" in this project's own backlog rather than glossed over. New
+  `litellm_proxy::RestartAttempt<'a>` (a real struct, not a long positional argument list -- see
+  the clippy finding below) + `RestartOutcome` enum (`Restarted { process, pid }` / `Failed(...)` /
+  `LimitReached`) + `attempt_restart(attempt, progress_tx) -> RestartOutcome`: one real
+  check-and-maybe-respawn step, deliberately not an owned retry loop itself, so the caller decides
+  cadence and bounds -- it reuses the exact same `spawn_child`/`wait_for_health` primitives
+  `litellm_proxy_start` itself already calls, no second spawn path invented. `BackendState` gained
+  `litellm_generation: u64` (mirroring the already-proven `leo_generation`/`android_download_
+  generation`-class guard pattern this codebase has used repeatedly since §75.69): every real
+  `litellm_proxy_start` call mints a fresh generation via `wrapping_add(1)` *before* the
+  not-installed check, and a new `spawn_litellm_supervisor(state, my_generation, port,
+  config_path, out_tx)` background thread -- spawned only when the caller opts in -- polls the real
+  process every `LITELLM_SUPERVISOR_POLL_INTERVAL` (300ms) via `ProxyProcess::is_running()`,
+  bails out silently the instant `state.litellm_generation != my_generation` (an explicit Stop or a
+  fresh manual Restart superseding it, the identical "stale background thread recognizes it's been
+  superseded and gives up cleanly" discipline this project has relied on since Leo's own generation
+  guard), and on a real detected crash calls `attempt_restart` with `restarts_so_far` tracked
+  locally and bounded by a new `LITELLM_MAX_AUTO_RESTARTS = 3` -- exhausting the bound pushes a
+  real `litellm_failed` event (`"reason": "crashed and exceeded N auto-restart attempts"`) instead
+  of retrying forever; a successful respawn pushes a new `litellm_restarted` event carrying the
+  real new pid and a running restart count, then resumes polling under the *same* generation.
+  `litellm_proxy_start`'s own dispatch signature gained an `auto_restart: bool` param (parsed from
+  `req.params` via `.and_then(|v| v.as_bool()).unwrap_or(false)`, so every pre-existing caller that
+  omits it keeps today's exact detect-only behavior unchanged) -- true only spawns the supervisor
+  after the initial real health-check already succeeded, never racing a not-yet-healthy process.
+  **A real clippy finding, not shipped and patched later**: `attempt_restart`'s first draft took 8
+  positional parameters and tripped `clippy::too_many_arguments` -- per this project's own hard
+  rule (no `#[allow(clippy::too_many_arguments)]` anywhere in `crates/`, stated explicitly in this
+  file's own "Rules, not suggestions" section), refactored into the real `RestartAttempt<'a>`
+  struct instead of suppressing the lint, re-verified clean via `cargo clippy -p spartan-backend
+  --release --all-targets` (0 warnings) afterward. 3 new tests in `litellm_proxy.rs` -- most
+  notably `attempt_restart_respawns_a_real_process_after_a_real_external_kill`, which spawns a
+  real `python3 -m http.server` stand-in (this crate's own established "always-available
+  subprocess" convention, since no real `litellm` binary is installed in this sandboxed
+  environment), kills it via a real, external `Command::new("kill").arg("-9")` -- not
+  `ProxyProcess::stop()`, which is a clean, explicit stop and would prove nothing about crash
+  detection -- and confirms `attempt_restart` genuinely respawns a *new* OS process with a
+  different real pid, not just that the function returns without erroring; plus a real
+  limit-reached no-op test and a real unspawnable-program failure test. 2 new dispatch-level tests
+  in `spartan-backend::lib.rs` -- `litellm_proxy_start_with_auto_restart_still_reports_a_real_
+  honest_not_installed_error` (confirming the new param doesn't change the honest failure path
+  when `litellm` genuinely isn't on `$PATH`, which is this environment's own real, standing
+  condition) and `litellm_proxy_start_mints_a_real_fresh_generation_on_every_call` -- 238
+  `spartan-backend` lib tests total (up from 233), all passing under `--test-threads=1`, full
+  `cargo fmt --all -- --check`/`cargo clippy -p spartan-backend --release --all-targets` both
+  clean. **UI, both shells** (`desktop/src/components/ModelsScreen.tsx`, `web/src/components/
+  ModelsPanel.tsx`, the latter a verbatim port using `client.call`/`e.event`/`e.data` in place of
+  `window.spartan.call`/`window.spartan.onEvent`, matching every other Models-panel feature this
+  session has ported): a new "Restart automatically if the proxy crashes" checkbox (shown only
+  while the proxy isn't already running, mirroring the port-input field's own existing
+  visibility rule) threads its checked state into `litellm_proxy_start`'s new `auto_restart` param;
+  a new `litellm_restarted` event handler appends a real `[auto-restart] proxy crashed and was
+  respawned (pid <pid>, restart #<n>)` line to the existing log view and re-fetches status.
+  **Real, live, end-to-end Playwright verification in both shells against the actual compiled
+  `web/dist`/`desktop/dist` served by two real running `spartan-devserver` instances** (not a
+  mock, `desktop/` via the established real-WebSocket-shim + `--web-root:desktop/dist`
+  same-origin technique this whole `desktop/` effort has used since §75.59): in `web/`, the
+  checkbox rendered unchecked by default, toggled correctly to checked, and clicking Start with it
+  checked produced a real outgoing WebSocket frame -- captured directly, not inferred --
+  `{"id":13,"method":"litellm_proxy_start","params":{"port":4000,"auto_restart":true}}`, reaching
+  the real backend and producing the honest, expected `` `litellm` isn't on $PATH `` error (since
+  litellm genuinely isn't installed in this sandboxed environment) with zero page errors;
+  `desktop/` was independently re-verified with the identical script and produced a
+  byte-identical real frame (`{"id":10,"method":"litellm_proxy_start","params":{"port":4000,
+  "auto_restart":true}}`) and the same honest error, zero page errors. **What this does not
+  confirm**: no real `litellm` binary was ever actually crashed-and-respawned end-to-end through
+  either shell's own UI in this session, since `litellm` isn't installed in this sandboxed
+  environment (the same "confirmed here, not universal" caveat this project already applies to
+  GPU/`/dev/kvm`/live-Ollama-reachability gaps) -- the crash-detection-and-respawn *mechanism*
+  itself is proven for real at the unit level, against a real killed subprocess, using the exact
+  same `spawn_child`/`wait_for_health`/`ProxyProcess::is_running()` primitives the production
+  supervisor calls; only the opt-in checkbox and the resulting `auto_restart` wire param were
+  verified live through the UI, not a full crash-detected-and-restarted round trip in a browser;
+  the real Electron window remains unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 

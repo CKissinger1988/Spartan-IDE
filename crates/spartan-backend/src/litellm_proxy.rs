@@ -8,10 +8,15 @@
 //! "tokio contained in a thread" discipline even though this module needs
 //! no tokio at all (a child process + a sync HTTP poll, nothing async).
 //!
-//! Restart-on-crash is a real, deliberately deferred follow-up, named here
-//! rather than silently absorbed -- `try_wait`/`is_running` exist precisely
-//! so a caller *can* detect a crash, but this module itself never restarts
-//! anything automatically.
+//! Restart-on-crash (task #273) is real: `attempt_restart` is the one real
+//! respawn primitive, generalized over `program`/`args` for the same
+//! testability reason `spawn_child` already is. It is deliberately a
+//! single check-and-maybe-respawn step, not an owned polling loop -- the
+//! real polling cadence and the generation-guarded "does anyone still care
+//! about this proxy" check live in `spartan-backend::lib.rs`'s own
+//! `spawn_litellm_supervisor`, since that needs access to `BackendState`
+//! this crate doesn't have. `try_wait`/`is_running` remain the real
+//! building blocks a caller uses to *detect* a crash in the first place.
 
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Sender;
@@ -158,6 +163,69 @@ pub fn wait_for_health(
     }
 }
 
+/// Real outcome of one `attempt_restart` call.
+pub enum RestartOutcome {
+    /// A genuinely new process (a real, different pid) is now spawned and
+    /// healthy -- the caller should replace whatever dead handle it had
+    /// with this one.
+    Restarted { process: ProxyProcess, pid: u32 },
+    /// The respawn attempt itself failed (couldn't spawn, or never became
+    /// healthy) -- the caller is still down; a real, honest report, not
+    /// silently swallowed.
+    Failed(LiteLlmProxyError),
+    /// `restarts_so_far` had already reached `max_restarts` -- a real,
+    /// deliberate cap so a proxy that crashes instantly on every launch
+    /// (a real, permanent misconfiguration, not a transient blip) doesn't
+    /// spin forever.
+    LimitReached,
+}
+
+/// Everything one `attempt_restart` call needs to know about the process
+/// it's trying to bring back -- grouped into a real struct rather than a
+/// long parameter list (this project's own established preference: no
+/// `#[allow(clippy::too_many_arguments)]` anywhere in `crates/`).
+pub struct RestartAttempt<'a> {
+    pub program: &'a str,
+    pub args: &'a [String],
+    pub port: u16,
+    pub health_path: &'a str,
+    pub health_timeout: Duration,
+    pub restarts_so_far: u32,
+    pub max_restarts: u32,
+}
+
+/// One real respawn attempt: spawns a fresh `attempt.program`/`attempt.args`
+/// process on `attempt.port` and waits for it to become healthy, exactly
+/// the same spawn+health-check sequence `spawn`/`wait_for_health` already
+/// use for the initial launch. Never called for an already-running
+/// process -- the caller is expected to have already confirmed the old one
+/// is genuinely dead (`is_running() == false`) before calling this.
+pub fn attempt_restart(attempt: RestartAttempt, progress_tx: Sender<String>) -> RestartOutcome {
+    if attempt.restarts_so_far >= attempt.max_restarts {
+        return RestartOutcome::LimitReached;
+    }
+    match spawn_child(attempt.program, attempt.args, attempt.port, progress_tx) {
+        Ok(mut new_process) => match wait_for_health(
+            &mut new_process,
+            attempt.health_path,
+            attempt.health_timeout,
+        ) {
+            Ok(()) => {
+                let pid = new_process.pid();
+                RestartOutcome::Restarted {
+                    process: new_process,
+                    pid,
+                }
+            }
+            Err(e) => {
+                let _ = new_process.stop();
+                RestartOutcome::Failed(e)
+            }
+        },
+        Err(e) => RestartOutcome::Failed(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,5 +321,113 @@ mod tests {
             elapsed < Duration::from_secs(5),
             "must fail fast on real process exit, not wait out the full 30s timeout: took {elapsed:?}"
         );
+    }
+
+    /// Real crash detection + respawn (task #273): a real stand-in process
+    /// is killed via a real external `kill -9` (deliberately bypassing
+    /// `ProxyProcess::stop()`, which is a clean, explicit stop -- this
+    /// simulates a genuine, unexpected crash instead), and `attempt_restart`
+    /// is confirmed to spawn a genuinely new, healthy process on the same
+    /// port -- a real, different pid, not the same dead one reported alive.
+    #[test]
+    fn attempt_restart_respawns_a_real_process_after_a_real_external_kill() {
+        let port = free_port();
+        let program = "python3";
+        let args = vec![
+            "-m".to_string(),
+            "http.server".to_string(),
+            port.to_string(),
+        ];
+        let (tx, _rx) = mpsc::channel();
+        let mut process = spawn_child(program, &args, port, tx).expect("python3 must be on $PATH");
+        wait_for_health(&mut process, "/", Duration::from_secs(10))
+            .expect("real http.server must become healthy");
+        let original_pid = process.pid();
+
+        // A real external kill -- not this process's own `stop()` -- so
+        // the resulting death is indistinguishable from a genuine crash.
+        Command::new("kill")
+            .arg("-9")
+            .arg(original_pid.to_string())
+            .status()
+            .expect("real `kill` must be on $PATH");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while process.is_running() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            !process.is_running(),
+            "the process must be genuinely dead after a real external kill"
+        );
+
+        let (tx2, _rx2) = mpsc::channel();
+        match attempt_restart(
+            RestartAttempt {
+                program,
+                args: &args,
+                port,
+                health_path: "/",
+                health_timeout: Duration::from_secs(10),
+                restarts_so_far: 0,
+                max_restarts: 3,
+            },
+            tx2,
+        ) {
+            RestartOutcome::Restarted {
+                mut process,
+                pid: new_pid,
+            } => {
+                assert_ne!(
+                    new_pid, original_pid,
+                    "a real respawn must be a genuinely different process"
+                );
+                assert!(process.is_running(), "the respawned process must be up");
+                let _ = process.stop();
+            }
+            RestartOutcome::Failed(e) => panic!("expected a real successful restart, got: {e}"),
+            RestartOutcome::LimitReached => panic!("0 restarts so far must not hit the limit"),
+        }
+    }
+
+    /// `attempt_restart` refuses to even try once `restarts_so_far` has
+    /// already reached `max_restarts` -- a real, pure check, no subprocess
+    /// spawned at all for this case.
+    #[test]
+    fn attempt_restart_reports_limit_reached_without_spawning_anything() {
+        let (tx, _rx) = mpsc::channel();
+        let outcome = attempt_restart(
+            RestartAttempt {
+                program: "python3",
+                args: &[],
+                port: 0,
+                health_path: "/",
+                health_timeout: Duration::from_secs(1),
+                restarts_so_far: 3,
+                max_restarts: 3,
+            },
+            tx,
+        );
+        assert!(matches!(outcome, RestartOutcome::LimitReached));
+    }
+
+    /// A real, honest failure -- respawning a program that doesn't exist
+    /// reports `Failed`, not a silent success or a panic.
+    #[test]
+    fn attempt_restart_reports_failed_for_a_real_unspawnable_program() {
+        let (tx, _rx) = mpsc::channel();
+        let outcome = attempt_restart(
+            RestartAttempt {
+                program: "this-program-does-not-exist-xyz",
+                args: &[],
+                port: free_port(),
+                health_path: "/",
+                health_timeout: Duration::from_secs(1),
+                restarts_so_far: 0,
+                max_restarts: 3,
+            },
+            tx,
+        );
+        assert!(matches!(outcome, RestartOutcome::Failed(_)));
     }
 }

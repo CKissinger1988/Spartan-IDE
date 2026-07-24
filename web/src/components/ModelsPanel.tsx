@@ -108,6 +108,10 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
   const [litellmBusy, setLitellmBusy] = useState(false);
   const [litellmLog, setLitellmLog] = useState<string[]>([]);
   const [litellmError, setLitellmError] = useState<string | null>(null);
+  // Real task #273 opt-in restart-on-crash toggle -- threaded through as
+  // `auto_restart` on `litellm_proxy_start`, off by default (matches the
+  // pre-existing "detect-only" behavior for anyone who doesn't opt in).
+  const [litellmAutoRestart, setLitellmAutoRestart] = useState(false);
 
   const [hfModels, setHfModels] = useState<HfModel[]>([]);
   const [hfError, setHfError] = useState<string | null>(null);
@@ -228,6 +232,17 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
         setLitellmBusy(false);
         setLitellmError(error);
         refreshLitellmStatus();
+      } else if (e.event === "litellm_restarted") {
+        // A real, automatic respawn after an unexpected crash (task #273)
+        // -- the proxy is healthy again under a genuinely new pid, so this
+        // is a real, positive status update, not an error.
+        const { pid, restart_count } = e.data as { pid: number; restart_count: number };
+        setLitellmLog((prev) => [
+          ...prev.slice(-49),
+          `[auto-restart] proxy crashed and was respawned (pid ${pid}, restart #${restart_count})`,
+        ]);
+        setLitellmError(null);
+        refreshLitellmStatus();
       } else if (e.event === "hf_pull_progress") {
         const { model_id, line } = e.data as { model_id: string; line: string };
         setPullStates((prev) => {
@@ -299,11 +314,13 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
     setLitellmBusy(true);
     setLitellmError(null);
     setLitellmLog([]);
-    client.call("litellm_proxy_start", { port }).catch((e: Error) => {
-      setLitellmBusy(false);
-      setLitellmError(e.message);
-    });
-  }, [client, litellmPort]);
+    client
+      .call("litellm_proxy_start", { port, auto_restart: litellmAutoRestart })
+      .catch((e: Error) => {
+        setLitellmBusy(false);
+        setLitellmError(e.message);
+      });
+  }, [client, litellmPort, litellmAutoRestart]);
 
   const stopLitellm = useCallback(() => {
     setLitellmBusy(true);
@@ -499,17 +516,27 @@ export default function ModelsPanel({ client }: ModelsPanelProps): React.ReactEl
         </div>
         {litellmError && <div className="git-panel-empty mono">{litellmError}</div>}
         {litellmStatus?.status !== "running" ? (
-          <div style={{ display: "flex", gap: 6, padding: "4px 4px" }}>
-            <input
-              className="git-commit-input mono"
-              style={{ minHeight: 0, width: 70, resize: "none" }}
-              value={litellmPort}
-              onChange={(e) => setLitellmPort(e.target.value)}
-              placeholder="port"
-            />
-            <button className="git-commit-button" disabled={litellmBusy} onClick={startLitellm}>
-              {litellmBusy ? "Starting…" : "Start"}
-            </button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "4px 4px" }}>
+            <div style={{ display: "flex", gap: 6 }}>
+              <input
+                className="git-commit-input mono"
+                style={{ minHeight: 0, width: 70, resize: "none" }}
+                value={litellmPort}
+                onChange={(e) => setLitellmPort(e.target.value)}
+                placeholder="port"
+              />
+              <button className="git-commit-button" disabled={litellmBusy} onClick={startLitellm}>
+                {litellmBusy ? "Starting…" : "Start"}
+              </button>
+            </div>
+            <label className="mono" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <input
+                type="checkbox"
+                checked={litellmAutoRestart}
+                onChange={(e) => setLitellmAutoRestart(e.target.checked)}
+              />
+              Restart automatically if the proxy crashes
+            </label>
           </div>
         ) : (
           <div style={{ padding: "4px 4px" }}>
