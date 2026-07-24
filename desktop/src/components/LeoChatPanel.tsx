@@ -149,6 +149,35 @@ interface LeoChatPanelProps {
   projectRoot: string;
 }
 
+/**
+ * Real §266 multi-turn session history -- one real entry per
+ * `leo_start_task` call this backend process has seen, closing the gap
+ * every prior pass left named: once a task reached `Done`/`Failed`/
+ * cancelled, nothing about it survived past that single session's own
+ * component state. Mirrors `spartan-backend::LeoHistoryEntry`'s exact
+ * real shape (`task`/`outcome`/`summary`/`error`/`unix_timestamp`) --
+ * `outcome` is one of `"Done"`/`"Failed"`/`"Cancelled"`, `summary` is
+ * only ever present for `"Done"`, `error` only for `"Failed"`.
+ */
+interface LeoHistoryEntry {
+  task: string;
+  outcome: string;
+  summary: string | null;
+  error: string | null;
+  unix_timestamp: number;
+}
+
+/** Real relative-age formatting, matching `GitPanel.tsx`'s own
+ * `formatAge` convention verbatim (this project's own established
+ * per-component-copy discipline, not a shared package). */
+function formatAge(unixSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
 function describeCall(call: PendingCall): string {
   switch (call.tool) {
     case "read_file":
@@ -224,6 +253,14 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
   const [log, setLog] = useState<LogEntry[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
   const [memorySaved, setMemorySaved] = useState<boolean | null>(null);
+
+  // Real §266 session history -- fetched fresh on every open (never
+  // cached), matching `GitPanel.tsx`'s own established "History" section
+  // precedent exactly, since a Done/Failed/Cancelled outcome can land
+  // between opens.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<LeoHistoryEntry[] | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   // Real §75.95 random-thoughts status text -- active exactly while Leo is
   // doing real, unattended work with nothing more specific to show yet:
@@ -526,6 +563,23 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     }
   }, [requestNextStep]);
 
+  const toggleHistory = useCallback(() => {
+    if (historyOpen) {
+      setHistoryOpen(false);
+      setHistoryError(null);
+      return;
+    }
+    setHistoryOpen(true);
+    setHistoryError(null);
+    window.spartan
+      .call("leo_session_history")
+      .then((result) => {
+        const r = result as { entries?: LeoHistoryEntry[] } | undefined;
+        setHistory(r?.entries ?? []);
+      })
+      .catch((e: Error) => setHistoryError(e.message));
+  }, [historyOpen]);
+
   return (
     <div className="leo-panel">
       <div className="leo-header mono">
@@ -652,6 +706,47 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
                 {memorySaved ? "Saved a note to project memory." : "Could not save to project memory."}
               </p>
             )}
+          </div>
+        )}
+
+        <div
+          className="git-section-label mono"
+          onClick={toggleHistory}
+          style={{ cursor: "pointer" }}
+          title="Past Leo tasks this session"
+        >
+          History {historyOpen ? "▾" : "▸"}
+        </div>
+        {historyOpen && (
+          <div className="git-section">
+            {historyError && <div className="git-panel-empty mono">{historyError}</div>}
+            {history === null && !historyError && (
+              <div className="git-panel-empty mono">Loading history…</div>
+            )}
+            {history?.length === 0 && (
+              <div className="git-panel-empty mono">No past tasks yet.</div>
+            )}
+            {history?.map((entry, i) => (
+              <React.Fragment key={i}>
+                <div
+                  className="git-row"
+                  title={`${entry.task}\n${new Date(entry.unix_timestamp * 1000).toLocaleString()}`}
+                >
+                  <span
+                    className={`mono leo-history-outcome leo-history-outcome-${entry.outcome.toLowerCase()}`}
+                  >
+                    {entry.outcome}
+                  </span>
+                  <span className="mono git-row-path">{entry.task || "(untitled task)"}</span>
+                  <span style={{ opacity: 0.6, whiteSpace: "nowrap", fontSize: 11 }} className="mono">
+                    {formatAge(entry.unix_timestamp)}
+                  </span>
+                </div>
+                {(entry.summary || entry.error) && (
+                  <p className="leo-history-detail mono">{entry.summary ?? entry.error}</p>
+                )}
+              </React.Fragment>
+            ))}
           </div>
         )}
       </div>

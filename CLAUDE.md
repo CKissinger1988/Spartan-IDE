@@ -6504,6 +6504,68 @@ first — it's the parity reference until each row there is actually reimplement
   reached the execute/verify loop at all, matching every Leo-panel feature since §75.47's own
   "Electron shells only" scope); no live Electron window launch this session (same standing gap
   since §75.59).
+- **Real, working code — real Leo multi-turn session history, closing the last named
+  `docs/FUTURE_FEATURES.md` P2 Leo item this session's own tracked pass touched (task #266)**:
+  direct continuation of §265, same session ("Continue uninterrupted"). Before this, once a Leo
+  task reached `Done`/`Failed`/cancelled, nothing about it survived past that one component's own
+  live state -- no record of what was asked, what happened, or when. New `LeoHistoryEntry`
+  (`task`/`outcome`/`summary`/`error`/`unix_timestamp`) and a real, bounded `BackendState::
+  leo_session_history: Vec<LeoHistoryEntry>` (a new `push_leo_history` helper caps it at
+  `MAX_LEO_SESSION_HISTORY = 50`, draining the oldest entries, matching this codebase's own
+  established bounded-ring precedent rather than growing unbounded for a long-lived process). A
+  real, deliberate design choice, not an oversight: `Failed` is **not** recorded the instant
+  `mark_failed()` fires -- §75.78's own real, bounded `Failed -> Recovering -> Executing` retry
+  loop can still revive a `Failed` agent, so recording it immediately would misrepresent a task
+  that later actually succeeds as a permanent failure. Instead, a new `leo_last_error` field
+  stashes the real error text, and `leo_start_task`'s own initial synchronous block checks whether
+  the *previous* agent (if any) is sitting in `Failed` before constructing a fresh one -- only then
+  is it retroactively pushed to history, since starting a genuinely new task is the one real,
+  unambiguous signal that the old one has been abandoned rather than recovered. `leo_cancel` pushes
+  a real `Cancelled` entry immediately instead -- its own transition table (`Agent::cancel`) only
+  ever succeeds from a real in-flight state (`Planning`/`Executing`/`Verifying`), so there's no
+  equivalent "might still recover" ambiguity to defer. Two small extractions make both paths
+  directly unit-testable without a live model: `record_leo_next_step_outcome(state, event)` (called
+  from `leo_next_step`'s loop, pushes a real `Done` entry with its summary, or stashes a real
+  `leo_last_error` for `leo_execute_failed`) and reusing `push_leo_history` directly from
+  `leo_start_task`/`leo_cancel`. New `leo_session_history` dispatch method returns every real entry
+  newest-first as `{"entries": [...]}`. `leo_session_history` was added to `main.ts`'s/
+  `preload.ts`'s IPC allowlists at the identical list position in both files, continuing this
+  project's own established drift-avoidance discipline (the exact bug class §75.79/task #141 found
+  once already between these two files). `desktop/src/components/LeoChatPanel.tsx` gained a real,
+  collapsible "History" section (reusing `GitPanel.tsx`'s own already-established `.git-section-
+  label`/`.git-section`/`.git-row`/`.git-panel-empty` CSS classes and its exact `formatAge`
+  convention, copied verbatim per this project's own established per-component-copy discipline, not
+  a shared package) -- fetched fresh every time it's opened, never cached, matching the Git panel's
+  own branch/tag/log sections' identical "state can change between opens" reasoning. Each row shows
+  a color-coded outcome badge (blue-accent `Done`, red `Failed`, dim `Cancelled`), the real task
+  text, a coarse relative age, and (when present) a truncated summary/error line underneath. `web/`
+  has no Leo UI at all to attach this to (confirmed via grep, matching every other Leo-panel
+  feature's own already-documented scope), so this stays `desktop/`-only. 7 new Rust tests (history
+  bounding at the real cap, empty-by-default, real newest-first ordering, both extracted recording
+  paths, a real `leo_cancel`-pushes-`Cancelled`-with-the-real-task-text test, and a real
+  `leo_start_task`-retroactively-records-a-previous-`Failed`-agent test), 214 `spartan-backend` lib
+  tests total (up from 207), full `cargo fmt --all -- --check`/`cargo clippy -p spartan-backend
+  --release --all-targets`/`cargo test -p spartan-backend --release --lib -- --test-threads=1`
+  clean; `desktop/`'s own `tsc --noEmit`/`npm run build` clean. **Real, live, end-to-end Playwright
+  verification against the actual compiled `desktop/dist` served by a real running `spartan-
+  devserver` binary** (not a mock -- the same "as real as achievable without a launchable Electron
+  window" technique this whole `desktop/` effort has used since §75.59): against a real git-fixture
+  project with this sandbox's own already-confirmed-unreachable Ollama (`Connection refused`, fast
+  and honest, unchanged since §75.56), History correctly started empty; a first real `leo_start_task`
+  failed fast and History stayed empty (retroactive recording hasn't fired yet); a second real
+  `leo_start_task` correctly retroactively recorded the first task's real `Failed` entry; a third
+  task raced a `leo_cancel` call (fired back-to-back with no intermediate await, so the real per-
+  connection dispatch loop processes both before the real connection-refused failure can land) and
+  produced a real `Cancelled` entry for the third task -- which, starting a new task, *also*
+  correctly retroactively recorded the second task's own real `Failed` outcome, landing at exactly
+  3 real entries, newest-first, screenshotted. **What this does not confirm**: no live model-driven
+  exercise of a real `Done` outcome (Ollama unreachable this session, same standing constraint);
+  cooperative cancellation of the underlying background thread remains the separate, already-named
+  gap `leo_cancel`'s own doc comment carries (a cancelled task's history entry is real, but the
+  thread itself keeps running to a discarded result); no equivalent history UI in the reference wgpu
+  shell (Leo wiring there has never reached the execute/verify loop at all, matching every Leo-panel
+  feature since §75.47's own "Electron shells only" scope); no live Electron window launch this
+  session (same standing gap since §75.59).
 
 ## Build & test
 

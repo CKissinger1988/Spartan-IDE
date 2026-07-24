@@ -243,6 +243,7 @@ app.whenReady().then(() => {
     "leo_approve_call",
     "leo_reject_call",
     "leo_retry",
+    "leo_session_history",
     "pty_spawn",
     "pty_input",
     "pty_resize",

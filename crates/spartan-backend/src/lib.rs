@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use spartan_buffer::Document;
 use spartan_leo::agent::{Agent, AgentError};
@@ -228,6 +228,82 @@ pub struct BackendState {
     /// stops, not a bounded call that resolves on its own.
     logcat_sessions: HashMap<u64, spartan_android::adb::LogcatHandle>,
     next_logcat_id: u64,
+    /// Real task #266 multi-turn session history -- closes the
+    /// `docs/FUTURE_FEATURES.md`-named "chat panel is task-scoped, no
+    /// history" gap. Deliberately in-memory/session-scoped only (unlike
+    /// `spartan_leo::memory`'s own real, persisted-to-disk project-tier
+    /// memory, §75.67) -- this is a real UI convenience for "what did Leo
+    /// just do a few tasks ago in this session," not a second memory
+    /// system; it does not survive a process restart and was never asked
+    /// to. Bounded by `MAX_LEO_SESSION_HISTORY` (oldest entries drop
+    /// first) so a very long-running session can't grow this unboundedly.
+    leo_session_history: Vec<LeoHistoryEntry>,
+    /// The real task text of whichever agent `leo_agent` currently holds
+    /// (or most recently held) -- `leo_start_task`'s own `task` parameter
+    /// isn't stored anywhere else in this struct, so this is the only
+    /// place a later history-recording call site (`leo_cancel`, a
+    /// still-`Failed` agent being replaced by a new `leo_start_task`) can
+    /// recover which real task a completed/abandoned run was for.
+    leo_current_task: Option<String>,
+    /// The most recent real `leo_plan_failed`/`leo_execute_failed` error
+    /// text, if any -- `Failed` is not always truly terminal (§75.78's own
+    /// bounded retry loop can bring it back to `Executing`), so a failure
+    /// is deliberately *not* pushed into `leo_session_history` the moment
+    /// it happens; this field remembers the real reason so it can be
+    /// attached retroactively if the task is later abandoned (a new
+    /// `leo_start_task` call) rather than actually retried.
+    leo_last_error: Option<String>,
+}
+
+/// One real, terminal `leo_session_history` entry -- see
+/// `BackendState::leo_session_history`'s own doc comment for why this
+/// exists and what it deliberately isn't (not persisted, not a second
+/// memory system).
+#[derive(Clone, Serialize)]
+struct LeoHistoryEntry {
+    task: String,
+    /// `"Done"` | `"Failed"` | `"Cancelled"` -- a plain string, not a new
+    /// enum, matching `agent_state_name`'s own existing real convention
+    /// for how this crate already reports `AgentState` across the IPC
+    /// boundary.
+    outcome: String,
+    summary: Option<String>,
+    error: Option<String>,
+    unix_timestamp: u64,
+}
+
+/// Real, deliberate bound -- see `BackendState::leo_session_history`'s own
+/// doc comment. 50 is generous for one real interactive session (a user
+/// running fifty distinct Leo tasks without ever restarting the app) while
+/// still keeping this a real, finite structure, not an unbounded log.
+const MAX_LEO_SESSION_HISTORY: usize = 50;
+
+/// Real, shared push helper -- every one of this module's three real
+/// recording call sites (`leo_start_task`'s retroactive-`Failed` case,
+/// `leo_cancel`, and `leo_next_step`'s own real `Done` completion) goes
+/// through this one function, so the real timestamp/bounding/task-text
+/// resolution logic exists in exactly one place.
+fn push_leo_history(
+    state: &mut BackendState,
+    outcome: &str,
+    summary: Option<String>,
+    error: Option<String>,
+) {
+    let unix_timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    state.leo_session_history.push(LeoHistoryEntry {
+        task: state.leo_current_task.clone().unwrap_or_default(),
+        outcome: outcome.to_string(),
+        summary,
+        error,
+        unix_timestamp,
+    });
+    if state.leo_session_history.len() > MAX_LEO_SESSION_HISTORY {
+        let overflow = state.leo_session_history.len() - MAX_LEO_SESSION_HISTORY;
+        state.leo_session_history.drain(0..overflow);
+    }
 }
 
 impl BackendState {
@@ -953,6 +1029,28 @@ fn leo_status(state: &BackendState) -> Result<serde_json::Value, String> {
     }
 }
 
+/// Real task #266 session-history snapshot -- newest first (matching
+/// `git_log`'s own already-established real convention for a real,
+/// user-facing history list), reachable at any time regardless of
+/// whether a Leo task is currently in flight.
+fn leo_session_history(state: &BackendState) -> serde_json::Value {
+    let entries: Vec<serde_json::Value> = state
+        .leo_session_history
+        .iter()
+        .rev()
+        .map(|e| {
+            serde_json::json!({
+                "task": e.task,
+                "outcome": e.outcome,
+                "summary": e.summary,
+                "error": e.error,
+                "unix_timestamp": e.unix_timestamp,
+            })
+        })
+        .collect();
+    serde_json::json!({ "entries": entries })
+}
+
 /// Real `Idle -> Planning` transition plus a real, spawned background
 /// thread that makes the actual blocking model call -- mirroring
 /// `spartan-editor-core::leo_bridge::spawn_plan_request` exactly, moved
@@ -1614,6 +1712,18 @@ fn leo_start_task(
 ) -> Result<serde_json::Value, String> {
     let my_generation = {
         let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
+        // Real task #266: a previous agent left sitting in `Failed` (the
+        // user never retried it, or `leo_retry` itself was exhausted) is
+        // about to be discarded for good by the fresh `Agent` below --
+        // this is the one real, unambiguous point to retroactively record
+        // it as a real terminal `Failed` history entry, using whatever
+        // real error text `leo_last_error` last captured.
+        if let Some(agent) = guard.leo_agent.as_ref() {
+            if agent.state() == spartan_leo::state::AgentState::Failed {
+                let last_error = guard.leo_last_error.clone();
+                push_leo_history(&mut guard, "Failed", None, last_error);
+            }
+        }
         let approval_mode = approval_mode_from_settings(spartan_settings::load().leo_approval_mode);
         let mut agent = Agent::new(PathBuf::from(&project_root), approval_mode);
         agent
@@ -1621,6 +1731,8 @@ fn leo_start_task(
             .map_err(|e| format!("begin_planning: {e:?}"))?;
         guard.leo_agent = Some(agent);
         guard.leo_project_root = Some(PathBuf::from(&project_root));
+        guard.leo_current_task = Some(task.clone());
+        guard.leo_last_error = None;
         // A fresh `Agent` per task (§75.47's own documented decision)
         // means the execute-loop's own real state must reset too, or a
         // second task would start with the first task's stale history.
@@ -1636,12 +1748,13 @@ fn leo_start_task(
         let provider = match build_leo_provider(&settings.leo_provider, settings.gpu_offload) {
             Ok(provider) => provider,
             Err(message) => {
-                let Ok(guard) = state.lock() else {
+                let Ok(mut guard) = state.lock() else {
                     return;
                 };
                 if guard.leo_generation != my_generation {
                     return;
                 }
+                guard.leo_last_error = Some(message.clone());
                 let event = Event {
                     event: "leo_plan_failed".to_string(),
                     data: serde_json::json!({ "error": message }),
@@ -1679,7 +1792,7 @@ fn leo_start_task(
             let Some(agent) = guard.leo_agent.as_mut() else {
                 return;
             };
-            match agent.apply_generated_plan(result) {
+            let ev = match agent.apply_generated_plan(result) {
                 Ok(()) => {
                     let plan = agent.plan().expect("plan set on successful transition");
                     Event {
@@ -1695,7 +1808,15 @@ fn leo_start_task(
                     event: "leo_plan_failed".to_string(),
                     data: serde_json::json!({ "error": format!("{other:?}") }),
                 },
+            };
+            if ev.event == "leo_plan_failed" {
+                guard.leo_last_error = ev
+                    .data
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
             }
+            ev
         };
         if let Ok(line) = serde_json::to_string(&event) {
             let _ = out_tx.send(line);
@@ -1773,6 +1894,15 @@ fn leo_cancel(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value, Str
     guard.leo_generation += 1;
     guard.leo_pending_call = None;
     guard.leo_history.clear();
+    // Real task #266: `agent.cancel()` above already flipped the real
+    // state to `Idle`, which would erase any trace this task ever ran
+    // before a future `leo_start_task` could retroactively record it (the
+    // way it does for a `Failed` agent) -- `Agent::cancel`'s own real
+    // transition table only ever succeeds from a genuinely in-flight
+    // state (`Planning`/`AwaitingApproval`/`Executing`/`Verifying`), so
+    // reaching this line always means a real task was actually abandoned,
+    // never a harmless no-op on an already-idle agent.
+    push_leo_history(&mut guard, "Cancelled", None, None);
     Ok(serde_json::json!({ "ok": true, "state": state_name }))
 }
 
@@ -2101,6 +2231,34 @@ fn run_leo_verification_and_completion(
 /// unchanged) -- the loop only ever shortens the real number of UI round
 /// trips for read-only exploration, it never widens what may run without
 /// a human.
+/// Real task #266 recording, extracted from `leo_next_step`'s own
+/// background closure so it's directly unit-testable against a plain
+/// constructed `Event` with no threading/model call involved -- the same
+/// "separate the decision logic from the threading" precedent
+/// `run_leo_verification_and_completion` already established one pass
+/// earlier. `Done` is unambiguously terminal (a real, immediate push into
+/// `leo_session_history`) -- `Failed` is not, since §75.78's own bounded
+/// retry loop can still bring it back to `Executing`, so only the real
+/// error text is remembered here (`leo_last_error`), retroactively
+/// recorded as terminal only if the task is later abandoned rather than
+/// retried (`leo_start_task`'s own real check, see its doc comment).
+fn record_leo_next_step_outcome(state: &mut BackendState, event: &Event) {
+    if event.event == "leo_execute_done" {
+        let summary_text = event
+            .data
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        push_leo_history(state, "Done", summary_text, None);
+    } else if event.event == "leo_execute_failed" {
+        state.leo_last_error = event
+            .data
+            .get("error")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+    }
+}
+
 fn leo_next_step(
     state: &Arc<Mutex<BackendState>>,
     out_tx: Sender<String>,
@@ -2260,6 +2418,7 @@ fn leo_next_step(
                     }
                 }
             };
+            record_leo_next_step_outcome(&mut guard, &event);
             if let Ok(line) = serde_json::to_string(&event) {
                 let _ = out_tx.send(line);
             }
@@ -4082,6 +4241,10 @@ pub fn handle_request(
             .lock()
             .map_err(|_| "backend state poisoned".to_string())
             .and_then(|g| leo_status(&g)),
+        "leo_session_history" => state
+            .lock()
+            .map_err(|_| "backend state poisoned".to_string())
+            .map(|g| leo_session_history(&g)),
         "leo_start_task" => (|| {
             let task = get_str_param(&req.params, "task")?;
             let project_root = get_str_param(&req.params, "project_root")?;
@@ -8188,6 +8351,175 @@ mod tests {
         let resp = call(&state, 1, "leo_cancel", serde_json::json!({}));
         assert!(resp.error.is_some());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- Real task #266: multi-turn session history ---
+
+    #[test]
+    fn push_leo_history_bounds_the_real_session_history_at_the_max() {
+        let mut state = BackendState {
+            leo_current_task: Some("task".to_string()),
+            ..Default::default()
+        };
+        for i in 0..(MAX_LEO_SESSION_HISTORY + 5) {
+            push_leo_history(&mut state, "Done", Some(format!("summary {i}")), None);
+        }
+        assert_eq!(state.leo_session_history.len(), MAX_LEO_SESSION_HISTORY);
+        // The oldest 5 real entries must have been dropped, keeping the
+        // most recent `MAX_LEO_SESSION_HISTORY` -- confirmed by checking
+        // the real, still-present first entry is "summary 5", not the
+        // real, now-evicted "summary 0".
+        assert_eq!(
+            state.leo_session_history[0].summary.as_deref(),
+            Some("summary 5")
+        );
+    }
+
+    #[test]
+    fn leo_session_history_is_empty_by_default() {
+        let state = new_state();
+        let resp = call(&state, 1, "leo_session_history", serde_json::json!({}));
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["entries"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn leo_session_history_reports_real_entries_newest_first() {
+        let state = Arc::new(Mutex::new(BackendState::default()));
+        {
+            let mut guard = state.lock().unwrap();
+            guard.leo_current_task = Some("first task".to_string());
+            push_leo_history(&mut guard, "Done", Some("did the first thing".into()), None);
+            guard.leo_current_task = Some("second task".to_string());
+            push_leo_history(&mut guard, "Failed", None, Some("a real error".into()));
+        }
+        let resp = call(&state, 1, "leo_session_history", serde_json::json!({}));
+        let entries = resp.result.unwrap()["entries"].clone();
+        let arr = entries.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(
+            arr[0]["task"], "second task",
+            "newest entry must come first"
+        );
+        assert_eq!(arr[0]["outcome"], "Failed");
+        assert_eq!(arr[0]["error"], "a real error");
+        assert_eq!(arr[1]["task"], "first task");
+        assert_eq!(arr[1]["outcome"], "Done");
+        assert_eq!(arr[1]["summary"], "did the first thing");
+    }
+
+    #[test]
+    fn record_leo_next_step_outcome_pushes_a_real_done_entry() {
+        let mut state = BackendState {
+            leo_current_task: Some("do the thing".to_string()),
+            ..Default::default()
+        };
+        let event = Event {
+            event: "leo_execute_done".to_string(),
+            data: serde_json::json!({ "summary": "did it", "memory_saved": true }),
+        };
+        record_leo_next_step_outcome(&mut state, &event);
+        assert_eq!(state.leo_session_history.len(), 1);
+        assert_eq!(state.leo_session_history[0].outcome, "Done");
+        assert_eq!(
+            state.leo_session_history[0].summary.as_deref(),
+            Some("did it")
+        );
+        assert_eq!(state.leo_session_history[0].task, "do the thing");
+    }
+
+    #[test]
+    fn record_leo_next_step_outcome_stashes_the_real_error_but_does_not_push_yet() {
+        // A real `Failed` outcome is not immediately terminal (§75.78's
+        // own bounded retry loop can still bring it back) -- confirms no
+        // history entry is pushed yet, only the real error text is
+        // remembered for a later, real retroactive recording.
+        let mut state = BackendState::default();
+        let event = Event {
+            event: "leo_execute_failed".to_string(),
+            data: serde_json::json!({ "error": "a real tool error" }),
+        };
+        record_leo_next_step_outcome(&mut state, &event);
+        assert!(state.leo_session_history.is_empty());
+        assert_eq!(state.leo_last_error.as_deref(), Some("a real tool error"));
+    }
+
+    #[test]
+    fn leo_cancel_pushes_a_real_cancelled_history_entry_with_the_real_task_text() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-leo-cancel-history-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut agent = Agent::new(dir.clone(), ApprovalMode::ManualEveryStep);
+        agent.begin_planning().unwrap();
+        agent.apply_generated_plan(Ok(sample_plan())).unwrap();
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            leo_current_task: Some("cancel me".to_string()),
+            ..Default::default()
+        }));
+
+        let resp = call(&state, 1, "leo_cancel", serde_json::json!({}));
+        assert!(resp.error.is_none(), "leo_cancel errored: {:?}", resp.error);
+
+        let history = call(&state, 2, "leo_session_history", serde_json::json!({}));
+        let entries = history.result.unwrap()["entries"].clone();
+        let arr = entries.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["task"], "cancel me");
+        assert_eq!(arr[0]["outcome"], "Cancelled");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn leo_start_task_retroactively_records_a_previous_failed_agent() {
+        let tmp = TempRepo::new("leo-start-task-retroactive-failed");
+        let mut agent = agent_in_executing_state(&tmp.dir);
+        agent.mark_failed().unwrap();
+        assert_eq!(agent.state(), spartan_leo::state::AgentState::Failed);
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            leo_current_task: Some("the failed task".to_string()),
+            leo_last_error: Some("the real reason it failed".to_string()),
+            leo_project_root: Some(tmp.dir.clone()),
+            ..Default::default()
+        }));
+
+        // A real new task, never retried -- the previous `Failed` agent
+        // is about to be discarded for good by `leo_start_task`'s own
+        // fresh `Agent`, which is exactly the one real point this should
+        // retroactively record it.
+        let resp = call(
+            &state,
+            1,
+            "leo_start_task",
+            serde_json::json!({ "task": "a new task", "project_root": tmp.dir.to_string_lossy() }),
+        );
+        assert!(
+            resp.error.is_none(),
+            "leo_start_task errored: {:?}",
+            resp.error
+        );
+
+        let history = call(&state, 2, "leo_session_history", serde_json::json!({}));
+        let entries = history.result.unwrap()["entries"].clone();
+        let arr = entries.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["task"], "the failed task");
+        assert_eq!(arr[0]["outcome"], "Failed");
+        assert_eq!(arr[0]["error"], "the real reason it failed");
+
+        // Real, synchronous confirmation that the new task's own text is
+        // now current (used if *this* task later fails and is abandoned
+        // in turn) -- checked here rather than waiting on the real
+        // background thread, which needs a live model this environment
+        // doesn't have.
+        assert_eq!(
+            state.lock().unwrap().leo_current_task.as_deref(),
+            Some("a new task")
+        );
     }
 
     fn sample_plan() -> ImplementationPlan {
