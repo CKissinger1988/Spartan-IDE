@@ -252,6 +252,23 @@ impl ModelProvider for LlamaCppProvider {
         }
     }
 
+    // Real, honestly-named scope cut (task #269, `ModelProvider::
+    // stream_completion_cancellable`'s own default): unlike
+    // `OllamaProvider`/`ClaudeProvider`/`LiteLLMProvider`, this provider
+    // has no override here, so a real Leo cancel against a live llama.cpp
+    // call falls back to the trait's own default (delegates straight to
+    // `stream_completion`, ignoring the cancel flag). This module's real
+    // generation loop (`run_token_loop`, called twice below) is in-process
+    // CPU/GPU token sampling with no network read to interleave a
+    // per-chunk cancellation check into the way the three network-backed
+    // providers' `for line in reader.lines()` loops do -- adding one would
+    // mean touching `run_token_loop`'s own signature and both real call
+    // sites, real, separate, deliberately deferred future work rather than
+    // rushed into this pass. `spartan-backend::leo_cancel`'s own existing
+    // generation-counter guard still discards a late result from this
+    // provider exactly as it always has -- what's specifically new in this
+    // pass (early network-loop termination) simply doesn't extend to this
+    // one in-process provider yet.
     fn stream_completion(
         &self,
         request: &CompletionRequest,

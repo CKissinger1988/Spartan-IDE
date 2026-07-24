@@ -44,6 +44,7 @@ use crate::provider::{
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub struct LiteLLMProvider {
@@ -245,6 +246,15 @@ impl ModelProvider for LiteLLMProvider {
         request: &CompletionRequest,
         on_delta: &mut dyn FnMut(Delta),
     ) -> Result<(), ProviderError> {
+        self.stream_completion_cancellable(request, on_delta, &AtomicBool::new(false))
+    }
+
+    fn stream_completion_cancellable(
+        &self,
+        request: &CompletionRequest,
+        on_delta: &mut dyn FnMut(Delta),
+        cancel: &AtomicBool,
+    ) -> Result<(), ProviderError> {
         let body = build_request_body(request, &self.model);
 
         let resp = ureq::post(&format!("{}/v1/chat/completions", self.base_url))
@@ -261,6 +271,13 @@ impl ModelProvider for LiteLLMProvider {
         let reader = BufReader::new(resp.into_reader());
         let mut open_calls: HashMap<u64, String> = HashMap::new();
         for line in reader.lines() {
+            // Real §75.73-closing cooperative cancellation (task #269) --
+            // see `ModelProvider::stream_completion_cancellable`'s own doc
+            // comment for the same real, honest per-chunk-only limit
+            // `OllamaProvider` already carries.
+            if cancel.load(Ordering::SeqCst) {
+                return Err(ProviderError::Cancelled);
+            }
             let line = line.map_err(|e| ProviderError::Network(e.to_string()))?;
             let Some(data) = line.strip_prefix("data: ") else {
                 continue;

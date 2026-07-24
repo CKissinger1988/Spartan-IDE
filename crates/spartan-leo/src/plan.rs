@@ -12,6 +12,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::json;
 use spartan_model::provider::{CompletionRequest, Delta, Message, ModelProvider, ToolDefinition};
+use std::sync::atomic::AtomicBool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ImplementationPlan {
@@ -156,9 +157,25 @@ pub fn generate_plan(
     provider: &dyn ModelProvider,
     task: &str,
 ) -> Result<ImplementationPlan, PlanError> {
+    generate_plan_cancellable(provider, task, &AtomicBool::new(false))
+}
+
+/// Real §75.73-closing cooperative cancellation (task #269): identical to
+/// `generate_plan`, but a caller can set `cancel` to `true` (from another
+/// thread) to ask a real, possibly slow, already-in-flight model call to
+/// stop early rather than run to completion -- `generate_plan` itself is
+/// now a thin wrapper around this with a permanently-false flag, so every
+/// existing caller (including every test in this module, and the
+/// reference wgpu shell's own `leo_bridge.rs`, neither of which supports a
+/// real cancel button yet) is completely unaffected.
+pub fn generate_plan_cancellable(
+    provider: &dyn ModelProvider,
+    task: &str,
+    cancel: &AtomicBool,
+) -> Result<ImplementationPlan, PlanError> {
     let mut last_error = PlanError::NoPlanProposed;
     for _ in 0..MAX_PLAN_ATTEMPTS {
-        match generate_plan_once(provider, task) {
+        match generate_plan_once(provider, task, cancel) {
             Ok(plan) => return Ok(plan),
             Err(e @ PlanError::Provider(_)) => return Err(e),
             Err(e) => last_error = e,
@@ -170,6 +187,7 @@ pub fn generate_plan(
 fn generate_plan_once(
     provider: &dyn ModelProvider,
     task: &str,
+    cancel: &AtomicBool,
 ) -> Result<ImplementationPlan, PlanError> {
     let request = CompletionRequest {
         messages: vec![Message::user(task)],
@@ -184,18 +202,22 @@ fn generate_plan_once(
     let mut current_call_name = String::new();
 
     provider
-        .stream_completion(&request, &mut |delta| match delta {
-            Delta::ToolCallStart { name, .. } => {
-                current_call_name = name;
-            }
-            Delta::ToolCallArgsChunk { partial_json, .. } => {
-                if current_call_name == PLAN_TOOL_NAME {
-                    saw_plan_call = true;
-                    plan_args.push_str(&partial_json);
+        .stream_completion_cancellable(
+            &request,
+            &mut |delta| match delta {
+                Delta::ToolCallStart { name, .. } => {
+                    current_call_name = name;
                 }
-            }
-            Delta::ToolCallEnd { .. } | Delta::TextChunk(_) | Delta::Stop { .. } => {}
-        })
+                Delta::ToolCallArgsChunk { partial_json, .. } => {
+                    if current_call_name == PLAN_TOOL_NAME {
+                        saw_plan_call = true;
+                        plan_args.push_str(&partial_json);
+                    }
+                }
+                Delta::ToolCallEnd { .. } | Delta::TextChunk(_) | Delta::Stop { .. } => {}
+            },
+            cancel,
+        )
         .map_err(|e| PlanError::Provider(e.to_string()))?;
 
     if !saw_plan_call {
@@ -477,5 +499,84 @@ mod tests {
     #[test]
     fn the_real_system_prompt_still_requires_calling_propose_plan() {
         assert!(system_prompt().contains("propose_plan"));
+    }
+
+    /// A real fake overriding `stream_completion_cancellable` directly
+    /// (rather than `stream_completion`) so this test exercises the exact
+    /// method `generate_plan_cancellable` actually calls -- confirms a
+    /// real, live provider-level cancellation propagates as `PlanError::
+    /// Provider` and, matching the retry loop's own existing behavior for
+    /// any `Provider` error, is returned immediately with no retry.
+    struct CancellingProvider {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ModelProvider for CancellingProvider {
+        fn id(&self) -> &str {
+            "cancelling"
+        }
+        fn is_local(&self) -> bool {
+            true
+        }
+        fn context_window(&self) -> usize {
+            4096
+        }
+        fn supports_native_tool_calling(&self) -> bool {
+            true
+        }
+        fn health_check(&self) -> spartan_model::provider::ProviderHealth {
+            spartan_model::provider::ProviderHealth::Healthy
+        }
+        fn stream_completion(
+            &self,
+            _request: &CompletionRequest,
+            _on_delta: &mut dyn FnMut(Delta),
+        ) -> Result<(), spartan_model::provider::ProviderError> {
+            unreachable!("this test always calls the cancellable path")
+        }
+        fn stream_completion_cancellable(
+            &self,
+            _request: &CompletionRequest,
+            _on_delta: &mut dyn FnMut(Delta),
+            _cancel: &AtomicBool,
+        ) -> Result<(), spartan_model::provider::ProviderError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(spartan_model::provider::ProviderError::Cancelled)
+        }
+    }
+
+    #[test]
+    fn a_real_provider_level_cancellation_is_surfaced_immediately_with_no_retry() {
+        let provider = CancellingProvider {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let cancel = AtomicBool::new(false);
+        let result = generate_plan_cancellable(&provider, "add dark mode", &cancel);
+        match result {
+            Err(PlanError::Provider(msg)) => {
+                assert!(msg.contains("cancelled"), "got: {msg}");
+            }
+            other => panic!("expected PlanError::Provider, got {other:?}"),
+        }
+        assert_eq!(
+            provider.calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a real Provider-class error (cancellation included) must not be retried"
+        );
+    }
+
+    /// `generate_plan` (the non-cancellable wrapper) must remain completely
+    /// unaffected -- a real, permanently-false internal flag means a
+    /// provider's own `stream_completion_cancellable` override never
+    /// actually observes a cancellation through this path.
+    #[test]
+    fn generate_plan_itself_never_triggers_cancellation() {
+        let plan = json!({
+            "goal": "g", "approach": "a", "files": ["x.rs"], "risk_notes": "none"
+        })
+        .to_string();
+        let provider = SequencedFakeProvider::new(vec![Some(plan)]);
+        let result = generate_plan(&provider, "task");
+        assert!(result.is_ok());
     }
 }

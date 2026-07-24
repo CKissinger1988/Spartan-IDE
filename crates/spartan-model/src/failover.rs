@@ -24,6 +24,7 @@
 //! but might silently fail over to a provider lacking it.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::provider::{CompletionRequest, Delta, ModelProvider, ProviderError, ProviderHealth};
@@ -187,10 +188,31 @@ impl ModelProvider for FailoverProvider {
         request: &CompletionRequest,
         on_delta: &mut dyn FnMut(Delta),
     ) -> Result<(), ProviderError> {
+        self.stream_completion_cancellable(request, on_delta, &AtomicBool::new(false))
+    }
+
+    /// Real §75.73-closing cooperative cancellation (task #269): the same
+    /// real per-provider failover logic `stream_completion` always had,
+    /// but each attempt goes through the provider's own real
+    /// `stream_completion_cancellable` (only `OllamaProvider`/
+    /// `ClaudeProvider`/`LiteLLMProvider`/`LmStudioProvider` genuinely act
+    /// on it; the rest fall back to their own default, matching
+    /// `ModelProvider`'s own doc comment) -- plus a real check *between*
+    /// providers, so a cancellation that fires while provider 1 is being
+    /// tried doesn't then go on to try provider 2 as if nothing happened.
+    fn stream_completion_cancellable(
+        &self,
+        request: &CompletionRequest,
+        on_delta: &mut dyn FnMut(Delta),
+        cancel: &AtomicBool,
+    ) -> Result<(), ProviderError> {
         let chars = prompt_chars(request);
         let mut last_err: Option<ProviderError> = None;
 
         for provider in &self.providers {
+            if cancel.load(Ordering::SeqCst) {
+                return Err(ProviderError::Cancelled);
+            }
             self.tracker.record_request(provider.id(), chars);
             let mut emitted_output = false;
             let mut completion_chars = 0u64;
@@ -213,7 +235,7 @@ impl ModelProvider for FailoverProvider {
                     }
                     on_delta(delta);
                 };
-                provider.stream_completion(request, &mut wrapper)
+                provider.stream_completion_cancellable(request, &mut wrapper, cancel)
             };
 
             self.tracker
@@ -221,6 +243,7 @@ impl ModelProvider for FailoverProvider {
 
             match result {
                 Ok(()) => return Ok(()),
+                Err(ProviderError::Cancelled) => return Err(ProviderError::Cancelled),
                 Err(e) => {
                     if emitted_output {
                         // Real output already reached the caller on this
@@ -447,6 +470,100 @@ mod tests {
             chain.context_window(),
             4096,
             "the safe bound is the minimum"
+        );
+    }
+
+    #[test]
+    fn a_pre_cancelled_flag_stops_the_chain_before_trying_the_first_provider() {
+        let first = FakeProvider::new("primary", Behavior::SucceedWith("unused".to_string()));
+        let first_calls = Arc::clone(&first.calls);
+        let failover = FailoverProvider::new(vec![Box::new(first)]);
+        let cancel_flag = std::sync::atomic::AtomicBool::new(true);
+        let result = failover.stream_completion_cancellable(&req(), &mut |_| {}, &cancel_flag);
+        assert!(
+            matches!(result, Err(ProviderError::Cancelled)),
+            "an already-cancelled flag must stop the chain immediately: {result:?}"
+        );
+        assert_eq!(
+            first_calls.load(Ordering::SeqCst),
+            0,
+            "a provider already-cancelled before the chain even starts must never be tried"
+        );
+    }
+
+    #[test]
+    fn cancellation_stops_the_chain_even_after_real_output_was_emitted() {
+        // Real, deliberate difference from a genuine mid-stream *error*
+        // (`does_not_fail_over_after_real_output_was_already_emitted`
+        // above): a real cancellation must never fail over to try a second
+        // provider just because the first one had already streamed some
+        // real output before the cancel flag flipped -- the whole chain
+        // stops, matching a real user's "no, stop entirely" intent.
+        struct CancellingProvider {
+            calls: Arc<AtomicUsize>,
+        }
+        impl ModelProvider for CancellingProvider {
+            fn id(&self) -> &str {
+                "cancelling"
+            }
+            fn is_local(&self) -> bool {
+                true
+            }
+            fn context_window(&self) -> usize {
+                4096
+            }
+            fn supports_native_tool_calling(&self) -> bool {
+                true
+            }
+            fn health_check(&self) -> ProviderHealth {
+                ProviderHealth::Healthy
+            }
+            fn stream_completion(
+                &self,
+                _request: &CompletionRequest,
+                _on_delta: &mut dyn FnMut(Delta),
+            ) -> Result<(), ProviderError> {
+                unreachable!("this test always calls the cancellable path")
+            }
+            fn stream_completion_cancellable(
+                &self,
+                _request: &CompletionRequest,
+                on_delta: &mut dyn FnMut(Delta),
+                _cancel: &std::sync::atomic::AtomicBool,
+            ) -> Result<(), ProviderError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                on_delta(Delta::TextChunk("partial output".to_string()));
+                Err(ProviderError::Cancelled)
+            }
+        }
+
+        let primary_calls = Arc::new(AtomicUsize::new(0));
+        let primary = CancellingProvider {
+            calls: Arc::clone(&primary_calls),
+        };
+        let backup = FakeProvider::new("backup", Behavior::SucceedWith("unused".to_string()));
+        let backup_calls = Arc::clone(&backup.calls);
+        let failover = FailoverProvider::new(vec![Box::new(primary), Box::new(backup)]);
+
+        let mut text = String::new();
+        let cancel_flag = std::sync::atomic::AtomicBool::new(false);
+        let result = failover.stream_completion_cancellable(
+            &req(),
+            &mut |d| {
+                if let Delta::TextChunk(t) = d {
+                    text.push_str(&t);
+                }
+            },
+            &cancel_flag,
+        );
+
+        assert!(matches!(result, Err(ProviderError::Cancelled)));
+        assert_eq!(text, "partial output");
+        assert_eq!(primary_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            backup_calls.load(Ordering::SeqCst),
+            0,
+            "a real cancellation must not fail over to a second provider"
         );
     }
 

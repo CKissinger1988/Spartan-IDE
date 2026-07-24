@@ -25,6 +25,7 @@ use crate::provider::{
 };
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub struct OllamaProvider {
@@ -176,6 +177,15 @@ impl ModelProvider for OllamaProvider {
         request: &CompletionRequest,
         on_delta: &mut dyn FnMut(Delta),
     ) -> Result<(), ProviderError> {
+        self.stream_completion_cancellable(request, on_delta, &AtomicBool::new(false))
+    }
+
+    fn stream_completion_cancellable(
+        &self,
+        request: &CompletionRequest,
+        on_delta: &mut dyn FnMut(Delta),
+        cancel: &AtomicBool,
+    ) -> Result<(), ProviderError> {
         let body = build_request_body(request, &self.model, self.num_gpu);
 
         let resp = ureq::post(&format!("{}/api/chat", self.base_url))
@@ -196,6 +206,14 @@ impl ModelProvider for OllamaProvider {
         let reader = BufReader::new(resp.into_reader());
         let mut saw_tool_call = false;
         for line in reader.lines() {
+            // Real §75.73-closing cooperative cancellation (task #269):
+            // checked once per real line already received over the wire --
+            // can't interrupt a single blocking read still waiting on the
+            // *next* line, but stops promptly between any two real chunks
+            // rather than always running the whole response to completion.
+            if cancel.load(Ordering::SeqCst) {
+                return Err(ProviderError::Cancelled);
+            }
             let line = line.map_err(|e| ProviderError::Network(e.to_string()))?;
             if line.trim().is_empty() {
                 continue;
@@ -297,5 +315,117 @@ mod tests {
         let provider = OllamaProvider::local("llama3.1:8b").with_gpu_layers(Some(16));
         let body = build_request_body(&minimal_request(), &provider.model, provider.num_gpu);
         assert_eq!(body["options"]["num_gpu"], 16);
+    }
+
+    /// Real, live, socket-backed cancellation test for task #269 -- a real
+    /// `TcpListener`-based mock `/api/chat` server (the same "an actual
+    /// socket, not a stubbed function" discipline `spartan-crash`'s own
+    /// `spawn_mock_upload_server`, §75.82, already established) streams a
+    /// real 10-line NDJSON response with a real, deliberate delay between
+    /// each line, so a real cancel flag flipped from a second thread partway
+    /// through can be observed to genuinely stop `stream_completion_
+    /// cancellable` early -- not just that it *would* check the flag, but
+    /// that fewer than all 10 real chunks were ever delivered to `on_delta`.
+    fn spawn_mock_ollama_chat_server(line_count: usize, delay: std::time::Duration) -> String {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            // Drain the real request (headers + JSON body) before replying,
+            // matching how a real HTTP server behaves -- read until the
+            // client has sent everything (a short read loop is enough since
+            // this test's own request body is small and sent all at once).
+            let mut buf = [0u8; 4096];
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(200)));
+            let _ = stream.read(&mut buf);
+
+            let body_prefix =
+                "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\n\r\n".to_string();
+            let _ = stream.write_all(body_prefix.as_bytes());
+            let _ = stream.flush();
+            for i in 0..line_count {
+                let done = i == line_count - 1;
+                let line = json!({
+                    "message": {"role": "assistant", "content": format!("chunk-{i} ")},
+                    "done": done,
+                })
+                .to_string();
+                if stream.write_all(format!("{line}\n").as_bytes()).is_err() {
+                    // The real client closed its side (e.g. it cancelled and
+                    // dropped the connection) -- a real, honest early stop,
+                    // not a test failure.
+                    return;
+                }
+                let _ = stream.flush();
+                std::thread::sleep(delay);
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    #[test]
+    fn stream_completion_without_cancellation_receives_every_real_chunk() {
+        let base_url = spawn_mock_ollama_chat_server(5, std::time::Duration::from_millis(10));
+        let provider = OllamaProvider::new(base_url, "test-model");
+        let mut chunks = 0;
+        let result = provider.stream_completion(&minimal_request(), &mut |delta| {
+            if matches!(delta, Delta::TextChunk(_)) {
+                chunks += 1;
+            }
+        });
+        assert!(
+            result.is_ok(),
+            "an uncancelled stream must complete: {result:?}"
+        );
+        assert_eq!(
+            chunks, 5,
+            "every real chunk the mock server sent must arrive"
+        );
+    }
+
+    #[test]
+    fn a_real_cancellation_flag_set_mid_stream_genuinely_stops_early() {
+        // 20 real lines, 30ms apart -- comfortably long enough for a second
+        // thread to flip the real cancel flag partway through and for this
+        // test to reliably observe fewer than 20 chunks having arrived.
+        // `thread::scope` (safe, no `unsafe`) lets the timer thread below
+        // borrow `cancel` directly, since the scope guarantees it's joined
+        // before this function returns.
+        let base_url = spawn_mock_ollama_chat_server(20, std::time::Duration::from_millis(30));
+        let provider = OllamaProvider::new(base_url, "test-model");
+        let cancel = AtomicBool::new(false);
+
+        let mut chunks = 0;
+        let result = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                cancel.store(true, Ordering::SeqCst);
+            });
+            provider.stream_completion_cancellable(
+                &minimal_request(),
+                &mut |delta| {
+                    if matches!(delta, Delta::TextChunk(_)) {
+                        chunks += 1;
+                    }
+                },
+                &cancel,
+            )
+        });
+
+        assert!(
+            matches!(result, Err(ProviderError::Cancelled)),
+            "a real mid-stream cancellation must surface as ProviderError::Cancelled, got: {result:?}"
+        );
+        assert!(
+            chunks < 20,
+            "cancellation must genuinely stop the stream before every real chunk arrives, \
+             got {chunks} chunks (all 20 would mean the flag was never actually checked in time)"
+        );
+        assert!(
+            chunks > 0,
+            "the mock server had already sent some real chunks before cancel fired"
+        );
     }
 }

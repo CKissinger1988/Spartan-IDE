@@ -27,6 +27,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -36,7 +37,7 @@ use spartan_buffer::Document;
 use spartan_leo::agent::{Agent, AgentError};
 use spartan_leo::approval::ApprovalMode;
 use spartan_leo::execute::{self, ExecuteAction};
-use spartan_leo::plan::{generate_plan, ImplementationPlan, PlanError};
+use spartan_leo::plan::{generate_plan_cancellable, ImplementationPlan, PlanError};
 use spartan_leo::tool::{ToolCall, ToolResult};
 use spartan_model::provider::Message;
 use spartan_model::{
@@ -199,6 +200,26 @@ pub struct BackendState {
     /// approve-safe loop can run several real, unattended iterations
     /// before returning control, widening the exact window this guards.
     leo_generation: u64,
+    /// Real §75.73-closing cooperative cancellation (task #269): a real,
+    /// live `Arc<AtomicBool>` clone shared with whichever background
+    /// thread is currently blocked inside a real Leo model call
+    /// (`leo_start_task`'s planning thread, `leo_next_step`'s own
+    /// execute-loop thread). `leo_start_task` mints a brand-new flag
+    /// (`false`) every real new task, the same "start fresh" discipline
+    /// `leo_generation` itself already uses, rather than resetting the
+    /// existing one -- avoiding any chance of a late clone from a
+    /// previous, already-discarded generation racing a fresh task's own
+    /// flag. `leo_cancel` sets the *current* flag true, which every real
+    /// network-backed `ModelProvider` (`OllamaProvider`/`ClaudeProvider`/
+    /// `LiteLLMProvider`/`LmStudioProvider`) checks once per real streamed
+    /// chunk via `stream_completion_cancellable` and stops early on --
+    /// genuinely interrupting the real background thread instead of only
+    /// discarding its late result the way `leo_generation`'s own guard
+    /// already did before this pass. See `ModelProvider::
+    /// stream_completion_cancellable`'s own doc comment for the real,
+    /// honest per-chunk-only limit this carries, and `LlamaCppProvider`'s
+    /// own doc comment for the one real provider that doesn't act on it.
+    leo_cancel_flag: Arc<AtomicBool>,
     pty_sessions: HashMap<u64, pty::PtyHandle>,
     next_pty_id: u64,
     /// Real §75.74 dev-container interactive exec sessions -- keyed the
@@ -1933,7 +1954,17 @@ fn leo_start_task(
         guard.leo_history.clear();
         guard.leo_pending_call = None;
         guard.leo_generation += 1;
+        // Real §75.73-closing cooperative cancellation (task #269): a
+        // brand-new flag every real new task, the same "start fresh"
+        // discipline `leo_generation` itself already uses -- not a reset
+        // of the existing one, so a late clone held by a just-superseded
+        // background thread can never race this fresh task's own flag.
+        guard.leo_cancel_flag = Arc::new(AtomicBool::new(false));
         guard.leo_generation
+    };
+    let cancel_flag = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        Arc::clone(&guard.leo_cancel_flag)
     };
 
     let state = Arc::clone(state);
@@ -1970,7 +2001,7 @@ fn leo_start_task(
             .unwrap_or_default();
         let task_with_memory = augment_task_with_memory(&task, &memory);
         let result: Result<ImplementationPlan, PlanError> =
-            generate_plan(provider.as_ref(), &task_with_memory);
+            generate_plan_cancellable(provider.as_ref(), &task_with_memory, &cancel_flag);
 
         let event = {
             let Ok(mut guard) = state.lock() else {
@@ -2064,19 +2095,27 @@ fn leo_reject_plan(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value
 /// in this file, if the agent is already `Idle`/`Done`/`Failed`/
 /// `Recovering`.
 ///
-/// A real, deliberate scope limit named in `Agent::cancel`'s own doc
-/// comment applies here too: this cannot forcibly kill a real background
-/// OS thread already blocked on a model call or a `run_terminal`
-/// subprocess (no cooperative-cancellation channel exists for that yet)
-/// -- what it *does* do, and what actually makes cancel real rather than
-/// cosmetic, is bump `leo_generation` before releasing the lock, so
-/// whatever real result that thread eventually produces is discarded by
-/// the exact same generation-guard check `leo_start_task`/`leo_next_step`
-/// already perform, instead of silently resurrecting a task the user
-/// just told this shell to abandon. `leo_pending_call` and `leo_history`
-/// are cleared too -- a cancelled task has nothing left to resume, the
-/// same real cleanup `leo_start_task` already does when beginning a
-/// fresh one.
+/// **Updated by task #269, closing the exact gap this doc comment used to
+/// name as open**: this now genuinely interrupts a real background OS
+/// thread blocked inside a real network-backed model call
+/// (`OllamaProvider`/`ClaudeProvider`/`LiteLLMProvider`/`LmStudioProvider`,
+/// via `leo_cancel_flag`) -- not just discard its late result. A real,
+/// honestly-scoped limit still applies, named in `ModelProvider::
+/// stream_completion_cancellable`'s own doc comment: cancellation is only
+/// observed *between* already-arrived real chunks, never mid-read; and
+/// `LlamaCppProvider`'s own in-process token generation and a real
+/// `run_terminal` subprocess (killed only by its own timeout, §264) are
+/// both real, separate, still-uninterrupted cases. What this function
+/// always does regardless -- and what made cancel real even before this
+/// pass -- is bump `leo_generation` before releasing the lock, so any real
+/// result that arrives late (from a provider this pass doesn't reach, or
+/// simply because the cancel flag wasn't checked in time) is still
+/// discarded by the exact same generation-guard check `leo_start_task`/
+/// `leo_next_step` already perform, instead of silently resurrecting a
+/// task the user just told this shell to abandon. `leo_pending_call` and
+/// `leo_history` are cleared too -- a cancelled task has nothing left to
+/// resume, the same real cleanup `leo_start_task` already does when
+/// beginning a fresh one.
 fn leo_cancel(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value, String> {
     let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
     let agent = guard
@@ -2086,6 +2125,15 @@ fn leo_cancel(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::Value, Str
     agent.cancel().map_err(|e| format!("cancel: {e:?}"))?;
     let state_name = agent_state_name(agent);
     guard.leo_generation += 1;
+    // Real §75.73-closing cooperative cancellation (task #269): setting
+    // this real, shared flag is what makes cancel actually interrupt a
+    // real, already-in-flight background model call (the exact gap this
+    // function's own doc comment named), rather than only discarding a
+    // late result via the generation bump above -- see `BackendState::
+    // leo_cancel_flag`'s own doc comment for the full real mechanism.
+    guard
+        .leo_cancel_flag
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     guard.leo_pending_call = None;
     guard.leo_history.clear();
     // Real task #266: `agent.cancel()` above already flipped the real
@@ -2457,7 +2505,7 @@ fn leo_next_step(
     state: &Arc<Mutex<BackendState>>,
     out_tx: Sender<String>,
 ) -> Result<serde_json::Value, String> {
-    let (plan, mut history, my_generation) = {
+    let (plan, mut history, my_generation, cancel_flag) = {
         let guard = state.lock().map_err(|_| "backend state poisoned")?;
         let agent = guard
             .leo_agent
@@ -2473,7 +2521,17 @@ fn leo_next_step(
             return Err("a proposed action is already awaiting approval".to_string());
         }
         let plan = agent.plan().cloned().ok_or("no approved plan to execute")?;
-        (plan, guard.leo_history.clone(), guard.leo_generation)
+        (
+            plan,
+            guard.leo_history.clone(),
+            guard.leo_generation,
+            // Real §75.73-closing cooperative cancellation (task #269):
+            // the *current* flag `leo_start_task` minted for this same
+            // task/generation, not a fresh one -- `leo_next_step` never
+            // starts a new generation of its own, it's the same task's
+            // own real execute-loop continuing.
+            Arc::clone(&guard.leo_cancel_flag),
+        )
     };
 
     let state = Arc::clone(state);
@@ -2500,7 +2558,8 @@ fn leo_next_step(
         let mut auto_steps = 0u32;
 
         loop {
-            let result = execute::next_action(provider.as_ref(), &plan, &history);
+            let result =
+                execute::next_action_cancellable(provider.as_ref(), &plan, &history, &cancel_flag);
 
             let Ok(mut guard) = state.lock() else {
                 return;
@@ -8673,6 +8732,100 @@ mod tests {
 
         let status = call(&state, 2, "leo_status", serde_json::json!({}));
         assert_eq!(status.result.unwrap()["plan"], serde_json::Value::Null);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Real §75.73-closing cooperative cancellation (task #269): confirms
+    /// `leo_cancel` genuinely sets the real, shared `leo_cancel_flag` --
+    /// the specific new mechanism this pass adds on top of the already-
+    /// tested generation bump above, verified deterministically with no
+    /// real background model call involved at all.
+    #[test]
+    fn leo_cancel_sets_the_real_cancel_flag_true() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-leo-cancel-flag-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut agent = Agent::new(dir.clone(), ApprovalMode::ManualEveryStep);
+        agent.begin_planning().unwrap();
+        agent.apply_generated_plan(Ok(sample_plan())).unwrap();
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let state = Arc::new(Mutex::new(BackendState {
+            leo_agent: Some(agent),
+            leo_cancel_flag: Arc::clone(&cancel_flag),
+            ..Default::default()
+        }));
+
+        assert!(
+            !cancel_flag.load(std::sync::atomic::Ordering::SeqCst),
+            "starts unset"
+        );
+        let resp = call(&state, 1, "leo_cancel", serde_json::json!({}));
+        assert!(resp.error.is_none(), "leo_cancel errored: {:?}", resp.error);
+        assert!(
+            cancel_flag.load(std::sync::atomic::Ordering::SeqCst),
+            "leo_cancel must set the real shared cancel flag true, so a real \
+             in-flight background model call actually observes it and stops"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Real §75.73-closing cooperative cancellation (task #269): every
+    /// real new `leo_start_task` call mints a genuinely fresh cancel flag
+    /// (`false`), not a reset of the previous task's own flag -- a stale
+    /// `Arc` clone held by an already-superseded background thread must
+    /// never be able to observe or affect a brand-new task's own flag.
+    #[test]
+    fn leo_start_task_mints_a_fresh_cancel_flag_each_real_new_task() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-leo-fresh-cancel-flag-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = new_state();
+
+        call(
+            &state,
+            1,
+            "leo_start_task",
+            serde_json::json!({ "task": "first task", "project_root": dir.to_string_lossy() }),
+        );
+        let first_flag = {
+            let guard = state.lock().unwrap();
+            Arc::clone(&guard.leo_cancel_flag)
+        };
+        assert!(!first_flag.load(std::sync::atomic::Ordering::SeqCst));
+        // Simulate the first task being cancelled -- its own real flag is
+        // now permanently `true`.
+        first_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        call(
+            &state,
+            2,
+            "leo_start_task",
+            serde_json::json!({ "task": "second task", "project_root": dir.to_string_lossy() }),
+        );
+        let second_flag = {
+            let guard = state.lock().unwrap();
+            Arc::clone(&guard.leo_cancel_flag)
+        };
+        assert!(
+            !second_flag.load(std::sync::atomic::Ordering::SeqCst),
+            "a brand-new task must get its own fresh, unset cancel flag, \
+             never inheriting the previous (cancelled) task's own true value"
+        );
+        assert!(
+            !Arc::ptr_eq(&first_flag, &second_flag),
+            "the two tasks must hold genuinely distinct Arc<AtomicBool> instances"
+        );
+
+        // Real, established pattern (see leo_start_task_transitions_to_
+        // planning_and_returns_an_immediate_ack's own doc comment): avoid
+        // racing the real spawned background thread's own possibly-live
+        // network call by discarding the agent before this test ends.
+        state.lock().unwrap().leo_agent = None;
         std::fs::remove_dir_all(&dir).ok();
     }
 

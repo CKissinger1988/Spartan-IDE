@@ -23,6 +23,7 @@
 //! `LiteLLMProvider` code, so the wire handling is proven; only the LM-Studio-
 //! specific base URL + `/v1/models` health probe are unexercised live.
 
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use crate::litellm::LiteLLMProvider;
@@ -97,6 +98,20 @@ impl ModelProvider for LmStudioProvider {
         // Verbatim OpenAI-compatible SSE streaming -- the identical,
         // live-confirmed LiteLLMProvider path.
         self.inner.stream_completion(request, on_delta)
+    }
+
+    /// Real §75.73-closing cooperative cancellation (task #269) -- delegates
+    /// straight through to the inner `LiteLLMProvider`'s own real
+    /// cancellable path, matching how every other method on this provider
+    /// is composed rather than duplicated.
+    fn stream_completion_cancellable(
+        &self,
+        request: &CompletionRequest,
+        on_delta: &mut dyn FnMut(Delta),
+        cancel: &AtomicBool,
+    ) -> Result<(), ProviderError> {
+        self.inner
+            .stream_completion_cancellable(request, on_delta, cancel)
     }
 }
 

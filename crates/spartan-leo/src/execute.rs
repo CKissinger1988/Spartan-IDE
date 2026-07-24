@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 use spartan_model::provider::{
     CompletionRequest, Delta, Message, ModelProvider, Role, ToolDefinition,
 };
+use std::sync::atomic::AtomicBool;
 
 #[derive(Debug, Clone)]
 pub enum ExecuteAction {
@@ -197,6 +198,21 @@ pub fn next_action(
     plan: &ImplementationPlan,
     history: &[Message],
 ) -> Result<ExecuteStep, ExecuteError> {
+    next_action_cancellable(provider, plan, history, &AtomicBool::new(false))
+}
+
+/// Real §75.73-closing cooperative cancellation (task #269): identical to
+/// `next_action`, but a caller can set `cancel` to `true` (from another
+/// thread) to ask a real, possibly slow, already-in-flight model call to
+/// stop early rather than run to completion -- `next_action` itself is now
+/// a thin wrapper around this with a permanently-false flag, so every
+/// existing caller/test is completely unaffected.
+pub fn next_action_cancellable(
+    provider: &dyn ModelProvider,
+    plan: &ImplementationPlan,
+    history: &[Message],
+    cancel: &AtomicBool,
+) -> Result<ExecuteStep, ExecuteError> {
     let request = CompletionRequest {
         messages: history.to_vec(),
         tools: execute_tool_definitions(),
@@ -211,21 +227,25 @@ pub fn next_action(
     let mut saw_call = false;
 
     provider
-        .stream_completion(&request, &mut |delta| match delta {
-            Delta::ToolCallStart { id, name } => {
-                if !saw_call {
-                    call_id = id;
-                    call_name = name;
-                    saw_call = true;
+        .stream_completion_cancellable(
+            &request,
+            &mut |delta| match delta {
+                Delta::ToolCallStart { id, name } => {
+                    if !saw_call {
+                        call_id = id;
+                        call_name = name;
+                        saw_call = true;
+                    }
                 }
-            }
-            Delta::ToolCallArgsChunk { id, partial_json } => {
-                if saw_call && id == call_id {
-                    call_args.push_str(&partial_json);
+                Delta::ToolCallArgsChunk { id, partial_json } => {
+                    if saw_call && id == call_id {
+                        call_args.push_str(&partial_json);
+                    }
                 }
-            }
-            Delta::ToolCallEnd { .. } | Delta::TextChunk(_) | Delta::Stop { .. } => {}
-        })
+                Delta::ToolCallEnd { .. } | Delta::TextChunk(_) | Delta::Stop { .. } => {}
+            },
+            cancel,
+        )
         .map_err(|e| ExecuteError::Provider(e.to_string()))?;
 
     if !saw_call {
@@ -543,5 +563,69 @@ mod tests {
         assert!(prompt.contains(crate::persona::LEO_PERSONA));
         assert!(prompt.contains("test goal"));
         assert!(prompt.contains("task_complete"));
+    }
+
+    /// Real §75.73-closing cooperative cancellation (task #269) -- a real
+    /// fake overriding `stream_completion_cancellable` directly (the exact
+    /// method `next_action_cancellable` actually calls) confirms a real
+    /// provider-level cancellation propagates as `ExecuteError::Provider`,
+    /// matching `next_action`'s own existing error-surfacing behavior for
+    /// any other real provider error.
+    struct CancellingProvider;
+
+    impl ModelProvider for CancellingProvider {
+        fn id(&self) -> &str {
+            "cancelling"
+        }
+        fn is_local(&self) -> bool {
+            true
+        }
+        fn context_window(&self) -> usize {
+            4096
+        }
+        fn supports_native_tool_calling(&self) -> bool {
+            true
+        }
+        fn health_check(&self) -> spartan_model::provider::ProviderHealth {
+            spartan_model::provider::ProviderHealth::Healthy
+        }
+        fn stream_completion(
+            &self,
+            _request: &CompletionRequest,
+            _on_delta: &mut dyn FnMut(Delta),
+        ) -> Result<(), spartan_model::provider::ProviderError> {
+            unreachable!("this test always calls the cancellable path")
+        }
+        fn stream_completion_cancellable(
+            &self,
+            _request: &CompletionRequest,
+            _on_delta: &mut dyn FnMut(Delta),
+            _cancel: &AtomicBool,
+        ) -> Result<(), spartan_model::provider::ProviderError> {
+            Err(spartan_model::provider::ProviderError::Cancelled)
+        }
+    }
+
+    #[test]
+    fn a_real_provider_level_cancellation_is_surfaced_as_a_real_provider_error() {
+        let cancel = AtomicBool::new(false);
+        let result = next_action_cancellable(&CancellingProvider, &sample_plan(), &[], &cancel);
+        match result {
+            Err(ExecuteError::Provider(msg)) => assert!(msg.contains("cancelled"), "got: {msg}"),
+            other => panic!("expected ExecuteError::Provider, got {other:?}"),
+        }
+    }
+
+    /// `next_action` (the non-cancellable wrapper) must remain completely
+    /// unaffected -- a real, permanently-false internal flag means a
+    /// provider's own `stream_completion_cancellable` override never
+    /// actually observes a cancellation through this path.
+    #[test]
+    fn next_action_itself_never_triggers_cancellation() {
+        let provider = FakeProvider {
+            tool: Some((TASK_COMPLETE_TOOL, json!({"summary": "done"}))),
+        };
+        let result = next_action(&provider, &sample_plan(), &[]);
+        assert!(result.is_ok());
     }
 }

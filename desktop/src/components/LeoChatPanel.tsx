@@ -459,17 +459,17 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
   }, []);
 
   /** Real §75.73 cancel -- task #58's own named remaining item, "a UI
-   * control to interrupt an in-progress planning or execute loop." Real,
-   * deliberate scope limit named in `leo_cancel`'s own real backend doc
-   * comment applies here too: this cannot forcibly stop a real
-   * in-flight model call already running on its own background thread
-   * (no cooperative-cancellation channel exists for that yet) -- what it
-   * *does* do, and what makes it real rather than cosmetic, is bump the
-   * real backend's generation counter so that call's eventual result is
-   * discarded rather than silently resurrecting the cancelled task; this
-   * panel resets its own local view to a fresh, empty Idle state
-   * immediately rather than waiting to see whether that stale result
-   * ever arrives. */
+   * control to interrupt an in-progress planning or execute loop." As of
+   * task #269, `leo_cancel`'s own real backend now genuinely interrupts a
+   * real, already-in-flight streaming model call (Ollama/Claude/LiteLLM/
+   * LM Studio) via a real, shared cancel flag checked once per real
+   * streamed chunk -- not just the generation-counter-based late-result
+   * discard this panel already relied on, which still runs unconditionally
+   * as the real fallback (see `leo_cancel`'s own backend doc comment for
+   * the exact, honestly-scoped remaining limits). This panel's own logic
+   * needs no change either way: it resets its local view to a fresh,
+   * empty Idle state immediately, matching the real backend's own
+   * synchronous `Idle` transition. */
   const cancelTask = useCallback(async () => {
     try {
       const result = (await window.spartan.call("leo_cancel")) as { state: LeoState };

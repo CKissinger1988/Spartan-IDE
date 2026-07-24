@@ -22,6 +22,7 @@
 
 use serde_json::Value;
 use std::fmt;
+use std::sync::atomic::AtomicBool;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -141,6 +142,13 @@ pub enum ProviderError {
     /// failures, none of which are meaningfully a "network," "HTTP," or
     /// "parse" error in the sense the other three variants mean.
     Local(String),
+    /// Real §75.73-closing cooperative cancellation (task #269): a real,
+    /// deliberate stop mid-stream via `stream_completion_cancellable`'s own
+    /// cancel flag, not a genuine provider/network failure -- a caller that
+    /// wants to distinguish "the user cancelled this" from "the provider
+    /// actually broke" can match on this variant specifically rather than
+    /// string-matching a `Display`ed message.
+    Cancelled,
 }
 
 impl fmt::Display for ProviderError {
@@ -152,6 +160,7 @@ impl fmt::Display for ProviderError {
             }
             ProviderError::Parse(msg) => write!(f, "parse error: {msg}"),
             ProviderError::Local(msg) => write!(f, "{msg}"),
+            ProviderError::Cancelled => write!(f, "operation cancelled"),
         }
     }
 }
@@ -177,4 +186,44 @@ pub trait ModelProvider: Send + Sync {
         request: &CompletionRequest,
         on_delta: &mut dyn FnMut(Delta),
     ) -> Result<(), ProviderError>;
+
+    /// Real §75.73-closing cooperative cancellation (task #269): identical
+    /// contract to `stream_completion`, but a caller may set `cancel` to
+    /// `true` (from another thread, e.g. a real user-initiated Leo cancel)
+    /// to ask a real, possibly slow, already-in-flight streaming call to
+    /// stop early with `ProviderError::Cancelled` instead of running to
+    /// completion. This closes the exact gap `spartan-backend::leo_cancel`'s
+    /// own doc comment has named since §75.73: cancel could only discard a
+    /// late result via a generation counter, never actually stop the real
+    /// background OS thread blocked on the model call itself.
+    ///
+    /// A real, honestly-scoped default: this base implementation ignores
+    /// `cancel` entirely and simply delegates to `stream_completion` --
+    /// genuine cooperative cancellation needs a provider whose own real
+    /// streaming loop has a natural per-chunk checkpoint to check the flag
+    /// at (a real NDJSON/SSE `for line in reader.lines()` loop, checked
+    /// once per real line already received over the wire). `OllamaProvider`,
+    /// `ClaudeProvider`, and `LiteLLMProvider` (and `LmStudioProvider`,
+    /// which delegates straight through to its own inner `LiteLLMProvider`)
+    /// override this for real; `LlamaCppProvider` does not -- its own real
+    /// generation loop is in-process CPU/GPU token sampling with no network
+    /// read to interleave a check into the same way, a real, deliberate,
+    /// named v1 scope cut rather than an oversight (see its own module doc
+    /// comment). A second, real, honestly-named limit that applies even to
+    /// the providers that do override this: cancellation can only be
+    /// observed *between* already-arrived chunks, never interrupt a single
+    /// blocking read that's already waiting on the next one -- the same
+    /// class of limit `crates/spartan-backend/src/subprocess.rs`'s own
+    /// `wait_with_cancellation` (task #268) already carries for a real
+    /// long-running child process, just for network I/O instead of a
+    /// subprocess.
+    fn stream_completion_cancellable(
+        &self,
+        request: &CompletionRequest,
+        on_delta: &mut dyn FnMut(Delta),
+        cancel: &AtomicBool,
+    ) -> Result<(), ProviderError> {
+        let _ = cancel;
+        self.stream_completion(request, on_delta)
+    }
 }

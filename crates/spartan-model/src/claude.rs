@@ -23,6 +23,7 @@ use crate::provider::{
 };
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -109,6 +110,15 @@ impl ModelProvider for ClaudeProvider {
         request: &CompletionRequest,
         on_delta: &mut dyn FnMut(Delta),
     ) -> Result<(), ProviderError> {
+        self.stream_completion_cancellable(request, on_delta, &AtomicBool::new(false))
+    }
+
+    fn stream_completion_cancellable(
+        &self,
+        request: &CompletionRequest,
+        on_delta: &mut dyn FnMut(Delta),
+        cancel: &AtomicBool,
+    ) -> Result<(), ProviderError> {
         let messages: Vec<Value> = request
             .messages
             .iter()
@@ -176,6 +186,13 @@ impl ModelProvider for ClaudeProvider {
         let reader = BufReader::new(resp.into_reader());
         let mut state = SseParseState::default();
         for line in reader.lines() {
+            // Real §75.73-closing cooperative cancellation (task #269) --
+            // see `ModelProvider::stream_completion_cancellable`'s own doc
+            // comment for the same real, honest per-chunk-only limit
+            // `OllamaProvider` already carries.
+            if cancel.load(Ordering::SeqCst) {
+                return Err(ProviderError::Cancelled);
+            }
             let line = line.map_err(|e| ProviderError::Network(e.to_string()))?;
             if let Some(event) = state.feed_line(&line)? {
                 dispatch_sse_event(&event, &mut state, on_delta);

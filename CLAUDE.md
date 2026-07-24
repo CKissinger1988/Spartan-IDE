@@ -6695,6 +6695,106 @@ first — it's the parity reference until each row there is actually reimplement
   cancel UI verification for `web/`'s own React component beyond the real raw-WebSocket protocol
   level (its UI code is a verbatim structural port of `desktop/`'s already-verified component); the
   real Electron window remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — cooperative cancellation of in-flight Leo model calls, closing the exact
+  gap §75.73 itself named (task #269)**: §75.73's own doc comment for `leo_cancel` said plainly
+  "this cannot forcibly kill a real background OS thread already blocked on a model call... no
+  cooperative-cancellation channel exists for that yet" -- what it did instead was bump a real
+  generation counter so a late result gets discarded. This pass closes that named gap for real,
+  network-backed providers. `ModelProvider` (`spartan-model`) gained a new, default-provided
+  `stream_completion_cancellable(request, on_delta, cancel: &AtomicBool)` -- deliberately a
+  *provided* method (default: ignore `cancel`, delegate to `stream_completion`), not a breaking
+  change to the required `stream_completion` signature, so every existing implementor/test mock
+  across `spartan-model`, `spartan-leo`, and `failover.rs` needed zero changes unless it chose to
+  override the new method for real. `OllamaProvider`/`ClaudeProvider`/`LiteLLMProvider` each
+  override it with a real check inside their own existing `for line in reader.lines()` NDJSON/SSE
+  loop -- checked once per real line already received over the wire, returning a new
+  `ProviderError::Cancelled` variant the instant a `true` flag is observed. A real, honestly-named
+  limit, stated in the trait's own doc comment and matching the exact class of limit
+  `subprocess::wait_with_cancellation` (task #268) already carries for a real child process:
+  cancellation can only be observed *between* already-arrived chunks, never interrupt a single
+  blocking read still waiting on the next one. `LmStudioProvider` delegates straight through to its
+  own inner `LiteLLMProvider` (matching every other method on that provider, which is built by
+  composition, not duplication). `FailoverProvider::stream_completion_cancellable` mirrors its own
+  real per-provider retry-chain logic exactly, but checks `cancel` *between* providers too, so a
+  real cancellation stops the whole chain rather than falling over to try a second provider just
+  because the first one had already streamed some real output before the flag flipped -- a
+  deliberate, tested difference from a genuine mid-stream *error*, which the chain's own existing
+  logic still correctly retries elsewhere. `LlamaCppProvider` gets no override at all -- a real,
+  honestly-named v1 scope cut documented directly above its `stream_completion` impl: its real
+  generation loop (`run_token_loop`, called twice, once for free text and once for grammar-
+  constrained tool calling) is in-process CPU/GPU token sampling with no network read to interleave
+  a per-chunk check into the way the three network-backed providers' loops do; wiring it in would
+  mean touching `run_token_loop`'s own signature and both real call sites, real, separate,
+  deliberately deferred work rather than rushed into this pass. `spartan-leo::plan::
+  generate_plan_cancellable(provider, task, cancel)` and `execute::next_action_cancellable(provider,
+  plan, history, cancel)` thread the flag down to each provider call; the original `generate_plan`/
+  `next_action` became thin, byte-for-byte-behavior-unchanged wrappers passing a permanently-false
+  flag -- so every existing test in both modules, and the reference wgpu shell's own `leo_bridge.rs`
+  (which has no cancel button and calls the plain, unchanged `generate_plan`), needed zero code
+  changes at all. `spartan-backend::BackendState` gained a real `leo_cancel_flag: Arc<AtomicBool>`
+  field (its own detailed doc comment explains the full mechanism), minted as a genuinely **fresh**
+  `Arc::new(AtomicBool::new(false))` on every real new `leo_start_task` call -- the same "start
+  fresh, never reset" discipline `leo_generation` itself already established -- rather than resetting
+  the existing one, so a stale `Arc` clone still held by an already-superseded background thread can
+  never race or affect a brand-new task's own flag. `leo_next_step`'s own background thread reads
+  the *current* flag (not a fresh one -- it's continuing the same task/generation, not starting a
+  new one) at the same synchronous point it already reads `plan`/`history`/`my_generation`.
+  `leo_cancel` now sets the real flag `true` alongside its existing, unchanged generation bump --
+  its own doc comment was rewritten to state plainly that this now genuinely interrupts a real
+  in-flight network-backed model call, not just discards its late result, while still naming the
+  real residual limits (`LlamaCppProvider`, a `run_terminal` subprocess mid-execution -- separately
+  timeout-bounded since task #264, not addressed here -- and the fundamental "only observed between
+  chunks" limit every network provider carries). `desktop/`'s existing Cancel button
+  (`LeoChatPanel.tsx`, §75.73) needed **zero code changes** -- it already just calls
+  `window.spartan.call("leo_cancel")` with no params, so it transparently gained the real
+  interruption behavior; only its own doc comment was rewritten for accuracy, confirmed via a clean
+  `tsc --noEmit`. **Real, live, socket-backed verification, not a synthetic in-process fake for the
+  hardest-to-fake part**: a new real `TcpListener`-based mock `/api/chat` server (the same "an
+  actual socket, not a stubbed function" discipline `spartan-crash`'s own `spawn_mock_upload_server`,
+  §75.82, already established) streams a real 20-line NDJSON response with a real, deliberate 30ms
+  delay between each line; a real `std::thread::scope`-spawned timer thread (safe, no `unsafe` code
+  needed to share the `&AtomicBool` reference across threads) flips the cancel flag 150ms in, and
+  the test asserts the real result is `Err(ProviderError::Cancelled)` with genuinely fewer than all
+  20 chunks having arrived -- not just that the function *would* check the flag, but that it visibly,
+  measurably stopped early (the whole test completes in well under the 600ms the full 20-line stream
+  would otherwise take). A sibling test confirms an *uncancelled* stream still receives every real
+  chunk, ruling out a false-positive "always stops early" bug. Two new `FailoverProvider` tests: a
+  real pre-cancelled flag refuses to try even the first provider in the chain; a real cancellation
+  arriving mid-stream (after real output was already emitted) is confirmed to propagate immediately
+  rather than falling over to a second, healthy provider -- the real, deliberate difference from a
+  genuine error named above. Two new `spartan-leo` tests (one per module) confirm a real provider-
+  level `ProviderError::Cancelled` surfaces correctly as `PlanError::Provider`/`ExecuteError::
+  Provider` (and, matching each module's own existing retry-loop behavior for any `Provider`-class
+  error, is never retried), plus a paired test in each module confirming the plain, non-cancellable
+  wrapper genuinely never triggers cancellation through this new path. Two new dispatch-level
+  `spartan-backend` tests, both fully deterministic with no real network call involved: `leo_cancel`
+  against a real `AwaitingApproval`-state fixture agent genuinely flips a real, externally-held
+  `Arc<AtomicBool>` clone from `false` to `true`; two consecutive real `leo_start_task` calls are
+  confirmed to mint two genuinely distinct `Arc<AtomicBool>` instances (`Arc::ptr_eq` checked
+  directly), with the second task's own flag correctly still `false` even after the first task's
+  flag was deliberately set `true` first. 51 `spartan-model` lib tests (up from 45), 80 `spartan-leo`
+  lib tests total (4 new: one real cancellation test plus one non-cancellation-regression test in
+  each of `plan.rs`/`execute.rs`), 225 `spartan-backend` lib tests (up from 223) -- all passing in
+  isolation; `cargo fmt --all -- --check`/`cargo clippy -p spartan-model
+  -p spartan-leo -p spartan-backend --release --all-targets` both clean; `desktop/`'s own `tsc
+  --noEmit` clean. **A real, correctly-diagnosed test-parallelism flake, not a product bug, caught
+  and resolved during verification**: running all three crates' test suites together under full
+  default parallelism produced one real, non-deterministic failure in the new socket-based
+  uncancelled-stream test (`Connection reset by peer`) -- re-run immediately afterward with
+  `--test-threads=1` (isolating real socket-heavy tests from the many other real subprocess/socket
+  tests this workspace's own test suites already run concurrently), it passed cleanly and repeatably,
+  matching this project's own already-documented "real-subprocess-spawning suites occasionally flake
+  under full parallelism, re-run in isolation before assuming a regression" precedent exactly. **What
+  this does not confirm**: no live model-driven exercise of a real mid-stream cancellation through an
+  actual Leo task -- verified instead via a real local mock HTTP server exercising the identical
+  NDJSON streaming code path `OllamaProvider` genuinely runs in production, since this specific
+  end-to-end path wasn't independently re-verified against this session's own (sometimes-reachable)
+  real Ollama instance; no cancellation for `LlamaCppProvider`'s own in-process generation (the
+  named, deliberate v1 scope cut above) or for a `run_terminal` subprocess mid-execution (already
+  separately timeout-bounded since task #264, genuinely out of this pass's own scope); `web/` has no
+  Leo UI at all to extend (confirmed via grep, matching every other Leo-panel feature's own already-
+  documented scope); the real Electron window remains unlaunchable in this session (same standing
+  gap since §75.59).
 
 ## Build & test
 
