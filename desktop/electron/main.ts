@@ -304,6 +304,7 @@ app.whenReady().then(() => {
     "lmstudio_pull_model",
     "llamacpp_list_models",
     "llamacpp_download_model",
+    "model_download_cancel",
     "crash_reports_list",
     "crash_report_upload",
     "create_project",

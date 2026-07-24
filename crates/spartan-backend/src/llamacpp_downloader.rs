@@ -32,8 +32,17 @@ use serde::Serialize;
 use std::fs::{self, File};
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
+
+/// The real, distinct error `download_gguf` returns when a caller sets its
+/// `cancel` flag mid-download (task #268) -- a real, honest outcome
+/// distinct from a genuine network/write failure, so a caller (`spartan-
+/// backend`'s own `llamacpp_download_model`) can tag the resulting
+/// `llamacpp_download_failed` event `"cancelled": true` rather than
+/// reporting a cancellation as if it were an ordinary error.
+pub const CANCELLED_ERROR: &str = "download cancelled by user";
 
 /// `~/.spartan/models` (`$HOME`, falling back to `$USERPROFILE` for
 /// Windows, falling back to the current directory) -- the exact same
@@ -176,10 +185,20 @@ const PROGRESS_TIME_INTERVAL: Duration = Duration::from_secs(1);
 /// truncated file that `is_downloaded`/`list_downloaded` would mistake for
 /// a complete one. Idempotent: if `filename` is already fully downloaded,
 /// returns its existing path immediately without re-fetching anything.
+///
+/// Real, cancellable (task #268): `cancel` is checked once per real read
+/// chunk (never buffered ahead) -- there's no subprocess `Child` to kill
+/// here the way `hf_pull_model`/`lmstudio_pull_model` have, this crate's
+/// own HTTP reader is the only thing that can abort early. A real
+/// cancellation deletes the partial `.part` file before returning
+/// `Err(CANCELLED_ERROR.to_string())`, so a cancelled-and-retried download
+/// starts clean rather than resuming (no HTTP range-request support
+/// exists here to resume correctly anyway).
 pub fn download_gguf(
     hf_repo: &str,
     filename: &str,
     progress_tx: &Sender<String>,
+    cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
     let safe_name =
         safe_filename(filename).ok_or_else(|| format!("unsafe filename: {filename:?}"))?;
@@ -214,6 +233,11 @@ pub fn download_gguf(
     let mut last_reported_at = Instant::now();
 
     loop {
+        if cancel.load(Ordering::SeqCst) {
+            drop(writer);
+            let _ = fs::remove_file(&part_path);
+            return Err(CANCELLED_ERROR.to_string());
+        }
         let n = reader
             .read(&mut buf)
             .map_err(|e| format!("download read failed for {safe_name}: {e}"))?;
@@ -341,6 +365,7 @@ mod tests {
             "definitely-not-a-real-spartan-ide-test-org/definitely-not-a-real-repo-xyz",
             "model-Q4_K_M.gguf",
             &tx,
+            &AtomicBool::new(false),
         );
         assert!(result.is_err(), "expected a real error, got {result:?}");
     }
@@ -359,6 +384,7 @@ mod tests {
             "bartowski/Llama-3.2-3B-Instruct-GGUF",
             "not-a-real-gguf-file.sh",
             &tx,
+            &AtomicBool::new(false),
         );
         assert!(result.is_err());
     }
@@ -405,5 +431,45 @@ mod tests {
             "Q4_K_M",
         );
         assert!(result.is_err(), "expected a real error, got {result:?}");
+    }
+
+    /// Real, live (task #268): a real curated repo's real GGUF filename is
+    /// resolved first, then `download_gguf` is called with `cancel`
+    /// pre-set to `true` -- confirming the real HTTP loop genuinely aborts
+    /// before writing any real bytes to disk (a real, minimal-cost request:
+    /// only the connection/headers, never the multi-GB body), returns the
+    /// distinct `CANCELLED_ERROR`, and leaves no stray `.part` file behind
+    /// for a later idempotent re-download to mistake for anything.
+    /// Self-skips on the same real, already-documented TLS-proxy condition
+    /// (§75.49) `resolve_gguf_filename_finds_the_real_file_for_a_real_curated_repo`
+    /// above already does, for the identical reason.
+    #[test]
+    fn download_gguf_honors_a_pre_set_cancellation_flag_and_cleans_up_the_part_file() {
+        let model = crate::hf_downloader::CURATED_MODELS[0];
+        let filename = match resolve_gguf_filename(model.hf_repo, model.tag) {
+            Ok(f) => f,
+            Err(e) if e.contains("UnknownIssuer") || e.contains("tls connection init failed") => {
+                eprintln!(
+                    "SKIP: real Hugging Face API unreachable through this sandbox's own TLS-\
+                     intercepting proxy (§75.49's already-documented condition), not a code \
+                     defect: {e}"
+                );
+                return;
+            }
+            Err(e) => panic!("expected a real success or a real TLS-proxy skip, got: {e}"),
+        };
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let cancel = AtomicBool::new(true);
+        let result = download_gguf(model.hf_repo, &filename, &tx, &cancel);
+
+        assert_eq!(result, Err(CANCELLED_ERROR.to_string()));
+
+        let safe_name = safe_filename(&filename).expect("a real resolved filename is safe");
+        let part_path = models_dir().join(format!("{safe_name}.part"));
+        assert!(
+            !part_path.is_file(),
+            "a real cancellation must not leave a stray .part file: {part_path:?}"
+        );
     }
 }

@@ -24,7 +24,7 @@ type PullState =
   | { phase: "idle" }
   | { phase: "pulling"; lines: string[] }
   | { phase: "ready" }
-  | { phase: "failed"; error: string };
+  | { phase: "failed"; error: string; cancelled?: boolean };
 
 interface DownloadedGgufModel {
   filename: string;
@@ -40,7 +40,7 @@ type LlamaCppPullState =
   | { phase: "idle" }
   | { phase: "downloading"; lines: string[] }
   | { phase: "ready"; path: string }
-  | { phase: "failed"; error: string };
+  | { phase: "failed"; error: string; cancelled?: boolean };
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
@@ -220,8 +220,12 @@ export default function ModelsScreen(): React.ReactElement {
         const { model_id } = data as { model_id: string };
         setPullStates((prev) => ({ ...prev, [model_id]: { phase: "ready" } }));
       } else if (event === "hf_pull_failed") {
-        const { model_id, error } = data as { model_id: string; error: string };
-        setPullStates((prev) => ({ ...prev, [model_id]: { phase: "failed", error } }));
+        const { model_id, error, cancelled } = data as {
+          model_id: string;
+          error: string;
+          cancelled?: boolean;
+        };
+        setPullStates((prev) => ({ ...prev, [model_id]: { phase: "failed", error, cancelled } }));
       } else if (event === "lmstudio_pull_progress") {
         const { model_id, line } = data as { model_id: string; line: string };
         setLmPullStates((prev) => {
@@ -233,8 +237,12 @@ export default function ModelsScreen(): React.ReactElement {
         const { model_id } = data as { model_id: string };
         setLmPullStates((prev) => ({ ...prev, [model_id]: { phase: "ready" } }));
       } else if (event === "lmstudio_pull_failed") {
-        const { model_id, error } = data as { model_id: string; error: string };
-        setLmPullStates((prev) => ({ ...prev, [model_id]: { phase: "failed", error } }));
+        const { model_id, error, cancelled } = data as {
+          model_id: string;
+          error: string;
+          cancelled?: boolean;
+        };
+        setLmPullStates((prev) => ({ ...prev, [model_id]: { phase: "failed", error, cancelled } }));
       } else if (event === "llamacpp_download_progress") {
         const { model_id, line } = data as { model_id: string; line: string };
         setLlamacppPullStates((prev) => {
@@ -250,8 +258,15 @@ export default function ModelsScreen(): React.ReactElement {
         setLlamacppPullStates((prev) => ({ ...prev, [model_id]: { phase: "ready", path } }));
         refreshLlamacppModels();
       } else if (event === "llamacpp_download_failed") {
-        const { model_id, error } = data as { model_id: string; error: string };
-        setLlamacppPullStates((prev) => ({ ...prev, [model_id]: { phase: "failed", error } }));
+        const { model_id, error, cancelled } = data as {
+          model_id: string;
+          error: string;
+          cancelled?: boolean;
+        };
+        setLlamacppPullStates((prev) => ({
+          ...prev,
+          [model_id]: { phase: "failed", error, cancelled },
+        }));
       }
     });
   }, [refreshLitellmStatus, refreshLlamacppModels]);
@@ -379,6 +394,22 @@ export default function ModelsScreen(): React.ReactElement {
       .catch((e: Error) => setUseModelStatus(`Failed: ${e.message}`));
   }, []);
 
+  /**
+   * Real cancel/stop for an in-flight download (task #268) -- `source` is
+   * one of the three real registry namespaces `spartan-backend` uses
+   * (`"hf"`/`"lmstudio"`/`"llamacpp"`), `eventId` the exact same id
+   * already used to key `pullStates`/`lmPullStates`/`llamacppPullStates`.
+   * Only sets the real backend flag here; the resulting `..._failed`
+   * event (now carrying `cancelled: true`) is what actually flips the UI
+   * state, the same way a genuine network failure already does.
+   */
+  const cancelDownload = useCallback((source: "hf" | "lmstudio" | "llamacpp", eventId: string) => {
+    window.spartan.call("model_download_cancel", { source, event_id: eventId }).catch(() => {
+      // A real failed cancel request (e.g. the download already finished
+      // a moment earlier) is a harmless race, not worth surfacing.
+    });
+  }, []);
+
   return (
     <div className="git-panel">
       <div className="git-section-label mono">Local Model Provider</div>
@@ -463,14 +494,19 @@ export default function ModelsScreen(): React.ReactElement {
                       ? "Pull again"
                       : "Pull"}
                 </button>
+                {state.phase === "pulling" && (
+                  <button className="git-commit-button" onClick={() => cancelDownload("hf", model.id)}>
+                    Cancel
+                  </button>
+                )}
                 {state.phase === "ready" && (
                   <span className="mono" style={{ fontSize: 10.5, color: "var(--accent)" }}>
                     ✓ ready
                   </span>
                 )}
                 {state.phase === "failed" && (
-                  <span className="mono" style={{ fontSize: 10.5, color: "#e05a4a" }}>
-                    {state.error}
+                  <span className="mono" style={{ fontSize: 10.5, color: state.cancelled ? "var(--text-dim)" : "#e05a4a" }}>
+                    {state.cancelled ? "Cancelled" : state.error}
                   </span>
                 )}
               </div>
@@ -529,21 +565,26 @@ export default function ModelsScreen(): React.ReactElement {
             const state = pullStates[key];
             if (!state || state.phase === "idle") return null;
             return (
-              <div style={{ marginTop: 4 }}>
+              <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                {state.phase === "pulling" && (
+                  <button className="git-commit-button" onClick={() => cancelDownload("hf", key)}>
+                    Cancel
+                  </button>
+                )}
                 {state.phase === "ready" && (
                   <span className="mono" style={{ fontSize: 10.5, color: "var(--accent)" }}>
                     ✓ ready
                   </span>
                 )}
                 {state.phase === "failed" && (
-                  <span className="mono" style={{ fontSize: 10.5, color: "#e05a4a" }}>
-                    {state.error}
+                  <span className="mono" style={{ fontSize: 10.5, color: state.cancelled ? "var(--text-dim)" : "#e05a4a" }}>
+                    {state.cancelled ? "Cancelled" : state.error}
                   </span>
                 )}
                 {state.phase === "pulling" && state.lines.length > 0 && (
                   <pre
                     className="mono"
-                    style={{ fontSize: 10, maxHeight: 80, overflowY: "auto", margin: "3px 0 0" }}
+                    style={{ fontSize: 10, maxHeight: 80, overflowY: "auto", margin: "3px 0 0", width: "100%" }}
                   >
                     {state.lines.join("\n")}
                   </pre>
@@ -597,14 +638,19 @@ export default function ModelsScreen(): React.ReactElement {
                       ? "Pull again"
                       : "Pull"}
                 </button>
+                {state.phase === "pulling" && (
+                  <button className="git-commit-button" onClick={() => cancelDownload("lmstudio", model.id)}>
+                    Cancel
+                  </button>
+                )}
                 {state.phase === "ready" && (
                   <span className="mono" style={{ fontSize: 10.5, color: "var(--accent)" }}>
                     ✓ ready
                   </span>
                 )}
                 {state.phase === "failed" && (
-                  <span className="mono" style={{ fontSize: 10.5, color: "#e05a4a" }}>
-                    {state.error}
+                  <span className="mono" style={{ fontSize: 10.5, color: state.cancelled ? "var(--text-dim)" : "#e05a4a" }}>
+                    {state.cancelled ? "Cancelled" : state.error}
                   </span>
                 )}
               </div>
@@ -672,21 +718,26 @@ export default function ModelsScreen(): React.ReactElement {
             const state = lmPullStates[key];
             if (!state || state.phase === "idle") return null;
             return (
-              <div style={{ marginTop: 4 }}>
+              <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                {state.phase === "pulling" && (
+                  <button className="git-commit-button" onClick={() => cancelDownload("lmstudio", key)}>
+                    Cancel
+                  </button>
+                )}
                 {state.phase === "ready" && (
                   <span className="mono" style={{ fontSize: 10.5, color: "var(--accent)" }}>
                     ✓ ready
                   </span>
                 )}
                 {state.phase === "failed" && (
-                  <span className="mono" style={{ fontSize: 10.5, color: "#e05a4a" }}>
-                    {state.error}
+                  <span className="mono" style={{ fontSize: 10.5, color: state.cancelled ? "var(--text-dim)" : "#e05a4a" }}>
+                    {state.cancelled ? "Cancelled" : state.error}
                   </span>
                 )}
                 {state.phase === "pulling" && state.lines.length > 0 && (
                   <pre
                     className="mono"
-                    style={{ fontSize: 10, maxHeight: 80, overflowY: "auto", margin: "3px 0 0" }}
+                    style={{ fontSize: 10, maxHeight: 80, overflowY: "auto", margin: "3px 0 0", width: "100%" }}
                   >
                     {state.lines.join("\n")}
                   </pre>
@@ -731,6 +782,11 @@ export default function ModelsScreen(): React.ReactElement {
                       ? "Download again"
                       : "Download"}
                 </button>
+                {state.phase === "downloading" && (
+                  <button className="git-commit-button" onClick={() => cancelDownload("llamacpp", model.id)}>
+                    Cancel
+                  </button>
+                )}
                 {state.phase === "ready" && (
                   <>
                     <span className="mono" style={{ fontSize: 10.5, color: "var(--accent)" }}>
@@ -742,8 +798,8 @@ export default function ModelsScreen(): React.ReactElement {
                   </>
                 )}
                 {state.phase === "failed" && (
-                  <span className="mono" style={{ fontSize: 10.5, color: "#e05a4a" }}>
-                    {state.error}
+                  <span className="mono" style={{ fontSize: 10.5, color: state.cancelled ? "var(--text-dim)" : "#e05a4a" }}>
+                    {state.cancelled ? "Cancelled" : state.error}
                   </span>
                 )}
               </div>
@@ -805,6 +861,11 @@ export default function ModelsScreen(): React.ReactElement {
             if (!state || state.phase === "idle") return null;
             return (
               <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                {state.phase === "downloading" && (
+                  <button className="git-commit-button" onClick={() => cancelDownload("llamacpp", key)}>
+                    Cancel
+                  </button>
+                )}
                 {state.phase === "ready" && (
                   <>
                     <span className="mono" style={{ fontSize: 10.5, color: "var(--accent)" }}>
@@ -816,12 +877,12 @@ export default function ModelsScreen(): React.ReactElement {
                   </>
                 )}
                 {state.phase === "failed" && (
-                  <span className="mono" style={{ fontSize: 10.5, color: "#e05a4a" }}>
-                    {state.error}
+                  <span className="mono" style={{ fontSize: 10.5, color: state.cancelled ? "var(--text-dim)" : "#e05a4a" }}>
+                    {state.cancelled ? "Cancelled" : state.error}
                   </span>
                 )}
                 {state.phase === "downloading" && state.lines.length > 0 && (
-                  <pre className="mono" style={{ fontSize: 10, maxHeight: 80, overflowY: "auto", margin: "3px 0 0" }}>
+                  <pre className="mono" style={{ fontSize: 10, maxHeight: 80, overflowY: "auto", margin: "3px 0 0", width: "100%" }}>
                     {state.lines.join("\n")}
                   </pre>
                 )}

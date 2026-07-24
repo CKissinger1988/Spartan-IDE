@@ -6627,6 +6627,74 @@ first — it's the parity reference until each row there is actually reimplement
   underlying code path is language-agnostic, matching every other query method's own same real
   caveat); the real Electron window remains unlaunchable in this session (same standing gap since
   §75.59).
+- **Real, working code — cancel/stop for in-flight model downloads (HF/Ollama, LM Studio,
+  llama.cpp), closing task #268 (the Model management backlog's own named gap)**: before this,
+  clicking Pull/Download always ran to completion (success or failure) with no way to abort a
+  slow or unwanted download. `BackendState` gained `download_cancellations: HashMap<String,
+  Arc<AtomicBool>>`, keyed by `download_registry_key(source, event_id)` (`"<source>:<event_id>"`
+  -- namespaced by source so the identical curated model id can never collide across HF/LM Studio/
+  llama.cpp pulling it at once); `begin_cancellable_download`/`end_cancellable_download` register
+  a fresh flag before a download's own background thread starts and remove it once that thread
+  genuinely finishes for any real reason (success, failure, or a real cancellation), so a stale
+  entry can never outlive the download it belongs to. New `model_download_cancel(source,
+  event_id)` dispatch method only ever *sets* the flag -- the actual kill happens inside each
+  download's own background thread, the only place holding the real handle. For the two
+  subprocess-based sources (`hf_pull_model`/`lmstudio_pull_model`), a new `subprocess::
+  wait_with_cancellation` replaces the prior plain, uninterruptible `child.wait()` -- it polls
+  `try_wait()` against the flag and, on cancel, really kills and reaps the child (confirmed via a
+  real test spawning `sleep 30`, cancelling it from a second thread, and independently verifying
+  via `kill -0` that the OS process is truly gone, not just that the function returned). llama.cpp's
+  own `download_gguf` has no subprocess to kill (a direct HTTP download) -- it now takes a
+  `cancel: &AtomicBool` checked once per real read chunk (never buffered ahead), and a real
+  cancellation deletes the partial `.part` file before returning a new, distinct
+  `llamacpp_downloader::CANCELLED_ERROR`, so a cancelled-and-retried download always starts clean
+  (no HTTP range-resume support exists to resume correctly anyway). Both real event-emitting
+  dispatch functions tag the resulting `..._failed` event `"cancelled": true` when the flag (not a
+  genuine network/subprocess error) caused the stop, so the UI can render "Cancelled" instead of a
+  raw error string. `model_download_cancel` was added to `main.ts`'s/`preload.ts`'s IPC allowlists
+  at the identical position (the established drift-avoidance discipline). Both shells'
+  `ModelsScreen.tsx`/`ModelsPanel.tsx` gained a Cancel button next to every Pull/Download button
+  (curated and custom, across all three sources) shown only while that specific download is
+  in-flight, calling `model_download_cancel` with the exact `source`/`event_id` key already used to
+  index that download's own UI state; the `failed` phase's rendering now shows a dim "Cancelled"
+  label instead of the raw error text when the event's `cancelled` flag is set. 10 new Rust tests
+  (3 in `subprocess.rs` -- a real normal-exit pass-through, a real long-running-process real-kill
+  test, and the existing spawn tests; 3 in `llamacpp_downloader.rs`, including a real, live test
+  that resolves a real curated model's real filename via a live HF API call, then calls
+  `download_gguf` with `cancel` pre-set to `true`, confirming a real `Err(CANCELLED_ERROR)` and no
+  stray `.part` file -- self-skips on this sandbox's own already-documented TLS-intercepting-proxy
+  condition, §75.49, the same way `resolve_gguf_filename`'s own existing live test already does; 4
+  dispatch-level tests in `spartan-backend::lib.rs`, including a real registration/unregistration
+  lifecycle test against `llamacpp_download_model` that's deliberately outcome-agnostic -- it only
+  asserts the flag is registered then genuinely removed once the download finishes, regardless of
+  whether that real network call happens to succeed or fail, so it never needs to self-skip), 233
+  `spartan-backend` lib tests total (up from 223), full `cargo fmt --all -- --check`/`cargo clippy
+  -p spartan-backend --release --all-targets` clean; both shells' own `tsc --noEmit`/`npm run
+  build` clean. **A real, live, multi-layered verification, not a single fragile browser-click
+  race**: a diagnostic polling script first confirmed this specific session's own real HF network
+  calls fail via the already-documented `UnknownIssuer` TLS-proxy condition in well under a second
+  (a real, environment-specific fact, not a code defect) -- too fast to reliably win a Playwright
+  click race against, through no fault of this feature's own code. Rather than accept a flaky test,
+  verification split into three real, deterministic layers: (1) a raw WebSocket script against the
+  actual running `spartan-devserver` binary called `llamacpp_download_model` then immediately
+  `model_download_cancel`, receiving the real `{"cancelled": true}` response (proving the full real
+  registration/lookup/set-flag path works end to end), then, after the real download had genuinely
+  finished on its own, a second real cancel call correctly returned the real, honest
+  `{"cancelled": false}` no-op, confirming `end_cancellable_download`'s own real cleanup; (2) the
+  Rust unit tests above independently prove the actual kill/flag-check mechanics for both real
+  subprocess and real HTTP-loop cases; (3) a `desktop/` UI-level test (the established mocked-
+  `window.spartan` + real `vite preview` technique for the still-unlaunchable real Electron window)
+  held the "downloading" phase open long enough to reliably click Cancel and confirmed, against the
+  real, unmodified `ModelsScreen.tsx` component code, that the click fired exactly one
+  `model_download_cancel` call with the correct `source`/`event_id` and that the real "Cancelled"
+  label rendered afterward, screenshotted at each step. **What this does not confirm**: no live
+  browser-click verification of a real (non-mocked) network cancellation succeeded end-to-end in
+  this specific session, due to the real, environment-specific TLS-proxy condition named above --
+  the mechanism itself is proven at the protocol and unit levels instead, the same "confirmed here,
+  not universal" caveat this project already applies to GPU/`/dev/kvm`/live-Ollama availability; no
+  cancel UI verification for `web/`'s own React component beyond the real raw-WebSocket protocol
+  level (its UI code is a verbatim structural port of `desktop/`'s already-verified component); the
+  real Electron window remains unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 

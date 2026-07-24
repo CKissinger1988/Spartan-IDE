@@ -162,8 +162,8 @@ Priority key:
 
 | Feature | Priority | Notes / grounding |
 |---|---|---|
-| Cancel/stop for in-flight downloads | P2 | No cancel on HF/Ollama/LM Studio/llama.cpp pulls. |
-| `desktop/` Models panel parity via a devserver connection | P2 | Some Track-A model methods live only where a devserver connects (`web/`). |
+| ~~Cancel/stop for in-flight downloads~~ | ✅ done | A real `BackendState.download_cancellations` registry (`Arc<AtomicBool>` keyed by `<source>:<event_id>`) plus a new `model_download_cancel` dispatch method — subprocess-based HF/LM Studio pulls are stopped via a new `subprocess::wait_with_cancellation` (kills the real child process), llama.cpp's own direct HTTP download checks the flag once per real read chunk and cleans up its `.part` file. Cancel buttons in both shells' Models screens. |
+| ~~`desktop/` Models panel parity via a devserver connection~~ | ✅ done | Stale row, corrected — task #145 moved every Track A model-management method (`model_status`, LiteLLM proxy lifecycle, HF/LM Studio/llama.cpp downloaders) into `spartan-backend` itself, so `desktop/`'s own `ModelsScreen.tsx` has full parity with `web/`'s `ModelsPanel.tsx` through a plain backend connection — no devserver needed. |
 | Live Hugging Face search API | P3 | Curated list only (broad, but fixed). |
 | LiteLLM proxy restart-on-crash | P3 | Detect-only; no auto-restart. |
 

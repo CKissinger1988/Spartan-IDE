@@ -253,6 +253,21 @@ pub struct BackendState {
     /// attached retroactively if the task is later abandoned (a new
     /// `leo_start_task` call) rather than actually retried.
     leo_last_error: Option<String>,
+    /// Real, live cancellation flags for in-flight model downloads (task
+    /// #268) -- keyed by `download_registry_key(source, event_id)` so the
+    /// same `event_id` string used in `hf_pull_progress`/
+    /// `lmstudio_pull_progress`/`llamacpp_download_progress` events can't
+    /// collide across the three real sources (pulling the same curated
+    /// model via both HF and LM Studio at once, say). A download's own
+    /// background thread inserts a fresh `Arc::new(AtomicBool::new(false))`
+    /// here before it starts, clones it into the thread, and removes the
+    /// entry once the download finishes for any reason (success, failure,
+    /// or a real user cancellation) -- so a stale entry can never outlive
+    /// the download it belongs to. `model_download_cancel` only ever
+    /// *sets* the flag; the download's own thread is what actually kills
+    /// the child process or aborts the HTTP read loop, since only it holds
+    /// the real `Child`/reader handle.
+    download_cancellations: HashMap<String, Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// One real, terminal `leo_session_history` entry -- see
@@ -1363,6 +1378,72 @@ fn litellm_proxy_status(state: &Arc<Mutex<BackendState>>) -> Result<serde_json::
     })
 }
 
+/// One real, stable key for `BackendState::download_cancellations` -- always
+/// `"<source>:<event_id>"`, so the identical curated-model id (or
+/// `repo:tag` custom id) used by more than one real download source at once
+/// (HF, LM Studio, llama.cpp) can never collide in the registry, and a
+/// cancel request has to name both which source and which download it means.
+fn download_registry_key(source: &str, event_id: &str) -> String {
+    format!("{source}:{event_id}")
+}
+
+/// Registers a fresh, real cancellation flag for a download about to start,
+/// overwriting any stale entry left under the same key (a prior download of
+/// the same id that already finished should already have unregistered
+/// itself -- this is a defensive fallback, not the normal path). Returns a
+/// clone for the caller's own background thread to hold and check.
+fn begin_cancellable_download(
+    state: &Arc<Mutex<BackendState>>,
+    source: &str,
+    event_id: &str,
+) -> Arc<std::sync::atomic::AtomicBool> {
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Ok(mut guard) = state.lock() {
+        guard
+            .download_cancellations
+            .insert(download_registry_key(source, event_id), flag.clone());
+    }
+    flag
+}
+
+/// Removes a download's cancellation flag once it's genuinely finished
+/// (success, a real failure, or a real user cancellation) -- called from
+/// every real exit path of a download's own background thread, so a
+/// finished download's id is never left claiming to still be cancellable.
+fn end_cancellable_download(state: &Arc<Mutex<BackendState>>, source: &str, event_id: &str) {
+    if let Ok(mut guard) = state.lock() {
+        guard
+            .download_cancellations
+            .remove(&download_registry_key(source, event_id));
+    }
+}
+
+/// Real cancel/stop for an in-flight model download (task #268). Setting
+/// the flag is all this function does -- the actual kill (a subprocess
+/// `Child::kill`, or an aborted HTTP read loop) happens inside the
+/// download's own background thread, the only place that holds the real
+/// handle. A `source`/`event_id` pair with no matching in-flight download
+/// (already finished, never started, or a real typo) is a harmless,
+/// honest `{"cancelled": false}` -- matching `litellm_proxy_stop`'s own
+/// "stopping what's already gone is a no-op, not an error" precedent --
+/// rather than a synchronous error for what is, from the caller's
+/// perspective, a race that resolved in its favor already.
+fn model_download_cancel(
+    state: &Arc<Mutex<BackendState>>,
+    source: String,
+    event_id: String,
+) -> Result<serde_json::Value, String> {
+    let guard = state.lock().map_err(|_| "backend state poisoned")?;
+    let key = download_registry_key(&source, &event_id);
+    match guard.download_cancellations.get(&key) {
+        Some(flag) => {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(serde_json::json!({ "cancelled": true }))
+        }
+        None => Ok(serde_json::json!({ "cancelled": false })),
+    }
+}
+
 /// Real, synchronous listing of the curated HF -> Ollama models.
 fn hf_list_models_json() -> serde_json::Value {
     let models: Vec<serde_json::Value> = hf_downloader::CURATED_MODELS
@@ -1422,7 +1503,15 @@ fn resolve_hf_pull_target(
 /// `resolve_hf_pull_target` above -- from this point on, both paths are
 /// identical: same validation-already-done target string, same subprocess
 /// spawn, same event shapes.
+///
+/// Real, cancellable (task #268): registers a fresh flag under
+/// `download_registry_key("hf", event_id)` before spawning, and waits on
+/// the real `ollama pull` child via `subprocess::wait_with_cancellation`
+/// instead of a plain, uninterruptible `child.wait()` -- a real
+/// `model_download_cancel` call for this id kills the child promptly
+/// rather than leaving it running to a discarded result.
 fn hf_pull_model(
+    state: &Arc<Mutex<BackendState>>,
     out_tx: Sender<String>,
     model_id: Option<String>,
     hf_repo: Option<String>,
@@ -1435,6 +1524,8 @@ fn hf_pull_model(
     }
 
     let ack_target = target.clone();
+    let cancel_flag = begin_cancellable_download(state, "hf", &event_id);
+    let cancel_state = Arc::clone(state);
     thread::spawn(move || {
         let (line_tx, line_rx) = mpsc::channel::<String>();
         let forward_out_tx = out_tx.clone();
@@ -1452,16 +1543,28 @@ fn hf_pull_model(
         });
 
         let event = match hf_downloader::spawn_pull_target(&target, line_tx) {
-            Ok(mut child) => match child.wait() {
-                Ok(status) if status.success() => Event {
+            Ok(mut child) => match subprocess::wait_with_cancellation(
+                &mut child,
+                &cancel_flag,
+                Duration::from_millis(200),
+            ) {
+                Ok(Some(status)) if status.success() => Event {
                     event: "hf_pull_ready".to_string(),
                     data: serde_json::json!({ "model_id": event_id }),
                 },
-                Ok(status) => Event {
+                Ok(Some(status)) => Event {
                     event: "hf_pull_failed".to_string(),
                     data: serde_json::json!({
                         "model_id": event_id,
                         "error": format!("ollama pull exited with {status}"),
+                    }),
+                },
+                Ok(None) => Event {
+                    event: "hf_pull_failed".to_string(),
+                    data: serde_json::json!({
+                        "model_id": event_id,
+                        "error": "cancelled by user",
+                        "cancelled": true,
                     }),
                 },
                 Err(e) => Event {
@@ -1474,6 +1577,7 @@ fn hf_pull_model(
                 data: serde_json::json!({ "model_id": event_id, "error": e.to_string() }),
             },
         };
+        end_cancellable_download(&cancel_state, "hf", &event_id);
         if let Ok(line) = serde_json::to_string(&event) {
             let _ = out_tx.send(line);
         }
@@ -1544,7 +1648,12 @@ fn resolve_lmstudio_pull_query(
 /// and honestly, with a clear, actionable message (naming exactly where
 /// `lms` is expected and what to do), if no real `lms` binary can be
 /// located at all -- never a silent hang.
+///
+/// Real, cancellable (task #268): the same `subprocess::
+/// wait_with_cancellation` + registry pattern `hf_pull_model` uses,
+/// registered under `download_registry_key("lmstudio", event_id)`.
 fn lmstudio_pull_model(
+    state: &Arc<Mutex<BackendState>>,
     out_tx: Sender<String>,
     model_id: Option<String>,
     hf_repo: Option<String>,
@@ -1562,6 +1671,8 @@ fn lmstudio_pull_model(
     }
 
     let ack_query = query.clone();
+    let cancel_flag = begin_cancellable_download(state, "lmstudio", &event_id);
+    let cancel_state = Arc::clone(state);
     thread::spawn(move || {
         let (line_tx, line_rx) = mpsc::channel::<String>();
         let forward_out_tx = out_tx.clone();
@@ -1579,16 +1690,28 @@ fn lmstudio_pull_model(
         });
 
         let event = match lmstudio_downloader::spawn_pull_query(&query, line_tx) {
-            Ok(mut child) => match child.wait() {
-                Ok(status) if status.success() => Event {
+            Ok(mut child) => match subprocess::wait_with_cancellation(
+                &mut child,
+                &cancel_flag,
+                Duration::from_millis(200),
+            ) {
+                Ok(Some(status)) if status.success() => Event {
                     event: "lmstudio_pull_ready".to_string(),
                     data: serde_json::json!({ "model_id": event_id }),
                 },
-                Ok(status) => Event {
+                Ok(Some(status)) => Event {
                     event: "lmstudio_pull_failed".to_string(),
                     data: serde_json::json!({
                         "model_id": event_id,
                         "error": format!("lms get exited with {status}"),
+                    }),
+                },
+                Ok(None) => Event {
+                    event: "lmstudio_pull_failed".to_string(),
+                    data: serde_json::json!({
+                        "model_id": event_id,
+                        "error": "cancelled by user",
+                        "cancelled": true,
                     }),
                 },
                 Err(e) => Event {
@@ -1601,6 +1724,7 @@ fn lmstudio_pull_model(
                 data: serde_json::json!({ "model_id": event_id, "error": e.to_string() }),
             },
         };
+        end_cancellable_download(&cancel_state, "lmstudio", &event_id);
         if let Ok(line) = serde_json::to_string(&event) {
             let _ = out_tx.send(line);
         }
@@ -1698,7 +1822,15 @@ fn resolve_llamacpp_download_target(
 /// pre-check for -- a real HTTP client is always available -- so any
 /// failure (network, a repo with no matching quant, a write error) only
 /// ever surfaces async, through the `_failed` event, never synchronously.
+///
+/// Real, cancellable (task #268): registers a fresh flag under
+/// `download_registry_key("llamacpp", event_id)` before spawning, and
+/// threads it directly into `download_gguf`'s own real HTTP read loop --
+/// unlike `hf_pull_model`/`lmstudio_pull_model`, there's no subprocess
+/// `Child` to kill here, so this is the one real source whose
+/// cancellation is checked-flag-based rather than process-kill-based.
 fn llamacpp_download_model(
+    state: &Arc<Mutex<BackendState>>,
     out_tx: Sender<String>,
     model_id: Option<String>,
     hf_repo: Option<String>,
@@ -1707,6 +1839,8 @@ fn llamacpp_download_model(
     let (event_id, hf_repo, tag) = resolve_llamacpp_download_target(model_id, hf_repo, tag)?;
 
     let ack_id = event_id.clone();
+    let cancel_flag = begin_cancellable_download(state, "llamacpp", &event_id);
+    let cancel_state = Arc::clone(state);
     thread::spawn(move || {
         let (line_tx, line_rx) = mpsc::channel::<String>();
         let forward_out_tx = out_tx.clone();
@@ -1724,13 +1858,25 @@ fn llamacpp_download_model(
         });
 
         let event = match llamacpp_downloader::resolve_gguf_filename(&hf_repo, &tag) {
-            Ok(filename) => match llamacpp_downloader::download_gguf(&hf_repo, &filename, &line_tx)
-            {
+            Ok(filename) => match llamacpp_downloader::download_gguf(
+                &hf_repo,
+                &filename,
+                &line_tx,
+                &cancel_flag,
+            ) {
                 Ok(path) => Event {
                     event: "llamacpp_download_ready".to_string(),
                     data: serde_json::json!({
                         "model_id": event_id,
                         "path": path.to_string_lossy(),
+                    }),
+                },
+                Err(e) if e == llamacpp_downloader::CANCELLED_ERROR => Event {
+                    event: "llamacpp_download_failed".to_string(),
+                    data: serde_json::json!({
+                        "model_id": event_id,
+                        "error": e,
+                        "cancelled": true,
                     }),
                 },
                 Err(e) => Event {
@@ -1743,6 +1889,7 @@ fn llamacpp_download_model(
                 data: serde_json::json!({ "model_id": event_id, "error": e }),
             },
         };
+        end_cancellable_download(&cancel_state, "llamacpp", &event_id);
         if let Ok(line) = serde_json::to_string(&event) {
             let _ = out_tx.send(line);
         }
@@ -4677,7 +4824,7 @@ pub fn handle_request(
                 .get("tag")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            hf_pull_model(out_tx.clone(), model_id, hf_repo, tag)
+            hf_pull_model(state, out_tx.clone(), model_id, hf_repo, tag)
         }
         "lmstudio_list_models" => Ok(lmstudio_list_models_json()),
         "lmstudio_pull_model" => {
@@ -4696,7 +4843,7 @@ pub fn handle_request(
                 .get("tag")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            lmstudio_pull_model(out_tx.clone(), model_id, hf_repo, tag)
+            lmstudio_pull_model(state, out_tx.clone(), model_id, hf_repo, tag)
         }
         "llamacpp_list_models" => Ok(llamacpp_list_models_json()),
         "llamacpp_download_model" => {
@@ -4715,8 +4862,13 @@ pub fn handle_request(
                 .get("tag")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            llamacpp_download_model(out_tx.clone(), model_id, hf_repo, tag)
+            llamacpp_download_model(state, out_tx.clone(), model_id, hf_repo, tag)
         }
+        "model_download_cancel" => (|| {
+            let source = get_str_param(&req.params, "source")?;
+            let event_id = get_str_param(&req.params, "event_id")?;
+            model_download_cancel(state, source, event_id)
+        })(),
         "crash_reports_list" => crash_reports_list(),
         "crash_report_upload" => {
             get_str_param(&req.params, "filename").and_then(|f| crash_report_upload(&f))
@@ -7590,9 +7742,11 @@ mod tests {
 
     #[test]
     fn llamacpp_download_model_dispatch_arm_reaches_the_real_handler() {
+        let state = new_state();
         let (tx, _rx) = mpsc::channel();
         let model = hf_downloader::CURATED_MODELS[0];
-        let result = llamacpp_download_model(tx, Some(model.id.to_string()), None, None).unwrap();
+        let result =
+            llamacpp_download_model(&state, tx, Some(model.id.to_string()), None, None).unwrap();
         assert_eq!(
             result.get("status").and_then(|v| v.as_str()),
             Some("starting")
@@ -7600,6 +7754,93 @@ mod tests {
         assert_eq!(
             result.get("model_id").and_then(|v| v.as_str()),
             Some(model.id)
+        );
+    }
+
+    /// Real, load-bearing (task #268): confirms a real in-flight download's
+    /// cancellation flag really is registered under the exact key
+    /// `model_download_cancel` will look up, and really is cleared once
+    /// the download's own background thread finishes -- both directly
+    /// against `BackendState`, not just that the dispatch functions
+    /// compile and return an ack. Deliberately outcome-agnostic: whether
+    /// the real network call behind it succeeds or fails honestly (this
+    /// environment's own already-documented TLS-proxy condition, §75.49,
+    /// included), either is a real "finished" state that must unregister
+    /// the flag -- so this test never needs to self-skip.
+    #[test]
+    fn llamacpp_download_model_registers_and_unregisters_a_real_cancellation_flag() {
+        let state = new_state();
+        let (tx, rx) = mpsc::channel();
+        let model = hf_downloader::CURATED_MODELS[0];
+        llamacpp_download_model(&state, tx, Some(model.id.to_string()), None, None).unwrap();
+
+        // The background thread registers the flag synchronously before
+        // this call returns (`begin_cancellable_download` runs on the
+        // caller's own thread, not inside the spawned one) -- so it's
+        // real and present the instant the ack comes back.
+        {
+            let guard = state.lock().unwrap();
+            let key = download_registry_key("llamacpp", model.id);
+            assert!(
+                guard.download_cancellations.contains_key(&key),
+                "expected a real registered cancellation flag for {key:?}"
+            );
+        }
+
+        // Wait for the real background thread to report a real terminal
+        // event (success or a real, honest network failure -- either is
+        // fine, this test only cares that the download genuinely finished
+        // and cleaned up after itself), bounded well under this crate's
+        // own real network-call timeouts.
+        let _ = rx.recv_timeout(Duration::from_secs(30));
+        std::thread::sleep(Duration::from_millis(200));
+
+        let guard = state.lock().unwrap();
+        let key = download_registry_key("llamacpp", model.id);
+        assert!(
+            !guard.download_cancellations.contains_key(&key),
+            "a real finished download must remove its own cancellation flag"
+        );
+    }
+
+    #[test]
+    fn model_download_cancel_on_an_unknown_id_is_a_real_honest_no_op() {
+        let state = new_state();
+        let result = model_download_cancel(
+            &state,
+            "hf".to_string(),
+            "no-such-real-download".to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            result.get("cancelled").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn model_download_cancel_sets_a_real_registered_flag() {
+        let state = new_state();
+        let flag = begin_cancellable_download(&state, "hf", "some-real-model");
+        assert!(!flag.load(std::sync::atomic::Ordering::SeqCst));
+
+        let result =
+            model_download_cancel(&state, "hf".to_string(), "some-real-model".to_string()).unwrap();
+        assert_eq!(
+            result.get("cancelled").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert!(
+            flag.load(std::sync::atomic::Ordering::SeqCst),
+            "the real flag the download's own thread holds must now be set"
+        );
+    }
+
+    #[test]
+    fn download_registry_key_namespaces_by_source_so_the_same_id_never_collides() {
+        assert_ne!(
+            download_registry_key("hf", "qwen2.5-coder-1.5b"),
+            download_registry_key("lmstudio", "qwen2.5-coder-1.5b")
         );
     }
 
