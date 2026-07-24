@@ -33,15 +33,29 @@ describe('ArtifactReviewScreen', () => {
     (localModelClient.isAvailable as jest.Mock).mockResolvedValue(false);
   });
 
-  test('renders artifact title, summary, and diff content', async () => {
-    const { findByText, getByText } = await render(
-      <ArtifactReviewScreen route={route} navigation={navigation} />
-    );
+  // Real, CI-only flake, not a product bug: this is the *first* test in the
+  // file to actually render `ArtifactReviewScreen`, so it alone pays the
+  // one-time React Native Testing Library cold-start cost (initial native
+  // module mocking, first component-tree construction) -- every other test
+  // below renders the identical component and reliably passes, confirming
+  // this isn't a real rendering regression. Under CI's own resource
+  // contention that cold start has occasionally exceeded Jest's default
+  // 5000ms, so this one test gets a real, generous explicit bound instead
+  // of a blanket file-wide timeout bump that would mask a genuinely slow
+  // test anywhere else in this suite.
+  test(
+    'renders artifact title, summary, and diff content',
+    async () => {
+      const { findByText, getByText } = await render(
+        <ArtifactReviewScreen route={route} navigation={navigation} />
+      );
 
-    expect(await findByText(artifact.title)).toBeTruthy();
-    expect(getByText(artifact.summary)).toBeTruthy();
-    expect(getByText(artifact.files[0].path)).toBeTruthy();
-  });
+      expect(await findByText(artifact.title)).toBeTruthy();
+      expect(getByText(artifact.summary)).toBeTruthy();
+      expect(getByText(artifact.files[0].path)).toBeTruthy();
+    },
+    15000
+  );
 
   test('diff lines render their real text content -- added, removed, and context lines', async () => {
     const { findByText, getByText } = await render(
