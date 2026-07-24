@@ -13,6 +13,26 @@
 use git2::{IndexAddOption, Repository, RepositoryOpenFlags, Status, StatusOptions};
 use std::path::{Path, PathBuf};
 
+/// Splits raw bytes into lines, each still carrying its own trailing `\n`
+/// (a final line with no trailing newline is kept as-is) -- so re-joining
+/// any contiguous sub-slice of the result is a plain concatenation with no
+/// reconstruction guesswork. Used by `stage_hunk` to splice one hunk's
+/// real new-side lines into an unrelated region of the real old content.
+fn split_keep_newlines(content: &[u8]) -> Vec<&[u8]> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for (i, &b) in content.iter().enumerate() {
+        if b == b'\n' {
+            lines.push(&content[start..=i]);
+            start = i + 1;
+        }
+    }
+    if start < content.len() {
+        lines.push(&content[start..]);
+    }
+    lines
+}
+
 /// Shared credential callback for real fetch/push against an authenticated
 /// remote. Tries SSH-agent first (the common key-backed case), then a
 /// default/anonymous credential (local `file://` remotes need none, so the
@@ -162,6 +182,21 @@ pub struct ConflictEntry {
     pub theirs: Option<String>,
 }
 
+/// One real unstaged diff hunk for a single file, as identified by
+/// `libgit2` itself (not a hand-rolled diff algorithm) -- see
+/// `diff_hunks()`'s own doc comment for exactly what it covers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HunkInfo {
+    /// This hunk's position among the file's real hunks, 0-indexed --
+    /// the value `stage_hunk()` expects back.
+    pub index: usize,
+    /// The real unified-diff hunk header, e.g. `@@ -3,4 +3,6 @@`.
+    pub header: String,
+    /// The real hunk body: every context/`+`/`-` line concatenated, each
+    /// still carrying its real leading `' '`/`'+'`/`'-'` origin marker.
+    pub body: String,
+}
+
 /// A real, open local git repository. Every method here is a thin,
 /// honest wrapper over a real `git2` call -- no simulated state.
 pub struct GitRepo {
@@ -256,6 +291,130 @@ impl GitRepo {
                 index.write()
             }
         }
+    }
+
+    /// Real per-hunk unstaged diff for one file -- diffs the file's real
+    /// index (staged) blob against its real current working-tree content
+    /// via `git2::Patch::from_blob_and_buffer` (a real libgit2 diff, not a
+    /// hand-rolled line algorithm) and returns every hunk it identifies, in
+    /// order. A real, named v1 scope cut: a path with no index entry yet
+    /// (an untracked file) has no "old" baseline to hunk against and
+    /// returns a real, honest empty list -- whole-file `stage()` already
+    /// covers that case; partial staging of a brand-new file is a
+    /// separate, unimplemented follow-up.
+    pub fn diff_hunks(&self, path: &Path) -> Result<Vec<HunkInfo>, git2::Error> {
+        let workdir = self
+            .repo
+            .workdir()
+            .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
+        let index = self.repo.index()?;
+        let old_blob = match index.get_path(path, 0) {
+            Some(entry) => self.repo.find_blob(entry.id)?,
+            None => return Ok(Vec::new()),
+        };
+        let new_content = std::fs::read(workdir.join(path)).unwrap_or_default();
+        let patch = git2::Patch::from_blob_and_buffer(
+            &old_blob,
+            Some(path),
+            &new_content,
+            Some(path),
+            None,
+        )?;
+        let mut hunks = Vec::with_capacity(patch.num_hunks());
+        for i in 0..patch.num_hunks() {
+            let (hunk, line_count) = patch.hunk(i)?;
+            let mut body = String::new();
+            for l in 0..line_count {
+                let line = patch.line_in_hunk(i, l)?;
+                let origin = line.origin();
+                if origin == '+' || origin == '-' || origin == ' ' {
+                    body.push(origin);
+                }
+                body.push_str(&String::from_utf8_lossy(line.content()));
+            }
+            hunks.push(HunkInfo {
+                index: i,
+                header: String::from_utf8_lossy(hunk.header())
+                    .trim_end()
+                    .to_string(),
+                body,
+            });
+        }
+        Ok(hunks)
+    }
+
+    /// Real "stage this one hunk" (the mechanism behind `git add -p`'s own
+    /// per-hunk selection) -- recomputes the real unstaged diff for `path`
+    /// (matching `diff_hunks()` exactly, so `hunk_index` always refers to
+    /// the hunk the caller most recently saw), splices that one hunk's real
+    /// "new side" (its context + `+` lines) into the real index (old)
+    /// content at the hunk's own `old_start`/`old_lines` position, and
+    /// writes the result as the file's new index entry via
+    /// `Index::add_frombuffer` (which computes and writes the real blob
+    /// itself) -- the working tree is left completely untouched, matching
+    /// real `git add -p`'s own behavior exactly. Staging hunks one at a
+    /// time (re-fetching the list between each) keeps every later hunk's
+    /// own `old_start`/`old_lines` correct, since each call re-diffs
+    /// against the just-updated index; staging by a stale index out of
+    /// order in one batch is not supported -- a real, named v1 scope cut.
+    pub fn stage_hunk(&self, path: &Path, hunk_index: usize) -> Result<(), git2::Error> {
+        let workdir = self
+            .repo
+            .workdir()
+            .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
+        let mut index = self.repo.index()?;
+        let old_entry = index
+            .get_path(path, 0)
+            .ok_or_else(|| git2::Error::from_str("no staged base for this path to hunk against"))?;
+        let old_blob = self.repo.find_blob(old_entry.id)?;
+        let old_content = old_blob.content();
+        let new_content = std::fs::read(workdir.join(path)).unwrap_or_default();
+        let patch = git2::Patch::from_blob_and_buffer(
+            &old_blob,
+            Some(path),
+            &new_content,
+            Some(path),
+            None,
+        )?;
+        if hunk_index >= patch.num_hunks() {
+            return Err(git2::Error::from_str("hunk index out of range"));
+        }
+        let (hunk, line_count) = patch.hunk(hunk_index)?;
+        // Split the real old (index) content into lines, keeping each
+        // line's own trailing `\n` attached, so re-joining is a plain
+        // concatenation with no reconstruction guesswork.
+        let old_lines: Vec<&[u8]> = split_keep_newlines(old_content);
+        let old_start = hunk.old_start() as usize; // 1-indexed, per real unified-diff convention
+        let old_len = hunk.old_lines() as usize;
+        // `old_start` is 1-indexed and, for a pure-addition hunk with
+        // `old_lines() == 0`, names the real line *after* which the
+        // insertion happens -- so the real splice point is `old_start`
+        // unchanged in that case (nothing to remove) and `old_start - 1`
+        // otherwise (the first of the `old_len` lines this hunk replaces).
+        let splice_start = if old_len == 0 {
+            old_start.min(old_lines.len())
+        } else {
+            old_start.saturating_sub(1)
+        };
+        let splice_end = (splice_start + old_len).min(old_lines.len());
+        let mut new_index_content = Vec::new();
+        for line in &old_lines[..splice_start] {
+            new_index_content.extend_from_slice(line);
+        }
+        for l in 0..line_count {
+            let line = patch.line_in_hunk(hunk_index, l)?;
+            if line.origin() == ' ' || line.origin() == '+' {
+                new_index_content.extend_from_slice(line.content());
+            }
+        }
+        for line in &old_lines[splice_end..] {
+            new_index_content.extend_from_slice(line);
+        }
+        let mut entry = old_entry;
+        entry.id = git2::Oid::zero(); // overwritten by add_frombuffer from the real content
+        entry.file_size = 0; // same
+        index.add_frombuffer(&entry, &new_index_content)?;
+        index.write()
     }
 
     /// Real "discard changes" -- restores this one path's working-tree file
@@ -2148,5 +2307,132 @@ mod tests {
         repo.stage(Path::new("f.txt")).unwrap();
         repo.commit("first").unwrap();
         assert!(repo.commit_merge("nothing to complete").is_err());
+    }
+
+    /// A real, real committed 20-line file with two well-separated later
+    /// edits (line 2 and line 19 -- far enough apart that libgit2's default
+    /// 3-line diff context can't merge them into one hunk) -- the standard
+    /// real fixture for exercising real per-hunk staging.
+    fn repo_with_two_separated_unstaged_hunks(unique: &str) -> (TempRepo, GitRepo) {
+        let (tmp, repo) = TempRepo::new(unique);
+        let base: String = (1..=20)
+            .map(|n| format!("line{n}\n"))
+            .collect::<Vec<_>>()
+            .join("");
+        tmp.write("f.txt", &base);
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("base").unwrap();
+        let modified = base
+            .replace("line2\n", "line2 CHANGED\n")
+            .replace("line19\n", "line19 CHANGED\n");
+        tmp.write("f.txt", &modified);
+        (tmp, repo)
+    }
+
+    #[test]
+    fn diff_hunks_on_an_untracked_file_is_a_real_honest_empty_list() {
+        let (tmp, repo) = TempRepo::new("diff_hunks_untracked");
+        tmp.write("untracked.txt", "content\n");
+        assert!(repo
+            .diff_hunks(Path::new("untracked.txt"))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn diff_hunks_reports_two_real_separate_hunks_for_two_separated_edits() {
+        let (_tmp, repo) = repo_with_two_separated_unstaged_hunks("diff_hunks_two");
+        let hunks = repo.diff_hunks(Path::new("f.txt")).unwrap();
+        assert_eq!(
+            hunks.len(),
+            2,
+            "the two edits are far enough apart to stay separate hunks"
+        );
+        assert!(hunks[0].body.contains("line2 CHANGED"));
+        assert!(!hunks[0].body.contains("line19"));
+        assert!(hunks[1].body.contains("line19 CHANGED"));
+        assert!(!hunks[1].body.contains("line2 CHANGED"));
+        assert!(hunks[0].header.starts_with("@@"));
+        assert_eq!(hunks[0].index, 0);
+        assert_eq!(hunks[1].index, 1);
+    }
+
+    #[test]
+    fn stage_hunk_stages_only_the_selected_hunk_leaving_the_other_real_change_unstaged() {
+        let (tmp, repo) = repo_with_two_separated_unstaged_hunks("stage_hunk_one");
+        repo.stage_hunk(Path::new("f.txt"), 0).unwrap();
+
+        // The real staged (index) content now has line2's change but not
+        // line19's.
+        let staged = repo
+            .index_blob_content(Path::new("f.txt"))
+            .unwrap()
+            .unwrap();
+        assert!(staged.contains("line2 CHANGED"));
+        assert!(!staged.contains("line19 CHANGED"));
+
+        // The real working-tree file is completely untouched by staging.
+        assert!(fs::read_to_string(tmp.dir.join("f.txt"))
+            .unwrap()
+            .contains("line19 CHANGED"));
+
+        // git_status shows this file as both staged (line2) AND still
+        // unstaged (line19's real remaining diff).
+        let status = repo.status().unwrap();
+        let entry = status
+            .iter()
+            .find(|e| e.path == Path::new("f.txt"))
+            .unwrap();
+        assert!(entry.staged.is_some());
+        assert!(entry.unstaged.is_some());
+    }
+
+    #[test]
+    fn stage_hunk_twice_in_sequence_stages_the_real_whole_file() {
+        let (tmp, repo) = repo_with_two_separated_unstaged_hunks("stage_hunk_both");
+        // First call recomputes the real diff fresh, sees 2 hunks, stages
+        // hunk 0.
+        repo.stage_hunk(Path::new("f.txt"), 0).unwrap();
+        // The real remaining diff now has exactly 1 hunk (line19's change)
+        // -- re-fetched fresh, not reused from the first call.
+        let remaining = repo.diff_hunks(Path::new("f.txt")).unwrap();
+        assert_eq!(remaining.len(), 1);
+        repo.stage_hunk(Path::new("f.txt"), 0).unwrap();
+
+        let staged = repo
+            .index_blob_content(Path::new("f.txt"))
+            .unwrap()
+            .unwrap();
+        let working = fs::read_to_string(tmp.dir.join("f.txt")).unwrap();
+        assert_eq!(
+            staged, working,
+            "staging every real hunk matches the working tree exactly"
+        );
+        assert!(repo.diff_hunks(Path::new("f.txt")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn stage_hunk_out_of_range_errors_honestly() {
+        let (_tmp, repo) = repo_with_two_separated_unstaged_hunks("stage_hunk_oor");
+        assert!(repo.stage_hunk(Path::new("f.txt"), 99).is_err());
+    }
+
+    #[test]
+    fn stage_hunk_on_a_pure_addition_at_end_of_file_works() {
+        let (tmp, repo) = TempRepo::new("stage_hunk_addition");
+        tmp.write("f.txt", "line1\nline2\nline3\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("base").unwrap();
+        tmp.write("f.txt", "line1\nline2\nline3\nline4\nline5\n");
+
+        let hunks = repo.diff_hunks(Path::new("f.txt")).unwrap();
+        assert_eq!(hunks.len(), 1);
+        repo.stage_hunk(Path::new("f.txt"), 0).unwrap();
+
+        let staged = repo
+            .index_blob_content(Path::new("f.txt"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(staged, "line1\nline2\nline3\nline4\nline5\n");
     }
 }

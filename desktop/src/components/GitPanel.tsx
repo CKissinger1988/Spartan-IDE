@@ -54,6 +54,12 @@ interface ConflictEntry {
   theirs: string | null;
 }
 
+interface HunkInfo {
+  index: number;
+  header: string;
+  body: string;
+}
+
 /** Real relative-age formatting for the history list -- coarse on
  * purpose (a source-control sidebar, not a timestamp report). */
 function formatAge(unixSeconds: number): string {
@@ -335,10 +341,22 @@ function DiffView({ diff }: { diff: string }): React.ReactElement {
  * performs a real two-parent commit; "Abort" is a real, destructive
  * `git merge --abort` equivalent, confirmed first.
  *
+ * Real per-hunk staging (task #271): expanding an *unstaged* row's diff
+ * (the merge-conflict panel's own "±" button, unaffected) also fetches its
+ * real hunk list via `spartan_git::diff_hunks` (built on real
+ * `git2::Patch::from_blob_and_buffer`, not a hand-rolled diff) and renders
+ * a "Stage this hunk" button per hunk -- `resolve_conflict_with_content`'s
+ * own real one-file-at-a-time discipline applied one layer finer.
+ * `stage_hunk` recomputes the diff fresh every call, so hunks are always
+ * staged one at a time against the real current index, never a stale
+ * client-side list; both the hunk list and overall status are refetched
+ * after each stage.
+ *
  * A deliberate, named v1 scope cut, matching this whole `desktop/`
  * effort's own established pattern of naming what's deferred rather than
- * silently omitting it: no per-hunk staging, no stash-during-merge
- * interplay, no branch delete/rename, no merging via drag-and-drop.
+ * silently omitting it: no per-line (sub-hunk) selection, no unstage-a-
+ * hunk (whole-file unstage only), no stash-during-merge interplay, no
+ * branch delete/rename, no merging via drag-and-drop.
  */
 export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [status, setStatus] = useState<GitStatus | null>(null);
@@ -350,6 +368,11 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [diffContent, setDiffContent] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
+  // Real per-hunk staging (task #271) -- only fetched for an unstaged
+  // row's own expansion (a staged diff has nothing left to hunk-stage).
+  const [hunks, setHunks] = useState<HunkInfo[] | null>(null);
+  const [hunksError, setHunksError] = useState<string | null>(null);
+  const [hunkBusy, setHunkBusy] = useState(false);
   const [showBranches, setShowBranches] = useState(false);
   const [branches, setBranches] = useState<BranchInfo[] | null>(null);
   // Real remote-tracking branches (`origin/feature`) as of the last fetch
@@ -727,6 +750,20 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
     [root, refresh]
   );
 
+  // Real per-hunk fetch (task #271), reused both when opening an unstaged
+  // row's expansion and after a hunk is staged (whose own staging changes
+  // the real remaining hunk list, so it's always refetched fresh, never
+  // patched client-side).
+  const refreshHunks = useCallback(
+    (path: string) => {
+      window.spartan
+        .call("git_diff_hunks", { project_root: root, path })
+        .then((result) => setHunks((result as { hunks: HunkInfo[] }).hunks))
+        .catch((err: Error) => setHunksError(err.message));
+    },
+    [root]
+  );
+
   const toggleDiff = useCallback(
     (path: string, staged: boolean, e: React.MouseEvent) => {
       e.stopPropagation();
@@ -734,19 +771,46 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
         setExpandedDiff(null);
         setDiffContent(null);
         setDiffError(null);
+        setHunks(null);
+        setHunksError(null);
         return;
       }
       setExpandedDiff({ path, staged });
       setDiffContent(null);
       setDiffError(null);
+      setHunks(null);
+      setHunksError(null);
       setDiffLoading(true);
       window.spartan
         .call("git_diff", { project_root: root, path, staged })
         .then((result) => setDiffContent((result as { diff: string }).diff))
         .catch((err: Error) => setDiffError(err.message))
         .finally(() => setDiffLoading(false));
+      // Hunks only make sense for an *unstaged* row -- a staged diff has
+      // nothing left to hunk-stage.
+      if (!staged) refreshHunks(path);
     },
-    [root, expandedDiff]
+    [root, expandedDiff, refreshHunks]
+  );
+
+  // Real "stage this one hunk" -- stages, then refreshes both overall
+  // status (staged/unstaged counts, and whether the file leaves "Changes"
+  // entirely once its last hunk is staged) and the real remaining hunk
+  // list for this same path.
+  const stageHunk = useCallback(
+    (path: string, hunkIndex: number) => {
+      setHunkBusy(true);
+      setHunksError(null);
+      window.spartan
+        .call("git_stage_hunk", { project_root: root, path, hunk_index: hunkIndex })
+        .then(() => {
+          refresh();
+          refreshHunks(path);
+        })
+        .catch((err: Error) => setHunksError(err.message))
+        .finally(() => setHunkBusy(false));
+    },
+    [root, refresh, refreshHunks]
   );
 
   const toggleBranches = useCallback(() => {
@@ -1283,6 +1347,24 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
                 {diffLoading && <div className="git-panel-empty mono">Loading diff…</div>}
                 {diffError && <div className="git-panel-empty mono">{diffError}</div>}
                 {diffContent !== null && <DiffView diff={diffContent} />}
+                {hunksError && <div className="git-panel-empty mono">{hunksError}</div>}
+                {hunks?.map((h) => (
+                  <div key={h.index} className="git-hunk-block">
+                    <div className="git-hunk-header mono">
+                      <span>{h.header}</span>
+                      <button
+                        type="button"
+                        className="editor-find-btn"
+                        disabled={hunkBusy}
+                        onClick={() => stageHunk(entry.path, h.index)}
+                        title="Stage only this hunk"
+                      >
+                        Stage this hunk
+                      </button>
+                    </div>
+                    <DiffView diff={h.body} />
+                  </div>
+                ))}
               </div>
             )}
           </React.Fragment>

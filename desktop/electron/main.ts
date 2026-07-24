@@ -267,6 +267,8 @@ app.whenReady().then(() => {
     "git_create_tag",
     "git_delete_tag",
     "git_diff",
+    "git_diff_hunks",
+    "git_stage_hunk",
     "git_branches",
     "git_checkout",
     "git_create_branch",

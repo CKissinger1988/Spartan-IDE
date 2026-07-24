@@ -3718,6 +3718,37 @@ fn git_diff(project_root: &str, path: &str, staged: bool) -> Result<serde_json::
     }))
 }
 
+/// Real per-hunk unstaged diff for one file -- lists every real hunk
+/// `spartan_git::diff_hunks` identifies, so the UI can offer a "stage this
+/// hunk" action per real hunk rather than only whole-file staging.
+fn git_diff_hunks(project_root: &str, path: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let hunks = repo
+        .diff_hunks(std::path::Path::new(path))
+        .map_err(|e| format!("git diff hunks: {e}"))?
+        .into_iter()
+        .map(|h| serde_json::json!({ "index": h.index, "header": h.header, "body": h.body }))
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "hunks": hunks }))
+}
+
+/// Real "stage this one hunk" (`git add -p`'s own per-hunk selection) --
+/// `hunk_index` must refer to a hunk from the *most recent* real
+/// `git_diff_hunks` call for this file, since staging one hunk changes the
+/// real index and so the real hunk list for any later staging action.
+fn git_stage_hunk(
+    project_root: &str,
+    path: &str,
+    hunk_index: u64,
+) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.stage_hunk(std::path::Path::new(path), hunk_index as usize)
+        .map_err(|e| format!("git stage hunk: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 /// Real local branch list -- every real local branch name plus which one
 /// is current (none flagged for a real detached `HEAD`).
 fn git_branches(project_root: &str) -> Result<serde_json::Value, String> {
@@ -4757,6 +4788,21 @@ pub fn handle_request(
                 .and_then(|v| v.as_bool())
                 .ok_or("missing/invalid bool param `staged`")?;
             git_diff(&root, &path, staged)
+        })(),
+        "git_diff_hunks" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let path = get_str_param(&req.params, "path")?;
+            git_diff_hunks(&root, &path)
+        })(),
+        "git_stage_hunk" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let path = get_str_param(&req.params, "path")?;
+            let hunk_index = req
+                .params
+                .get("hunk_index")
+                .and_then(|v| v.as_u64())
+                .ok_or("missing/invalid u64 param `hunk_index`")?;
+            git_stage_hunk(&root, &path, hunk_index)
         })(),
         "git_branches" => get_str_param(&req.params, "project_root").and_then(|r| git_branches(&r)),
         "git_checkout" => (|| {
@@ -6568,6 +6614,120 @@ mod tests {
         assert!(resp.result.is_none());
         assert!(resp.error.unwrap().contains("no git repository found"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn git_diff_hunks_and_stage_hunk_round_trip_through_the_dispatch_path() {
+        let tmp = TempRepo::new("diff_hunks_dispatch");
+        let base: String = (1..=20)
+            .map(|n| format!("line{n}\n"))
+            .collect::<Vec<_>>()
+            .join("");
+        std::fs::write(tmp.dir.join("f.txt"), &base).unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "base" }),
+        );
+        let modified = base
+            .replace("line2\n", "line2 CHANGED\n")
+            .replace("line19\n", "line19 CHANGED\n");
+        std::fs::write(tmp.dir.join("f.txt"), &modified).unwrap();
+
+        let hunks_resp = call(
+            &state,
+            3,
+            "git_diff_hunks",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        let hunks = hunks_resp.result.unwrap()["hunks"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(hunks.len(), 2);
+        assert!(hunks[0]["body"].as_str().unwrap().contains("line2 CHANGED"));
+
+        let stage_resp = call(
+            &state,
+            4,
+            "git_stage_hunk",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "hunk_index": 0 }),
+        );
+        assert_eq!(stage_resp.result.unwrap()["ok"], true);
+
+        // The real working tree is untouched by staging.
+        assert_eq!(
+            std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            modified
+        );
+
+        let status_resp = call(
+            &state,
+            5,
+            "git_status",
+            serde_json::json!({ "project_root": root }),
+        );
+        let entries = status_resp.result.unwrap()["entries"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let entry = entries
+            .iter()
+            .find(|e| e["path"] == "f.txt")
+            .expect("f.txt must be in status");
+        assert!(!entry["staged"].is_null());
+        assert!(!entry["unstaged"].is_null());
+
+        // Exactly one real hunk remains after staging the first.
+        let remaining_resp = call(
+            &state,
+            6,
+            "git_diff_hunks",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        let remaining = remaining_resp.result.unwrap()["hunks"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(remaining.len(), 1);
+    }
+
+    #[test]
+    fn git_stage_hunk_out_of_range_errors_honestly_through_the_dispatch_path() {
+        let tmp = TempRepo::new("stage_hunk_oor_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "v1\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "base" }),
+        );
+        std::fs::write(tmp.dir.join("f.txt"), "v2\n").unwrap();
+        let resp = call(
+            &state,
+            3,
+            "git_stage_hunk",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "hunk_index": 99 }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("git stage hunk"));
     }
 
     #[test]

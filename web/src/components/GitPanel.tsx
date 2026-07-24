@@ -59,6 +59,12 @@ interface ConflictEntry {
   theirs: string | null;
 }
 
+interface HunkInfo {
+  index: number;
+  header: string;
+  body: string;
+}
+
 /** Real relative-age formatting for the history list -- coarse on
  * purpose (a source-control sidebar, not a timestamp report). */
 function formatAge(unixSeconds: number): string {
@@ -329,8 +335,16 @@ function DiffView({ diff }: { diff: string }): React.ReactElement {
  * "Take theirs" one-click resolution plus a manual-edit textarea, and
  * "Complete Merge"/"Abort" finish or discard the merge.
  *
- * Same real, named v1 scope cut as the ported original: no per-hunk
- * staging, no stash-during-merge interplay, no branch delete/rename.
+ * Real per-hunk staging (task #271), ported verbatim from `desktop/`'s own
+ * copy: expanding an unstaged row's diff also fetches its real hunk list
+ * (`spartan_git::diff_hunks`, built on `git2::Patch::from_blob_and_buffer`)
+ * and renders a "Stage this hunk" button per hunk; staging recomputes the
+ * real diff fresh every call, so hunks always target the real current
+ * index.
+ *
+ * Same real, named v1 scope cut as the ported original: no per-line
+ * (sub-hunk) selection, no unstage-a-hunk, no stash-during-merge
+ * interplay, no branch delete/rename.
  */
 export default function GitPanel({ client, root }: GitPanelProps): React.ReactElement {
   const [status, setStatus] = useState<GitStatus | null>(null);
@@ -342,6 +356,10 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
   const [diffContent, setDiffContent] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
+  // Real per-hunk staging (task #271), mirroring desktop/'s own.
+  const [hunks, setHunks] = useState<HunkInfo[] | null>(null);
+  const [hunksError, setHunksError] = useState<string | null>(null);
+  const [hunkBusy, setHunkBusy] = useState(false);
   const [showBranches, setShowBranches] = useState(false);
   const [branches, setBranches] = useState<BranchInfo[] | null>(null);
   // Real remote-tracking branches (`origin/feature`) as of the last fetch
@@ -700,6 +718,19 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
     [client, root, refresh]
   );
 
+  // Real per-hunk fetch (task #271), mirroring desktop/'s own -- reused
+  // both when opening an unstaged row's expansion and after a hunk is
+  // staged, always refetched fresh, never patched client-side.
+  const refreshHunks = useCallback(
+    (path: string) => {
+      client
+        .call("git_diff_hunks", { project_root: root, path })
+        .then((result) => setHunks((result as { hunks: HunkInfo[] }).hunks))
+        .catch((err: Error) => setHunksError(err.message));
+    },
+    [client, root]
+  );
+
   const toggleDiff = useCallback(
     (path: string, staged: boolean, e: React.MouseEvent) => {
       e.stopPropagation();
@@ -707,19 +738,41 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
         setExpandedDiff(null);
         setDiffContent(null);
         setDiffError(null);
+        setHunks(null);
+        setHunksError(null);
         return;
       }
       setExpandedDiff({ path, staged });
       setDiffContent(null);
       setDiffError(null);
+      setHunks(null);
+      setHunksError(null);
       setDiffLoading(true);
       client
         .call("git_diff", { project_root: root, path, staged })
         .then((result) => setDiffContent((result as { diff: string }).diff))
         .catch((err: Error) => setDiffError(err.message))
         .finally(() => setDiffLoading(false));
+      if (!staged) refreshHunks(path);
     },
-    [client, root, expandedDiff]
+    [client, root, expandedDiff, refreshHunks]
+  );
+
+  // Real "stage this one hunk", mirroring desktop/'s own.
+  const stageHunk = useCallback(
+    (path: string, hunkIndex: number) => {
+      setHunkBusy(true);
+      setHunksError(null);
+      client
+        .call("git_stage_hunk", { project_root: root, path, hunk_index: hunkIndex })
+        .then(() => {
+          refresh();
+          refreshHunks(path);
+        })
+        .catch((err: Error) => setHunksError(err.message))
+        .finally(() => setHunkBusy(false));
+    },
+    [client, root, refresh, refreshHunks]
   );
 
   const toggleBranches = useCallback(() => {
@@ -1250,6 +1303,24 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
                 {diffLoading && <div className="git-panel-empty mono">Loading diff…</div>}
                 {diffError && <div className="git-panel-empty mono">{diffError}</div>}
                 {diffContent !== null && <DiffView diff={diffContent} />}
+                {hunksError && <div className="git-panel-empty mono">{hunksError}</div>}
+                {hunks?.map((h) => (
+                  <div key={h.index} className="git-hunk-block">
+                    <div className="git-hunk-header mono">
+                      <span>{h.header}</span>
+                      <button
+                        type="button"
+                        className="editor-find-btn"
+                        disabled={hunkBusy}
+                        onClick={() => stageHunk(entry.path, h.index)}
+                        title="Stage only this hunk"
+                      >
+                        Stage this hunk
+                      </button>
+                    </div>
+                    <DiffView diff={h.body} />
+                  </div>
+                ))}
               </div>
             )}
           </React.Fragment>

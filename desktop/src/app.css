@@ -357,6 +357,24 @@
   min-height: 70px;
 }
 
+.git-hunk-block {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin: 4px 0;
+  overflow: hidden;
+}
+
+.git-hunk-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-alt, rgba(255, 255, 255, 0.03));
+}
+
 .tree-row {
   display: flex;
   align-items: center;
