@@ -380,6 +380,15 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [remoteBranches, setRemoteBranches] = useState<string[] | null>(null);
   const [branchError, setBranchError] = useState<string | null>(null);
   const [newBranchName, setNewBranchName] = useState("");
+  // Real cherry-pick (task #272): browsing a branch's own commits (local or
+  // remote-tracking) without checking it out, and applying one of them onto
+  // the current branch. At most one branch's commit log expanded at a time,
+  // matching this panel's own established "one expansion" convention.
+  const [expandedBranchLog, setExpandedBranchLog] = useState<string | null>(null);
+  const [branchLogCommits, setBranchLogCommits] = useState<CommitInfo[] | null>(null);
+  const [branchLogError, setBranchLogError] = useState<string | null>(null);
+  const [cherryPickBusy, setCherryPickBusy] = useState(false);
+  const [cherryPickError, setCherryPickError] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
@@ -876,6 +885,59 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
     [root, refresh]
   );
 
+  // Real, live "browse this branch's own commits" toggle (task #272) --
+  // works for both local branch names and remote-tracking ones (e.g.
+  // `origin/feature`), matching `git_log_for_ref`'s own two-namespace
+  // resolution. Fetched fresh on every open, matching every other
+  // expandable list this panel already has.
+  const toggleBranchLog = useCallback(
+    (refName: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (expandedBranchLog === refName) {
+        setExpandedBranchLog(null);
+        setBranchLogCommits(null);
+        setBranchLogError(null);
+        return;
+      }
+      setExpandedBranchLog(refName);
+      setBranchLogCommits(null);
+      setBranchLogError(null);
+      setCherryPickError(null);
+      window.spartan
+        .call("git_log_for_ref", { project_root: root, ref_name: refName, max: 10 })
+        .then((result) => setBranchLogCommits((result as { commits: CommitInfo[] }).commits))
+        .catch((e2: Error) => setBranchLogError(e2.message));
+    },
+    [root, expandedBranchLog]
+  );
+
+  // Real `git cherry-pick <oid>` -- applies a commit from a browsed
+  // branch's own log onto the current branch. Refreshes overall status
+  // (the working tree just changed) and, if the History section is
+  // already open, its own commit list too, so the real new commit shows
+  // up without needing a manual re-toggle.
+  const cherryPick = useCallback(
+    (oid: string) => {
+      setCherryPickBusy(true);
+      setCherryPickError(null);
+      window.spartan
+        .call("git_cherry_pick", { project_root: root, oid })
+        .then(() => {
+          refresh();
+          if (showHistory) {
+            return window.spartan.call("git_log", { project_root: root, max: 25 });
+          }
+          return null;
+        })
+        .then((result) => {
+          if (result) setCommits((result as { commits: CommitInfo[] }).commits);
+        })
+        .catch((e: Error) => setCherryPickError(e.message))
+        .finally(() => setCherryPickBusy(false));
+    },
+    [root, refresh, showHistory]
+  );
+
   const createBranch = useCallback(() => {
     const name = newBranchName.trim();
     if (!name) return;
@@ -984,44 +1046,122 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
             <div className="git-panel-empty mono">Loading branches…</div>
           )}
           {branches?.map((b) => (
-            <div
-              key={b.name}
-              className="git-row"
-              onClick={() => {
-                if (!b.current && !switching) checkoutBranch(b.name);
-              }}
-              title={b.current ? "Current branch" : `Switch to ${b.name}`}
-            >
-              <span className="git-status-glyph mono">{b.current ? "✓" : ""}</span>
-              <span className="mono git-row-path">{b.name}</span>
-              {!b.current && (
-                <button
-                  type="button"
-                  className="editor-find-btn"
-                  disabled={mergeBusy || Boolean(mergeStatus?.inProgress)}
-                  onClick={(e) => mergeBranch(b.name, e)}
-                  title={`Merge ${b.name} into ${status.branch ?? "the current branch"}`}
-                >
-                  Merge
-                </button>
+            <React.Fragment key={b.name}>
+              <div
+                className="git-row"
+                onClick={() => {
+                  if (!b.current && !switching) checkoutBranch(b.name);
+                }}
+                title={b.current ? "Current branch" : `Switch to ${b.name}`}
+              >
+                <span className="git-status-glyph mono">{b.current ? "✓" : ""}</span>
+                <span className="mono git-row-path">{b.name}</span>
+                {!b.current && (
+                  <>
+                    <button
+                      type="button"
+                      className="editor-find-btn"
+                      disabled={mergeBusy || Boolean(mergeStatus?.inProgress)}
+                      onClick={(e) => mergeBranch(b.name, e)}
+                      title={`Merge ${b.name} into ${status.branch ?? "the current branch"}`}
+                    >
+                      Merge
+                    </button>
+                    <button
+                      type="button"
+                      className="editor-find-btn"
+                      onClick={(e) => toggleBranchLog(b.name, e)}
+                      title={`Browse ${b.name}'s own commits`}
+                    >
+                      {expandedBranchLog === b.name ? "▾" : "▸"} Commits
+                    </button>
+                  </>
+                )}
+              </div>
+              {expandedBranchLog === b.name && (
+                <div className="git-hunk-block">
+                  {branchLogError && (
+                    <div className="git-panel-empty mono">{branchLogError}</div>
+                  )}
+                  {branchLogCommits === null && !branchLogError && (
+                    <div className="git-panel-empty mono">Loading commits…</div>
+                  )}
+                  {branchLogCommits?.map((c) => (
+                    <div key={c.oid} className="git-hunk-header mono">
+                      <span>
+                        {c.oid.slice(0, 7)} {c.summary}
+                      </span>
+                      <button
+                        type="button"
+                        className="editor-find-btn"
+                        disabled={cherryPickBusy}
+                        onClick={() => cherryPick(c.oid)}
+                        title={`Cherry-pick onto ${status.branch ?? "the current branch"}`}
+                      >
+                        Cherry-pick
+                      </button>
+                    </div>
+                  ))}
+                  {cherryPickError && (
+                    <div className="git-panel-empty mono">{cherryPickError}</div>
+                  )}
+                </div>
               )}
-            </div>
+            </React.Fragment>
           ))}
           {remoteBranches && remoteBranches.length > 0 && (
             <>
               <div className="git-section-label mono">Remote branches</div>
               {remoteBranches.map((rb) => (
-                <div
-                  key={rb}
-                  className="git-row"
-                  onClick={() => {
-                    if (!switching) checkoutRemoteBranch(rb);
-                  }}
-                  title={`Check out ${rb} (creates a local tracking branch)`}
-                >
-                  <span className="git-status-glyph mono">⑃</span>
-                  <span className="mono git-row-path">{rb}</span>
-                </div>
+                <React.Fragment key={rb}>
+                  <div
+                    className="git-row"
+                    onClick={() => {
+                      if (!switching) checkoutRemoteBranch(rb);
+                    }}
+                    title={`Check out ${rb} (creates a local tracking branch)`}
+                  >
+                    <span className="git-status-glyph mono">⑃</span>
+                    <span className="mono git-row-path">{rb}</span>
+                    <button
+                      type="button"
+                      className="editor-find-btn"
+                      onClick={(e) => toggleBranchLog(rb, e)}
+                      title={`Browse ${rb}'s own commits`}
+                    >
+                      {expandedBranchLog === rb ? "▾" : "▸"} Commits
+                    </button>
+                  </div>
+                  {expandedBranchLog === rb && (
+                    <div className="git-hunk-block">
+                      {branchLogError && (
+                        <div className="git-panel-empty mono">{branchLogError}</div>
+                      )}
+                      {branchLogCommits === null && !branchLogError && (
+                        <div className="git-panel-empty mono">Loading commits…</div>
+                      )}
+                      {branchLogCommits?.map((c) => (
+                        <div key={c.oid} className="git-hunk-header mono">
+                          <span>
+                            {c.oid.slice(0, 7)} {c.summary}
+                          </span>
+                          <button
+                            type="button"
+                            className="editor-find-btn"
+                            disabled={cherryPickBusy}
+                            onClick={() => cherryPick(c.oid)}
+                            title={`Cherry-pick onto ${status.branch ?? "the current branch"}`}
+                          >
+                            Cherry-pick
+                          </button>
+                        </div>
+                      ))}
+                      {cherryPickError && (
+                        <div className="git-panel-empty mono">{cherryPickError}</div>
+                      )}
+                    </div>
+                  )}
+                </React.Fragment>
               ))}
             </>
           )}

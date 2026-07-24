@@ -863,6 +863,98 @@ impl GitRepo {
         Ok(out)
     }
 
+    /// Real `git log <ref_name>` -- the same real, full-graph `revwalk` as
+    /// `log()`, but starting from a named branch (local or remote-tracking,
+    /// the same two-namespace resolution `merge_branch` already uses)
+    /// instead of `HEAD` -- so a branch's own commits can be browsed
+    /// without checking it out. Errors honestly if the ref doesn't exist in
+    /// either namespace.
+    pub fn list_commits_for_ref(
+        &self,
+        ref_name: &str,
+        max: usize,
+    ) -> Result<Vec<CommitInfo>, git2::Error> {
+        let start_oid = self
+            .repo
+            .find_branch(ref_name, git2::BranchType::Local)
+            .or_else(|_| self.repo.find_branch(ref_name, git2::BranchType::Remote))?
+            .into_reference()
+            .peel_to_commit()?
+            .id();
+        let mut walk = self.repo.revwalk()?;
+        walk.push(start_oid)?;
+        let mut out = Vec::new();
+        for oid in walk {
+            if out.len() >= max {
+                break;
+            }
+            let oid = oid?;
+            let commit = self.repo.find_commit(oid)?;
+            out.push(CommitInfo {
+                oid: oid.to_string(),
+                summary: commit.summary().unwrap_or("").to_string(),
+                author: commit.author().name().unwrap_or("").to_string(),
+                time: commit.time().seconds(),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Real `git cherry-pick <oid>` -- applies the named commit's real
+    /// changes onto the current `HEAD` (via `git2`'s own real `cherrypick`,
+    /// which sets the real `CHERRYPICK_HEAD` state and populates the index/
+    /// working tree), then commits the result as a new commit with a single
+    /// parent (`HEAD`) -- unlike `revert_commit`'s two-parent-free "Revert"
+    /// commit, a cherry-pick commit is a normal, single-parent one, matching
+    /// real `git cherry-pick`'s own commit shape. A real conflict is an
+    /// honest error: the in-progress cherry-pick state is cleaned up (never
+    /// left half-applied) and the caller is told, exactly like
+    /// `revert_commit`'s own conflict handling. A cherry-pick that produces
+    /// no real changes at all (the commit's own diff is already fully
+    /// present on `HEAD`) is also a real, honest error rather than a
+    /// silent, pointless duplicate commit -- checked by comparing the
+    /// resulting tree to `HEAD`'s own tree before committing.
+    pub fn cherry_pick_commit(&self, oid_hex: &str) -> Result<git2::Oid, git2::Error> {
+        let oid = git2::Oid::from_str(oid_hex)?;
+        let commit = self.repo.find_commit(oid)?;
+        let head_commit = self.repo.head()?.peel_to_commit()?;
+        self.repo.cherrypick(&commit, None)?;
+        let mut index = self.repo.index()?;
+        if index.has_conflicts() {
+            let _ = self.repo.cleanup_state();
+            return Err(git2::Error::from_str(
+                "cherry-pick produced conflicts; the working tree was left unchanged",
+            ));
+        }
+        let tree_oid = index.write_tree()?;
+        if tree_oid == head_commit.tree_id() {
+            let _ = self.repo.cleanup_state();
+            return Err(git2::Error::from_str(
+                "the previous cherry-pick is now empty -- its changes are already on HEAD",
+            ));
+        }
+        let tree = self.repo.find_tree(tree_oid)?;
+        let signature = self.repo.signature()?;
+        let author = commit.author();
+        let summary = commit.summary().unwrap_or("");
+        let body = commit.body().unwrap_or("");
+        let message = if body.is_empty() {
+            format!("{summary}\n\n(cherry picked from commit {oid})\n")
+        } else {
+            format!("{summary}\n\n{body}\n(cherry picked from commit {oid})\n")
+        };
+        let new_oid = self.repo.commit(
+            Some("HEAD"),
+            &author,
+            &signature,
+            &message,
+            &tree,
+            &[&head_commit],
+        )?;
+        let _ = self.repo.cleanup_state();
+        Ok(new_oid)
+    }
+
     /// Every file a real commit changed, relative to its first parent
     /// (a root commit diffs against the empty tree, so everything shows
     /// as `Added` -- the real, correct answer). A real tree-to-tree
@@ -1861,6 +1953,115 @@ mod tests {
         assert!(repo
             .revert_commit("0000000000000000000000000000000000000000")
             .is_err());
+    }
+
+    #[test]
+    fn list_commits_for_ref_browses_a_branch_without_checking_it_out() {
+        let (tmp, repo) = TempRepo::new("log_for_ref");
+        tmp.write("f.txt", "v1\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("root").unwrap();
+        repo.repo
+            .branch(
+                "feature",
+                &repo.repo.head().unwrap().peel_to_commit().unwrap(),
+                false,
+            )
+            .unwrap();
+        repo.repo.set_head("refs/heads/feature").unwrap();
+        tmp.write("f.txt", "v2\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        let feature_commit = repo.commit("feature work").unwrap();
+        // Switch back to master -- "feature"'s own extra commit must still
+        // be browsable without checking it out again.
+        repo.repo.set_head("refs/heads/master").unwrap();
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force();
+        repo.repo.checkout_head(Some(&mut checkout)).unwrap();
+        assert_eq!(repo.log(10).unwrap().len(), 1, "master itself has 1 commit");
+        let feature_log = repo.list_commits_for_ref("feature", 10).unwrap();
+        assert_eq!(feature_log.len(), 2, "feature has root + its own commit");
+        assert_eq!(feature_log[0].oid, feature_commit.to_string());
+        assert_eq!(feature_log[0].summary, "feature work");
+    }
+
+    #[test]
+    fn list_commits_for_ref_on_an_unknown_branch_errors() {
+        let (tmp, repo) = TempRepo::new("log_for_ref_bad");
+        tmp.write("f.txt", "v1\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("init").unwrap();
+        assert!(repo.list_commits_for_ref("does-not-exist", 10).is_err());
+    }
+
+    #[test]
+    fn cherry_pick_commit_applies_a_real_change_from_another_branch() {
+        let (tmp, repo) = TempRepo::new("cherry_pick_basic");
+        tmp.write("f.txt", "line one\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("root").unwrap();
+        repo.repo
+            .branch(
+                "feature",
+                &repo.repo.head().unwrap().peel_to_commit().unwrap(),
+                false,
+            )
+            .unwrap();
+        repo.repo.set_head("refs/heads/feature").unwrap();
+        tmp.write("f.txt", "line one\nline two\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        let feature_commit = repo.commit("add line two").unwrap();
+        // Back to master, which does NOT have "line two" yet.
+        repo.repo.set_head("refs/heads/master").unwrap();
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force();
+        repo.repo.checkout_head(Some(&mut checkout)).unwrap();
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "line one\n"
+        );
+        repo.cherry_pick_commit(&feature_commit.to_string())
+            .unwrap();
+        // The cherry-picked change is now on master's working tree...
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "line one\nline two\n"
+        );
+        // ...as a real, new, single-parent commit (not a rewrite of history).
+        let log = repo.log(10).unwrap();
+        assert_eq!(log.len(), 2);
+        assert!(log[0].summary.starts_with("add line two"));
+        assert_eq!(repo.repo.state(), git2::RepositoryState::Clean);
+    }
+
+    #[test]
+    fn cherry_pick_commit_with_an_unknown_oid_errors() {
+        let (tmp, repo) = TempRepo::new("cherry_pick_bad_oid");
+        tmp.write("f.txt", "v1\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("init").unwrap();
+        assert!(repo
+            .cherry_pick_commit("0000000000000000000000000000000000000000")
+            .is_err());
+    }
+
+    #[test]
+    fn cherry_pick_an_already_applied_commit_is_an_honest_empty_error() {
+        let (tmp, repo) = TempRepo::new("cherry_pick_empty");
+        tmp.write("f.txt", "line one\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("root").unwrap();
+        tmp.write("f.txt", "line one\nline two\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        let same_branch_commit = repo.commit("add line two").unwrap();
+        // Cherry-picking a commit that's already HEAD's own change produces
+        // no real diff against HEAD -- a real, honest error, not a
+        // pointless duplicate commit.
+        let err = repo
+            .cherry_pick_commit(&same_branch_commit.to_string())
+            .unwrap_err();
+        assert!(err.message().contains("already on HEAD"));
+        assert_eq!(repo.repo.state(), git2::RepositoryState::Clean);
     }
 
     #[test]

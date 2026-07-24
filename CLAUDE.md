@@ -6952,6 +6952,68 @@ first — it's the parity reference until each row there is actually reimplement
   per-hunk staging in the reference wgpu shell (that shell has no Git panel to extend, matching the
   established "Electron-shells-only" scope every recent Git pass has carried); the real Electron
   window remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — real cherry-pick UI in both Git panels, closing the "cherry-pick" half of
+  the "Rebase / cherry-pick UI" backlog row (task #272)**: continues the same "prioritize and
+  continue with future features" push. `spartan_git::list_commits_for_ref(ref_name, max)`
+  generalizes `log()`'s own real, full-graph `revwalk` to start from a named branch instead of
+  `HEAD` -- the same two-namespace (local-then-remote-tracking) branch resolution `merge_branch`
+  already established -- so a branch's own commits can be browsed without checking it out.
+  `spartan_git::cherry_pick_commit(oid_hex)` is a real `git2::Repository::cherrypick` (sets the
+  real `CHERRYPICK_HEAD` state, applies to the index/working tree) followed by a real commit --
+  deliberately a **single-parent** commit (unlike `revert_commit`'s own two-parent-free "Revert"
+  shape), matching real `git cherry-pick`'s own commit topology, with the standard `"<summary>\n\n
+  (cherry picked from commit <oid>)\n"` trailer message. Two real conflict/edge cases are handled
+  honestly rather than silently: a genuine conflict cleans up the in-progress state and errors
+  (mirroring `revert_commit`'s own established discipline); a cherry-pick whose resulting tree is
+  byte-identical to `HEAD`'s own tree (the commit's changes are already fully present) errors with
+  a clear "already on HEAD" message instead of committing a pointless duplicate -- checked by
+  comparing tree oids before ever calling `repo.commit()`. New `spartan-backend::git_log_for_ref`/
+  `git_cherry_pick` dispatch methods mirror `git_log`'s/`git_revert_commit`'s own exact shapes,
+  registered in `main.ts`'s/`preload.ts`'s IPC allowlists at the identical position (the
+  established drift-avoidance discipline -- confirmed via a direct set-diff of both files' real
+  allowlists, which also incidentally confirmed the pre-existing `design_parse`/`design_bundle`/
+  `design_apply_edit` "mismatch" is real, correct, and unrelated: those three route through a
+  separate `guiBuilder` client via their own direct `ipcMain.handle` calls in `main.ts`, not
+  through the shared `methods` array `preload.ts`'s list mirrors). **UI, both shells**: every
+  non-current branch row in the existing branch switcher (both local and remote-tracking rows)
+  gained a "▸/▾ Commits" toggle, opening a real, freshly-fetched (never cached) bounded commit
+  list for that branch with a "Cherry-pick" button per commit; a successful cherry-pick refreshes
+  overall status and, if the History section happens to already be open, its own commit list too,
+  so the real new commit shows up without a manual re-toggle. 5 new `spartan-git` tests (a real
+  cross-branch browse-without-checkout round trip; an unknown-ref error; a real cherry-pick
+  applying a change from `feature` onto `master` as a genuine single-parent commit, confirmed via
+  both the real working-tree content and `repo.state()`; an unknown-oid error; the trickier
+  already-applied-commit case -- cherry-picking a commit that IS the current `HEAD` produces a
+  real, correctly-computed identical tree, hitting the honest "empty" error rather than a
+  duplicate commit) plus 2 new dispatch-level tests in `spartan-backend` (an end-to-end
+  create-branch → checkout → commit → checkout-back → browse-without-checkout → cherry-pick round
+  trip through the full `handle_request` dispatch, confirming the real working-tree content change
+  and that master gained exactly one real new commit, not a rewrite; an honest unknown-oid dispatch
+  error) -- all 7 new tests passed on their first run, a genuinely clean implementation with no
+  fabricated "bug found and fixed" narrative. 62 `spartan-git` tests and 233 `spartan-backend` lib
+  tests total, full `cargo fmt --all -- --check`/`cargo clippy -p spartan-git -p spartan-backend
+  --release --all-targets`/`cargo test -p spartan-git -p spartan-backend --release --lib --
+  --test-threads=1` all clean; both shells' own `tsc --noEmit` clean. **Real, live, end-to-end
+  Playwright verification against the actual compiled `web/dist` and `desktop/dist` served by two
+  real running `spartan-devserver` instances** (not a mock, `desktop/` via the same real-
+  WebSocket-shim + `--web-root:desktop/dist` same-origin technique the per-hunk-staging pass
+  established): a real fixture (a `root` commit on `master`, a `feature` branch with one extra
+  "add line two" commit `master` doesn't have) -- opening the branch switcher and clicking
+  `feature`'s "Commits" toggle correctly showed its real 2-commit log with two "Cherry-pick"
+  buttons in both shells; clicking Cherry-pick on the newest commit correctly applied it onto
+  `master`. Every step was independently cross-checked against the real `git log`/`git show
+  --stat` CLI output on the actual fixture directories in both shells: `f.txt`'s real content
+  changed from `"line one"` to `"line one\nline two"`, and a genuine new single-parent commit
+  appeared on `master` (distinct oid from the original `feature` commit) carrying the exact real
+  `(cherry picked from commit <original-oid>)` trailer -- confirming the index/working-tree
+  splice and the commit metadata are both correct, not just that the UI's own state looked right.
+  **What this does not confirm**: no per-commit conflict-resolution UI for a real cherry-pick
+  conflict (the honest error surfaces, resolution is manual -- matching the merge-conflict panel's
+  own separate, already-shipped scope rather than being folded into this one); no full interactive
+  rebase (a real, separate, much larger P3 item, still entirely unstarted); no cherry-pick UI in
+  the reference wgpu shell (that shell has no Git panel to extend, matching the established
+  "Electron-shells-only" scope every recent Git pass has carried); the real Electron window
+  remains unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 

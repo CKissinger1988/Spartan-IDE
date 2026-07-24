@@ -280,6 +280,8 @@ app.whenReady().then(() => {
     "git_commit_merge",
     "git_abort_merge",
     "git_log",
+    "git_log_for_ref",
+    "git_cherry_pick",
     "git_commit_files",
     "git_commit_diff",
     "git_blame",

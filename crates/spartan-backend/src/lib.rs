@@ -3910,6 +3910,44 @@ fn git_log(project_root: &str, max: usize) -> Result<serde_json::Value, String> 
     Ok(serde_json::json!({ "commits": commits }))
 }
 
+/// Real `git log <ref_name>` -- a named branch's own commits (local or
+/// remote-tracking), browsable without checking that branch out.
+fn git_log_for_ref(
+    project_root: &str,
+    ref_name: &str,
+    max: usize,
+) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let commits = repo
+        .list_commits_for_ref(ref_name, max)
+        .map_err(|e| format!("git log {ref_name}: {e}"))?
+        .into_iter()
+        .map(|c| {
+            serde_json::json!({
+                "oid": c.oid,
+                "summary": c.summary,
+                "author": c.author,
+                "time": c.time,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "commits": commits }))
+}
+
+/// Real `git cherry-pick <oid>` -- applies a real commit's changes onto the
+/// current `HEAD` as a new, single-parent commit. A real conflict, or a
+/// commit whose changes are already fully present on `HEAD`, is reported
+/// honestly rather than silently absorbed or committed anyway.
+fn git_cherry_pick(project_root: &str, oid: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let new_oid = repo
+        .cherry_pick_commit(oid)
+        .map_err(|e| format!("git cherry-pick: {e}"))?;
+    Ok(serde_json::json!({ "ok": true, "oid": new_oid.to_string() }))
+}
+
 /// Per-line blame for a file as committed in `HEAD`: for each line, in
 /// file order, the real commit that last touched it. `path` may be
 /// absolute (the editor's open-file path) or repo-relative (the Git
@@ -4850,6 +4888,17 @@ pub fn handle_request(
             let root = get_str_param(&req.params, "project_root")?;
             let max = req.params.get("max").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
             git_log(&root, max)
+        })(),
+        "git_log_for_ref" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let ref_name = get_str_param(&req.params, "ref_name")?;
+            let max = req.params.get("max").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+            git_log_for_ref(&root, &ref_name, max)
+        })(),
+        "git_cherry_pick" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let oid = get_str_param(&req.params, "oid")?;
+            git_cherry_pick(&root, &oid)
         })(),
         "git_blame" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
@@ -6530,6 +6579,133 @@ mod tests {
             std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
             "line one\n"
         );
+    }
+
+    #[test]
+    fn git_log_for_ref_and_cherry_pick_round_trip_through_the_dispatch_path() {
+        let tmp = TempRepo::new("cherry_pick_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "line one\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "root" }),
+        );
+        call(
+            &state,
+            3,
+            "git_create_branch",
+            serde_json::json!({ "project_root": root, "branch": "feature" }),
+        );
+        call(
+            &state,
+            4,
+            "git_checkout",
+            serde_json::json!({ "project_root": root, "branch": "feature" }),
+        );
+        std::fs::write(tmp.dir.join("f.txt"), "line one\nline two\n").unwrap();
+        call(
+            &state,
+            5,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        let feature_commit = call(
+            &state,
+            6,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "add line two" }),
+        );
+        let feature_oid = feature_commit.result.unwrap()["oid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // Back to master -- it does NOT have "line two" yet.
+        call(
+            &state,
+            7,
+            "git_checkout",
+            serde_json::json!({ "project_root": root, "branch": "master" }),
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "line one\n"
+        );
+        // Browse "feature"'s own log without checking it out again.
+        let feature_log = call(
+            &state,
+            8,
+            "git_log_for_ref",
+            serde_json::json!({ "project_root": root, "ref_name": "feature", "max": 10 }),
+        );
+        let commits = feature_log.result.unwrap()["commits"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(commits.len(), 2, "feature has root + its own commit");
+        assert_eq!(commits[0]["oid"], feature_oid);
+        // Cherry-pick that commit onto master.
+        let resp = call(
+            &state,
+            9,
+            "git_cherry_pick",
+            serde_json::json!({ "project_root": root, "oid": feature_oid }),
+        );
+        assert_eq!(resp.result.unwrap()["ok"], true);
+        assert_eq!(
+            std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "line one\nline two\n",
+            "the cherry-picked change is now on master's working tree"
+        );
+        let master_log = call(
+            &state,
+            10,
+            "git_log",
+            serde_json::json!({ "project_root": root, "max": 10 }),
+        );
+        let commits = master_log.result.unwrap()["commits"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(commits.len(), 2, "a real new commit, not a rewrite");
+    }
+
+    #[test]
+    fn git_cherry_pick_with_an_unknown_oid_errors_honestly_through_the_dispatch_path() {
+        let tmp = TempRepo::new("cherry_pick_bad_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "v1\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "init" }),
+        );
+        let resp = call(
+            &state,
+            3,
+            "git_cherry_pick",
+            serde_json::json!({
+                "project_root": root,
+                "oid": "0000000000000000000000000000000000000000"
+            }),
+        );
+        assert!(resp.error.is_some());
     }
 
     #[test]
