@@ -43,6 +43,10 @@ interface Settings {
   appearance: AppearanceSettings;
   crash_reporting: CrashReportingSettings;
   onboarding_completed: boolean;
+  /** Real task #265 -- the shell command Leo runs during `Verifying`
+   * before declaring a task `Done`. `null` (the default) keeps
+   * `Verifying` a real, momentary, always-passing waypoint. */
+  leo_verify_command: string | null;
 }
 
 interface CrashReportEntry {
@@ -260,6 +264,14 @@ export default function SettingsScreen(): React.ReactElement {
           appearance: next.appearance,
           crash_reporting: next.crash_reporting,
           onboarding_completed: next.onboarding_completed,
+          // Real nested-Option patch shape (task #265): omit entirely to
+          // leave the current value untouched (this key is only ever
+          // included in `overrides` when the verify-command row itself
+          // changed); an empty string clears it, matching the backend's
+          // own trim-then-empty-means-None parse.
+          ...(overrides.leo_verify_command !== undefined
+            ? { leo_verify_command: overrides.leo_verify_command ?? "" }
+            : {}),
         })
         .then((result) => setSettings(result as Settings))
         .catch((e: Error) => setError(e.message))
@@ -509,6 +521,30 @@ export default function SettingsScreen(): React.ReactElement {
         Manual mode requires an explicit click before any real tool call runs. Auto-approve safe
         reads still always requires approval for edit_file and run_terminal — read-only exploration
         (search_files/list_directory/read_file) runs immediately instead.
+      </div>
+      <div className="settings-row">
+        <label className="settings-label mono">Verification command</label>
+        <input
+          className="settings-select mono"
+          type="text"
+          placeholder="e.g. cargo test  (leave blank to skip)"
+          disabled={saving}
+          defaultValue={settings.leo_verify_command ?? ""}
+          key={settings.leo_verify_command ?? ""}
+          onBlur={(e) => {
+            const cmd = e.target.value.trim();
+            if (cmd !== (settings.leo_verify_command ?? "")) {
+              save({ leo_verify_command: cmd.length > 0 ? cmd : null });
+            }
+          }}
+          style={{ width: 320 }}
+        />
+      </div>
+      <div className="settings-note mono">
+        Runs through the project's real sandbox before Leo declares a task Done (bounded to 120s,
+        §264). A non-zero exit marks the task Failed instead — the exact state the Retry button
+        recovers from — so a real failing check genuinely feeds Leo's own bounded recovery loop.
+        Leave blank to keep Verifying a momentary, always-passing waypoint.
       </div>
 
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>

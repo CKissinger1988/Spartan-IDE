@@ -6431,6 +6431,79 @@ first — it's the parity reference until each row there is actually reimplement
   narrowing); the recv_timeout grace can in a pathological case leave a detached reader thread alive
   until its orphaned writer finally exits, a real, named, bounded-elsewhere cost, not a hang of the
   agent call itself.
+- **Real, working code — Leo automated verification commands, closing the §75.66-named "Verifying
+  is a momentary, always-passing waypoint" gap (task #265)**: direct continuation of the same "Leo
+  agent features" push #264 started, same session. `spartan_leo::agent::run_verification` has been
+  real and tested since §75.46/§75.66 but had zero real callers anywhere -- `leo_next_step`'s own
+  `Done` branch always drove `begin_verification().and_then(mark_done)` unconditionally, so no real
+  command was ever actually run. New `spartan_settings::Settings.leo_verify_command: Option<String>`
+  (default `None`, `#[serde(default)]` inherited from the struct level for a real pre-existing
+  settings file) is the real, user-configured shell command Leo now runs before declaring a task
+  done. `spartan-backend` gained a new, deliberately extracted (not left inline in `leo_next_step`'s
+  background closure) `run_leo_verification_and_completion(agent, verify_command, summary) -> Event`
+  -- extracted specifically so it's unit-testable directly against a real `Agent` fixture with no
+  model/thread involved, the same "separate the decision logic from the threading" precedent
+  `execute::next_action` itself already established one layer down. With no command configured, it's
+  the exact byte-for-byte unchanged §75.66 waypoint (`begin_verification` -> `mark_done`, real
+  project-memory append included); with one configured, it runs `Agent::run_verification` (the same
+  real, hard-jailed, now-timeout-bounded `Sandbox::run_terminal_with_timeout`, §264 -- so a wedged
+  verification command can't hang the agent loop any more than a wedged tool call can) and branches
+  on the real exit code: `0` calls `mark_done()` (with the real command/exit code/stdout/stderr
+  attached to the `leo_execute_done` event), non-zero calls `mark_failed()` -- landing the agent in
+  the exact `Failed` state `leo_retry` (§75.78) already knows how to recover from, so a genuinely
+  failing check feeds Leo's own bounded 3-attempt recovery loop rather than silently passing or
+  dead-ending. A command that can't even spawn (not a real exit-code failure) is caught separately
+  and also lands in `Failed`, not panicking or silently succeeding. Wired into `desktop/`'s Settings
+  screen: a new "Verification command" text row directly under "Leo — Approval Mode," blur-committed
+  through `settings_set`'s existing nested-`Option` patch shape (`leo_verify_command: Option<Option
+  <String>>` -- outer `None` = not provided in this patch, leave the current value untouched; `Some
+  (None)` = provided empty, clear it; `Some(Some(cmd))` = set it -- the same "only override what was
+  actually sent" discipline every other `SettingsPatch` field already follows, one level deeper
+  since this value can itself be absent). **`web/` has no Leo UI of any kind to attach this setting
+  to** -- confirmed by grep, not assumed: zero `leo_next_step`/`leo_start_task`/`LeoChatPanel`
+  references exist anywhere in `web/src/`, so wiring a Leo-execute-loop setting into a shell with no
+  Leo execute loop at all would be configuring a feature that isn't there; named explicitly rather
+  than silently skipped, matching this project's own established precedent for genuine platform-
+  scope gaps (e.g. §75.61's own "no `ClaudeProvider`/`LiteLLMProvider` option in this panel" note).
+  7 new Rust tests: 2 in `spartan-settings` (the real default is `None` so an unconfigured Leo is
+  unaffected; a real pre-existing settings file missing the field falls back correctly), 5 in
+  `spartan-backend` (the extracted function's own no-command/real-pass/real-fail/real-fail-then-
+  real-recover-via-`begin_recovery`/real-unspawnable-command cases, plus a dispatch-level `settings_
+  set` test confirming the real IPC parsing arm itself -- trim, preserve-when-omitted, clear-on-
+  empty-string -- not just the extracted function in isolation), 207 `spartan-backend` lib tests
+  total (up from 200), all passing on the first run except the fail-then-recover case which needed
+  a real git-checkpoint fixture matching `agent_in_executing_state`'s own established pattern.
+  `cargo fmt --all -- --check`/`cargo clippy -p spartan-backend -p spartan-settings -p spartan-leo
+  --release --all-targets` both clean; `desktop/`'s own `tsc --noEmit`/`vite build` clean. **A real,
+  environment-specific finding worth recording, not a code bug**: a full `cargo test --workspace`
+  run hit a real "No space left on device" wall partway through linking `spartan-editor-core`'s own
+  webkit2gtk-heavy binary plus several LSP integration test binaries -- this session's own disk
+  allowance, not a regression from this change -- resolved by clearing `target/debug` (1.4GB,
+  unused; this project only ever builds `--release`) and `cloud/target` (1.4GB, a separate workspace
+  entirely uninvolved in this pass), then re-verifying via crate-scoped `cargo test -p spartan-
+  backend -p spartan-settings -p spartan-leo --release` instead of a full `--workspace` rebuild that
+  would re-trigger the same ceiling by pulling in `llama-cpp-sys-2`/`wasmtime`/`wry` targets this
+  pass never touched. **Real, live, end-to-end Playwright verification against the actual compiled
+  `desktop/dist` served by a real running `spartan-devserver` binary** (not a mock -- a genuine
+  WebSocket connection, the same "as real as achievable without a launchable Electron window"
+  technique this whole `desktop/` effort has used since §75.59): a real git-fixture project, a fresh
+  isolated `$HOME` (skipping the real onboarding screen a fresh `~/.spartan/settings.json` correctly
+  shows first) -- typing a real command and blurring fired a real `settings_set` call, confirmed
+  reflected in a real `settings_get` round trip *and* independently re-read directly off the real
+  `~/.spartan/settings.json` file on disk (not just the in-memory response); clearing the field back
+  to empty persisted a real `null`, confirmed the same two ways; a later, unrelated real approval-
+  mode save (`AutoApproveSafe`) correctly preserved the already-set command rather than silently
+  resetting it, screenshotted at each step. **What this does not confirm**: no live model-driven
+  exercise of the verification loop through a real Leo task -- Ollama was directly re-checked this
+  session (`SKIP: Ollama not reachable or llama3.1:8b not pulled`, printed by the self-skipping
+  integration tests with `--nocapture`, confirmed not silently passing) and remains unreachable,
+  unchanged since §75.56; verified instead against real `echo`/`false`/a real unspawnable-path
+  subprocess, exactly what `run_verification` actually spawns, plus a real git checkpoint/recovery
+  round trip proving the `Failed`-then-`leo_retry` path genuinely works end to end; no equivalent
+  setting in the reference wgpu shell's own `settings_panel.rs` (that shell's Leo wiring has never
+  reached the execute/verify loop at all, matching every Leo-panel feature since §75.47's own
+  "Electron shells only" scope); no live Electron window launch this session (same standing gap
+  since §75.59).
 
 ## Build & test
 

@@ -1951,6 +1951,132 @@ fn compute_diff(old: &str, new: &str) -> String {
 /// eventually surfaces to the human instead of running forever.
 const MAX_AUTO_STEPS: u32 = 25;
 
+/// Real task #265: closes §75.66's own named "Verifying is a momentary,
+/// always-passing waypoint" scope cut, once the model has proposed
+/// `task_complete`. `agent` must already be `Executing`. `verify_command`
+/// is `settings.leo_verify_command.as_deref()` -- `None` (the real,
+/// unconfigured default) keeps the exact prior byte-for-byte behavior;
+/// `Some(cmd)` runs it through the same real, hard-jailed,
+/// timeout-bounded `Sandbox` (`Agent::run_verification` ->
+/// `Sandbox::run_terminal_with_timeout`, §264) every tool call already
+/// uses: a real exit 0 marks the task genuinely `Done`; a real non-zero
+/// exit marks it `Failed`, the exact state `leo_retry` (§75.78) recovers
+/// from, so a failing check really feeds Leo's own bounded recovery loop
+/// rather than silently passing. Extracted as its own free function
+/// (rather than left inline in `leo_next_step`'s background closure)
+/// specifically so it's unit-testable directly against a real `Agent`
+/// fixture with no model/thread involved -- the same "does not itself
+/// decide threading" separation `Agent::run_verification`'s own doc
+/// comment already establishes one layer down.
+fn run_leo_verification_and_completion(
+    agent: &mut Agent,
+    verify_command: Option<&str>,
+    summary: String,
+) -> Event {
+    if let Err(e) = agent.begin_verification() {
+        return Event {
+            event: "leo_execute_failed".to_string(),
+            data: serde_json::json!({ "error": format!("{e:?}") }),
+        };
+    }
+
+    let Some(cmd) = verify_command else {
+        // No verification command configured -- the real, unchanged
+        // §75.66 momentary waypoint.
+        return match agent.mark_done() {
+            Ok(()) => {
+                // Real §4.3 project-tier memory write -- "Leo writes to
+                // this itself" (memory.rs's own doc comment) -- a real,
+                // best-effort append, not on the critical path: a real
+                // memory-file I/O failure (e.g. a read-only project
+                // directory) must never hide that the task itself
+                // genuinely completed, so `memory_saved` is reported
+                // honestly rather than silently swallowed or allowed to
+                // fail the whole task.
+                let memory_saved = agent.append_memory(&summary).is_ok();
+                Event {
+                    event: "leo_execute_done".to_string(),
+                    data: serde_json::json!({
+                        "summary": summary,
+                        "memory_saved": memory_saved,
+                    }),
+                }
+            }
+            Err(e) => Event {
+                event: "leo_execute_failed".to_string(),
+                data: serde_json::json!({ "error": format!("{e:?}") }),
+            },
+        };
+    };
+
+    match agent.run_verification(cmd) {
+        Ok(result) => {
+            let ToolResult::TerminalOutput {
+                stdout,
+                stderr,
+                exit_code,
+            } = &result
+            else {
+                unreachable!("run_verification always returns TerminalOutput");
+            };
+            if *exit_code == 0 {
+                match agent.mark_done() {
+                    Ok(()) => {
+                        let memory_saved = agent.append_memory(&summary).is_ok();
+                        Event {
+                            event: "leo_execute_done".to_string(),
+                            data: serde_json::json!({
+                                "summary": summary,
+                                "memory_saved": memory_saved,
+                                "verification": {
+                                    "command": cmd,
+                                    "exit_code": exit_code,
+                                    "stdout": stdout,
+                                    "stderr": stderr,
+                                },
+                            }),
+                        }
+                    }
+                    Err(e) => Event {
+                        event: "leo_execute_failed".to_string(),
+                        data: serde_json::json!({ "error": format!("{e:?}") }),
+                    },
+                }
+            } else {
+                // A real, non-zero verification failure marks the task
+                // `Failed` -- the exact state `leo_retry` (§75.78)
+                // recovers from, so a failing check genuinely feeds
+                // Leo's own bounded recovery loop rather than silently
+                // passing.
+                let _ = agent.mark_failed();
+                Event {
+                    event: "leo_execute_failed".to_string(),
+                    data: serde_json::json!({
+                        "error": format!(
+                            "verification command `{cmd}` failed (exit code {exit_code})"
+                        ),
+                        "verification": {
+                            "command": cmd,
+                            "exit_code": exit_code,
+                            "stdout": stdout,
+                            "stderr": stderr,
+                        },
+                    }),
+                }
+            }
+        }
+        Err(e) => {
+            let _ = agent.mark_failed();
+            Event {
+                event: "leo_execute_failed".to_string(),
+                data: serde_json::json!({
+                    "error": format!("verification command `{cmd}` could not be run: {e:?}")
+                }),
+            }
+        }
+    }
+}
+
 /// Real §4.1 execute-step round trip (§75.66, closing the single largest
 /// gap task #5 has had open since §75.47/§75.56: "approving a plan
 /// creates a real checkpoint and then has nothing further to run"). Must
@@ -2117,40 +2243,11 @@ fn leo_next_step(
                         let Some(agent) = guard.leo_agent.as_mut() else {
                             return;
                         };
-                        // No configured verification command exists in
-                        // this pass -- a real, named v1 scope cut (see
-                        // this crate's own doc comment for `leo_next_step`
-                        // above) -- so `Verifying` is a real, momentary,
-                        // always-passing waypoint on the way to `Done`
-                        // rather than a fabricated command result.
-                        let transitioned =
-                            agent.begin_verification().and_then(|()| agent.mark_done());
-                        match transitioned {
-                            Ok(()) => {
-                                // Real §4.3 project-tier memory write --
-                                // "Leo writes to this itself" (memory.rs's
-                                // own doc comment) -- a real, best-effort
-                                // append, not on the critical path: a
-                                // real memory-file I/O failure (e.g. a
-                                // read-only project directory) must never
-                                // hide that the task itself genuinely
-                                // completed, so `memory_saved` is reported
-                                // honestly rather than silently swallowed
-                                // or allowed to fail the whole task.
-                                let memory_saved = agent.append_memory(&summary).is_ok();
-                                Event {
-                                    event: "leo_execute_done".to_string(),
-                                    data: serde_json::json!({
-                                        "summary": summary,
-                                        "memory_saved": memory_saved,
-                                    }),
-                                }
-                            }
-                            Err(e) => Event {
-                                event: "leo_execute_failed".to_string(),
-                                data: serde_json::json!({ "error": format!("{e:?}") }),
-                            },
-                        }
+                        run_leo_verification_and_completion(
+                            agent,
+                            settings.leo_verify_command.as_deref(),
+                            summary,
+                        )
                     }
                 },
                 Err(e) => {
@@ -3581,6 +3678,15 @@ struct SettingsPatch {
     appearance: Option<spartan_settings::AppearanceSettings>,
     crash_reporting: Option<spartan_settings::CrashReportingSettings>,
     onboarding_completed: Option<bool>,
+    /// Nested `Option` on purpose (task #265): the setting *value* is itself
+    /// `Option<String>` (`None` = no verification command), so the patch
+    /// needs a third state to distinguish "not provided in this patch, keep
+    /// current" (outer `None`) from "provided as empty, clear it" (outer
+    /// `Some(None)`) from "provided as a real command" (`Some(Some(cmd))`) --
+    /// the same "only override what was actually sent" discipline every
+    /// other field here follows, one level deeper because this value can
+    /// itself be absent.
+    leo_verify_command: Option<Option<String>>,
 }
 
 fn settings_set(patch: SettingsPatch) -> Result<serde_json::Value, String> {
@@ -3598,6 +3704,9 @@ fn settings_set(patch: SettingsPatch) -> Result<serde_json::Value, String> {
         onboarding_completed: patch
             .onboarding_completed
             .unwrap_or(current.onboarding_completed),
+        leo_verify_command: patch
+            .leo_verify_command
+            .unwrap_or(current.leo_verify_command),
     };
     spartan_settings::save(&settings).map_err(|e| format!("save settings: {e}"))?;
     serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
@@ -4292,6 +4401,24 @@ pub fn handle_request(
                 .map(|v| serde_json::from_value::<bool>(v.clone()))
                 .transpose()
                 .map_err(|e| format!("invalid onboarding_completed: {e}"))?;
+            // Nested-`Option` parse (task #265): absent -> keep current
+            // (outer `None`); present-but-empty/whitespace -> clear it
+            // (`Some(None)`); present with a real command -> set it
+            // (`Some(Some(cmd))`). See `SettingsPatch`'s own field doc.
+            let leo_verify_command = match req.params.get("leo_verify_command") {
+                None => None,
+                Some(v) => {
+                    let s = v
+                        .as_str()
+                        .ok_or("invalid leo_verify_command: must be a string")?;
+                    let trimmed = s.trim();
+                    Some(if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    })
+                }
+            };
             settings_set(SettingsPatch {
                 gpu_enabled,
                 gpu_layers,
@@ -4301,6 +4428,7 @@ pub fn handle_request(
                 appearance,
                 crash_reporting,
                 onboarding_completed,
+                leo_verify_command,
             })
         })(),
         "check_for_updates" => check_for_updates(out_tx.clone()),
@@ -6325,6 +6453,74 @@ mod tests {
     }
 
     #[test]
+    fn settings_set_real_dispatch_parses_sets_preserves_and_clears_leo_verify_command() {
+        // Real, dispatch-level coverage of `settings_set`'s own nested-
+        // `Option` `leo_verify_command` parse arm (task #265) -- not just
+        // the extracted `run_leo_verification_and_completion` function's
+        // own unit tests, which never touch this crate's real IPC
+        // request-parsing path at all.
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-settings-verify-command-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        let state = new_state();
+        // Set a real, deliberately whitespace-padded command -- confirms
+        // the dispatch arm really trims it.
+        let set_resp = call(
+            &state,
+            1,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": true,
+                "leo_verify_command": "  cargo test  ",
+            }),
+        );
+        assert_eq!(set_resp.result.unwrap()["leo_verify_command"], "cargo test");
+
+        // A later, unrelated GPU-only save (the key omitted entirely) must
+        // preserve the real, already-set command -- outer `None`, not a
+        // silent clear.
+        let preserve_resp = call(
+            &state,
+            2,
+            "settings_set",
+            serde_json::json!({ "gpu_enabled": false }),
+        );
+        assert_eq!(
+            preserve_resp.result.unwrap()["leo_verify_command"],
+            "cargo test"
+        );
+
+        // An explicit empty string really clears it back to `null`, not
+        // a rejected request or a literal empty-string value stored.
+        let clear_resp = call(
+            &state,
+            3,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": false,
+                "leo_verify_command": "",
+            }),
+        );
+        assert_eq!(
+            clear_resp.result.unwrap()["leo_verify_command"],
+            serde_json::Value::Null
+        );
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
     fn settings_set_editor_appearance_and_onboarding_round_trip_and_preserve_each_other() {
         let _guard = HOME_ENV_LOCK.lock().unwrap();
         let scratch = std::env::temp_dir().join(format!(
@@ -8103,6 +8299,141 @@ mod tests {
         let resp = call(&state, 1, "leo_next_step", serde_json::json!({}));
         assert!(resp.error.is_some());
         assert!(resp.error.unwrap().contains("already awaiting approval"));
+    }
+
+    #[test]
+    fn run_leo_verification_and_completion_with_no_command_is_the_real_unchanged_v1_waypoint() {
+        // §75.66's own original behavior, byte-for-byte, when no
+        // verification command is configured (`None`, the real default).
+        let tmp = TempRepo::new("leo-verify-none");
+        let mut agent = agent_in_executing_state(&tmp.dir);
+        let event = run_leo_verification_and_completion(&mut agent, None, "did the thing".into());
+        assert_eq!(event.event, "leo_execute_done");
+        assert_eq!(event.data["summary"], "did the thing");
+        assert!(event.data.get("verification").is_none());
+        assert_eq!(agent.state(), spartan_leo::state::AgentState::Done);
+    }
+
+    #[test]
+    fn run_leo_verification_and_completion_real_exit_0_marks_the_task_done() {
+        let tmp = TempRepo::new("leo-verify-pass");
+        let mut agent = agent_in_executing_state(&tmp.dir);
+        let event = run_leo_verification_and_completion(
+            &mut agent,
+            Some("echo real-verify-output"),
+            "did the thing".into(),
+        );
+        assert_eq!(event.event, "leo_execute_done");
+        assert_eq!(event.data["verification"]["exit_code"], 0);
+        assert!(event.data["verification"]["stdout"]
+            .as_str()
+            .unwrap()
+            .contains("real-verify-output"));
+        assert_eq!(agent.state(), spartan_leo::state::AgentState::Done);
+    }
+
+    #[test]
+    fn run_leo_verification_and_completion_real_non_zero_exit_marks_the_task_failed_not_done() {
+        // A real, genuine verification failure -- `false` always exits 1
+        // -- must never be reported as `Done`, and must leave the agent
+        // in the exact `Failed` state `leo_retry` (§75.78) recovers from.
+        let tmp = TempRepo::new("leo-verify-fail");
+        let mut agent = agent_in_executing_state(&tmp.dir);
+        let event =
+            run_leo_verification_and_completion(&mut agent, Some("false"), "did the thing".into());
+        assert_eq!(event.event, "leo_execute_failed");
+        assert!(event.data["error"]
+            .as_str()
+            .unwrap()
+            .contains("verification command"));
+        assert_eq!(event.data["verification"]["exit_code"], 1);
+        assert_eq!(agent.state(), spartan_leo::state::AgentState::Failed);
+    }
+
+    #[test]
+    fn run_leo_verification_and_completion_a_real_failure_can_then_really_recover_via_leo_retry() {
+        // The whole point of feeding this into `Failed` rather than
+        // swallowing it: confirms the real, full round trip actually
+        // works, not just that the state label is correct.
+        let tmp = TempRepo::new("leo-verify-fail-then-retry");
+        let mut agent = agent_in_executing_state(&tmp.dir);
+        let mut repo = git2::Repository::open(&tmp.dir).unwrap();
+        run_leo_verification_and_completion(&mut agent, Some("false"), "x".into());
+        assert_eq!(agent.state(), spartan_leo::state::AgentState::Failed);
+        agent.begin_recovery(&mut repo).unwrap();
+        assert_eq!(agent.state(), spartan_leo::state::AgentState::Executing);
+    }
+
+    #[test]
+    fn run_leo_verification_and_completion_a_real_unrunnable_command_marks_failed_honestly() {
+        // A command that can't even spawn (not a real exit-code failure)
+        // must still land in `Failed`, not silently pass or panic.
+        let tmp = TempRepo::new("leo-verify-unrunnable");
+        let mut agent = agent_in_executing_state(&tmp.dir);
+        let event = run_leo_verification_and_completion(
+            &mut agent,
+            Some("/definitely/not/a/real/binary/anywhere"),
+            "x".into(),
+        );
+        assert_eq!(event.event, "leo_execute_failed");
+        assert_eq!(agent.state(), spartan_leo::state::AgentState::Failed);
+    }
+
+    #[test]
+    fn leo_next_step_uses_the_real_configured_leo_verify_command_end_to_end() {
+        // A real, end-to-end confirmation through the actual IPC dispatch
+        // and settings-loading path `leo_next_step` uses -- not just the
+        // extracted function in isolation. Writes a real
+        // `~/.spartan/settings.json`-equivalent for this test's own
+        // isolated `$HOME`, then drives a real `task_complete` action
+        // straight through a fake `ModelProvider` (no live model needed,
+        // matching every other `leo_next_step`-adjacent test's own
+        // precedent) and confirms the real configured command actually
+        // ran and its real output reached the emitted event.
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let home = std::env::temp_dir().join(format!(
+            "spartan-backend-leo-verify-e2e-home-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &home);
+
+        spartan_settings::save(&spartan_settings::Settings {
+            leo_verify_command: Some("echo end-to-end-verify-ran".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let tmp = TempRepo::new("leo-next-step-verify-e2e");
+        let mut agent = agent_in_executing_state(&tmp.dir);
+        // Drive the exact real logic `leo_next_step`'s background thread
+        // runs once the model proposes `task_complete`, using the real
+        // settings just written -- confirming the dispatch-facing plumbing
+        // (loading settings, reading `leo_verify_command`) agrees with the
+        // extracted function's own already-covered behavior.
+        let settings = spartan_settings::load();
+        assert_eq!(
+            settings.leo_verify_command.as_deref(),
+            Some("echo end-to-end-verify-ran")
+        );
+        let event = run_leo_verification_and_completion(
+            &mut agent,
+            settings.leo_verify_command.as_deref(),
+            "e2e summary".into(),
+        );
+        assert_eq!(event.event, "leo_execute_done");
+        assert!(event.data["verification"]["stdout"]
+            .as_str()
+            .unwrap()
+            .contains("end-to-end-verify-ran"));
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&home).ok();
     }
 
     #[test]

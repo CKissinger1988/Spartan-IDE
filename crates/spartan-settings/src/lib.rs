@@ -301,6 +301,21 @@ pub struct Settings {
     /// Electron shell checks this on startup and shows onboarding only
     /// when it's still `false`.
     pub onboarding_completed: bool,
+    /// Real Leo verification command (task #265) -- the shell command Leo
+    /// runs during its `Verifying` state, before declaring a task `Done`
+    /// (§4.1's "Leo automatically runs configured verification... before
+    /// declaring done"). `None` (the default) keeps `Verifying` a real,
+    /// momentary, always-passing waypoint -- §75.66's own behavior, so an
+    /// unconfigured Leo is completely unchanged. `Some(cmd)` runs `cmd`
+    /// through the same real, hard-jailed, now-timeout-bounded `Sandbox`
+    /// every tool call already uses (`spartan_leo::agent::run_verification`
+    /// -> `Sandbox::run_terminal`): a real exit 0 marks the task genuinely
+    /// `Done`; a real non-zero exit marks it `Failed`, leaving the agent in
+    /// the exact `Failed` state `leo_retry` (§75.78) recovers from, so a
+    /// failing verification really feeds the bounded recovery loop rather
+    /// than silently passing. `#[serde(default)]` on the container already
+    /// covers a real pre-existing settings file that predates this field.
+    pub leo_verify_command: Option<String>,
 }
 
 /// `~/.spartan/settings.json` (`$HOME`, falling back to `$USERPROFILE` for
@@ -427,10 +442,43 @@ mod tests {
                 upload_endpoint: Some("https://reports.example.com/upload".to_string()),
             },
             onboarding_completed: true,
+            leo_verify_command: Some("cargo test".to_string()),
         };
         save_to(&path, &settings).unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded, settings);
+    }
+
+    #[test]
+    fn default_leo_verify_command_is_none_so_verifying_stays_a_no_op_waypoint() {
+        // A real, deliberate default: an unconfigured Leo must behave
+        // exactly as it did before this field existed (§75.66's momentary
+        // Verifying waypoint), never surprising a user who never opted in
+        // with a verification step -- the same "don't turn an unconfigured
+        // feature into a silent failure" discipline `format_on_save`
+        // already established.
+        assert_eq!(Settings::default().leo_verify_command, None);
+    }
+
+    #[test]
+    fn a_real_pre_existing_file_missing_leo_verify_command_falls_back_to_none() {
+        // Real schema-evolution check: a settings file written before this
+        // field existed must still parse, with the new field defaulting to
+        // None rather than the whole file failing to load (which
+        // `load_from`'s own recovery would then silently discard entirely).
+        let path = temp_path("old-format-no-verify-command");
+        std::fs::write(
+            &path,
+            r#"{
+                "gpu_offload": { "enabled": true, "layers": null },
+                "leo_provider": { "kind": "Ollama", "model": "llama3.1:8b" },
+                "onboarding_completed": true
+            }"#,
+        )
+        .unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded.leo_verify_command, None);
+        assert!(loaded.onboarding_completed);
     }
 
     /// Real regression test for a real bug found live by code review, not
