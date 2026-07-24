@@ -7163,6 +7163,95 @@ first — it's the parity reference until each row there is actually reimplement
   real PTY by its own original, unchanged design, matching this project's own "Electron-shells-
   only" scope for most recent feature passes); the real Electron window remains unlaunchable in
   this session (same standing gap since §75.59).
+- **Real, working code — real DAP `output` events (logpoints + debuggee stdout/stderr) wired into
+  the Debug panel in both shells, closing a real, previously-undiscovered data-loss bug found
+  along the way (task #275)**: continues the same "prioritize and continue with future features"
+  push. The originally-scoped task was "surface DAP output in the UI," but tracing the real path
+  from adapter to panel found the data was never reaching `spartan-dap`'s own public API at all --
+  `DapClient::wait_for`/`wait_for_stop_or_exit` only ever matched against a target predicate
+  (`"stopped"`/`"exited"`), silently discarding any real `output`-type event that arrived in
+  between, a genuine bug pre-dating this task, not something this pass introduced. Fixed at the
+  root: a new `DapClient::wait_for_collecting_output<F>(pred, timeout, output_sink: &mut Vec<Value>)`
+  classifies every incoming message first -- a real `output` event is pushed into `output_sink`
+  and the wait loop `continue`s (never treated as a match), everything else falls through to the
+  existing predicate check unchanged. `wait_for_stop_or_exit` was rewritten around it (now taking
+  the same `output_sink` as a third param) with one real, incidental simplification: its original
+  two-phase shape (a `wait_event("stopped", timeout)` call, then a separate `wait_event("exited",
+  500ms)` call) collapsed into one real combined-predicate call matching either event, since the
+  new collecting wait already has to inspect every message anyway. `DapSession`'s own command loop
+  (in `session.rs`) drains the real `output_events` Vec after every `wait_for_stop_or_exit` call,
+  filters out `category == "telemetry"` (a real, live-confirmed `debugpy`-specific behavior --
+  relaying its own internal diagnostic pings, e.g. text `"ptvsd"`/`"debugpy"`, as real `output`
+  events with no user value), and sends each surviving one as a new `DapUpdate::Output { category,
+  text }` -- a new variant with a detailed doc comment recording the second real, live-confirmed
+  finding this pass surfaced: a logpoint's own interpolated message arrives with the **identical**
+  `"stdout"` category as the debuggee's genuine `print()` output, with no distinguishing marker
+  between the two anywhere in the real DAP protocol -- so a caller can't (and doesn't need to)
+  tell them apart, both are equally real program output. `spartan-backend::dap_integration::
+  dap_update_event` gained a matching arm emitting a real `dap_output` event
+  (`{doc_id, category, text}`), registered nowhere new in the IPC allowlists since `dap_stopped`/
+  `dap_exited`/etc. already cover the same event-forwarding path. **Four real, pre-existing tests
+  were found regressed by this fix, not broken by it -- a direct, correct consequence of finally
+  seeing output that was always real, just previously discarded**: `spartan-dap`'s own
+  `dap_python_integration.rs` (3 tests) and `dap_lldb_integration.rs` (1 test) each asserted that
+  the very next update after a real `Continue` command is always the terminal one (`Exited`) --
+  false now that a debuggee's real stdout legitimately arrives as its own `Output` update first. A
+  new shared `next_non_output_update(session)` helper (draining and discarding `Output` updates
+  until a real terminal one arrives) fixed the 3 debugpy call sites; the lldb test was fixed with
+  an inline drain loop that also asserts `saw_real_stdout` became true along the way -- confirming,
+  as a second independent live finding beyond the already-known debugpy one, that **`lldb-dap`
+  also relays real debuggee stdout via `output` events**, not just `debugpy`. Both temporary
+  `eprintln!` probes used to root-cause this live (one in `session.rs`'s own command loop, one in
+  the failing test) were removed before finalizing -- the real, permanent fix needed neither. A new
+  test, `real_debugpy_logpoint_output_is_captured_not_silently_dropped`, exercises the full,
+  intended feature directly: a fixture with a plain breakpoint plus a real logpoint (`log_message:
+  "iter {i}"`, no `condition`) on a 3-iteration loop -- after `Continue`, drains every update,
+  asserts no `telemetry`-category output ever leaked through, asserts exactly 3 real logpoint
+  firings with correctly interpolated `i` values (0, 1, 2), and asserts the debuggee's own real
+  `print(total)` output (`"3"`) also arrived through the identical mechanism, before a final real
+  `Exited`. **UI, both shells** (`desktop/src/components/DebugPanel.tsx`, `web/src/components/
+  DebugPanel.tsx`): a new `OutputEntry {category, text}` type and an `outputLog?: OutputEntry[]`
+  prop render a scrollable OUTPUT section under the existing WATCH panel, one line per real entry,
+  colored by category (`debug-output-stderr` in red, everything else default text). `App.tsx` in
+  both shells gained `dapOutputByDoc: Record<number, OutputEntry[]>` (or the `web/`-equivalent
+  keyed state), appending on every real `dap_output` event, bounded to `MAX_DAP_OUTPUT_LINES = 500`
+  per session, and explicitly cleared to `[]` the moment a fresh `dap_launch` is issued so a new
+  run never shows stale output from a prior one. **A real UI bug was found only by live testing,
+  not by code review**: the OUTPUT section's first version was gated behind the same `isLive`
+  check (`status === "launching" || status === "stopped"`) the WATCH panel already uses --
+  correct for WATCH (a live expression needs a live session to evaluate against), but wrong here,
+  since it made the OUTPUT panel vanish the instant the debuggee exited (`status: "exited"` makes
+  `isLive` false) -- exactly the moment a user most wants to review what was captured. Confirmed
+  live: after reaching "Program exited," the rendered `outputLines` array was empty despite a real
+  logpoint having fired 3 times. Fixed in both files by removing the `isLive &&` condition (now
+  gated purely on `outputLog && outputLog.length > 0`), with each component's own doc comment
+  rewritten to state this is a deliberate, considered choice, not the original one. Full workspace
+  `cargo fmt --all -- --check`/`cargo clippy -p spartan-dap -p spartan-backend --release
+  --all-targets`/`cargo test -p spartan-dap -p spartan-backend --release -- --test-threads=1` all
+  clean; both shells' own `tsc --noEmit`/`npm run build` clean. **Real, live, end-to-end Playwright
+  verification in both shells against a real `debugpy` session, not a mock**: `web/` was driven
+  against the actual compiled `web/dist` served by a real running `spartan-devserver` binary, a
+  real fixture (`total = 0; for i in range(3): total += i; print(total)`) with a plain breakpoint
+  on line 1 and a real logpoint (`iter {i}`) set on line 3 via the existing right-click condition/
+  logpoint editor -- Debug stopped at the real breakpoint, Continue ran the loop to a real exit,
+  and the rendered OUTPUT panel showed exactly `["3", "iter 0", "iter 1", "iter 2"]`, all four
+  assertions (`iter 0`/`iter 1`/`iter 2`/the real `print(total)` "3") true, zero page errors,
+  screenshotted with the panel still visible after "Program exited." `desktop/` was independently
+  re-verified via the established real-WebSocket-shim + `--web-root:desktop/dist` same-origin
+  technique for the still-unlaunchable real Electron window, against a fresh, separate fixture --
+  byte-equivalent results (`["3\n", "iter 0\n", "iter 1\n", "iter 2\n"]`, all four assertions true),
+  screenshotted showing the real breakpoint (red dot, line 1) and logpoint (gold dot, line 3) in
+  the gutter alongside the populated OUTPUT panel, with one benign, pre-existing favicon-class 404
+  in the console (unrelated to this feature, matching the same harmless finding other desktop
+  Playwright passes in this project have already noted). **What this does not confirm**: no output
+  streamed live while a program is still running and producing it incrementally in real time --
+  this pass's own architecture collects output only in the gap between `Continue`/`StepOver`/
+  `StepInto` and the next stop/exit, not via a continuously-open stream (a real, named scope limit,
+  not attempted here); no output captured during the very first `launch_and_break` sequence itself
+  (only `wait_for_stop_or_exit`'s calls inside the command loop collect output -- any real output
+  produced before the very first breakpoint hit is not yet captured, a real, separate, narrower gap
+  than the one this task closed); no verification against any adapter beyond debugpy/lldb-dap; the
+  real Electron window remains unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 

@@ -25,6 +25,18 @@ export interface DapStoppedInfo {
   variables: { name: string; value: string }[];
 }
 
+/** One real DAP `output` event (task #275) -- a logpoint firing, or the
+ * debuggee's own real stdout/stderr, both relayed through the identical
+ * `dap_output` backend event with no distinguishing marker between them
+ * (a real, live-confirmed `debugpy`/`lldb-dap` finding -- see
+ * `spartan_dap::DapUpdate::Output`'s own doc comment). The same type
+ * `desktop/src/components/DebugPanel.tsx` already defines, duplicated
+ * here rather than imported since these are two separate npm projects. */
+export interface OutputEntry {
+  category: string;
+  text: string;
+}
+
 export type DapSessionStatus = "launching" | "stopped" | "exited" | "error" | "build_failed";
 
 export interface DapSessionState {
@@ -47,6 +59,14 @@ interface DebugPanelProps {
   watches?: WatchEntry[];
   onAddWatch?: (expression: string) => void;
   onRemoveWatch?: (expression: string) => void;
+  /** Real DAP output (logpoints + the debuggee's own real stdout/stderr,
+   * task #275). The App owns the accumulated log per session (reset on
+   * every fresh launch); absent means the feature isn't wired for this
+   * render. Rendered regardless of `isLive` -- a real, deliberate choice
+   * (not the initial one): a user needs to review the debuggee's own
+   * final output most right after it exits, not have it disappear the
+   * instant the session leaves the live states. */
+  outputLog?: OutputEntry[];
 }
 
 /**
@@ -70,6 +90,7 @@ export default function DebugPanel({
   watches,
   onAddWatch,
   onRemoveWatch,
+  outputLog,
 }: DebugPanelProps): React.ReactElement | null {
   const [watchDraft, setWatchDraft] = useState("");
   if (!hasFile) return null;
@@ -190,6 +211,18 @@ export default function DebugPanel({
               ))}
             </div>
           )}
+        </div>
+      )}
+      {outputLog && outputLog.length > 0 && (
+        <div className="debug-output">
+          <div className="debug-output-title">OUTPUT</div>
+          <div className="debug-output-log">
+            {outputLog.map((entry, i) => (
+              <div key={i} className={`debug-output-line debug-output-${entry.category}`}>
+                {entry.text}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

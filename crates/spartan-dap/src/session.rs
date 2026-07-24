@@ -23,6 +23,7 @@
 use crate::build::{self, BuildResult};
 use crate::client::{Breakpoint, DapClient, DEFAULT_TIMEOUT};
 use serde::Serialize;
+use serde_json::Value;
 use spartan_languages::CommandSpec;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -73,6 +74,23 @@ pub enum DapUpdate {
     Stopped(DapStopped),
     Exited,
     Error(String),
+    /// A real DAP `output` event -- a logpoint firing, or (on adapters
+    /// that relay it this way) the debuggee's own stdout/stderr.
+    /// `category` is the adapter's own real DAP category string
+    /// (`"console"`/`"stdout"`/`"stderr"`, etc., defaulting to
+    /// `"console"` per the spec when the adapter omits it); `text` is
+    /// the real output text, unmodified. A real, live-confirmed
+    /// `debugpy` behavior, not assumed from the spec: a logpoint's own
+    /// interpolated message arrives with the *identical* `"stdout"`
+    /// category as the debuggee's genuine `print()` output -- there is
+    /// no separate "this came from a logpoint" marker, so a caller can't
+    /// (and doesn't need to) distinguish the two. A real `"telemetry"`
+    /// category (adapter-internal diagnostic pings, no user value) is
+    /// already filtered out before this variant is ever constructed.
+    Output {
+        category: String,
+        text: String,
+    },
 }
 
 pub struct DapSession {
@@ -168,7 +186,32 @@ impl DapSession {
                     let _ = updates_tx.send(DapUpdate::Error("command request failed".to_string()));
                     continue;
                 }
-                match wait_for_stop_or_exit(&mut client, DEFAULT_TIMEOUT) {
+                let mut output_events = Vec::new();
+                let outcome =
+                    wait_for_stop_or_exit(&mut client, DEFAULT_TIMEOUT, &mut output_events);
+                for ev in output_events {
+                    let category = ev["body"]["category"]
+                        .as_str()
+                        .unwrap_or("console")
+                        .to_string();
+                    // A real, live-observed finding, not assumed: `debugpy`
+                    // relays its own internal diagnostic pings ("ptvsd",
+                    // "debugpy") as real `output` events with category
+                    // `telemetry` -- pure adapter-implementation noise, of
+                    // zero value to a user watching real logpoint/stdout
+                    // output. Filtered here so it never reaches a caller.
+                    if category == "telemetry" {
+                        continue;
+                    }
+                    let text = ev["body"]["output"].as_str().unwrap_or("").to_string();
+                    if updates_tx
+                        .send(DapUpdate::Output { category, text })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                match outcome {
                     Some(("stopped", ev)) => {
                         thread_id = ev["body"]["threadId"].as_i64().unwrap_or(thread_id);
                         let reason = ev["body"]["reason"].as_str().unwrap_or("stopped");
@@ -269,16 +312,33 @@ fn evaluate_in_current_frame(
     }
 }
 
+/// Waits for a real `stopped` or `exited` event, collecting every real
+/// `output` event seen along the way into `output_sink` instead of
+/// silently dropping it (the previous two-phase `wait_event("stopped",
+/// ...)` then `wait_event("exited", ...)` implementation never issued a
+/// matching wait for `output` at all, so any real output/logpoint event
+/// that arrived was buffered and then never read back out by anything).
 fn wait_for_stop_or_exit(
     client: &mut DapClient,
     timeout: Duration,
-) -> Option<(&'static str, serde_json::Value)> {
-    if let Some(ev) = client.wait_event("stopped", timeout) {
-        return Some(("stopped", ev));
+    output_sink: &mut Vec<Value>,
+) -> Option<(&'static str, Value)> {
+    let ev = client.wait_for_collecting_output(
+        |m| {
+            m.get("type").and_then(Value::as_str) == Some("event")
+                && matches!(
+                    m.get("event").and_then(Value::as_str),
+                    Some("stopped") | Some("exited")
+                )
+        },
+        timeout,
+        output_sink,
+    )?;
+    if ev.get("event").and_then(Value::as_str) == Some("stopped") {
+        Some(("stopped", ev))
+    } else {
+        Some(("exited", ev))
     }
-    client
-        .wait_event("exited", Duration::from_millis(500))
-        .map(|ev| ("exited", ev))
 }
 
 fn describe_stop(client: &mut DapClient, thread_id: i64, reason: &str) -> DapStopped {

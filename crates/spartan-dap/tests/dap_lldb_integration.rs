@@ -115,12 +115,35 @@ fn real_breakpoint_hits_then_continue_runs_to_a_real_exit() {
     );
 
     session.send_command(DapCommand::Continue);
-    let after_continue = session
-        .recv_update()
-        .expect("expected a real update after sending Continue");
+    // A real, live finding from wiring up DAP `output` events (task #275):
+    // unlike `debugpy` (proven separately in
+    // `dap_python_integration.rs`'s own logpoint test), `lldb-dap` relays
+    // the debuggee's own real stdout (`println!("result={}", result)`)
+    // through this exact mechanism too -- so a real `Output` update can
+    // now legitimately arrive on this channel before the final
+    // Stopped/Exited outcome. Drain any of those first, matching the
+    // identical pattern the new logpoint test already established.
+    let mut saw_real_stdout = false;
+    let final_update = loop {
+        match session
+            .recv_update()
+            .expect("expected a real update after sending Continue")
+        {
+            DapUpdate::Output { text, .. } => {
+                if text.contains("result=43") {
+                    saw_real_stdout = true;
+                }
+            }
+            other => break other,
+        }
+    };
     assert!(
-        matches!(after_continue, DapUpdate::Exited),
-        "expected the program to run to a real exit after Continue"
+        matches!(final_update, DapUpdate::Exited),
+        "expected the program to run to a real exit after Continue, got {final_update:?}"
+    );
+    assert!(
+        saw_real_stdout,
+        "expected the debuggee's own real stdout (result=43) to have arrived as a real Output update"
     );
 
     std::fs::remove_dir_all(&dir).ok();

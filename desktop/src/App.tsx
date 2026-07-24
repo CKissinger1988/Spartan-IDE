@@ -18,7 +18,11 @@ import Editor, {
   type WorkspaceTextEdit,
   type BreakpointSpec,
 } from "./components/Editor";
-import DebugPanel, { type DapSessionState, type WatchEntry } from "./components/DebugPanel";
+import DebugPanel, {
+  type DapSessionState,
+  type OutputEntry,
+  type WatchEntry,
+} from "./components/DebugPanel";
 import LogcatPanel from "./components/LogcatPanel";
 import Placeholder from "./components/Placeholder";
 import WorkflowsScreen from "./components/WorkflowsScreen";
@@ -137,6 +141,13 @@ export default function App(): React.ReactElement {
   // its final state before the user dismisses it via Stop or relaunches.
   const [breakpointsByDoc, setBreakpointsByDoc] = useState<Record<number, BreakpointSpec[]>>({});
   const [dapSessionByDoc, setDapSessionByDoc] = useState<Record<number, DapSessionState>>({});
+  // Real DAP output (§275) -- logpoints + the debuggee's own real stdout/
+  // stderr, both relayed through the same `dap_output` event. Bounded per
+  // doc so a chatty debuggee can't grow this unboundedly across a long
+  // session, matching this codebase's own established bounded-log
+  // precedent (e.g. `leo_session_history`'s cap).
+  const [dapOutputByDoc, setDapOutputByDoc] = useState<Record<number, OutputEntry[]>>({});
+  const MAX_DAP_OUTPUT_LINES = 500;
   // Real DAP watch/REPL expressions (§250) -- a debugger-wide list (not
   // per-doc), re-evaluated against the active session on every stop.
   // `watchResults` is keyed by expression; empty while not stopped.
@@ -289,6 +300,20 @@ export default function App(): React.ReactElement {
           return {
             ...prev,
             [doc_id]: { ...existing, status: "build_failed", message: diagnostics.join("\n") },
+          };
+        });
+      } else if (event === "dap_output") {
+        const { doc_id, category, text } = data as {
+          doc_id: number;
+          category: string;
+          text: string;
+        };
+        setDapOutputByDoc((prev) => {
+          const existing = prev[doc_id] ?? [];
+          const next = [...existing, { category, text }];
+          return {
+            ...prev,
+            [doc_id]: next.length > MAX_DAP_OUTPUT_LINES ? next.slice(-MAX_DAP_OUTPUT_LINES) : next,
           };
         });
       } else if (event === "android_build_progress") {
@@ -614,6 +639,9 @@ export default function App(): React.ReactElement {
       ...prev,
       [docId]: { sessionId: -1, status: "launching" },
     }));
+    // A fresh launch starts a genuinely new debuggee -- stale output from
+    // a prior run must not linger under it.
+    setDapOutputByDoc((prev) => ({ ...prev, [docId]: [] }));
     window.spartan
       .call("dap_launch", {
         doc_id: docId,
@@ -809,6 +837,7 @@ export default function App(): React.ReactElement {
                   watches={watchEntries}
                   onAddWatch={addWatch}
                   onRemoveWatch={removeWatch}
+                  outputLog={activeFile ? dapOutputByDoc[activeFile.docId] : undefined}
                 />
                 <LogcatPanel
                   visible={logcatOpen}

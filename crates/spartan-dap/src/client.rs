@@ -193,6 +193,50 @@ impl DapClient {
         result
     }
 
+    /// Real, `output`-aware sibling of `wait_for`. A real DAP `output`
+    /// event (the mechanism behind logpoints, and behind a debuggee's own
+    /// stdout/stderr on many adapters) can legitimately arrive at any
+    /// point while waiting for something else -- `wait_for` itself already
+    /// buffers a non-matching message for a later, differently-shaped
+    /// wait, but nothing ever issued that later wait for `output`
+    /// specifically, so every real output event was previously buffered
+    /// and then silently, permanently lost. This collects every real
+    /// `output` event seen along the way into `output_sink` (never
+    /// terminating the wait on one) instead of re-buffering it, so the
+    /// caller gets both the event it actually asked for and everything
+    /// real that arrived alongside it.
+    pub fn wait_for_collecting_output<F: Fn(&Value) -> bool>(
+        &mut self,
+        pred: F,
+        timeout: Duration,
+        output_sink: &mut Vec<Value>,
+    ) -> Option<Value> {
+        let deadline = Instant::now() + timeout;
+        let mut skipped = VecDeque::new();
+        let result = loop {
+            match self.next_message(deadline) {
+                Some(msg) => {
+                    let is_output = msg.get("type").and_then(Value::as_str) == Some("event")
+                        && msg.get("event").and_then(Value::as_str) == Some("output");
+                    if is_output {
+                        output_sink.push(msg);
+                        continue;
+                    }
+                    if pred(&msg) {
+                        break Some(msg);
+                    } else {
+                        skipped.push_back(msg);
+                    }
+                }
+                None => break None,
+            }
+        };
+        for m in skipped.into_iter().rev() {
+            self.buffered.push_front(m);
+        }
+        result
+    }
+
     pub fn request(&mut self, command: &str, arguments: Value, timeout: Duration) -> Option<Value> {
         let seq = self.send_request(command, arguments).ok()?;
         self.wait_for(

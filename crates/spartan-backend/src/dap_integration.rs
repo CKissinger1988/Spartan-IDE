@@ -62,6 +62,10 @@ fn dap_update_event(doc_id: u64, update: DapUpdate) -> Event {
             event: "dap_error".to_string(),
             data: serde_json::json!({ "doc_id": doc_id, "message": message }),
         },
+        DapUpdate::Output { category, text } => Event {
+            event: "dap_output".to_string(),
+            data: serde_json::json!({ "doc_id": doc_id, "category": category, "text": text }),
+        },
     }
 }
 
