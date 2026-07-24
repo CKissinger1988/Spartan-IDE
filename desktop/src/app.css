@@ -334,6 +334,29 @@
   font-weight: bold;
 }
 
+.git-merge-conflict-panel {
+  border: 1px solid #e05a4a;
+  border-radius: 6px;
+  padding: 6px;
+  gap: 6px;
+}
+
+.git-merge-conflict-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+}
+
+.git-merge-conflict-entry:first-of-type {
+  border-top: none;
+}
+
+.git-merge-conflict-textarea {
+  min-height: 70px;
+}
+
 .tree-row {
   display: flex;
   align-items: center;

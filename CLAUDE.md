@@ -6795,6 +6795,90 @@ first — it's the parity reference until each row there is actually reimplement
   Leo UI at all to extend (confirmed via grep, matching every other Leo-panel feature's own already-
   documented scope); the real Electron window remains unlaunchable in this session (same standing
   gap since §75.59).
+- **Real, working code — real merge-conflict resolution UI in both Git panels, closing task
+  #270 (the last item explicitly named in `docs/FUTURE_FEATURES.md`'s own git-surface backlog)**:
+  user-requested ("Prioritize and continue with future features"). Before this pass the Git panel
+  could show status/diff/branches/log/stashes/tags but had no way to actually merge one branch
+  into another -- `spartan_git` gained a real `MergeOutcome` enum (`UpToDate`/`FastForwarded`/
+  `Merged`/`Conflicted`) and `ConflictEntry` struct (`path`/`ancestor`/`ours`/`theirs`, each
+  `Option<String>` since a real conflict can have a missing side -- a file added on only one
+  branch), plus six new `GitRepo` methods built entirely on real `git2`/libgit2 APIs, not a
+  hand-rolled merge algorithm: `merge_in_progress()` (`RepositoryState::Merge`),
+  `merge_branch(branch)` (`merge_analysis()` then either a real fast-forward `set_target`, a
+  real no-op for `is_up_to_date()`, or a real `Repository::merge()` -- which writes genuine
+  conflict markers to the working tree and populates the index's conflict entries exactly like
+  the `git merge` CLI -- followed by a real two-parent `commit_merge()` when nothing actually
+  conflicted), `list_conflicts()` (walks `Index::conflicts()`, resolving each side's real blob
+  content via `find_blob`), `resolve_conflict_with_content(path, content)` (writes real content to
+  the real working-tree file and stages it -- the single mechanism behind "Take ours"/"Take
+  theirs"/manual-edit, which all just supply different `content`), `commit_merge(message)` (a
+  real two-parent commit from the real `HEAD` and the real merge head via
+  `mergehead_foreach`), and `abort_merge()` (a real, destructive `reset --hard` back to `HEAD`
+  plus `cleanup_state()`). **A real Rust borrow-checker limitation was hit and worked around, not
+  papered over**: `merge_branch`'s first draft held a `git2::Reference` across a later `&mut self`
+  call and hit a genuine E0502 -- `Drop`-implementing types (`Reference`/`Commit`/
+  `AnnotatedCommit`/`Index`) have their borrows extended to end-of-scope by NLL regardless of last
+  syntactic use -- fixed by explicitly scoping every `Drop`-having binding into its own block so
+  only `Copy` values (`Oid`, `bool`) cross the boundary into the later `&mut self` call. 7 new
+  `spartan-git` tests (51 total, up from 44), including two that build **genuinely divergent
+  branches with real overlapping edits to the same line** via a new `repo_with_divergent_branches`
+  test helper -- a fast-forward case, an already-merged no-op case, a clean two-parent merge with
+  no real overlap, and the real conflicted case (confirming both `ours`/`theirs` content, then a
+  full resolve-then-commit round trip producing a real two-parent commit, and a separate
+  resolve-then-abort round trip confirming the working tree is genuinely restored to `HEAD`).
+  `spartan-backend` gained five new dispatch functions (`git_merge_branch`, `git_merge_status`,
+  `git_resolve_conflict`, `git_commit_merge`, `git_abort_merge`, following the exact
+  `GitRepo::discover(...).ok_or(...)?`/`.map_err(...)?`/`Ok(serde_json::json!(...))` convention
+  every neighboring git dispatch function already uses) wired into `handle_request`'s match
+  statement right after `git_checkout_remote`, plus 4 new dispatch-level tests (a full real
+  conflict → resolve → commit round trip; a real abort round trip; a real fast-forward-with-no-
+  conflict case; an honest non-repo error) -- 229 `spartan-backend` lib tests total (up from 225).
+  Both `main.ts`/`preload.ts` gained the five new method names in their IPC allowlists at the
+  identical list position, continuing this project's own established drift-avoidance discipline.
+  **UI, both shells** (`desktop/src/components/GitPanel.tsx`, `web/src/components/GitPanel.tsx`,
+  the latter a verbatim port using `client.call` in place of `window.spartan.call`, matching every
+  other Git-panel feature this session has ported): each non-current branch row in the branch
+  switcher gained a "Merge" button (disabled while a merge is already in progress); while
+  `git_merge_status` reports `in_progress`, a dedicated bordered panel lists every real conflicted
+  file with "Take ours"/"Take theirs" one-click buttons (each disabled when that side is genuinely
+  `null`) plus a manual-edit textarea pre-filled with `ours` for a hand-merged result -- a real,
+  named v1 simplification stated in the component's own doc comment: this reuses a dedicated
+  textarea rather than routing through the main code editor tab, unlike the diff view's own
+  read-only `DiffView` reuse elsewhere in this panel. "Complete Merge" is disabled until every
+  conflict is resolved and performs the real two-parent commit; "Abort" is confirmed first
+  (`window.confirm`, matching the discard-changes/stash-drop/tag-delete precedent this panel
+  already established for destructive actions) and resets to `HEAD`. New `.git-merge-conflict-
+  panel`/`.git-merge-conflict-entry`/`.git-merge-conflict-textarea` CSS classes added
+  byte-identically to both shells' `app.css`. Full workspace `cargo fmt --all -- --check`/`cargo
+  clippy --workspace --release --all-targets` both clean; `desktop/`'s and `web/`'s own `tsc
+  --noEmit` both clean. **Real, live, end-to-end verification in both shells against real
+  divergent git branches with a genuine overlapping-line conflict, not a mock**: a real fixture
+  repo (`root` commit, then `feature` and `master` each independently editing the same line) was
+  served by two real `spartan-devserver` instances. `web/` was driven against the real compiled
+  `web/dist` via a real `vite build` + the devserver's own static serving -- clicking "Merge" on
+  `feature` correctly showed the real conflict panel (screenshotted), "Take theirs" correctly
+  resolved it, and "Complete Merge" produced a real merge commit -- independently confirmed via
+  the actual `git log --graph`/`git status`/file-content CLI output afterward (a real two-parent
+  commit, clean tree, `FEATURE CHANGE` content). **A second real, security-correct finding was hit
+  and resolved while building the `desktop/` verification harness, not a bug**: an initial attempt
+  served `desktop/`'s built renderer via a separate `vite preview` process while pointing a mocked
+  `window.spartan` at a different `spartan-devserver` instance's WebSocket port -- the real
+  Origin-allowlist check `ws_transport.rs` has enforced since §75.88 correctly rejected the
+  cross-origin connection with a real `403` during the WS handshake, exactly the behavior that
+  check exists to provide. Fixed by launching `spartan-devserver` with `--web-root:desktop/dist`
+  so the page and the WebSocket are served from the exact same origin, matching `web/`'s own
+  already-real same-origin setup -- not a workaround, the correct way to exercise this security
+  boundary. With that fixed, `desktop/`'s real 3-tier nav (Editor/Console/.../Settings sidebar,
+  the real Leo panel, everything) rendered correctly over the real WebSocket-forwarded
+  `window.spartan`, and the identical conflict → "Take ours" → "Complete Merge" flow produced a
+  second, independently real two-parent merge commit -- confirmed again via the git CLI
+  (`MASTER CHANGE` content preserved, clean tree), screenshotted at the conflict-panel stage
+  showing the real full desktop chrome. **What this does not confirm**: no per-hunk conflict
+  resolution (whole-file `ours`/`theirs`/manual-edit only, matching this panel's own existing
+  file-level-only staging scope); no merge-conflict UI in the reference wgpu shell (that shell has
+  no Git panel to extend, matching the established "Electron-shells-only" scope every recent Git
+  pass has carried); the real Electron window remains unlaunchable in this session (same standing
+  gap since §75.59).
 
 ## Build & test
 

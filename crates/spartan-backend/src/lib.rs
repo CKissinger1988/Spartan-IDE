@@ -3771,6 +3771,92 @@ fn git_checkout_remote(
     Ok(serde_json::json!({ "ok": true }))
 }
 
+/// Real `git merge <branch>` -- accepts a local (`feature`) or
+/// remote-tracking (`origin/feature`) branch name, matching both real
+/// namespaces `git_branches`/`git_remote_branches` already expose. Reports
+/// exactly which real outcome `spartan_git::MergeOutcome` produced; a real
+/// `"conflicted"` result means real conflicts now sit in the working tree
+/// and index -- `git_merge_status`/`git_resolve_conflict`/`git_commit_merge`
+/// are the real next steps.
+fn git_merge_branch(project_root: &str, branch: &str) -> Result<serde_json::Value, String> {
+    let mut repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let outcome = repo
+        .merge_branch(branch)
+        .map_err(|e| format!("git merge: {e}"))?;
+    let outcome_str = match outcome {
+        spartan_git::MergeOutcome::UpToDate => "up_to_date",
+        spartan_git::MergeOutcome::FastForwarded => "fast_forwarded",
+        spartan_git::MergeOutcome::Merged => "merged",
+        spartan_git::MergeOutcome::Conflicted => "conflicted",
+    };
+    Ok(serde_json::json!({ "outcome": outcome_str }))
+}
+
+/// Real merge-in-progress status: whether the repo is currently mid-merge
+/// (`RepositoryState::Merge`) and, if so, every real conflicted file's
+/// real ancestor/ours/theirs content -- one round trip covering everything
+/// the conflict-resolution UI needs to render, rather than racing two
+/// separate calls against a repo state that could change between them.
+fn git_merge_status(project_root: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let in_progress = repo.merge_in_progress();
+    let conflicts = repo
+        .list_conflicts()
+        .map_err(|e| format!("git merge status: {e}"))?
+        .into_iter()
+        .map(|c| {
+            serde_json::json!({
+                "path": c.path.to_string_lossy(),
+                "ancestor": c.ancestor,
+                "ours": c.ours,
+                "theirs": c.theirs,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "in_progress": in_progress, "conflicts": conflicts }))
+}
+
+/// Real one-click conflict resolution -- writes `content` to the real
+/// working-tree file and stages it, resolving the conflict. `content` is
+/// typically one of `git_merge_status`'s own real `ours`/`theirs` values
+/// (a real "take ours"/"take theirs" action) or the user's own hand-edited
+/// text.
+fn git_resolve_conflict(
+    project_root: &str,
+    path: &str,
+    content: &str,
+) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.resolve_conflict_with_content(std::path::Path::new(path), content)
+        .map_err(|e| format!("git resolve conflict: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// Real merge-commit completion -- a real two-parent commit (`HEAD` +
+/// `MERGE_HEAD`). Refuses honestly if real conflicts remain unresolved.
+fn git_commit_merge(project_root: &str, message: &str) -> Result<serde_json::Value, String> {
+    let mut repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let oid = repo
+        .commit_merge(message)
+        .map_err(|e| format!("git commit merge: {e}"))?;
+    Ok(serde_json::json!({ "oid": oid.to_string() }))
+}
+
+/// Real, destructive merge abort -- resets the working tree/index back to
+/// `HEAD`, discarding the in-progress merge and any partial resolutions.
+/// The frontend is responsible for confirming with the user first.
+fn git_abort_merge(project_root: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.abort_merge()
+        .map_err(|e| format!("git abort merge: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 /// Real `git log` -- the most recent commits reachable from `HEAD`,
 /// newest first, bounded by a caller-supplied (or default 50) `max`. A
 /// repo with no commits returns an honest empty list.
@@ -4690,6 +4776,29 @@ pub fn handle_request(
             let root = get_str_param(&req.params, "project_root")?;
             let branch = get_str_param(&req.params, "branch")?;
             git_checkout_remote(&root, &branch)
+        })(),
+        "git_merge_branch" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let branch = get_str_param(&req.params, "branch")?;
+            git_merge_branch(&root, &branch)
+        })(),
+        "git_merge_status" => {
+            get_str_param(&req.params, "project_root").and_then(|r| git_merge_status(&r))
+        }
+        "git_resolve_conflict" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let path = get_str_param(&req.params, "path")?;
+            let content = get_str_param(&req.params, "content")?;
+            git_resolve_conflict(&root, &path, &content)
+        })(),
+        "git_commit_merge" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let message = get_str_param(&req.params, "message")?;
+            git_commit_merge(&root, &message)
+        })(),
+        "git_abort_merge" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            git_abort_merge(&root)
         })(),
         "git_log" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
@@ -6757,6 +6866,288 @@ mod tests {
             entries.is_empty(),
             "a clean tree after commit has no real status entries"
         );
+    }
+
+    /// Creates two real branches diverging from a shared root commit, each
+    /// with a real, overlapping edit to the same line of the same file --
+    /// the exact real setup that produces a genuine merge conflict, not a
+    /// simulated one.
+    fn repo_with_a_real_conflicting_merge(
+        unique: &str,
+    ) -> (TempRepo, String, Arc<Mutex<BackendState>>) {
+        let tmp = TempRepo::new(unique);
+        std::fs::write(tmp.dir.join("f.txt"), "line one\nline two\nline three\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "root" }),
+        );
+        call(
+            &state,
+            3,
+            "git_create_branch",
+            serde_json::json!({ "project_root": root, "branch": "feature" }),
+        );
+        call(
+            &state,
+            4,
+            "git_checkout",
+            serde_json::json!({ "project_root": root, "branch": "feature" }),
+        );
+        std::fs::write(
+            tmp.dir.join("f.txt"),
+            "line one\nFEATURE CHANGE\nline three\n",
+        )
+        .unwrap();
+        call(
+            &state,
+            5,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            6,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "feature edit" }),
+        );
+        call(
+            &state,
+            7,
+            "git_checkout",
+            serde_json::json!({ "project_root": root, "branch": "master" }),
+        );
+        std::fs::write(
+            tmp.dir.join("f.txt"),
+            "line one\nMASTER CHANGE\nline three\n",
+        )
+        .unwrap();
+        call(
+            &state,
+            8,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            9,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "master edit" }),
+        );
+        (tmp, root, state)
+    }
+
+    #[test]
+    fn git_merge_branch_reports_a_real_conflict_through_the_dispatch_path() {
+        let (tmp, root, state) = repo_with_a_real_conflicting_merge("merge_conflict_dispatch");
+
+        let resp = call(
+            &state,
+            10,
+            "git_merge_branch",
+            serde_json::json!({ "project_root": root, "branch": "feature" }),
+        );
+        assert_eq!(resp.result.unwrap()["outcome"], "conflicted");
+
+        let status = call(
+            &state,
+            11,
+            "git_merge_status",
+            serde_json::json!({ "project_root": root }),
+        );
+        let result = status.result.unwrap();
+        assert_eq!(result["in_progress"], true);
+        let conflicts = result["conflicts"].as_array().unwrap().clone();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0]["path"], "f.txt");
+        assert!(conflicts[0]["ours"]
+            .as_str()
+            .unwrap()
+            .contains("MASTER CHANGE"));
+        assert!(conflicts[0]["theirs"]
+            .as_str()
+            .unwrap()
+            .contains("FEATURE CHANGE"));
+
+        // A real one-click "take theirs" resolution, then complete the merge
+        // with a real two-parent commit.
+        let theirs = conflicts[0]["theirs"].as_str().unwrap().to_string();
+        let resolve_resp = call(
+            &state,
+            12,
+            "git_resolve_conflict",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "content": theirs }),
+        );
+        assert_eq!(resolve_resp.result.unwrap()["ok"], true);
+
+        let status_after_resolve = call(
+            &state,
+            13,
+            "git_merge_status",
+            serde_json::json!({ "project_root": root }),
+        );
+        assert!(status_after_resolve.result.unwrap()["conflicts"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
+        let commit_resp = call(
+            &state,
+            14,
+            "git_commit_merge",
+            serde_json::json!({ "project_root": root, "message": "merge feature" }),
+        );
+        let oid = commit_resp.result.unwrap()["oid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(oid.len(), 40);
+
+        let status_final = call(
+            &state,
+            15,
+            "git_merge_status",
+            serde_json::json!({ "project_root": root }),
+        );
+        assert_eq!(status_final.result.unwrap()["in_progress"], false);
+        assert_eq!(
+            std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "line one\nFEATURE CHANGE\nline three\n"
+        );
+    }
+
+    #[test]
+    fn git_abort_merge_discards_the_conflict_through_the_dispatch_path() {
+        let (tmp, root, state) = repo_with_a_real_conflicting_merge("merge_abort_dispatch");
+
+        call(
+            &state,
+            10,
+            "git_merge_branch",
+            serde_json::json!({ "project_root": root, "branch": "feature" }),
+        );
+        let abort_resp = call(
+            &state,
+            11,
+            "git_abort_merge",
+            serde_json::json!({ "project_root": root }),
+        );
+        assert_eq!(abort_resp.result.unwrap()["ok"], true);
+
+        let status = call(
+            &state,
+            12,
+            "git_merge_status",
+            serde_json::json!({ "project_root": root }),
+        );
+        assert_eq!(status.result.unwrap()["in_progress"], false);
+        assert_eq!(
+            std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "line one\nMASTER CHANGE\nline three\n"
+        );
+    }
+
+    #[test]
+    fn git_merge_branch_fast_forwards_with_no_conflict_through_the_dispatch_path() {
+        let tmp = TempRepo::new("merge_ff_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "v1\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "root" }),
+        );
+        call(
+            &state,
+            3,
+            "git_create_branch",
+            serde_json::json!({ "project_root": root, "branch": "feature" }),
+        );
+        call(
+            &state,
+            4,
+            "git_checkout",
+            serde_json::json!({ "project_root": root, "branch": "feature" }),
+        );
+        std::fs::write(tmp.dir.join("f.txt"), "v2\n").unwrap();
+        call(
+            &state,
+            5,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            6,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "feature edit" }),
+        );
+        call(
+            &state,
+            7,
+            "git_checkout",
+            serde_json::json!({ "project_root": root, "branch": "master" }),
+        );
+
+        let resp = call(
+            &state,
+            8,
+            "git_merge_branch",
+            serde_json::json!({ "project_root": root, "branch": "feature" }),
+        );
+        assert_eq!(resp.result.unwrap()["outcome"], "fast_forwarded");
+        assert_eq!(
+            std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "v2\n"
+        );
+
+        let status = call(
+            &state,
+            9,
+            "git_merge_status",
+            serde_json::json!({ "project_root": root }),
+        );
+        assert_eq!(status.result.unwrap()["in_progress"], false);
+    }
+
+    #[test]
+    fn git_merge_branch_on_a_real_non_repo_path_errors_honestly() {
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-merge-non-repo-{}-{}",
+            std::process::id(),
+            "merge_non_repo_dispatch"
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "git_merge_branch",
+            serde_json::json!({ "project_root": scratch.to_string_lossy(), "branch": "feature" }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp
+            .error
+            .unwrap()
+            .contains("no git repository found at or above this path"));
     }
 
     /// `settings_get`/`settings_set` both resolve `$HOME` process-wide

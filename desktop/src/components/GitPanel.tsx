@@ -47,6 +47,13 @@ interface ChangedFile {
   status: string;
 }
 
+interface ConflictEntry {
+  path: string;
+  ancestor: string | null;
+  ours: string | null;
+  theirs: string | null;
+}
+
 /** Real relative-age formatting for the history list -- coarse on
  * purpose (a source-control sidebar, not a timestamp report). */
 function formatAge(unixSeconds: number): string {
@@ -313,11 +320,25 @@ function DiffView({ diff }: { diff: string }): React.ReactElement {
  * the parent's blob), reusing the same `DiffView` the working-tree diff
  * already uses.
  *
+ * Real merge-conflict resolution UI (task #270): a "Merge" button on each
+ * non-current branch row runs a real `git_merge_branch` (fast-forward,
+ * a real no-conflict three-way merge, or a real conflicted merge --
+ * conflict markers written to the working tree exactly like the real
+ * `git merge` CLI). While a merge is genuinely in progress
+ * (`git_merge_status`'s own real `RepositoryState::Merge` check), a
+ * dedicated conflict panel lists every real conflicted file with its
+ * real `ours`/`theirs` content, one-click "Take ours"/"Take theirs"
+ * resolution, and a manual-edit textarea (pre-filled with `ours`) for a
+ * hand-merged result -- a real, named v1 simplification versus opening
+ * the file in the main code editor tab, not yet wired to this panel.
+ * "Complete Merge" is disabled until every conflict is resolved and
+ * performs a real two-parent commit; "Abort" is a real, destructive
+ * `git merge --abort` equivalent, confirmed first.
+ *
  * A deliberate, named v1 scope cut, matching this whole `desktop/`
  * effort's own established pattern of naming what's deferred rather than
- * silently omitting it: no per-hunk staging, no stash, no branch
- * delete/rename, no merge-conflict resolution UI -- conflicted files are
- * shown with a marker but not specially handled.
+ * silently omitting it: no per-hunk staging, no stash-during-merge
+ * interplay, no branch delete/rename, no merging via drag-and-drop.
  */
 export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [status, setStatus] = useState<GitStatus | null>(null);
@@ -364,6 +385,19 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [stashMessage, setStashMessage] = useState("");
   // Real git tags.
   const [tags, setTags] = useState<{ name: string; target: string; annotated: boolean }[]>([]);
+  // Real merge-conflict resolution (task #270). `mergeStatus` reflects
+  // `git_merge_status`'s real `RepositoryState::Merge` check plus every
+  // real conflicted file's ancestor/ours/theirs content -- refetched
+  // after every action that could change it (branch checkout, merge
+  // attempt, a resolve, completing/aborting).
+  const [mergeStatus, setMergeStatus] = useState<{
+    inProgress: boolean;
+    conflicts: ConflictEntry[];
+  } | null>(null);
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const [mergeCommitMessage, setMergeCommitMessage] = useState("");
+  const [conflictEdits, setConflictEdits] = useState<Record<string, string>>({});
 
   const refresh = useCallback(() => {
     window.spartan
@@ -444,10 +478,105 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
       .catch(() => setTags([]));
   }, [root]);
 
+  const refreshMergeStatus = useCallback(() => {
+    window.spartan
+      .call("git_merge_status", { project_root: root })
+      .then((r) => {
+        const result = r as { in_progress: boolean; conflicts: ConflictEntry[] };
+        setMergeStatus({ inProgress: result.in_progress, conflicts: result.conflicts });
+      })
+      .catch(() => setMergeStatus(null));
+  }, [root]);
+
   useEffect(() => {
     refreshStashes();
     refreshTags();
-  }, [refreshStashes, refreshTags]);
+    refreshMergeStatus();
+  }, [refreshStashes, refreshTags, refreshMergeStatus]);
+
+  // Real merge attempt (task #270) -- fast-forward, a clean three-way
+  // merge, or a real conflicted merge (conflict markers written to the
+  // working tree, exactly like the real `git merge` CLI). Whatever the
+  // real outcome, both status and merge-status are refetched so the
+  // conflict panel (if any) appears immediately.
+  const mergeBranch = useCallback(
+    (name: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      setMergeBusy(true);
+      setMergeError(null);
+      setBranchError(null);
+      window.spartan
+        .call("git_merge_branch", { project_root: root, branch: name })
+        .then(() => {
+          setShowBranches(false);
+          setBranches(null);
+          setConflictEdits({});
+          refresh();
+          refreshMergeStatus();
+        })
+        .catch((e: Error) => setBranchError(e.message))
+        .finally(() => setMergeBusy(false));
+    },
+    [root, refresh, refreshMergeStatus]
+  );
+
+  // Real one-click conflict resolution -- writes `content` to the real
+  // working-tree file and stages it. `content` is typically a conflict's
+  // own real `ours`/`theirs` value ("Take ours"/"Take theirs") or the
+  // user's own hand-edited text from the manual-edit textarea below.
+  const resolveConflictWith = useCallback(
+    (path: string, content: string) => {
+      setMergeBusy(true);
+      setMergeError(null);
+      window.spartan
+        .call("git_resolve_conflict", { project_root: root, path, content })
+        .then(() => refreshMergeStatus())
+        .catch((e: Error) => setMergeError(e.message))
+        .finally(() => setMergeBusy(false));
+    },
+    [root, refreshMergeStatus]
+  );
+
+  // Completes the merge with a real two-parent commit once every real
+  // conflict is resolved.
+  const commitMerge = useCallback(() => {
+    const msg = mergeCommitMessage.trim() || "Merge";
+    setMergeBusy(true);
+    setMergeError(null);
+    window.spartan
+      .call("git_commit_merge", { project_root: root, message: msg })
+      .then(() => {
+        setMergeCommitMessage("");
+        setConflictEdits({});
+        refresh();
+        refreshMergeStatus();
+      })
+      .catch((e: Error) => setMergeError(e.message))
+      .finally(() => setMergeBusy(false));
+  }, [root, mergeCommitMessage, refresh, refreshMergeStatus]);
+
+  // A real, destructive `git merge --abort` equivalent -- resets the
+  // working tree/index back to `HEAD`, discarding the in-progress merge
+  // and any partial resolutions. Confirmed first.
+  const abortMerge = useCallback(() => {
+    if (
+      !window.confirm(
+        "Abort this merge? All conflict resolutions will be discarded and the working tree reset to HEAD."
+      )
+    )
+      return;
+    setMergeBusy(true);
+    setMergeError(null);
+    window.spartan
+      .call("git_abort_merge", { project_root: root })
+      .then(() => {
+        setConflictEdits({});
+        refresh();
+        refreshMergeStatus();
+      })
+      .catch((e: Error) => setMergeError(e.message))
+      .finally(() => setMergeBusy(false));
+  }, [root, refresh, refreshMergeStatus]);
 
   // Tag a specific commit (lightweight, via a prompt for the name).
   const tagCommit = useCallback(
@@ -801,6 +930,17 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
             >
               <span className="git-status-glyph mono">{b.current ? "✓" : ""}</span>
               <span className="mono git-row-path">{b.name}</span>
+              {!b.current && (
+                <button
+                  type="button"
+                  className="editor-find-btn"
+                  disabled={mergeBusy || Boolean(mergeStatus?.inProgress)}
+                  onClick={(e) => mergeBranch(b.name, e)}
+                  title={`Merge ${b.name} into ${status.branch ?? "the current branch"}`}
+                >
+                  Merge
+                </button>
+              )}
             </div>
           ))}
           {remoteBranches && remoteBranches.length > 0 && (
@@ -839,6 +979,90 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
               onClick={createBranch}
             >
               Create
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mergeStatus?.inProgress && (
+        <div className="git-section git-merge-conflict-panel">
+          <div className="git-section-label mono">
+            Merge in progress — {mergeStatus.conflicts.length} conflict
+            {mergeStatus.conflicts.length === 1 ? "" : "s"}
+          </div>
+          {mergeError && <div className="git-panel-empty mono">{mergeError}</div>}
+          {mergeStatus.conflicts.map((c) => (
+            <div key={c.path} className="git-merge-conflict-entry">
+              <div className="mono git-row-path">{c.path}</div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button
+                  type="button"
+                  className="editor-find-btn"
+                  disabled={mergeBusy || c.ours === null}
+                  onClick={() => resolveConflictWith(c.path, c.ours ?? "")}
+                  title="Keep our (current branch's) version"
+                >
+                  Take ours
+                </button>
+                <button
+                  type="button"
+                  className="editor-find-btn"
+                  disabled={mergeBusy || c.theirs === null}
+                  onClick={() => resolveConflictWith(c.path, c.theirs ?? "")}
+                  title="Keep their (merged branch's) version"
+                >
+                  Take theirs
+                </button>
+              </div>
+              <textarea
+                className="git-commit-input mono git-merge-conflict-textarea"
+                placeholder="Manually edit the resolved content…"
+                value={conflictEdits[c.path] ?? c.ours ?? c.theirs ?? ""}
+                onChange={(e) =>
+                  setConflictEdits((prev) => ({ ...prev, [c.path]: e.target.value }))
+                }
+              />
+              <button
+                type="button"
+                className="editor-find-btn"
+                disabled={mergeBusy}
+                onClick={() =>
+                  resolveConflictWith(c.path, conflictEdits[c.path] ?? c.ours ?? c.theirs ?? "")
+                }
+              >
+                Resolve with this content
+              </button>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+            <input
+              className="git-commit-input mono"
+              placeholder="Merge commit message"
+              value={mergeCommitMessage}
+              onChange={(e) => setMergeCommitMessage(e.target.value)}
+              style={{ flex: 1, minHeight: "auto", height: 28 }}
+            />
+            <button
+              type="button"
+              className="git-commit-button"
+              disabled={mergeBusy || mergeStatus.conflicts.length > 0}
+              onClick={commitMerge}
+              title={
+                mergeStatus.conflicts.length > 0
+                  ? "Resolve every conflict first"
+                  : "Complete the merge with a real two-parent commit"
+              }
+            >
+              Complete Merge
+            </button>
+            <button
+              type="button"
+              className="editor-find-btn"
+              disabled={mergeBusy}
+              onClick={abortMerge}
+              title="Discard the merge and reset to HEAD"
+            >
+              Abort
             </button>
           </div>
         </div>

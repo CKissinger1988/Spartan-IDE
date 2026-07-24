@@ -43,6 +43,19 @@ pub enum PullOutcome {
     NonFastForward,
 }
 
+/// Outcome of a real `merge_branch` attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeOutcome {
+    UpToDate,
+    FastForwarded,
+    /// A real merge commit was created (two parents); no conflicts.
+    Merged,
+    /// The merge left real, unresolved conflicts in the index and working
+    /// tree -- `list_conflicts()`/`resolve_conflict_with_content()`/
+    /// `commit_merge()` are the real next steps.
+    Conflicted,
+}
+
 /// One file's real status in the working tree, both halves independently
 /// (a file can be both staged *and* have further unstaged changes on top
 /// -- git's own real index/worktree split, not simplified away).
@@ -137,6 +150,16 @@ pub struct TagInfo {
     pub name: String,
     pub target: String,
     pub annotated: bool,
+}
+
+/// One real conflicted file, as reported by `list_conflicts()` -- see that
+/// method's own doc comment for what a `None` side really means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictEntry {
+    pub path: PathBuf,
+    pub ancestor: Option<String>,
+    pub ours: Option<String>,
+    pub theirs: Option<String>,
 }
 
 /// A real, open local git repository. Every method here is a thin,
@@ -341,6 +364,222 @@ impl GitRepo {
         // Clear REVERT_HEAD now that the revert is committed.
         let _ = self.repo.cleanup_state();
         Ok(new_oid)
+    }
+
+    /// Real `true` while a real merge (started by `merge_branch`, or a real
+    /// `git merge` run outside this crate) has left the repository with
+    /// unresolved conflicts or otherwise not yet committed --
+    /// `RepositoryState::Merge` specifically. A real rebase/cherry-pick/
+    /// revert are separate `git2` states this method deliberately does not
+    /// report on, matching this crate's own real, narrow "Merge-conflict
+    /// resolution UI" scope, not a general "any operation is in progress"
+    /// check.
+    pub fn merge_in_progress(&self) -> bool {
+        self.repo.state() == git2::RepositoryState::Merge
+    }
+
+    /// Real `git merge <branch>` -- accepts either a local branch name
+    /// (`feature`) or a remote-tracking one (`origin/feature`), matching
+    /// the same two real branch namespaces `list_branches`/
+    /// `list_remote_branches` already expose. Uses `git2`'s own real merge
+    /// analysis to pick the correct real outcome: already up to date, a
+    /// real fast-forward (moves `HEAD` directly, no merge commit), or a
+    /// real three-way merge -- which either produces a clean merge commit
+    /// (two parents: `HEAD` and the merged branch) or leaves real conflicts
+    /// in the index/working tree for `list_conflicts`/
+    /// `resolve_conflict_with_content`/`commit_merge` to handle. Errors
+    /// honestly if the named branch doesn't exist in either namespace.
+    pub fn merge_branch(&mut self, branch: &str) -> Result<MergeOutcome, git2::Error> {
+        // Every real `git2` type below (`Reference`/`Commit`/`AnnotatedCommit`/
+        // `Index`) implements `Drop`, which extends its borrow of `self.repo`
+        // to the end of its enclosing scope regardless of last syntactic use
+        // -- each real lookup is deliberately scoped to its own block, with
+        // only `Copy` values (`Oid`, `bool`) crossing a block boundary, so
+        // `self.commit_merge(...)` below can still take `&mut self`.
+        let their_commit_id = {
+            let their_ref = self
+                .repo
+                .find_branch(branch, git2::BranchType::Local)
+                .or_else(|_| self.repo.find_branch(branch, git2::BranchType::Remote))?
+                .into_reference();
+            their_ref.peel_to_commit()?.id()
+        };
+
+        let (is_up_to_date, is_fast_forward) = {
+            let annotated = self.repo.find_annotated_commit(their_commit_id)?;
+            let (analysis, _preference) = self.repo.merge_analysis(&[&annotated])?;
+            (analysis.is_up_to_date(), analysis.is_fast_forward())
+        };
+
+        if is_up_to_date {
+            return Ok(MergeOutcome::UpToDate);
+        }
+
+        if is_fast_forward {
+            let their_commit = self.repo.find_commit(their_commit_id)?;
+            let mut checkout = git2::build::CheckoutBuilder::new();
+            checkout.force();
+            self.repo
+                .checkout_tree(their_commit.as_object(), Some(&mut checkout))?;
+            let mut head_ref = self.repo.head()?;
+            if head_ref.is_branch() {
+                head_ref.set_target(their_commit_id, "fast-forward merge")?;
+            } else {
+                // A real detached HEAD -- move it directly, matching
+                // `checkout_remote_branch`'s own precedent for the
+                // no-real-branch-ref case.
+                self.repo.set_head_detached(their_commit_id)?;
+            }
+            return Ok(MergeOutcome::FastForwarded);
+        }
+
+        // A real, genuine three-way merge -- writes real conflict markers
+        // into the working tree and populates the index's real conflict
+        // entries when the two sides touched overlapping content; leaves
+        // both untouched (a clean merge, ready to commit) otherwise.
+        let has_conflicts = {
+            let annotated = self.repo.find_annotated_commit(their_commit_id)?;
+            self.repo.merge(&[&annotated], None, None)?;
+            self.repo.index()?.has_conflicts()
+        };
+        if has_conflicts {
+            return Ok(MergeOutcome::Conflicted);
+        }
+        self.commit_merge(&format!("Merge branch '{branch}'"))?;
+        Ok(MergeOutcome::Merged)
+    }
+
+    /// Real per-file conflict listing -- one entry per real conflicted path
+    /// currently in the index, each side's real content read from its own
+    /// real blob. A side is `None` when that side has no entry at all for
+    /// this path -- a real, valid "modify/delete" conflict shape, not
+    /// assumed to always be "both sides modified the same file".
+    pub fn list_conflicts(&self) -> Result<Vec<ConflictEntry>, git2::Error> {
+        let index = self.repo.index()?;
+        let blob_content =
+            |entry: &Option<git2::IndexEntry>| -> Result<Option<String>, git2::Error> {
+                match entry {
+                    Some(e) => {
+                        let blob = self.repo.find_blob(e.id)?;
+                        Ok(Some(String::from_utf8_lossy(blob.content()).into_owned()))
+                    }
+                    None => Ok(None),
+                }
+            };
+        let mut entries = Vec::new();
+        for conflict in index.conflicts()? {
+            let conflict = conflict?;
+            let path = conflict
+                .ancestor
+                .as_ref()
+                .or(conflict.our.as_ref())
+                .or(conflict.their.as_ref())
+                .map(|e| PathBuf::from(String::from_utf8_lossy(&e.path).into_owned()))
+                .ok_or_else(|| git2::Error::from_str("real conflict entry carries no path"))?;
+            entries.push(ConflictEntry {
+                path,
+                ancestor: blob_content(&conflict.ancestor)?,
+                ours: blob_content(&conflict.our)?,
+                theirs: blob_content(&conflict.their)?,
+            });
+        }
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(entries)
+    }
+
+    /// Real one-click conflict resolution -- writes `content` (the chosen
+    /// real "take ours"/"take theirs" blob text, or the user's own real
+    /// hand-edited text) directly to the real working-tree file, then
+    /// stages it, which resolves the conflict exactly the way a real
+    /// `git add <path>` on a conflicted path already does (removing the
+    /// ancestor/ours/theirs index entries, replacing them with one normal
+    /// staged entry). A file already edited and saved through this
+    /// project's own existing editor `edit`/`save_file` path needs no new
+    /// method at all -- the existing `stage()` (this crate's own `git
+    /// add`) already resolves it identically; this method exists
+    /// specifically for the one-click case where the resolved content
+    /// isn't already on disk.
+    pub fn resolve_conflict_with_content(
+        &self,
+        path: &Path,
+        content: &str,
+    ) -> Result<(), git2::Error> {
+        let workdir = self
+            .repo
+            .workdir()
+            .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
+        std::fs::write(workdir.join(path), content).map_err(|e| {
+            git2::Error::from_str(&format!("failed to write resolved content: {e}"))
+        })?;
+        self.stage(path)
+    }
+
+    /// Real merge-commit completion -- creates a commit with **two**
+    /// real parents (`HEAD` and the real `MERGE_HEAD` a `merge_branch`
+    /// call left behind), the one real shape `commit()` itself
+    /// deliberately never produces (always single-parent). Refuses with a
+    /// real, honest error if the index still has unresolved conflicts, or
+    /// if there's no real `MERGE_HEAD` to read (not actually mid-merge).
+    /// Clears the in-progress merge state afterward, the same real
+    /// `cleanup_state()` call `revert_commit`'s own conflict-cleanup path
+    /// already established.
+    pub fn commit_merge(&mut self, message: &str) -> Result<git2::Oid, git2::Error> {
+        {
+            let index = self.repo.index()?;
+            if index.has_conflicts() {
+                return Err(git2::Error::from_str(
+                    "cannot complete the merge -- real unresolved conflicts remain",
+                ));
+            }
+        }
+        let mut merge_parent_oids = Vec::new();
+        self.repo.mergehead_foreach(|oid| {
+            merge_parent_oids.push(*oid);
+            true
+        })?;
+        if merge_parent_oids.is_empty() {
+            return Err(git2::Error::from_str(
+                "no real MERGE_HEAD found -- this repository is not mid-merge",
+            ));
+        }
+        let mut index = self.repo.index()?;
+        let tree_oid = index.write_tree()?;
+        let tree = self.repo.find_tree(tree_oid)?;
+        let signature = self.repo.signature()?;
+        let head_commit = self.repo.head()?.peel_to_commit()?;
+        let mut parents = vec![head_commit];
+        for oid in &merge_parent_oids {
+            parents.push(self.repo.find_commit(*oid)?);
+        }
+        let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+        let new_oid = self.repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &parent_refs,
+        )?;
+        self.repo.cleanup_state()?;
+        Ok(new_oid)
+    }
+
+    /// Real, destructive merge abort -- resets the working tree and index
+    /// back to `HEAD` (discarding the real in-progress merge entirely,
+    /// including any real partial conflict resolutions already staged) and
+    /// clears the in-progress state. The caller is responsible for
+    /// confirming with the user first, matching `discard_changes`'s own
+    /// precedent for a real destructive operation in this crate.
+    pub fn abort_merge(&self) -> Result<(), git2::Error> {
+        let head_commit = self.repo.head()?.peel_to_commit()?;
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force();
+        self.repo.reset(
+            head_commit.as_object(),
+            git2::ResetType::Hard,
+            Some(&mut checkout),
+        )?;
+        self.repo.cleanup_state()
     }
 
     /// Real list of tags, sorted by name -- each with the hex oid of the
@@ -1729,5 +1968,185 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&remote_dir);
+    }
+
+    /// Real helper shared by the merge tests below -- a repo with a real
+    /// common ancestor commit, then a real divergent commit on each of
+    /// `master`/`feature` touching the *same* file, exactly the shape a
+    /// real conflicting merge needs. Returns to `master` (the branch a real
+    /// `merge_branch("feature")` call would run from).
+    fn repo_with_divergent_branches(unique: &str) -> (TempRepo, GitRepo) {
+        let (tmp, repo) = TempRepo::new(unique);
+        tmp.write("f.txt", "line one\nline two\nline three\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("common ancestor").unwrap();
+        repo.create_branch("feature").unwrap();
+        repo.checkout_branch("feature").unwrap();
+        tmp.write("f.txt", "line one\nFEATURE CHANGE\nline three\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("feature change").unwrap();
+        repo.checkout_branch("master").unwrap();
+        tmp.write("f.txt", "line one\nMASTER CHANGE\nline three\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("master change").unwrap();
+        (tmp, repo)
+    }
+
+    #[test]
+    fn merge_branch_reports_up_to_date_when_already_merged() {
+        let (tmp, mut repo) = TempRepo::new("merge_up_to_date");
+        tmp.write("f.txt", "v1");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("first").unwrap();
+        repo.create_branch("feature").unwrap();
+        let outcome = repo.merge_branch("feature").unwrap();
+        assert_eq!(outcome, MergeOutcome::UpToDate);
+    }
+
+    #[test]
+    fn merge_branch_fast_forwards_when_head_has_not_diverged() {
+        let (tmp, mut repo) = TempRepo::new("merge_fast_forward");
+        tmp.write("f.txt", "v1");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("first").unwrap();
+        repo.create_branch("feature").unwrap();
+        repo.checkout_branch("feature").unwrap();
+        tmp.write("f.txt", "v2");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("feature-only change").unwrap();
+        repo.checkout_branch("master").unwrap();
+
+        let outcome = repo.merge_branch("feature").unwrap();
+        assert_eq!(outcome, MergeOutcome::FastForwarded);
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "v2",
+            "a real fast-forward must land feature's own content"
+        );
+        assert!(!repo.merge_in_progress());
+    }
+
+    #[test]
+    fn merge_branch_with_no_real_overlap_merges_cleanly_with_two_parents() {
+        let (tmp, mut repo) = TempRepo::new("merge_clean_two_parent");
+        tmp.write("a.txt", "a");
+        repo.stage(Path::new("a.txt")).unwrap();
+        repo.commit("common ancestor").unwrap();
+        repo.create_branch("feature").unwrap();
+        repo.checkout_branch("feature").unwrap();
+        tmp.write("b.txt", "b"); // a real, non-overlapping new file
+        repo.stage(Path::new("b.txt")).unwrap();
+        repo.commit("feature adds b.txt").unwrap();
+        repo.checkout_branch("master").unwrap();
+        tmp.write("c.txt", "c"); // a real, non-overlapping new file
+        repo.stage(Path::new("c.txt")).unwrap();
+        repo.commit("master adds c.txt").unwrap();
+
+        let outcome = repo.merge_branch("feature").unwrap();
+        assert_eq!(outcome, MergeOutcome::Merged);
+        assert!(!repo.merge_in_progress());
+        // A real merge commit -- both real files from both real sides
+        // are present.
+        assert!(tmp.dir.join("b.txt").exists());
+        assert!(tmp.dir.join("c.txt").exists());
+        let commit = repo.repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(
+            commit.parent_count(),
+            2,
+            "a real merge commit must have exactly two parents"
+        );
+    }
+
+    #[test]
+    fn merge_branch_with_real_overlapping_edits_reports_conflicted_and_lists_both_sides() {
+        let (_tmp, mut repo) = repo_with_divergent_branches("merge_conflicted_list");
+        let outcome = repo.merge_branch("feature").unwrap();
+        assert_eq!(outcome, MergeOutcome::Conflicted);
+        assert!(repo.merge_in_progress());
+
+        let conflicts = repo.list_conflicts().unwrap();
+        assert_eq!(conflicts.len(), 1);
+        let c = &conflicts[0];
+        assert_eq!(c.path, PathBuf::from("f.txt"));
+        assert!(
+            c.ancestor.as_deref() == Some("line one\nline two\nline three\n"),
+            "real ancestor content: {:?}",
+            c.ancestor
+        );
+        assert!(
+            c.ours.as_deref().unwrap().contains("MASTER CHANGE"),
+            "real 'ours' (master) content: {:?}",
+            c.ours
+        );
+        assert!(
+            c.theirs.as_deref().unwrap().contains("FEATURE CHANGE"),
+            "real 'theirs' (feature) content: {:?}",
+            c.theirs
+        );
+    }
+
+    #[test]
+    fn resolve_conflict_with_content_then_commit_merge_produces_a_real_two_parent_commit() {
+        let (tmp, mut repo) = repo_with_divergent_branches("merge_resolve_then_commit");
+        let outcome = repo.merge_branch("feature").unwrap();
+        assert_eq!(outcome, MergeOutcome::Conflicted);
+
+        // Completing the merge before resolving must be a real, honest
+        // refusal, not a broken commit.
+        let premature = repo.commit_merge("too early");
+        assert!(premature.is_err());
+
+        repo.resolve_conflict_with_content(
+            Path::new("f.txt"),
+            "line one\nRESOLVED BY HAND\nline three\n",
+        )
+        .unwrap();
+        assert!(!repo
+            .list_conflicts()
+            .unwrap()
+            .iter()
+            .any(|c| c.path == Path::new("f.txt")));
+
+        let oid = repo.commit_merge("Merge branch 'feature'").unwrap();
+        assert!(!oid.is_zero());
+        assert!(!repo.merge_in_progress());
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "line one\nRESOLVED BY HAND\nline three\n"
+        );
+        let commit = repo.repo.find_commit(oid).unwrap();
+        assert_eq!(commit.parent_count(), 2);
+    }
+
+    #[test]
+    fn abort_merge_really_discards_the_in_progress_merge_and_partial_resolutions() {
+        let (tmp, mut repo) = repo_with_divergent_branches("merge_abort");
+        repo.merge_branch("feature").unwrap();
+        // A real, partial resolution staged before the abort.
+        repo.resolve_conflict_with_content(Path::new("f.txt"), "partially resolved")
+            .unwrap();
+
+        repo.abort_merge().unwrap();
+
+        assert!(!repo.merge_in_progress());
+        assert!(repo.list_conflicts().unwrap().is_empty());
+        assert!(
+            repo.status().unwrap().is_empty(),
+            "a real abort leaves a clean tree"
+        );
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "line one\nMASTER CHANGE\nline three\n",
+            "a real abort restores HEAD's own (master's) content"
+        );
+    }
+
+    #[test]
+    fn commit_merge_with_no_real_merge_head_errors_honestly() {
+        let (tmp, mut repo) = TempRepo::new("commit_merge_no_merge_head");
+        tmp.write("f.txt", "v1");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("first").unwrap();
+        assert!(repo.commit_merge("nothing to complete").is_err());
     }
 }
