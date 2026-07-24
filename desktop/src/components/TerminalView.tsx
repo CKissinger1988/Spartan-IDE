@@ -7,6 +7,15 @@ interface TerminalViewProps {
   cwd: string;
   command?: string;
   args?: string[];
+  /** Whether this terminal's own tab/pane is currently the visible one.
+   * Defaults to `true` (every pre-existing caller -- Console, Dev
+   * Containers -- has exactly one always-visible terminal, so this
+   * concept doesn't apply to them). Sessions (§ task #274, closing the
+   * "one active PTY at a time" gap named since §75.64) instead keeps
+   * every opened session's `TerminalView` mounted and toggles this prop
+   * via CSS visibility, so a real PTY and its real xterm.js buffer both
+   * survive a tab switch instead of being torn down and respawned. */
+  active?: boolean;
 }
 
 /**
@@ -25,9 +34,16 @@ interface TerminalViewProps {
  * real primitive (a PTY running a command), so building two separate
  * implementations would only be real, unnecessary duplication.
  */
-export default function TerminalView({ cwd, command, args }: TerminalViewProps): React.ReactElement {
+export default function TerminalView({
+  cwd,
+  command,
+  args,
+  active = true,
+}: TerminalViewProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<number | null>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
 
   useEffect(() => {
     const term = new Terminal({
@@ -42,6 +58,8 @@ export default function TerminalView({ cwd, command, args }: TerminalViewProps):
     });
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
+    termRef.current = term;
+    fitAddonRef.current = fitAddon;
     if (containerRef.current) {
       term.open(containerRef.current);
       fitAddon.fit();
@@ -82,6 +100,16 @@ export default function TerminalView({ cwd, command, args }: TerminalViewProps):
       });
 
     const handleResize = () => {
+      // A hidden (display:none) slot still fires ResizeObserver at its own
+      // real (0,0) size -- fitAddon's own proposeDimensions() would clamp
+      // that to a degenerate 2x1 terminal and forward it as a real
+      // `pty_resize`, which many real CLIs (readline-based prompts, TUI
+      // apps) handle badly. Skip entirely while genuinely hidden; the
+      // real resize this pass actually cares about -- becoming visible
+      // again -- fires its own ResizeObserver entry with real dimensions
+      // once the container's box size actually changes.
+      if (!containerRef.current) return;
+      if (containerRef.current.offsetWidth === 0 || containerRef.current.offsetHeight === 0) return;
       fitAddon.fit();
       if (sessionIdRef.current !== null) {
         window.spartan
@@ -102,9 +130,33 @@ export default function TerminalView({ cwd, command, args }: TerminalViewProps):
         window.spartan.call("pty_close", { session_id: sessionIdRef.current }).catch(() => {});
       }
       term.dispose();
+      termRef.current = null;
+      fitAddonRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cwd, command, JSON.stringify(args ?? [])]);
+
+  // Real, deterministic re-fit + redraw the moment this terminal becomes
+  // the visible one again (Sessions, §274) -- doesn't rely purely on
+  // ResizeObserver's own notification timing, which can lag a frame
+  // behind the CSS `display` change that actually resized the box.
+  useEffect(() => {
+    if (!active) return;
+    const raf = requestAnimationFrame(() => {
+      const term = termRef.current;
+      const fitAddon = fitAddonRef.current;
+      if (!term || !fitAddon || !containerRef.current) return;
+      if (containerRef.current.offsetWidth === 0 || containerRef.current.offsetHeight === 0) return;
+      fitAddon.fit();
+      if (sessionIdRef.current !== null) {
+        window.spartan
+          .call("pty_resize", { session_id: sessionIdRef.current, cols: term.cols, rows: term.rows })
+          .catch(() => {});
+      }
+      term.scrollToBottom();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [active]);
 
   return <div className="terminal-view" ref={containerRef} />;
 }

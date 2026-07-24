@@ -172,7 +172,7 @@ Priority key:
 
 | Feature | Priority | Notes / grounding |
 |---|---|---|
-| Concurrent multi-session monitoring | P2 | Sessions mounts one active PTY at a time. |
+| ~~Concurrent multi-session monitoring~~ | ✅ done | Task #274: `TerminalView` gained an `active` prop for a deterministic re-fit/redraw on becoming visible again; `SessionsScreen.tsx` lazy-mounts a provider's session on first visit and keeps it alive (CSS-hidden, not unmounted) across every later tab switch, with a live-session dot indicator. Live-verified via real WebSocket frame counting: `pty_spawn` fired exactly once per provider regardless of tab-switch count. `desktop/`-only (`web/` has no Sessions/Console screen). |
 | UTF-8 chunk-boundary reassembly | P3 | A multi-byte char split across OS reads can drop a replacement char (§75.64). |
 | PTY resize verified against a real reader | P3 | Resize IPC works; unverified against a `$COLUMNS`-reading process. |
 

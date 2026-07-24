@@ -7094,6 +7094,75 @@ first — it's the parity reference until each row there is actually reimplement
   supervisor calls; only the opt-in checkbox and the resulting `auto_restart` wire param were
   verified live through the UI, not a full crash-detected-and-restarted round trip in a browser;
   the real Electron window remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — real concurrent multi-session monitoring in `desktop/`'s Sessions
+  screen, closing the "one active PTY at a time" gap named since §75.64 (task #274)**: continues
+  the same "prioritize and continue with future features" push. Before this pass,
+  `SessionsScreen.tsx` rendered `<TerminalView key={active} .../>` -- keying the component by the
+  active provider meant switching tabs unmounted the previous session's `TerminalView` entirely,
+  tearing down its real PTY (via the existing unmount cleanup's `pty_close` call) and its real
+  xterm.js instance, then spawning a brand-new one on return. Closing this needed both a real
+  design decision (keep every visited session mounted, hidden rather than destroyed) and a real
+  correctness concern that decision introduces: `TerminalView`'s existing `ResizeObserver`-driven
+  `handleResize` calls `fitAddon.fit()` unconditionally, and `@xterm/addon-fit`'s own installed
+  `proposeDimensions()` (read directly from its bundled source before writing any code) clamps a
+  degenerate 0-size container to a real, still-nonzero `{cols: 2, rows: 1}` rather than skipping
+  it -- so a naive CSS-hide-instead-of-unmount approach would have silently fired a real
+  `pty_resize` down to a 2x1 terminal every time a tab was hidden, a real hazard for readline-based
+  prompts and TUI apps, not a hypothetical one. Fixed with an explicit `offsetWidth === 0 ||
+  offsetHeight === 0` guard added to `handleResize` itself, skipping the resize/fit call entirely
+  while genuinely hidden -- both `SessionsScreen.tsx`'s own tab-hide and any other real 0-size
+  transition are covered by the same one guard. `TerminalView` gained an optional `active` prop
+  (defaulting to `true`, so the two pre-existing always-visible callers -- Console, the Dev
+  Containers terminal -- need no changes) plus a small, real, deterministic second effect: rather
+  than trust `ResizeObserver`'s own notification timing exclusively when a hidden tab becomes
+  visible again (real, but potentially a frame or more delayed depending on the browser's own
+  batching), a `requestAnimationFrame`-scheduled re-fit + `pty_resize` + `term.scrollToBottom()`
+  fires the moment `active` transitions to `true`, using `termRef`/`fitAddonRef` refs populated by
+  the main mount effect so a later, separate render (the parent's own state update on tab click)
+  can reach them safely. `SessionsScreen.tsx` itself: a new `mounted: Set<Provider>` starts with
+  only `"claude"` (the real default active tab) and gains a provider the first time its own tab is
+  actually clicked -- a real, deliberate lazy-spawn choice, named in the component's own doc
+  comment, so simply opening the Sessions screen never spawns three real CLI processes on its own,
+  only the ones a user actually visits. Every mounted provider's `TerminalView` renders
+  simultaneously inside its own `.sessions-pty-slot` wrapper, `display: flex`/`display: none`
+  toggled by which is currently `active` -- CSS visibility, never a React unmount, so the
+  underlying PTY and xterm.js scrollback both survive indefinitely across tab switches. A new
+  `.sessions-tab-live-dot` (a small gold dot, reusing the already-real `--status-active-rgb` token
+  from Track C's own holographic-aesthetic palette, §124) renders next to any tab that's mounted
+  but not currently active -- a real, deliberate UX addition beyond the bare functional
+  requirement, making "this session is still running in the background" visibly discoverable
+  rather than a silent implementation detail. Pure TypeScript/React/CSS -- no Rust or protocol
+  changes needed, since `pty_spawn`/`pty_output`/`pty_close` were all already real and sufficient;
+  `cargo fmt --all -- --check` re-confirmed clean anyway. `desktop/`'s own `npm run typecheck`/
+  `npm run build` both clean. **Real, live, end-to-end Playwright verification against the actual
+  compiled `desktop/dist` served by a real running `spartan-devserver` binary** (not a mock, via
+  the established real-WebSocket-shim + `--web-root:desktop/dist` same-origin technique this whole
+  `desktop/` effort has used since §75.59) -- verified at the protocol level, not by trying to
+  parse xterm.js's own canvas-rendered text: real outgoing `pty_spawn` WebSocket frames were
+  captured and counted directly. Opening Sessions showed exactly 1 real `pty_spawn` call (for
+  `claude`, the real default, lazily mounted on first screen visit); clicking `codex` produced a
+  second real `pty_spawn` call (count: 2); clicking `gemini` produced a third (count: 3); the
+  live-dot indicator correctly showed exactly 2 dots (`claude`+`codex`, both mounted-but-inactive)
+  while `gemini` was the active tab, screenshotted; switching back to `claude`, then `codex`, then
+  `gemini` again -- three more real tab clicks -- left the `pty_spawn` count still exactly 3 after
+  every single one, proving concretely (not just visually) that no session was ever silently
+  re-spawned. `codex`/`gemini` aren't installed in this sandboxed environment, so both produced a
+  real, honest `Failed to start: failed to spawn pty: Unable to spawn <name> because: No viable
+  candidates found in PATH "..."` message rendered directly in their own terminal, screenshotted
+  alongside the live dots -- a real, deterministic, side-effect-free spawn attempt, chosen
+  deliberately over engaging the real, installed `claude` CLI itself (which would need real
+  interactive/auth handling this verification had no need to risk). Zero page errors throughout.
+  **What this does not confirm**: no equivalent change in `web/` (that shell has no Sessions or
+  Console screen of any kind, confirmed via grep before starting -- this whole gap was
+  `desktop/`-only from the start, not a cross-shell parity item); no live exercise of the real
+  `claude` CLI's own concurrent-session behavior (only its safe, deterministic not-installed
+  siblings were driven live, though the underlying spawn/hide/show mechanism is identical
+  regardless of which real command is named); no equivalent concurrent-session model in the
+  reference wgpu shell (that shell's own multi-CLI orchestration, §75.57, is a real, separate,
+  simpler design -- switching a workflow node's active session there already tears down the prior
+  real PTY by its own original, unchanged design, matching this project's own "Electron-shells-
+  only" scope for most recent feature passes); the real Electron window remains unlaunchable in
+  this session (same standing gap since §75.59).
 
 ## Build & test
 
