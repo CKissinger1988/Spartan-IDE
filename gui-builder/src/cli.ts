@@ -11,6 +11,7 @@
  *   node dist/cli.js <path-to-jsx-or-tsx-file>       (Code -> Canvas, §75.41)
  *   node dist/cli.js apply <editJson>                (Canvas -> Code, §75.42)
  *   node dist/cli.js bundle <path-to-jsx-or-tsx-file> (live visual render, §75.52)
+ *   node dist/cli.js components <project-dir> [from-file] (component browser, task #278)
  *
  * "parse" mode reads the file at `<path>` from disk (§6.2 step 1 -- there is
  * no live buffer on this side, so it always reflects what's actually on
@@ -34,6 +35,7 @@ import { readFileSync } from "node:fs";
 import { parseComponent } from "./parse.js";
 import { applyCanvasEdit } from "./edit.js";
 import { bundleComponent } from "./bundle.js";
+import { discoverComponents } from "./components.js";
 import type { CanvasEdit } from "./types.js";
 
 function fail(message: string): never {
@@ -103,12 +105,29 @@ async function runBundle(path: string | undefined): Promise<void> {
   process.stdout.write(JSON.stringify({ code: result.code }));
 }
 
+/** Real component-library discovery (task #278). `fromFile` is optional
+ * but strongly wanted by a real caller: with it, each result carries the
+ * relative module specifier an import in that file would actually need. */
+function runComponents(rootDir: string | undefined, fromFile: string | undefined): void {
+  if (!rootDir) {
+    fail("usage: cli.js components <project-dir> [from-file]");
+  }
+  try {
+    const components = discoverComponents(rootDir, fromFile);
+    process.stdout.write(JSON.stringify({ components }));
+  } catch (e) {
+    fail(`failed to discover components: ${(e as Error).message}`);
+  }
+}
+
 async function main(): Promise<void> {
   const mode = process.argv[2];
   if (mode === "apply") {
     runApply(process.argv[3]);
   } else if (mode === "bundle") {
     await runBundle(process.argv[3]);
+  } else if (mode === "components") {
+    runComponents(process.argv[3], process.argv[4]);
   } else {
     runParse(mode);
   }

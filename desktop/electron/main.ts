@@ -355,6 +355,13 @@ app.whenReady().then(() => {
       return guiBuilder.applyEdit(JSON.stringify(params.edit), params.source);
     }
   );
+  ipcMain.handle(
+    "spartan:design_components",
+    async (_event, params: { rootDir: string; fromFile?: string }) => {
+      if (!guiBuilder) throw new Error("gui-builder not ready");
+      return guiBuilder.discoverComponents(params.rootDir, params.fromFile);
+    }
+  );
 
   // Two real, deliberately narrow main-process-only conveniences for the
   // new Settings "Diagnostics"/"About" section (§75.76) -- neither routes

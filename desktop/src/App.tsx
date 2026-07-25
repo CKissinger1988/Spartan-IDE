@@ -917,7 +917,11 @@ export default function App(): React.ReactElement {
             <div className="content-area">
               {screen === "workflows" && <WorkflowsScreen />}
               {screen === "design" && (
-                <DesignScreen activeFile={activeFile} onContentChange={handleContentChange} />
+                <DesignScreen
+                  activeFile={activeFile}
+                  onContentChange={handleContentChange}
+                  projectRoot={ROOT}
+                />
               )}
               {screen === "console" && <ConsoleScreen root={ROOT} />}
               {screen === "sessions" && <SessionsScreen root={ROOT} />}

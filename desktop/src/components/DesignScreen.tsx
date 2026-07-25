@@ -20,9 +20,24 @@ interface ComponentNode {
   textContent: string | null;
 }
 
+/** One real component discovered in the project by `gui-builder`'s own
+ * `discoverComponents` (task #278). `importFrom` is `null` when the
+ * component is declared in the currently-open file, so inserting it needs
+ * no import at all. */
+interface DiscoveredComponent {
+  name: string;
+  file: string;
+  isDefault: boolean;
+  importFrom: string | null;
+}
+
 interface DesignScreenProps {
   activeFile: OpenFile | null;
   onContentChange: (path: string, content: string, saved?: boolean) => void;
+  /** Real project root, used to scan for the component palette. Absent
+   * means the palette simply isn't offered -- there's nothing honest to
+   * scan without it. */
+  projectRoot?: string;
 }
 
 function isComponentFile(path: string): boolean {
@@ -402,6 +417,7 @@ function StyleValueControl({
 export default function DesignScreen({
   activeFile,
   onContentChange,
+  projectRoot,
 }: DesignScreenProps): React.ReactElement {
   const [roots, setRoots] = useState<ComponentNode[]>([]);
   const [bundleCode, setBundleCode] = useState<string | null>(null);
@@ -414,6 +430,8 @@ export default function DesignScreen({
   );
   const [reparentTargetId, setReparentTargetId] = useState("");
   const [insertTagName, setInsertTagName] = useState("");
+  const [palette, setPalette] = useState<DiscoveredComponent[]>([]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Declared up here, not down beside the other render-time derivations,
@@ -499,6 +517,66 @@ export default function DesignScreen({
     [selectedNode]
   );
 
+  /** Re-scans the real project every time the palette is opened, never
+   * caching -- a component file can be created or renamed between two
+   * opens, the same "state can change between opens" reasoning the Git
+   * panel's own branch/tag/log sections already follow. */
+  const togglePalette = useCallback(async () => {
+    if (paletteOpen) {
+      setPaletteOpen(false);
+      return;
+    }
+    setPaletteOpen(true);
+    if (!projectRoot) return;
+    try {
+      const result = (await window.spartan.call("design_components", {
+        rootDir: projectRoot,
+        fromFile: activeFile?.path,
+      })) as { components: DiscoveredComponent[] };
+      setPalette(result.components);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [paletteOpen, projectRoot, activeFile?.path]);
+
+  /** Inserts a discovered component as a child of the selected node,
+   * carrying its import along when it lives in another file -- the whole
+   * point of a component browser over the plain tag-name field, which
+   * could only ever produce an undefined binding for a cross-file
+   * component. */
+  const insertComponent = useCallback(
+    async (component: DiscoveredComponent) => {
+      if (!activeFile || !selectedId) return;
+      const edit: Record<string, unknown> = {
+        kind: "ComponentInsert",
+        parentId: selectedId,
+        tagName: component.name,
+      };
+      if (component.importFrom) {
+        edit.importFrom = component.importFrom;
+        edit.importIsDefault = component.isDefault;
+      }
+      try {
+        const result = (await window.spartan.call("design_apply_edit", {
+          edit,
+          source: activeFile.content,
+        })) as { source: string };
+        const oldLength = [...activeFile.content].length;
+        await window.spartan.call("edit", {
+          doc_id: activeFile.docId,
+          start_char: 0,
+          end_char: oldLength,
+          text: result.source,
+        });
+        onContentChange(activeFile.path, result.source);
+        await refresh(activeFile.path);
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [activeFile, selectedId, onContentChange, refresh]
+  );
+
   const applyEdit = useCallback(async () => {
     if (!activeFile || !selectedId) return;
     let edit: Record<string, unknown>;
@@ -573,6 +651,43 @@ export default function DesignScreen({
       </div>
       <div className="design-edit-panel">
         <div className="design-panel-label">Edit</div>
+        {projectRoot && (
+          <>
+            <button className="design-palette-toggle mono" onClick={togglePalette}>
+              {paletteOpen ? "▾" : "▸"} Components{palette.length > 0 ? ` (${palette.length})` : ""}
+            </button>
+            {paletteOpen && (
+              <div className="design-palette">
+                {palette.length === 0 ? (
+                  <div className="design-palette-empty mono">
+                    No exported components found under the project root.
+                  </div>
+                ) : (
+                  palette.map((c) => (
+                    <button
+                      key={`${c.file}:${c.name}`}
+                      className="design-palette-item mono"
+                      disabled={!selectedId}
+                      title={
+                        selectedId
+                          ? `Insert <${c.name} /> into the selected element${
+                              c.importFrom ? ` and import it from "${c.importFrom}"` : ""
+                            }`
+                          : "Select an element in the tree first"
+                      }
+                      onClick={() => insertComponent(c)}
+                    >
+                      <span className="design-palette-name">&lt;{c.name} /&gt;</span>
+                      <span className="design-palette-from">
+                        {c.importFrom ?? "this file"}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </>
+        )}
         {selectedNode ? (
           <>
             <div className="design-selected mono">

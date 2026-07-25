@@ -7397,6 +7397,73 @@ first — it's the parity reference until each row there is actually reimplement
   disk, so it shows the pre-edit render until save -- the same already-documented §75.42
   stale-until-save behavior, unchanged by this pass; the real Electron window remains unlaunchable
   in this session (same standing gap since §75.59).
+- **Real, working code — real component-library browser, closing §75.90's own last named GUI
+  Builder MVP gap (task #278)**: continues the same "prioritize and continue with future features"
+  push. Before this pass, inserting a component meant typing a tag name into a bare text field --
+  which could only ever produce a working result for a plain DOM tag or a component already
+  declared in the same file, since `<Card />` without its import regenerates source referencing an
+  undefined binding and breaks the live preview on the very next bundle. Closing this properly
+  therefore needed two real pieces, not just a palette. **Discovery**: new
+  `gui-builder/src/components.ts` walks a real project for `.jsx`/`.tsx` files and reports every
+  exported React component, parsed with the exact same `parserAdapter` every other module here
+  uses -- no code is ever executed, the same pure-AST-read discipline `parse.ts` already follows.
+  It handles the real export shapes a project actually contains (`export default function Card`,
+  `export default Card`, `export function Button`, `export const Badge = () => ...`, and an
+  `export { Panel }` list), skips `node_modules`/`dist`/`build`/`.next`/`coverage`/`out`, is
+  depth-bounded (the same bounded-walk discipline `spartan-leo`'s own `search_files` applies), and
+  **skips a file that fails to parse rather than failing the whole scan** -- a real project
+  routinely holds a file mid-edit, and a palette that refuses to open because one unrelated file
+  is momentarily invalid would be strictly worse than one listing everything it could read. The
+  "is this a component?" test is a real, *named* heuristic rather than analysis: an exported
+  binding starting with an uppercase letter. That is exactly the rule React itself enforces at the
+  JSX call site (lowercase tag = DOM element, uppercase = component), so it matches how the code
+  will actually behave -- but it genuinely cannot tell an exported component from an exported
+  class or capitalized constant, which the module's own doc comment says outright rather than
+  implying deeper certainty. An anonymous `export default () => ...` is deliberately skipped, since
+  there is no real name to offer a palette and inventing one would be a fabrication. **Import
+  insertion**: `ComponentInsert` gained `importFrom`/`importIsDefault`, and a new `ensureImport`
+  adds as little as possible -- nothing at all when the binding is already imported from anywhere
+  (re-importing an existing name is a real duplicate-binding syntax error, not a cosmetic issue), a
+  merged specifier when an import from the same module already exists, and only otherwise a whole
+  new statement, inserted *after* the existing leading imports so it joins the import block instead
+  of jumping above a file's own header. A real edge case handled rather than assumed away: a module
+  can only have one default binding, so a same-module merge that would collide with an existing
+  default import falls through to a separate statement instead of silently replacing the user's own
+  binding. `relativeSpecifier` computes each result's real module path (POSIX-separated,
+  extension-stripped, `./`-prefixed) in the CLI rather than the UI -- a genuine path concern, and
+  the renderer process has no `node:path`. **UI**: a new `Components (N)` palette in the Design
+  screen, re-scanned on every open and never cached (the same "state can change between opens"
+  reasoning the Git panel's own branch/tag/log sections already follow), each row showing the
+  component's real import origin (`./shared/Button`, or `this file`) and disabled until a parent
+  element is selected, since `ComponentInsert` genuinely needs one. 14 new tests (61 total in
+  `gui-builder`, up from 47): 8 covering discovery (each export shape, the lowercase skip, the
+  anonymous-default skip, `node_modules`/`dist` exclusion, a deliberately unparseable file not
+  being fatal, and real `importFrom`/`relativeSpecifier` values) and 6 covering import insertion
+  (default, named, same-module merge producing exactly one statement, the never-re-import guard, no
+  import at all for a plain DOM tag, and a new import joining rather than preceding the existing
+  block) -- all passing. `desktop/`'s own `tsc --noEmit`/`npm run build` clean; no Rust touched.
+  `design_components` was registered in `main.ts`'s handler set and `preload.ts`'s allowlist
+  together, continuing the established drift-avoidance discipline. **Real, live, end-to-end
+  Playwright verification against the actual compiled `gui-builder` CLI** (bridged via
+  `page.exposeFunction`, §75.90's own technique, with `maxBuffer` matched to the real
+  `gui-builder-client.ts`'s 32 MB after the previous pass's harness lesson), driving the real
+  `desktop/dist` served by a real `spartan-devserver` against a real multi-file fixture
+  (`Card.jsx`, `Banner.jsx`, and a `shared/Button.jsx` exporting two named components, plus real
+  `npm install`ed react): the palette listed exactly the 4 real components with correct origins and
+  `node_modules` correctly absent; items were confirmed disabled with nothing selected and enabled
+  after selecting a node; inserting the cross-file **named** export produced a real `import { Badge
+  } from "./shared/Button";` plus `<Badge />` inside the selected `<h1>`, and the cross-file
+  **default** export produced a real `import Banner from "./Banner";` plus `<Banner />` inside the
+  root `<div>` -- both confirmed by reading the real bytes off disk after a real Ctrl+S, with zero
+  page errors. **What this does not confirm**: no equivalent in `web/` (no Design screen there at
+  all, the same real platform scope every recent Design/Leo pass carries); the uppercase-export
+  heuristic is honest but cannot distinguish a component from a capitalized non-component export;
+  only `.jsx`/`.tsx` are scanned (a component living in a `.js`/`.ts` file is not discovered, a
+  real, named limit matching the Design screen's own `isComponentFile` check); no drag-and-drop
+  onto the visual canvas, no responsive/breakpoint preview, no asset management (the remaining real
+  GUI Builder rows, untouched); insertion always appends a self-closing element with no props, the
+  same v1 shape `ComponentInsert` has had since §75.90; the real Electron window remains
+  unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 

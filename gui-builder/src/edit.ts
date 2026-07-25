@@ -216,8 +216,76 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       break;
     case "ComponentInsert":
       applyComponentInsert(nodesById, edit);
+      // Inserting a component that lives in another file is only a real
+      // edit if its import comes with it -- otherwise the regenerated
+      // source references an undefined binding and the live preview
+      // breaks on the very next bundle (task #278).
+      if (edit.importFrom) {
+        ensureImport(ast, edit.tagName, edit.importFrom, edit.importIsDefault ?? false);
+      }
       break;
   }
 
   return recast.print(ast).code;
+}
+
+/**
+ * Makes sure `name` is imported from `specifier`, adding as little as
+ * possible: nothing at all when the binding is already imported (from
+ * anywhere -- re-importing an existing name would be a real syntax
+ * error), a new specifier merged into an existing `import ... from
+ * "<specifier>"` when one is already present, and only otherwise a whole
+ * new import statement at the top of the file.
+ *
+ * A real, deliberate ordering choice: a brand-new import is inserted
+ * *after* any existing leading imports rather than at index 0, so an
+ * inserted component's import joins the existing import block instead of
+ * jumping above a file's own header comment or first import.
+ */
+function ensureImport(
+  ast: { program: { body: unknown[] } },
+  name: string,
+  specifier: string,
+  isDefault: boolean
+): void {
+  const body = ast.program.body as Record<string, unknown>[];
+
+  let lastImportIndex = -1;
+  for (let i = 0; i < body.length; i++) {
+    const node = body[i];
+    if (node.type !== "ImportDeclaration") continue;
+    lastImportIndex = i;
+    const specifiers = (node.specifiers as Record<string, unknown>[]) ?? [];
+    // Already imported under this exact name -- from any module. Adding
+    // it again would produce a real duplicate-binding syntax error.
+    for (const spec of specifiers) {
+      const local = spec.local as Record<string, unknown> | undefined;
+      if (local && local.name === name) return;
+    }
+  }
+
+  // Merge into an existing import from the same module, if there is one.
+  for (const node of body) {
+    if (node.type !== "ImportDeclaration") continue;
+    const source = node.source as Record<string, unknown> | undefined;
+    if (!source || source.value !== specifier) continue;
+    const specifiers = (node.specifiers as Record<string, unknown>[]) ?? [];
+    if (isDefault) {
+      // A module can only have one default import binding; if this one
+      // already has a different default, fall through to a new statement
+      // rather than silently replacing the user's own binding.
+      if (specifiers.some((s) => s.type === "ImportDefaultSpecifier")) break;
+      specifiers.unshift(b.importDefaultSpecifier(b.identifier(name)) as unknown as Record<string, unknown>);
+    } else {
+      specifiers.push(b.importSpecifier(b.identifier(name)) as unknown as Record<string, unknown>);
+    }
+    node.specifiers = specifiers;
+    return;
+  }
+
+  const specifierNode = isDefault
+    ? b.importDefaultSpecifier(b.identifier(name))
+    : b.importSpecifier(b.identifier(name));
+  const decl = b.importDeclaration([specifierNode], b.stringLiteral(specifier));
+  body.splice(lastImportIndex + 1, 0, decl as unknown as Record<string, unknown>);
 }

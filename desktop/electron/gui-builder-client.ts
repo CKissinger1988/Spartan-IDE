@@ -84,4 +84,14 @@ export class GuiBuilderClient {
     const stdout = await runCli(this.cliPath, ["apply", editJson], source);
     return JSON.parse(stdout);
   }
+
+  /** Real component-library discovery (task #278). `fromFile` lets each
+   * result carry the relative module specifier an import in that file
+   * would actually need, so inserting a component from another file can
+   * bring its import with it. */
+  async discoverComponents(rootDir: string, fromFile?: string): Promise<unknown> {
+    const args = fromFile ? ["components", rootDir, fromFile] : ["components", rootDir];
+    const stdout = await runCli(this.cliPath, args);
+    return JSON.parse(stdout);
+  }
 }

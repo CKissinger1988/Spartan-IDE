@@ -376,3 +376,78 @@ test("KNOWN LIMITATION: an edit that forces a parent JSXElement reprint can coll
   assert.doesNotMatch(result, /<B \/>\}\n\s+Leo/);
   assert.match(result, /<B \/>\}Leo/);
 });
+
+// --- ComponentInsert with a real import (task #278) ---
+
+test("ComponentInsert with importFrom adds a real default import", () => {
+  const source = ['import React from "react";', "", "export default function App() {", "  return <div />;", "}", ""].join("\n");
+  const out = applyCanvasEdit(source, {
+    kind: "ComponentInsert",
+    parentId: "n0",
+    tagName: "Card",
+    importFrom: "./Card",
+    importIsDefault: true,
+  });
+  assert.match(out, /import Card from "\.\/Card";/);
+  assert.match(out, /<Card \/>/);
+});
+
+test("ComponentInsert with importFrom adds a real named import", () => {
+  const source = ["export default function App() {", "  return <div />;", "}", ""].join("\n");
+  const out = applyCanvasEdit(source, {
+    kind: "ComponentInsert",
+    parentId: "n0",
+    tagName: "Button",
+    importFrom: "../ui/Button",
+    importIsDefault: false,
+  });
+  assert.match(out, /import \{ Button \} from "\.\.\/ui\/Button";/);
+});
+
+test("ComponentInsert merges into an existing import from the same module", () => {
+  const source = ['import { Button } from "./ui";', "", "export default function App() {", "  return <div />;", "}", ""].join("\n");
+  const out = applyCanvasEdit(source, {
+    kind: "ComponentInsert",
+    parentId: "n0",
+    tagName: "Badge",
+    importFrom: "./ui",
+    importIsDefault: false,
+  });
+  // One merged statement, not two separate imports from the same module.
+  assert.equal(out.match(/from "\.\/ui"/g)?.length, 1);
+  assert.match(out, /import \{ Button, Badge \} from "\.\/ui";/);
+});
+
+test("ComponentInsert never re-imports a binding the file already has", () => {
+  const source = ['import Card from "./Card";', "", "export default function App() {", "  return <div />;", "}", ""].join("\n");
+  const out = applyCanvasEdit(source, {
+    kind: "ComponentInsert",
+    parentId: "n0",
+    tagName: "Card",
+    importFrom: "./Card",
+    importIsDefault: true,
+  });
+  assert.equal(out.match(/import Card from/g)?.length, 1, "a duplicate binding would be a real syntax error");
+  assert.match(out, /<Card \/>/);
+});
+
+test("ComponentInsert without importFrom adds no import at all", () => {
+  const source = ["export default function App() {", "  return <div />;", "}", ""].join("\n");
+  const out = applyCanvasEdit(source, { kind: "ComponentInsert", parentId: "n0", tagName: "span" });
+  assert.ok(!out.includes("import"), "a plain DOM tag needs no import");
+  assert.match(out, /<span \/>/);
+});
+
+test("a new import joins the existing import block rather than jumping above it", () => {
+  const source = ['import React from "react";', 'import { useState } from "react";', "", "export default function App() {", "  return <div />;", "}", ""].join("\n");
+  const out = applyCanvasEdit(source, {
+    kind: "ComponentInsert",
+    parentId: "n0",
+    tagName: "Card",
+    importFrom: "./Card",
+    importIsDefault: true,
+  });
+  const lines = out.split("\n").filter((l) => l.startsWith("import"));
+  assert.equal(lines.length, 3);
+  assert.match(lines[2], /import Card from "\.\/Card";/);
+});

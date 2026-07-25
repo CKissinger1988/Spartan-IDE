@@ -79,4 +79,24 @@ export type CanvasEdit =
    * real limitation `PropChange` already has). The new element is
    * always self-closing (`<Tag />`); giving it real children is a
    * separate, unstarted future increment. */
-  | { kind: "ComponentInsert"; parentId: string; tagName: string; index?: number; props?: Record<string, string> };
+  | {
+      kind: "ComponentInsert";
+      parentId: string;
+      tagName: string;
+      index?: number;
+      props?: Record<string, string>;
+      /** Module specifier to import `tagName` from, when the component
+       * being inserted lives in another file (task #278's real
+       * component-library browser supplies this). Omitted for a plain
+       * DOM tag or a component already declared in the same file --
+       * inserting `<Card />` without its import would otherwise
+       * regenerate source referencing an undefined binding, breaking the
+       * live preview on the very next bundle. `ensureImport` adds as
+       * little as possible: nothing when the name is already imported,
+       * a merged specifier when an import from the same module exists,
+       * and only otherwise a whole new statement. */
+      importFrom?: string;
+      /** Whether `tagName` is that module's default export -- decides
+       * `import Card from "..."` vs. `import { Card } from "..."`. */
+      importIsDefault?: boolean;
+    };

@@ -41,6 +41,7 @@ const ALLOWED_METHODS = new Set([
   "design_parse",
   "design_bundle",
   "design_apply_edit",
+  "design_components",
   "pty_spawn",
   "pty_input",
   "pty_resize",
