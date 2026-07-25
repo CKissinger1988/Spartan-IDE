@@ -7252,6 +7252,78 @@ first — it's the parity reference until each row there is actually reimplement
   produced before the very first breakpoint hit is not yet captured, a real, separate, narrower gap
   than the one this task closed); no verification against any adapter beyond debugpy/lldb-dap; the
   real Electron window remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — real DAP `setVariable` (edit a variable's live value while stopped) in
+  both shells' Debug panels (task #276)**: continues the same "prioritize and continue with future
+  features" push, and completes the debug-inspection surface -- the Variables panel and Watches
+  could both *read* a stopped frame since §132/§250, but nothing could ever *write* to it.
+  `DapClient::set_variable(variables_reference, name, value)` is a real DAP `setVariable` request,
+  with a doc comment recording the one real spec subtlety a caller must get right: the reference
+  passed is the *container's* (the scope, or a parent variable for a nested field), never the
+  variable's own -- and the real success response carries the adapter's own re-formatted
+  `body.value`, which can legitimately differ from what was typed, so the caller returns that
+  rather than echoing the input back. A new `DapCommand::SetVariable { name, value, reply }`
+  follows `Evaluate`'s own already-established discrete-request/reply-channel shape (never steps or
+  continues, so it deliberately skips `wait_for_stop_or_exit`), with one real, deliberate
+  difference named in its own doc comment: on success it *also* pushes a fresh
+  `DapUpdate::Stopped` with reason `"variable_edit"`, so the Variables panel and every open Watch
+  both refresh through the exact same event path a normal stop already uses -- no second, parallel
+  refresh mechanism was built, since Watches already re-evaluate on every `Stopped` (§250) and get
+  this for free. The private `set_variable_in_current_frame` mirrors `evaluate_in_current_frame`'s
+  own "re-derive the frame and scope fresh from `thread_id` on every call" discipline (correct even
+  if a step happened between two edits, not a one-time cached lookup), and reports a real error
+  honestly for each distinct real failure -- no active frame, no active scope, or the adapter
+  itself rejecting the edit (a read-only or type-mismatched value). A real, named v1 scope cut,
+  stated in the function's own doc comment rather than discovered later: only a variable directly
+  in the top scope (locals) is editable, not a nested field of a compound value -- that needs the
+  *variable's own* `variablesReference` as the container, which this crate's `DapVariable` (only
+  `name`/`value`) doesn't carry yet. `spartan-backend::dap_set_variable` follows `dap_evaluate`'s
+  own exact lock-release-before-blocking shape (clone the session `Arc`, drop the guard, then
+  block), so a slow adapter can never freeze every other request; `dap_set_variable` was added to
+  `main.ts`'s and `preload.ts`'s IPC allowlists at the identical list position in both files,
+  continuing this project's own established drift-avoidance discipline. **UI, both shells**
+  (`desktop/src/components/DebugPanel.tsx`, `web/src/components/DebugPanel.tsx`, plus
+  byte-identical `.debug-variable-value-editable`/`.debug-variable-edit-input` CSS in both
+  `app.css` files -- confirmed byte-identical by diffing the two additions directly, not assumed):
+  a double-click on any value in the Variables panel turns it into a real inline input seeded with
+  the current value, committed on Enter or blur and abandoned on Escape; the value only renders as
+  editable (underlined, with a "Double-click to edit" tooltip) when the `onSetVariable` prop is
+  actually wired, matching every other optional real-tool prop in this component. Both `App.tsx`
+  files fire the real `dap_set_variable` call and then deliberately do *nothing* else -- the
+  backend's own queued `dap_stopped` event flows through the already-existing event handler and
+  updates both the Variables panel and every Watch, so there is no separate refresh path to keep
+  in sync. 2 new Rust tests plus a real extension of an existing one: a live, self-skipping
+  `real_debugpy_set_variable_edits_the_real_stopped_frame` in `spartan-dap`'s own
+  `dap_python_integration.rs`, a deterministic `dap_set_variable_on_an_unknown_session_id_errors_
+  honestly` dispatch test in `spartan-backend`, and -- deliberately extending the already-real
+  end-to-end `dap_debugpy_integration.rs` test rather than duplicating its whole launch sequence --
+  a real set-`x`-to-`100` step asserting the adapter-confirmed value, the real refreshed
+  `dap_stopped` event carrying `x = 100`, and then a real `dap_evaluate` of `x * 2` returning
+  `200`, proving the edit genuinely reached the debuggee's own execution state rather than only its
+  display. 239 `spartan-backend` lib tests (up from 238) plus 5 real debugpy and 2 real lldb-dap
+  integration tests all green; `cargo fmt --all -- --check` and `cargo clippy -p spartan-dap -p
+  spartan-backend --release --all-targets` both clean (verified by exit code, not by eyeballing
+  tail output -- the exact verification-methodology mistake §262 found and recorded); both shells'
+  own `tsc --noEmit`/`npm run build` clean. **Real, live, end-to-end Playwright verification in
+  both shells against a real `debugpy` session, not a mock**, with a fixture chosen specifically so
+  the edit's effect is falsifiable three independent ways (`x = 21` / `y = x * 2` / `print(y)`,
+  breakpoint on line 2 so `x` is already live): `web/` was driven against the actual compiled
+  `web/dist` served by a real running `spartan-devserver`; a real double-click opened the editor,
+  typing `100` and pressing Enter changed the Variables panel to `x = 100` **and** moved an open
+  `x * 2` watch from `42` to `200` (proving the edit reached the live frame, not just the display),
+  and continuing to a real exit made the debuggee's own `print(y)` emit **`200`, not `42`** --
+  proving the edit genuinely changed real program execution. Screenshotted with the status bar
+  reading the real `Stopped: variable_edit at line 2`. `desktop/` was independently re-verified via
+  the established real-WebSocket-shim + `--web-root:desktop/dist` same-origin technique for the
+  still-unlaunchable real Electron window, against a fresh, separate fixture -- byte-equivalent
+  results at every step (`x = 100`, watch `200`, real program output `200`), zero page errors in
+  either shell. **What this does not confirm**: no editing of a nested field of a compound value
+  (the named v1 scope cut above); no editing of a variable outside the current top frame's first
+  scope (globals, or an outer frame's locals -- the same "top frame only" limit `evaluate` itself
+  already carries); no verification against any adapter beyond `debugpy` (the underlying code path
+  is adapter-agnostic, but a real adapter that rejects an edit -- a read-only value, a type
+  mismatch -- was only exercised through the error path's own code, not against a real refusing
+  adapter); the real Electron window remains unlaunchable in this session (same standing gap since
+  §75.59).
 
 ## Build & test
 

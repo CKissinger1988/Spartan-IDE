@@ -730,6 +730,24 @@ export default function App(): React.ReactElement {
     });
   }, []);
 
+  // Real DAP setVariable (task #276) -- edits a variable's live value in
+  // the current top scope. The backend already queues a fresh
+  // `dap_stopped` event on success (with reason "variable_edit"), which
+  // flows through the exact same event handler above and updates both
+  // the Variables panel and (via the effect below) every open Watch --
+  // no separate refresh call needed here.
+  const setVariable = useCallback(
+    (name: string, value: string) => {
+      if (!activeFile) return;
+      const session = dapSessionByDoc[activeFile.docId];
+      if (!session || session.sessionId < 0) return;
+      window.spartan
+        .call("dap_set_variable", { session_id: session.sessionId, name, value })
+        .catch((err: Error) => console.error("dap_set_variable failed:", err));
+    },
+    [activeFile, dapSessionByDoc]
+  );
+
   const activeSession = activeFile ? (dapSessionByDoc[activeFile.docId] ?? null) : null;
   const activeSessionId = activeSession?.sessionId ?? -1;
   const activeSessionStatus = activeSession?.status;
@@ -837,6 +855,7 @@ export default function App(): React.ReactElement {
                   watches={watchEntries}
                   onAddWatch={addWatch}
                   onRemoveWatch={removeWatch}
+                  onSetVariable={setVariable}
                   outputLog={activeFile ? dapOutputByDoc[activeFile.docId] : undefined}
                 />
                 <LogcatPanel

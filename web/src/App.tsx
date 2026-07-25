@@ -774,6 +774,24 @@ export default function App(): React.ReactElement {
     });
   }, []);
 
+  // Real DAP setVariable (task #276) -- edits a variable's live value in
+  // the current top scope over the real WebSocket transport. The backend
+  // already queues a fresh `dap_stopped` event on success (reason
+  // "variable_edit"), which flows through the same event handling and
+  // updates both the Variables panel and every open Watch (via the
+  // effect below) -- no separate refresh call needed here.
+  const setVariable = useCallback(
+    (name: string, value: string) => {
+      if (!backendClient || activeBackendDocId === null) return;
+      const session = dapSessionByDoc[activeBackendDocId];
+      if (!session || session.sessionId < 0) return;
+      backendClient
+        .call("dap_set_variable", { session_id: session.sessionId, name, value })
+        .catch((err: Error) => console.error("dap_set_variable failed:", err));
+    },
+    [backendClient, activeBackendDocId, dapSessionByDoc]
+  );
+
   const activeDapSession =
     activeBackendDocId !== null ? (dapSessionByDoc[activeBackendDocId] ?? null) : null;
   const activeDapSessionId = activeDapSession?.sessionId ?? -1;
@@ -1076,6 +1094,7 @@ export default function App(): React.ReactElement {
               watches={watchEntries}
               onAddWatch={addWatch}
               onRemoveWatch={removeWatch}
+              onSetVariable={setVariable}
               outputLog={activeBackendDocId !== null ? dapOutputByDoc[activeBackendDocId] : undefined}
             />
           )}

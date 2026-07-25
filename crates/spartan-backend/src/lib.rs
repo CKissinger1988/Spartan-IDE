@@ -3079,6 +3079,30 @@ fn dap_evaluate(
     Ok(serde_json::json!({ "result": result }))
 }
 
+/// Real, live edit of a variable's value while stopped, via DAP
+/// `setVariable` (task #276). Same lock-release-before-blocking shape as
+/// `dap_evaluate`. On success `spartan_dap::DapSession::set_variable`
+/// already queued a fresh `Stopped` update internally -- the caller sees
+/// the real new value both in this response and in the next `dap_stopped`
+/// event, which also makes any open Watches re-evaluate against it.
+fn dap_set_variable(
+    state: &Arc<Mutex<BackendState>>,
+    session_id: u64,
+    name: &str,
+    value: &str,
+) -> Result<serde_json::Value, String> {
+    let session = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        guard
+            .dap_sessions
+            .get(&session_id)
+            .ok_or_else(|| format!("no dap session with id {session_id}"))?
+            .clone()
+    };
+    let result = session.set_variable(name, value)?;
+    Ok(serde_json::json!({ "value": result }))
+}
+
 /// Real, explicit `Disconnect` (not a drop-triggered shutdown -- see
 /// `spartan-dap::session`'s own doc comment for why this crate's shared
 /// `Arc<DapSession>` needs an explicit command instead) plus removal
@@ -4873,6 +4897,12 @@ pub fn handle_request(
             let session_id = get_u64_param(&req.params, "session_id")?;
             let expression = get_str_param(&req.params, "expression")?;
             dap_evaluate(state, session_id, &expression)
+        })(),
+        "dap_set_variable" => (|| {
+            let session_id = get_u64_param(&req.params, "session_id")?;
+            let name = get_str_param(&req.params, "name")?;
+            let value = get_str_param(&req.params, "value")?;
+            dap_set_variable(state, session_id, &name, &value)
         })(),
         "dap_disconnect" => {
             get_u64_param(&req.params, "session_id").and_then(|id| dap_disconnect(state, id))
@@ -10490,5 +10520,23 @@ mod tests {
             2,
             "a second real start call must mint a genuinely new generation"
         );
+    }
+
+    /// Real, honest error path for `dap_set_variable` (task #276) against
+    /// an id no session was ever registered under -- deterministic, no
+    /// real adapter needed, mirroring `dap_evaluate`'s own "no dap
+    /// session" error the live integration test can't cheaply cover for
+    /// every possible bad-id shape.
+    #[test]
+    fn dap_set_variable_on_an_unknown_session_id_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "dap_set_variable",
+            serde_json::json!({ "session_id": 999, "name": "x", "value": "1" }),
+        );
+        let err = resp.error.expect("no such dap session should error");
+        assert!(err.contains("999"), "error should name the bad id: {err}");
     }
 }

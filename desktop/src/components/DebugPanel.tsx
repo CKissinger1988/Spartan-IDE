@@ -58,6 +58,14 @@ interface DebugPanelProps {
   watches?: WatchEntry[];
   onAddWatch?: (expression: string) => void;
   onRemoveWatch?: (expression: string) => void;
+  /** Real DAP `setVariable` (task #276) -- edits a variable's live value
+   * in the current top scope while stopped. Absent means the feature
+   * isn't wired for this render (matches every other optional real-tool
+   * prop here). A real, deliberate v1 scope cut: only the top-scope
+   * (locals) variable list is editable, matching `spartan-dap`'s own
+   * `set_variable_in_current_frame` -- not a nested field of a compound
+   * value, which would need a different container reference. */
+  onSetVariable?: (name: string, value: string) => void;
   /** Real DAP output (logpoints + the debuggee's own real stdout/stderr,
    * task #275). The App owns the accumulated log per session (reset on
    * every fresh launch); absent means the feature isn't wired for this
@@ -89,9 +97,12 @@ export default function DebugPanel({
   watches,
   onAddWatch,
   onRemoveWatch,
+  onSetVariable,
   outputLog,
 }: DebugPanelProps): React.ReactElement | null {
   const [watchDraft, setWatchDraft] = useState("");
+  const [editingVariable, setEditingVariable] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
   if (!hasFile) return null;
 
   const isStopped = session?.status === "stopped";
@@ -103,6 +114,19 @@ export default function DebugPanel({
       onAddWatch(expr);
       setWatchDraft("");
     }
+  };
+
+  const beginEditVariable = (name: string, currentValue: string) => {
+    if (!onSetVariable) return;
+    setEditingVariable(name);
+    setEditDraft(currentValue);
+  };
+
+  const commitEditVariable = () => {
+    if (editingVariable && onSetVariable) {
+      onSetVariable(editingVariable, editDraft);
+    }
+    setEditingVariable(null);
   };
 
   return (
@@ -160,7 +184,32 @@ export default function DebugPanel({
             <span key={v.name} className="debug-variable">
               <span className="debug-variable-name">{v.name}</span>
               <span className="debug-variable-eq"> = </span>
-              <span className="debug-variable-value">{v.value}</span>
+              {editingVariable === v.name ? (
+                <input
+                  className="debug-variable-edit-input"
+                  autoFocus
+                  value={editDraft}
+                  onChange={(e) => setEditDraft(e.target.value)}
+                  onBlur={commitEditVariable}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitEditVariable();
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      setEditingVariable(null);
+                    }
+                  }}
+                />
+              ) : (
+                <span
+                  className={`debug-variable-value${onSetVariable ? " debug-variable-value-editable" : ""}`}
+                  title={onSetVariable ? "Double-click to edit" : undefined}
+                  onDoubleClick={() => beginEditVariable(v.name, v.value)}
+                >
+                  {v.value}
+                </span>
+              )}
             </span>
           ))}
         </div>

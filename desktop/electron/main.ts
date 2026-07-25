@@ -254,6 +254,7 @@ app.whenReady().then(() => {
     "dap_step_over",
     "dap_step_into",
     "dap_evaluate",
+    "dap_set_variable",
     "dap_disconnect",
     "leo_cancel",
     "git_status",

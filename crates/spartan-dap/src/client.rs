@@ -383,6 +383,31 @@ impl DapClient {
         )
     }
 
+    /// Real DAP `setVariable` -- edits a variable's live value while
+    /// stopped. `variables_reference` is the *container's* reference (the
+    /// scope, or a parent variable for a nested field), never the
+    /// variable's own reference, per the DAP spec. Returns the raw
+    /// response; a real success carries the adapter's own re-formatted
+    /// `body.value` (which may differ from what was typed -- e.g. an
+    /// adapter normalizing `"5"` to `5`), so a caller should prefer that
+    /// over echoing the raw input back.
+    pub fn set_variable(
+        &mut self,
+        variables_reference: i64,
+        name: &str,
+        value: &str,
+    ) -> Option<Value> {
+        self.request(
+            "setVariable",
+            json!({
+                "variablesReference": variables_reference,
+                "name": name,
+                "value": value,
+            }),
+            DEFAULT_TIMEOUT,
+        )
+    }
+
     /// Shuts down the adapter -- never trusts the subprocess's own
     /// shutdown, matching `spartan_lsp::LspClient::shutdown`'s identical
     /// discipline and the original `spartan-editor-core::dap::DapClient`'s

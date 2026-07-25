@@ -174,6 +174,116 @@ fn real_debugpy_evaluate_computes_a_real_expression_in_the_stopped_frame() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+// A real, live proof that `set_variable` (task #276) genuinely reaches
+// the live debuggee's own execution state, not just a display value:
+// setting `x` to `100` in the stopped frame must make a real, subsequent
+// `evaluate("x * 2")` return `"200"`, not the original `"42"`.
+#[test]
+fn real_debugpy_set_variable_edits_the_real_stopped_frame() {
+    if !debugpy_adapter_available() {
+        eprintln!("SKIP: python3 -c 'import debugpy.adapter' failed -- debugpy not installed");
+        return;
+    }
+    let dir = work_dir("spartan-dap-debugpy-setvar-test");
+    let src_path = dir.join("target.py");
+    std::fs::write(&src_path, FIXTURE_SOURCE).unwrap();
+
+    let adapter_command = CommandSpec {
+        program: "python3".to_string(),
+        args: vec!["-m".to_string(), "debugpy.adapter".to_string()],
+    };
+    let session = DapSession::launch(
+        &adapter_command,
+        false,
+        &dir,
+        &src_path,
+        &dir,
+        &src_path,
+        &[spartan_dap::Breakpoint::line(2)],
+    );
+
+    let initial = session
+        .recv_update()
+        .expect("expected a real initial update after launching");
+    let DapUpdate::Stopped(before) = initial else {
+        panic!("expected the first update to be Stopped, got {initial:?}");
+    };
+    assert!(
+        before
+            .variables
+            .iter()
+            .any(|v| v.name == "x" && v.value == "21"),
+        "expected the real original x = 21 before any edit: {before:?}"
+    );
+
+    let new_value = session
+        .set_variable("x", "100")
+        .expect("expected a real setVariable result");
+    assert_eq!(
+        new_value, "100",
+        "expected the adapter's own confirmed new value"
+    );
+
+    // set_variable queues a fresh Stopped update internally -- it must
+    // arrive with the real edited value.
+    let refreshed = session
+        .recv_update()
+        .expect("expected a real fresh Stopped update after the edit");
+    let DapUpdate::Stopped(after) = refreshed else {
+        panic!("expected a fresh Stopped update, got {refreshed:?}");
+    };
+    assert_eq!(after.reason, "variable_edit");
+    assert!(
+        after
+            .variables
+            .iter()
+            .any(|v| v.name == "x" && v.value == "100"),
+        "expected the real refreshed x = 100: {after:?}"
+    );
+
+    // The real proof this isn't just a display update: the live debuggee
+    // frame itself must now compute against the new value.
+    let result = session
+        .evaluate("x * 2")
+        .expect("expected a real evaluate result after the edit");
+    assert_eq!(
+        result, "200",
+        "expected x * 2 == 200 after the real live edit, not the original 42"
+    );
+
+    // A real, live-confirmed `debugpy` behavior, not assumed: unlike
+    // `evaluate`, which reports a real `NameError` for an undefined name,
+    // `setVariable` against a genuinely new name *succeeds* -- debugpy
+    // implements the assignment via an exec-style write into the frame's
+    // own local namespace, which creates the name rather than requiring
+    // it to already exist. Documented here as a real finding, not
+    // silently assumed to behave like `evaluate`.
+    let new_name = session.set_variable("totally_new_local_name", "1");
+    assert!(
+        new_name.is_ok(),
+        "expected debugpy to allow creating a genuinely new local via setVariable, got: {new_name:?}"
+    );
+    // This second successful edit also queues its own fresh Stopped
+    // update -- drained here so it doesn't sit unread ahead of the
+    // Continue/Exited pair below.
+    let _ = session.recv_update();
+    // A real evaluate confirms it actually landed in the live frame, not
+    // just that the response claimed success.
+    let confirm = session
+        .evaluate("totally_new_local_name")
+        .expect("expected the newly-created local to be evaluable");
+    assert_eq!(confirm, "1");
+
+    session.send_command(DapCommand::Continue);
+    let after_continue = next_non_output_update(&session);
+    assert!(
+        matches!(after_continue, DapUpdate::Exited),
+        "expected a real exit after Continue: {after_continue:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 // A real, live proof that a logpoint's real `output` event is now
 // captured, not silently lost -- the exact gap task #249's own account
 // named ("the debug panel shows stop/variable state, not a DAP `output`

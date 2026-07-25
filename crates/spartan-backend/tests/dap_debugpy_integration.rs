@@ -151,6 +151,61 @@ fn dap_launch_hits_a_real_breakpoint_then_continue_reaches_a_real_exit() {
         "expected x * 2 == 42 through the real dispatch"
     );
 
+    // Real live edit of a variable's value while stopped (task #276): set
+    // `x` to `100` -- if this genuinely reaches the live debuggee frame,
+    // `y = x * 2` (evaluated next) must reflect the real new value, not
+    // the original `21`.
+    let set_var_resp = handle_request(
+        &state,
+        Request {
+            id: 6,
+            method: "dap_set_variable".to_string(),
+            params: serde_json::json!({ "session_id": session_id, "name": "x", "value": "100" }),
+        },
+        tx.clone(),
+    );
+    assert!(
+        set_var_resp.error.is_none(),
+        "dap_set_variable errored: {:?}",
+        set_var_resp.error
+    );
+    assert_eq!(
+        set_var_resp.result.unwrap()["value"].as_str(),
+        Some("100"),
+        "expected the real adapter-confirmed new value"
+    );
+
+    // The fresh Stopped update `set_variable` queues internally must
+    // arrive as a real `dap_stopped` event with the real new value.
+    let refreshed = recv_event_matching(&rx, "dap_stopped", Duration::from_secs(10));
+    let refreshed_vars = refreshed["data"]["stopped"]["variables"]
+        .as_array()
+        .unwrap();
+    assert!(
+        refreshed_vars
+            .iter()
+            .any(|v| v["name"] == "x" && v["value"] == "100"),
+        "expected a real refreshed local variable x = 100: {refreshed}"
+    );
+
+    // And a real evaluate against the live frame must now see the edited
+    // value, not the original one, proving the edit genuinely reached the
+    // debuggee's own execution state, not just the display.
+    let eval_after_set = handle_request(
+        &state,
+        Request {
+            id: 7,
+            method: "dap_evaluate".to_string(),
+            params: serde_json::json!({ "session_id": session_id, "expression": "x * 2" }),
+        },
+        tx.clone(),
+    );
+    assert_eq!(
+        eval_after_set.result.unwrap()["result"].as_str(),
+        Some("200"),
+        "expected x * 2 == 200 after the real live edit"
+    );
+
     let continue_resp = handle_request(
         &state,
         Request {

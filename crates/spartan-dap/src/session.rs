@@ -44,6 +44,17 @@ pub enum DapCommand {
         expression: String,
         reply: Sender<Result<String, String>>,
     },
+    /// Edit a variable's live value in the current top scope while
+    /// stopped, via a real DAP `setVariable`. A discrete request/response
+    /// like `Evaluate` (never steps or continues), but unlike `Evaluate`
+    /// it also pushes a fresh `DapUpdate::Stopped` on success so the
+    /// Variables panel (and any open Watches, which already re-evaluate
+    /// on every `Stopped`) both reflect the real new value immediately.
+    SetVariable {
+        name: String,
+        value: String,
+        reply: Sender<Result<String, String>>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -181,6 +192,26 @@ impl DapSession {
                         let _ = reply.send(result);
                         continue;
                     }
+                    DapCommand::SetVariable { name, value, reply } => {
+                        // Same discrete-request shape as Evaluate. On a real
+                        // success, also push a fresh Stopped update (reason
+                        // "variable_edit") so the Variables panel and any
+                        // open Watches both pick up the real new value
+                        // through the exact same event path a normal stop
+                        // already uses -- no second, parallel refresh
+                        // mechanism needed.
+                        let result =
+                            set_variable_in_current_frame(&mut client, thread_id, &name, &value);
+                        if result.is_ok() {
+                            let stopped = describe_stop(&mut client, thread_id, "variable_edit");
+                            if updates_tx.send(DapUpdate::Stopped(stopped)).is_err() {
+                                let _ = reply.send(result);
+                                break;
+                            }
+                        }
+                        let _ = reply.send(result);
+                        continue;
+                    }
                 };
                 if resp.is_none() {
                     let _ = updates_tx.send(DapUpdate::Error("command request failed".to_string()));
@@ -273,6 +304,24 @@ impl DapSession {
         rx.recv_timeout(Duration::from_secs(10))
             .map_err(|_| "no evaluate response (session may have ended)".to_string())?
     }
+
+    /// Edit a variable's live value in the current top scope and block for
+    /// the real result -- the same real, bounded-timeout, honest-error
+    /// contract `evaluate` already established. On success, a fresh
+    /// `Stopped` update is queued for `recv_update`'s own consumer before
+    /// this call returns.
+    pub fn set_variable(&self, name: &str, value: &str) -> Result<String, String> {
+        let (tx, rx) = mpsc::channel();
+        self.cmd_tx
+            .send(DapCommand::SetVariable {
+                name: name.to_string(),
+                value: value.to_string(),
+                reply: tx,
+            })
+            .map_err(|_| "debug session is no longer running".to_string())?;
+        rx.recv_timeout(Duration::from_secs(10))
+            .map_err(|_| "no setVariable response (session may have ended)".to_string())?
+    }
 }
 
 /// Fetches the current top stack frame and evaluates `expression` in it.
@@ -305,6 +354,58 @@ fn evaluate_in_current_frame(
                 .filter(|s| !s.is_empty())
                 .or_else(|| resp["body"]["result"].as_str())
                 .unwrap_or("evaluation failed")
+                .to_string();
+            Err(msg)
+        }
+        None => Err("no response from the debug adapter".to_string()),
+    }
+}
+
+/// Real DAP `setVariable`, scoped to the current top frame's first real
+/// scope -- the same "re-derive fresh from `thread_id` every call" shape
+/// `evaluate_in_current_frame` already established (correct even if a
+/// step happened between two edits, not just a one-time cached lookup).
+/// A real, deliberate v1 scope limit: only edits a variable directly in
+/// the top scope (locals), not a nested field of a compound value -- that
+/// would need the *variable's own* `variablesReference` as the container,
+/// which this crate's `DapVariable` doesn't carry yet (only `name`/
+/// `value`). Returns the adapter's own real re-formatted value string on
+/// success (which may differ from what was typed), or a real error
+/// (no frame, no scope, or the adapter rejecting the edit -- e.g. a
+/// read-only or type-mismatched value).
+fn set_variable_in_current_frame(
+    client: &mut DapClient,
+    thread_id: i64,
+    name: &str,
+    value: &str,
+) -> Result<String, String> {
+    let frame_id = client
+        .stack_trace(thread_id)
+        .and_then(|f| {
+            f["body"]["stackFrames"]
+                .as_array()
+                .and_then(|a| a.first())
+                .and_then(|fr| fr["id"].as_i64())
+        })
+        .ok_or_else(|| "no active stack frame to set a variable in".to_string())?;
+    let vars_ref = client
+        .scopes(frame_id)
+        .and_then(|s| {
+            s["body"]["scopes"]
+                .as_array()
+                .and_then(|a| a.first())
+                .and_then(|sc| sc["variablesReference"].as_i64())
+        })
+        .ok_or_else(|| "no active scope to set a variable in".to_string())?;
+    match client.set_variable(vars_ref, name, value) {
+        Some(resp) if resp["success"].as_bool() == Some(true) => {
+            Ok(resp["body"]["value"].as_str().unwrap_or(value).to_string())
+        }
+        Some(resp) => {
+            let msg = resp["message"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("setVariable failed")
                 .to_string();
             Err(msg)
         }
