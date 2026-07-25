@@ -3,8 +3,8 @@
 Real, tested code — not pseudocode, not mocked servers/adapters. Every spike
 here is a real Rust crate (a Cargo workspace member) except
 `tree-sitter-wasm-spike` and `git-browser-spike`, real, separate npm
-projects (matching `gui-builder/`'s and `mobile/`'s own precedent for
-JS-native feasibility work no Rust equivalent makes sense for). See
+projects (matching `mobile/`'s own precedent for JS-native feasibility
+work no Rust equivalent makes sense for). See
 `docs/architecture-spec.md` §39 for what each spike is meant to validate and
 §47 for the honest, ongoing execution log (what actually ran, what didn't,
 and why).

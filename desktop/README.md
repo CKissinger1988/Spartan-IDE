@@ -34,15 +34,12 @@ deleted).
   this project and what's missing here" message instead of fake content.
   `LeoChatPanel.tsx` is a real, persistent, always-visible chat panel
   (fixed sibling of `.main-column`, not a nav screen) wired to Leo's real
-  `plan`/`approve`/`reject` loop -- see §75.61. `DesignScreen.tsx` is a
-  real, working GUI Builder + live preview (§75.62): a structural tree,
-  a real sandboxed iframe rendering `gui-builder/`'s own real esbuild
-  bundle output, and an edit panel whose applied edits round-trip back
-  into the live Editor buffer.
-- `electron/gui-builder-client.ts` — spawns the real, already-tested
-  `gui-builder/dist/cli.js` (§75.38-§75.53) directly from Electron's main
-  process (not through `spartan-backend` -- zero Rust dependency there),
-  one real subprocess per `parse`/`bundle`/`apply` call.
+  `plan`/`approve`/`reject` loop -- see §75.61.
+
+  A "Design" nav screen used to sit here too, hosting the GUI Builder and
+  its live preview. The GUI Builder was removed from Spartan IDE at the
+  user's explicit request -- the screen, its Electron-side client, and the
+  `design_*` IPC methods are all gone, recoverable only from git history.
 
 ## Known feature gaps vs. the original wgpu shell (`crates/spartan-editor-core`)
 
@@ -95,8 +92,8 @@ the actual, real React components — nothing here is a static mockup.
 | Editor screen: 3-tier nav, file tree, tabs, syntax highlighting, status bar, Leo panel | Source Control panel: real staged/unstaged split, commit box |
 | ![Settings screen](../docs/screenshots/desktop/03-settings-screen.png) | ![Workflows screen](../docs/screenshots/desktop/04-workflows-screen.png) |
 | Settings: editor, appearance, GPU offload, Leo approval mode & provider | Workflows: a real `@xyflow/react` node graph (Claude/Codex/Gemini) |
-| ![Design screen](../docs/screenshots/desktop/05-design-screen.png) | ![Dev Containers screen](../docs/screenshots/desktop/06-devcontainers-screen.png) |
-| Design (GUI Builder): structural tree + live preview, no file open yet | Dev Containers: a real detected `devcontainer.json` config, ready to start |
+| ![Dev Containers screen](../docs/screenshots/desktop/06-devcontainers-screen.png) | |
+| Dev Containers: a real detected `devcontainer.json` config, ready to start | |
 | ![Editor with Leo panel](../docs/screenshots/desktop/07-editor-with-leo-panel.png) | |
 | Leo's persistent chat panel, idle and ready for a task | |
 
@@ -121,7 +118,6 @@ electron .                # (or `npm run start` after both are built)
 ```bash
 # From the repo root, build every real artifact electron-builder bundles:
 cargo build --release -p spartan-backend
-cd gui-builder && npm install && npm run build && cd ..
 
 cd desktop
 npm install               # needs real internet access -- see the gap below
@@ -129,8 +125,8 @@ npm run package:linux     # runs `npm run build` then electron-builder --linux
 ```
 
 The result lands in `desktop/dist-package/` (gitignored). `package.json`'s
-`build` config bundles the real `spartan-backend` binary and `gui-builder`'s
-`dist/`+`node_modules/` as `extraResources`, and targets a Linux `AppImage`
+`build` config bundles the real `spartan-backend` binary as
+`extraResources`, and targets a Linux `AppImage`
 (§75.77) -- no code signing is configured (this is a private, unsigned
 build, not a publicly distributed release). Windows/macOS targets aren't
 configured; this environment has no way to build or verify them.

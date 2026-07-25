@@ -8,179 +8,23 @@ mod latency;
 mod selection;
 mod text;
 mod theme;
-mod webview_bridge;
 
 use mode_toggle::AppMode;
-#[cfg(windows)]
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use spartan_editor_core::viewport::{self, Viewport};
 use spartan_editor_core::{
     accessibility, activity_bar, agent_panel, build, cli_session, command_palette, dap_session,
-    editor_view, file_tree, git_panel, gui_bridge, highlight, language, leo_bridge, lsp,
-    lsp_session, mode_toggle, settings_panel, tab_bar, terminal, update_bridge, workflow,
+    editor_view, file_tree, git_panel, highlight, language, leo_bridge, lsp, lsp_session,
+    mode_toggle, settings_panel, tab_bar, terminal, update_bridge, workflow,
 };
 
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
-#[cfg(windows)]
-use windows::Win32::Foundation::HWND;
-#[cfg(windows)]
-use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use winit::event::{ElementState, Event, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::EventLoopBuilder;
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::WindowBuilder;
-use wry::dpi::{LogicalPosition, LogicalSize};
-use wry::Rect;
-
-/// Promoted verbatim from `spikes/ui-shell-spike/src/main.rs` (§47.11): a
-/// real, documented fix for a real bug that spike found only by testing
-/// keyboard input after clicking the embedded WebView, not predicted in
-/// advance -- once wry's child `WebView2` control takes keyboard focus,
-/// clicking elsewhere in this *same top-level window's* native area does
-/// not return keyboard focus to winit on Windows. `winit::window::Window::
-/// focus_window()` alone does not fix this (tested in that spike); a
-/// direct Win32 `SetFocus` call does. Windows/WebView2-only, matching this
-/// whole bridge's scope (`wry` uses a different backend -- WebKitGTK -- on
-/// Linux, where this exact focus-stealing bug, if it exists at all, hasn't
-/// been investigated in this project).
-#[cfg(windows)]
-fn win32_hwnd(window: &winit::window::Window) -> HWND {
-    match window
-        .window_handle()
-        .expect("window should have a valid handle")
-        .as_raw()
-    {
-        RawWindowHandle::Win32(h) => HWND(h.hwnd.get()),
-        other => panic!("unexpected window handle type: {other:?}"),
-    }
-}
-
-/// The real screen-space region Design mode's embedded WebView occupies
-/// (§6.1, task #12) -- exactly the main editor's own content area (right
-/// of the sidebar, below the tab bar/mode-toggle row), so switching modes
-/// swaps *what* fills that region without moving or resizing it.
-fn design_content_bounds(
-    window: &winit::window::Window,
-    size: winit::dpi::PhysicalSize<u32>,
-) -> Rect {
-    let scale = window.scale_factor();
-    Rect {
-        position: LogicalPosition::new(text::TEXT_ORIGIN_X as f64, text::TAB_BAR_HEIGHT as f64)
-            .into(),
-        size: LogicalSize::new(
-            (size.width as f64 / scale - text::TEXT_ORIGIN_X as f64).max(0.0),
-            (size.height as f64 / scale - text::TAB_BAR_HEIGHT as f64).max(0.0),
-        )
-        .into(),
-    }
-}
-
-/// A zero-size `Rect` at the same position `design_content_bounds` uses --
-/// used to effectively hide the WebView while leaving Design mode, rather
-/// than destroying and recreating it on every mode switch. A real,
-/// deliberate cost/complexity tradeoff: a hidden, zero-size WebView still
-/// exists as a real child control, but occupies no screen space and can't
-/// be clicked or receive real input.
-fn design_hidden_bounds() -> Rect {
-    Rect {
-        position: LogicalPosition::new(text::TEXT_ORIGIN_X as f64, text::TAB_BAR_HEIGHT as f64)
-            .into(),
-        size: LogicalSize::new(0.0, 0.0).into(),
-    }
-}
-
-/// Ensures a WebView exists and is shown at the real content-area bounds
-/// (creating it lazily on first use), then refreshes its content, if
-/// `mode` is `Design`; otherwise hides an already-existing one. Called
-/// after every real mode assignment (Ctrl+1/2/3, a mode-toggle click, a
-/// command-palette mode-switch command) -- not just ones that specifically
-/// target Design -- so leaving Design mode reliably hides the WebView
-/// again via this one shared code path, not a separate hide call at every
-/// site that could possibly change `mode` away from it.
-fn sync_webview_for_mode(
-    bridge: &mut Option<webview_bridge::WebviewBridge>,
-    component_tree_request: &mut Option<gui_bridge::ComponentTreeRequest>,
-    pending_bundle_request: &mut Option<gui_bridge::BundleRequest>,
-    mode: AppMode,
-    window: &winit::window::Window,
-    size: winit::dpi::PhysicalSize<u32>,
-    file: &OpenFile,
-) {
-    if mode == AppMode::Design {
-        let b = bridge.get_or_insert_with(|| {
-            webview_bridge::WebviewBridge::new(window, design_content_bounds(window, size))
-        });
-        b.set_bounds(design_content_bounds(window, size));
-        sync_webview_content(b, component_tree_request, pending_bundle_request, file);
-    } else if let Some(b) = bridge {
-        b.set_bounds(design_hidden_bounds());
-    }
-}
-
-/// Pushes the real active file's path/component-file check into the
-/// WebView and, for a real component file, spawns a real §75.41
-/// `gui_bridge` request for its component tree (showing a real "parsing"
-/// state immediately, resolved later by `AboutToWait`'s own poll of
-/// `component_tree_request`). Called whenever a WebView already exists
-/// and Design mode is (or is becoming) the current mode -- a real, named
-/// limitation: this must be called explicitly at every "active file
-/// changed while potentially still in Design mode" site (tab bar click,
-/// sidebar click, closing a file bringing a different one to the front),
-/// since there's no generic "on active file changed" hook in this crate
-/// to hang it off of instead.
-fn sync_webview_content(
-    bridge: &webview_bridge::WebviewBridge,
-    component_tree_request: &mut Option<gui_bridge::ComponentTreeRequest>,
-    pending_bundle_request: &mut Option<gui_bridge::BundleRequest>,
-    file: &OpenFile,
-) {
-    let is_component_file = gui_bridge::is_component_file(&file.label);
-    bridge.push_file_info(&file.label, is_component_file);
-    if is_component_file {
-        bridge.push_component_tree_loading();
-        *component_tree_request = Some(gui_bridge::spawn_component_tree_request(Path::new(
-            &file.label,
-        )));
-        // Real §75.52 live-preview trigger -- fired alongside the
-        // structural tree fetch above, at exactly the same "active file
-        // changed" sites, since both are real reflections of the same
-        // active file.
-        bridge.push_bundle_loading();
-        *pending_bundle_request = Some(gui_bridge::spawn_bundle_request(Path::new(&file.label)));
-    } else {
-        // Real, live bug fixed here, found only by testing a real
-        // file-switch away from a component file, not by inspection: an
-        // earlier version just cleared `component_tree_request` (correctly
-        // canceling any in-flight fetch) but never told the WebView to
-        // stop showing the *previous* file's stale tree underneath the
-        // now-updated file-info line.
-        *component_tree_request = None;
-        bridge.push_component_tree_not_applicable();
-        *pending_bundle_request = None;
-        bridge.push_bundle_not_applicable();
-    }
-}
-
-/// Thin wrapper for call sites that only have `Option<&WebviewBridge>` (no
-/// mode-transition logic needed) -- an "active file changed" site where
-/// Design mode may already be showing.
-fn sync_webview_file_info(
-    bridge: &Option<webview_bridge::WebviewBridge>,
-    component_tree_request: &mut Option<gui_bridge::ComponentTreeRequest>,
-    pending_bundle_request: &mut Option<gui_bridge::BundleRequest>,
-    mode: AppMode,
-    file: &OpenFile,
-) {
-    if mode != AppMode::Design {
-        return;
-    }
-    if let Some(bridge) = bridge {
-        sync_webview_content(bridge, component_tree_request, pending_bundle_request, file);
-    }
-}
 
 /// `Document::line()` (ropey) includes the line's trailing terminator, but
 /// cosmic-text's `BufferLine`s never do. Promoted verbatim.
@@ -786,29 +630,6 @@ fn main() {
     let startup_settings = spartan_settings::load();
     theme::init_theme(startup_settings.appearance.theme);
 
-    // Real GTK initialization (§6.1, task #12) -- a real bug found only by
-    // running this crate live on Linux, not by inspection: `wry`'s own
-    // documented contract requires `gtk::init()` to have already run
-    // before *any* `WebViewBuilder::build()` call on Linux/BSD (winit
-    // doesn't initialize GTK itself, unlike a GTK-native windowing
-    // toolkit), or it panics with "GDK has not been initialized." Called
-    // unconditionally and early, even though Design mode's WebView itself
-    // is created lazily on first use (§75.39) -- `gtk::init()` is cheap
-    // and harmless if no WebView is ever created this session, and this
-    // avoids any ordering hazard between lazy WebView creation and GTK
-    // init that a lazier call site would risk. See the `AboutToWait`
-    // handler below for the other documented half of this same contract
-    // (pumping GTK's own event loop every frame).
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "dragonfly",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd"
-    ))]
-    gtk::init()
-        .expect("gtk::init() failed -- required by wry's WebKitGTK backend on this platform");
-
     let program_start = Instant::now();
     println!("=== spartan-editor-core -- real Tier 1 core-engine increment ===");
 
@@ -1285,30 +1106,6 @@ fn main() {
     // react to input while a modal is up.
     let mut pending_close: Option<PendingClose> = None;
 
-    // Real embedded WebView bridge for Design mode (§6.1, task #12),
-    // promoted from `spikes/ui-shell-spike` (§47.11). `None` until the
-    // first time the user actually switches to Design mode -- a real,
-    // deliberate lazy-creation choice (an app that never opens Design mode
-    // never pays the cost of spawning a child WebKitGTK/WebView2 process).
-    let mut webview_bridge: Option<webview_bridge::WebviewBridge> = None;
-    // Real §75.41 dev-server bridge in-flight request, if any -- a real
-    // `node`/`gui-builder` subprocess spawned on its own thread, polled
-    // non-blockingly in `AboutToWait` below (matching `pending_build`'s
-    // own established pattern for a different real subprocess).
-    let mut component_tree_request: Option<gui_bridge::ComponentTreeRequest> = None;
-    // Real §75.52 live-visual-preview in-flight bundle request, if any --
-    // a real `node`/`gui-builder bundle` subprocess (real esbuild),
-    // spawned alongside `component_tree_request` at every "active file
-    // changed" site, polled non-blockingly in `AboutToWait` below.
-    let mut pending_bundle_request: Option<gui_bridge::BundleRequest> = None;
-    // Real §75.42 Canvas -> Code in-flight request, if any -- a real
-    // `node`/`gui-builder apply` subprocess spawned on its own thread when
-    // the WebView's edit form posts a real `CanvasEdit` over IPC, polled
-    // non-blockingly in `AboutToWait` below (same pattern as
-    // `component_tree_request` just above, for the opposite sync
-    // direction).
-    let mut pending_apply_edit: Option<gui_bridge::ApplyEditRequest> = None;
-
     event_loop
         .run(move |event, elwt| {
             elwt.set_control_flow(winit::event_loop::ControlFlow::Poll);
@@ -1320,43 +1117,6 @@ fn main() {
                     // handling of it, per `Adapter::process_event`'s own
                     // real documented contract.
                     accesskit_adapter.process_event(&window, &event);
-
-                    // Real Design-mode WebView focus fix (§6.1, task #12).
-                    // `spikes/ui-shell-spike`'s own README (§47.11) named
-                    // this exact question as "unexplored" for wry's Linux
-                    // WebKitGTK backend, having only confirmed and fixed
-                    // the Windows/WebView2 case (see `win32_hwnd`'s own
-                    // doc comment). It's no longer unexplored: a real,
-                    // live click-drag test against this crate's actual
-                    // WebKitGTK-backed Design mode confirmed the identical
-                    // symptom on Linux -- once the embedded WebView takes
-                    // keyboard focus, Ctrl+2 (and every other native
-                    // shortcut) silently stops reaching winit's own
-                    // `KeyboardInput` events, with no error of any kind.
-                    // `window.focus_window()` (winit's own cross-platform
-                    // method, backed by a real `XSetInputFocus` call on
-                    // X11) *does* reclaim it here, unlike on Windows where
-                    // that spike's own testing found it insufficient and
-                    // needed the raw Win32 `SetFocus` call instead -- so
-                    // both are applied, each covering the platform where
-                    // it was actually proven to work. Peeked here (by
-                    // reference, before the real `match event` below
-                    // consumes it) so it applies to *every* native mouse
-                    // press, regardless of which specific region's own
-                    // `MouseInput` arm ends up matching.
-                    if matches!(
-                        &event,
-                        WindowEvent::MouseInput {
-                            state: ElementState::Pressed,
-                            ..
-                        }
-                    ) {
-                        window.focus_window();
-                        #[cfg(windows)]
-                        unsafe {
-                            let _ = SetFocus(win32_hwnd(&window));
-                        }
-                    }
 
                     match event {
                         WindowEvent::CloseRequested => {
@@ -1411,19 +1171,6 @@ fn main() {
                         WindowEvent::Resized(new_size) => {
                             gpu_state.resize(new_size);
                             text_state.resize(new_size.width as f32, new_size.height as f32);
-
-                            // Real Design-mode WebView resize (§6.1, task
-                            // #12) -- only meaningful while a bridge exists
-                            // and is actually showing; `sync_webview_for_
-                            // mode`'s own hidden-bounds branch would just
-                            // re-hide it at a stale size otherwise, so this
-                            // only touches the WebView when Design mode is
-                            // the current one.
-                            if mode == AppMode::Design {
-                                if let Some(bridge) = &webview_bridge {
-                                    bridge.set_bounds(design_content_bounds(&window, new_size));
-                                }
-                            }
 
                             // Recomputes how many lines are visible from the new window
                             // height -- previously fixed at startup only (a named
@@ -1661,13 +1408,6 @@ fn main() {
                                             &active_file.viewport,
                                             active_file.highlighter.as_mut(),
                                         );
-                                        sync_webview_file_info(
-                                            &webview_bridge,
-                                            &mut component_tree_request,
-                                            &mut pending_bundle_request,
-                                            mode,
-                                            &files[active],
-                                        );
                                         window.request_redraw();
                                     }
                                 }
@@ -1789,13 +1529,6 @@ fn main() {
                                             &active_file.viewport,
                                             active_file.highlighter.as_mut(),
                                         );
-                                        sync_webview_file_info(
-                                            &webview_bridge,
-                                            &mut component_tree_request,
-                                            &mut pending_bundle_request,
-                                            mode,
-                                            &files[active],
-                                        );
                                         window.request_redraw();
                                     }
                                 }
@@ -1828,15 +1561,6 @@ fn main() {
                                     mode_toggle::hit_test(&mode_hits, char_index)
                                 {
                                     mode = clicked_mode;
-                                    sync_webview_for_mode(
-                                        &mut webview_bridge,
-                                        &mut component_tree_request,
-                                        &mut pending_bundle_request,
-                                        mode,
-                                        &window,
-                                        gpu_state.size,
-                                        &files[active],
-                                    );
                                     window.request_redraw();
                                 }
                             }
@@ -1968,13 +1692,6 @@ fn main() {
                                             &active_file.editor,
                                             &active_file.viewport,
                                             active_file.highlighter.as_mut(),
-                                        );
-                                        sync_webview_file_info(
-                                            &webview_bridge,
-                                            &mut component_tree_request,
-                                            &mut pending_bundle_request,
-                                            mode,
-                                            &files[active],
                                         );
                                         window.request_redraw();
                                     }
@@ -2280,9 +1997,6 @@ fn main() {
                                                 command_palette::CommandId::SwitchToEditorMode => {
                                                     mode = AppMode::Editor;
                                                 }
-                                                command_palette::CommandId::SwitchToDesignMode => {
-                                                    mode = AppMode::Design;
-                                                }
                                             },
                                             command_palette::PaletteEntry::File(path) => {
                                                 // Mirrors the file tree
@@ -2326,15 +2040,6 @@ fn main() {
                                         // reconciled with the WebView
                                         // exactly once here, not at each
                                         // individual command arm.
-                                        sync_webview_for_mode(
-                                            &mut webview_bridge,
-                                            &mut component_tree_request,
-                                            &mut pending_bundle_request,
-                                            mode,
-                                            &window,
-                                            gpu_state.size,
-                                            &files[active],
-                                        );
                                     }
                                     window.request_redraw();
                                 }
@@ -2535,7 +2240,6 @@ fn main() {
                                     | PhysicalKey::Code(KeyCode::Digit2)
                                     | PhysicalKey::Code(KeyCode::Digit3)
                                     | PhysicalKey::Code(KeyCode::Digit4)
-                                    | PhysicalKey::Code(KeyCode::Digit5)
                             ) =>
                         {
                             // Ctrl+1/2/3/4/5: real Agent/Editor/Design/
@@ -2550,9 +2254,8 @@ fn main() {
                             mode = match key_event.physical_key {
                                 PhysicalKey::Code(KeyCode::Digit1) => AppMode::Agent,
                                 PhysicalKey::Code(KeyCode::Digit2) => AppMode::Editor,
-                                PhysicalKey::Code(KeyCode::Digit3) => AppMode::Design,
-                                PhysicalKey::Code(KeyCode::Digit4) => AppMode::Terminal,
-                                PhysicalKey::Code(KeyCode::Digit5) => AppMode::Workflow,
+                                PhysicalKey::Code(KeyCode::Digit3) => AppMode::Terminal,
+                                PhysicalKey::Code(KeyCode::Digit4) => AppMode::Workflow,
                                 _ => unreachable!(),
                             };
                             if mode == AppMode::Terminal && terminal_panel.is_none() {
@@ -2564,15 +2267,6 @@ fn main() {
                                     .unwrap_or_else(|| PathBuf::from("."));
                                 terminal_panel = terminal::TerminalPanel::spawn(&cwd, 120, 40).ok();
                             }
-                            sync_webview_for_mode(
-                                &mut webview_bridge,
-                                &mut component_tree_request,
-                                &mut pending_bundle_request,
-                                mode,
-                                &window,
-                                gpu_state.size,
-                                &files[active],
-                            );
                             window.request_redraw();
                         }
                         WindowEvent::KeyboardInput {
@@ -2947,13 +2641,6 @@ fn main() {
                                     &active_file.editor,
                                     &active_file.viewport,
                                     active_file.highlighter.as_mut(),
-                                );
-                                sync_webview_file_info(
-                                    &webview_bridge,
-                                    &mut component_tree_request,
-                                    &mut pending_bundle_request,
-                                    mode,
-                                    &files[active],
                                 );
                                 window.request_redraw();
                             }
@@ -4624,30 +4311,6 @@ fn main() {
                     }
                 }
                 Event::AboutToWait => {
-                    // Real GTK event-loop pump (§6.1, task #12), required
-                    // on Linux/BSD by wry's own documented contract: since
-                    // winit doesn't drive GTK's own main loop, WebKitGTK's
-                    // real rendering/input/IPC processing would otherwise
-                    // never actually run, even though the WebView object
-                    // exists. A genuine bug was found here only by running
-                    // this crate live, not by inspection: `wry::
-                    // WebViewBuilder::build()` panics with "GDK has not
-                    // been initialized" the first time a WebView is
-                    // created, unless `gtk::init()` has already run (see
-                    // its call near the top of `main()`) -- this per-frame
-                    // pump is the other documented half of that same real
-                    // contract.
-                    #[cfg(any(
-                        target_os = "linux",
-                        target_os = "dragonfly",
-                        target_os = "freebsd",
-                        target_os = "openbsd",
-                        target_os = "netbsd"
-                    ))]
-                    while gtk::events_pending() {
-                        gtk::main_iteration_do(false);
-                    }
-
                     // Real §75.47 Leo plan-generation poll -- same
                     // non-blocking `try_recv` shape as every other real
                     // background-thread bridge in this crate. Only
@@ -4701,136 +4364,6 @@ fn main() {
                                 };
                             }
                             window.request_redraw();
-                        }
-                    }
-
-                    // Real §75.41 dev-server bridge poll -- non-blocking
-                    // (`try_recv`), matching `pending_build`'s own
-                    // established pattern for a different real subprocess.
-                    // Only meaningful while a request is actually
-                    // in-flight; a stale result for a file the user has
-                    // since switched away from can't happen, since
-                    // `sync_webview_content` always replaces (not just
-                    // adds to) `component_tree_request` before a new
-                    // subprocess is spawned.
-                    if let Some(request) = &component_tree_request {
-                        if let Ok(result) = request.receiver.try_recv() {
-                            if let Some(bridge) = &webview_bridge {
-                                match result {
-                                    Ok(json) => bridge.push_component_tree(&json),
-                                    Err(message) => bridge.push_component_tree_error(&message),
-                                }
-                            }
-                            component_tree_request = None;
-                        }
-                    }
-
-                    // Real §75.52 live-preview bundle poll -- same
-                    // non-blocking shape, spawned alongside
-                    // `component_tree_request` at every "active file
-                    // changed" site (`sync_webview_content`).
-                    if let Some(request) = &pending_bundle_request {
-                        if let Ok(result) = request.receiver.try_recv() {
-                            if let Some(bridge) = &webview_bridge {
-                                match result {
-                                    Ok(code) => bridge.push_bundle(&code),
-                                    Err(message) => bridge.push_bundle_error(&message),
-                                }
-                            }
-                            pending_bundle_request = None;
-                        }
-                    }
-
-                    // Real §75.42 Canvas -> Code poll: the moment the
-                    // WebView's edit form posts a real `CanvasEdit` over
-                    // IPC, spawn a real apply-edit subprocess fed the
-                    // *active file's live buffer* (`editor.text()`, not
-                    // whatever's on disk) as its stdin -- an edit must
-                    // never silently discard or race against unsaved
-                    // keystrokes already made in the real editor. Dropped
-                    // (not queued) if a previous apply is still in flight,
-                    // since a second `CanvasEdit` before the first
-                    // resolves would target node ids computed against a
-                    // tree that no longer matches the file this second
-                    // request itself needs to be based on.
-                    if pending_apply_edit.is_none() {
-                        if let Some(bridge) = &webview_bridge {
-                            if let Some(edit_json) = bridge.take_pending_edit() {
-                                let active_file = &files[active];
-                                let source = active_file.editor.text();
-                                pending_apply_edit =
-                                    Some(gui_bridge::spawn_apply_edit_request(source, edit_json));
-                            }
-                        }
-                    }
-
-                    // Real §75.42 apply-edit poll, same non-blocking
-                    // pattern as `component_tree_request` just above. A
-                    // successful apply replaces the active file's entire
-                    // real live buffer via `EditorView::replace_all_text`
-                    // -- going through the same undo/dirty-tracking path
-                    // any other edit already does -- then immediately
-                    // re-requests a fresh component tree, since node ids
-                    // are a pure function of tree structure and a
-                    // structural edit can shift every id after the one
-                    // just changed. Deliberately does *not* call
-                    // `edit_latency.note_key_event()`: this isn't a
-                    // keystroke, and folding a real subprocess round-trip
-                    // (tens-to-hundreds of ms) into the input-to-photon
-                    // typing-latency report would misrepresent what that
-                    // report measures, not just add noise to it.
-                    if let Some(request) = &pending_apply_edit {
-                        if let Ok(result) = request.receiver.try_recv() {
-                            pending_apply_edit = None;
-                            match result {
-                                Ok(new_source) => {
-                                    let active_file = &mut files[active];
-                                    let effect = active_file.editor.replace_all_text(&new_source);
-                                    if effect != editor_view::EditEffect::None {
-                                        if !active_file.dirty {
-                                            active_file.dirty = true;
-                                            window.set_title(&window_title(active_file));
-                                        }
-                                        active_file.lsp_debouncer.on_edit();
-                                        let (cursor_line, _) = active_file.editor.cursor_line_col();
-                                        let doc_len_lines = active_file.editor.document.len_lines();
-                                        active_file
-                                            .viewport
-                                            .ensure_visible(cursor_line, doc_len_lines);
-                                        reshape_window(
-                                            &mut text_state,
-                                            &active_file.editor,
-                                            &active_file.viewport,
-                                            active_file.highlighter.as_mut(),
-                                        );
-                                    }
-                                    if let Some(bridge) = &webview_bridge {
-                                        bridge.push_edit_applied();
-                                        bridge.push_component_tree_loading();
-                                        bridge.push_bundle_loading();
-                                    }
-                                    component_tree_request =
-                                        Some(gui_bridge::spawn_component_tree_request(Path::new(
-                                            &files[active].label,
-                                        )));
-                                    // Real §75.52: a canvas edit changes
-                                    // the real rendered output too, not
-                                    // just the structural tree -- refresh
-                                    // the live preview from the same
-                                    // freshly-written file the tree
-                                    // refetch above already targets.
-                                    pending_bundle_request =
-                                        Some(gui_bridge::spawn_bundle_request(Path::new(
-                                            &files[active].label,
-                                        )));
-                                    window.request_redraw();
-                                }
-                                Err(message) => {
-                                    if let Some(bridge) = &webview_bridge {
-                                        bridge.push_edit_error(&message);
-                                    }
-                                }
-                            }
                         }
                     }
 

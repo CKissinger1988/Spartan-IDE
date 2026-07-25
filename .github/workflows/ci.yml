@@ -92,34 +92,6 @@ jobs:
         working-directory: desktop
         run: npm run build:electron
 
-  gui-builder:
-    name: gui-builder/ (AST sync engine)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-          cache-dependency-path: gui-builder/package-lock.json
-
-      - name: npm ci
-        working-directory: gui-builder
-        run: npm ci
-
-      - name: Build
-        working-directory: gui-builder
-        run: npm run build
-
-      - name: Test
-        # A handful of these tests perform a real `npm install` of a temp
-        # react/react-dom fixture and self-skip if that install fails --
-        # see gui-builder/README.md.
-        working-directory: gui-builder
-        run: npm test
-
   mobile:
     name: mobile/ (Expo/React Native IDE)
     runs-on: ubuntu-latest

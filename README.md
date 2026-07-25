@@ -51,7 +51,7 @@ be driven headlessly.
 | ![Web app editor](docs/screenshots/web/03-editor-with-syntax-highlighting.png) | ![Workflows screen](docs/screenshots/desktop/04-workflows-screen.png) |
 | Web: the browser-based editor (`web/`), File System Access API + WASM buffer | Desktop: Workflows — a real `@xyflow/react` multi-CLI node graph |
 
-More screens (Settings, Design/GUI Builder, Dev Containers, the web app's file tree and
+More screens (Settings, Dev Containers, the web app's file tree and
 live-editing states) are in `docs/screenshots/desktop/` and `docs/screenshots/web/`, and
 embedded with full captions in `desktop/README.md` and `web/README.md`.
 
@@ -86,7 +86,7 @@ CI workflows, not hand-assembled — see [`.github/workflows/`](.github/workflow
 desktop/                    Real Electron + React desktop shell — the current, primary UI
   electron/                 Main process: spawns spartan-backend, exposes a narrow IPC bridge
   src/                      React renderer: editor, file tree, Git panel, terminal, Leo chat,
-                             GUI Builder / live preview, Workflows canvas, Settings
+                             Workflows canvas, Dev Containers, Models, Settings
 
 crates/spartan-backend/     Real Rust IPC service the Electron shell drives — wraps every
                              other crate below behind a newline-delimited JSON-RPC protocol
@@ -112,8 +112,6 @@ crates/spartan-editor-core/ The original wgpu-native shell — kept as the teste
                              implementation and backend proof-of-concept, not deleted; every
                              feature it proved was later promoted into the crates above
 
-gui-builder/                Real, separate npm project — parses/edits JSX via Babel + recast,
-                             bundles a live preview via esbuild, powers the Design screen
 web/                        Real, separate Vite+React npm project — a vscode.dev-inspired
                              browser IDE, first increment: File System Access API + a real
                              WASM-compiled spartan-buffer, no LSP/DAP/Leo/git yet
@@ -158,10 +156,6 @@ legacy/agent-deck-console/  This repo's prior product, preserved for feature-par
 - **Real integrated terminal** (Console) and a **real multi-CLI session manager**
   (Sessions) — spawn `claude`/`codex`/`gemini`/any named CLI as a real PTY, streamed live
   over IPC via `xterm.js`
-- **Real GUI Builder + live preview** (Design screen): parses a JSX/TSX component's real
-  AST, renders it live in a sandboxed iframe via a real esbuild bundle, supports
-  click-to-select and a Canvas → Code round trip (prop/style edits land back in the real
-  source file, formatting-preserving, via `recast`)
 - **Real node-graph Workflows canvas** for visualizing/launching multi-CLI orchestration
 - **Real Dev Containers** (OCI/Docker-based, following the open [containers.dev](https://containers.dev)
   `devcontainer.json` spec — the same one VS Code Dev Containers, GitHub Codespaces, and
@@ -224,8 +218,7 @@ touching security, sandboxing, or approval flows (§9, §36).
   TypeScript typechecks and builds clean, and every increment of it has been verified via
   a live, screenshotted Playwright pass driving a real Vite dev server against a
   test-only mock of the Electron preload bridge — see [Screenshots](#screenshots) above
-  for real captures. GUI Builder's two-way AST sync is fully closed
-  (`Reparent`/`ComponentInsert` included).
+  for real captures.
 - **`web/` — a real, separate browser IDE, now with two editing paths**: a
   vscode.dev-inspired Vite+React app. Its original path is fully client-side (a real WASM
   compilation of `spartan-buffer` against the File System Access API, no backend needed).
@@ -304,14 +297,6 @@ See [`desktop/README.md`](desktop/README.md) for the full setup story, including
 `ELECTRON_SKIP_BINARY_DOWNLOAD=1` fallback used in this project's own restricted sessions
 (which lets everything except the actual window launch build and typecheck).
 
-### GUI Builder
-
-```bash
-cd gui-builder
-npm install
-npm test
-```
-
 ### Web app (browser IDE)
 
 ```bash
@@ -351,7 +336,6 @@ CLAUDE.md                    Index + behavioral contract for this repo
 docs/architecture-spec.md    Full technical & design spec (source of truth, 75+ sections)
 docs/screenshots/            Real Playwright + Chromium captures (desktop/ and web/)
 desktop/                     Electron + React desktop shell — the current primary UI
-gui-builder/                 Real, separate npm project — JSX AST sync + live preview
 web/                         Real, separate npm project — vscode.dev-inspired browser IDE
 crates/                      Real Rust product code (spartan-backend, spartan-buffer,
                               spartan-buffer-wasm, spartan-leo, spartan-model, spartan-git,
@@ -367,7 +351,7 @@ site/                        Real GitHub Pages source (no source links, installe
 prototypes/                  Reference-only React UI mockups, not wired to anything
 legacy/agent-deck-console/   Prior product, preserved for feature-parity reference (§55)
 .github/workflows/           CI — fmt/clippy/test for Rust, typecheck/build/test for every
-                              real npm project (desktop/, gui-builder/, mobile/, web/,
+                              real npm project (desktop/, mobile/, web/,
                               spikes/tree-sitter-wasm-spike, spikes/git-browser-spike),
                               plus tag-triggered release.yml (installers) and pages.yml
                               (the public Pages site, including this README rendered live)
@@ -398,5 +382,5 @@ yet see.
 
 Licensed under the **Apache License, Version 2.0**. Copyright (c) 2026 CKissinger1988.
 See [`LICENSE`](LICENSE) for the full text. Every real crate and npm package in this
-workspace (`crates/`, `desktop/`, `web/`, `gui-builder/`, `mobile/`, `cloud/`) carries
+workspace (`crates/`, `desktop/`, `web/`, `mobile/`, `cloud/`) carries
 the same license.

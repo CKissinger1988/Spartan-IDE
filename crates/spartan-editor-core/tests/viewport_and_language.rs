@@ -686,8 +686,9 @@ fn coalesced_undo_falls_back_to_clamp_when_the_run_partially_ages_out_of_the_rin
 
 #[test]
 fn replace_all_text_swaps_the_entire_document_content() {
-    // §75.42's real Canvas -> Code entry point: gui-builder regenerates
-    // whole-file source, not a diff.
+    // A real whole-file swap, not a diff -- originally §75.42's Canvas ->
+    // Code entry point, kept after the GUI Builder's removal since a
+    // whole-document replace is generally useful on its own.
     let mut editor = EditorView::new("line one\nline two\n");
     let effect = editor.replace_all_text("completely different\ncontent\n");
     assert_eq!(effect, editor_view::EditEffect::Structural);

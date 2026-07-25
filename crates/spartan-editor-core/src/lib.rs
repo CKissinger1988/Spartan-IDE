@@ -21,7 +21,6 @@ pub mod dap_session;
 pub mod editor_view;
 pub mod file_tree;
 pub mod git_panel;
-pub mod gui_bridge;
 pub mod highlight;
 pub mod language;
 pub mod leo_bridge;

@@ -35,16 +35,6 @@
       "dist-electron/**/*",
       "package.json"
     ],
-    "extraResources": [
-      {
-        "from": "../gui-builder/dist",
-        "to": "gui-builder"
-      },
-      {
-        "from": "../gui-builder/node_modules",
-        "to": "gui-builder/node_modules"
-      }
-    ],
     "linux": {
       "target": [
         "AppImage",

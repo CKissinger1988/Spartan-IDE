@@ -220,15 +220,7 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
-          cache-dependency-path: |
-            gui-builder/package-lock.json
-            desktop/package-lock.json
-
-      - name: Build gui-builder (a real desktop/ runtime dependency)
-        working-directory: gui-builder
-        run: |
-          npm ci
-          npm run build
+          cache-dependency-path: desktop/package-lock.json
 
       - name: npm ci (desktop/)
         working-directory: desktop
@@ -279,15 +271,7 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
-          cache-dependency-path: |
-            gui-builder/package-lock.json
-            desktop/package-lock.json
-
-      - name: Build gui-builder (a real desktop/ runtime dependency)
-        working-directory: gui-builder
-        run: |
-          npm ci
-          npm run build
+          cache-dependency-path: desktop/package-lock.json
 
       - name: npm ci (desktop/)
         working-directory: desktop
@@ -335,15 +319,7 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
-          cache-dependency-path: |
-            gui-builder/package-lock.json
-            desktop/package-lock.json
-
-      - name: Build gui-builder (a real desktop/ runtime dependency)
-        working-directory: gui-builder
-        run: |
-          npm ci
-          npm run build
+          cache-dependency-path: desktop/package-lock.json
 
       - name: npm ci (desktop/)
         working-directory: desktop

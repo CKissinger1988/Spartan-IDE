@@ -12,14 +12,12 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { BackendClient } from "./backend-client.js";
-import { GuiBuilderClient } from "./gui-builder-client.js";
 
 const isDev = !app.isPackaged;
 
 /**
- * Real, shared packaged-vs-dev resource resolver -- found duplicated
- * (near-identical, by a code-review pass) across
- * `resolveBackendBinaryPath`/`resolveGuiBuilderCliPath` below. Real §75.76
+ * Real, shared packaged-vs-dev resource resolver, used by
+ * `resolveBackendBinaryPath` below. Real §75.76
  * packaged-app path: electron-builder's own `extraResources` config
  * (`package.json`'s `build.extraResources`) copies real files to
  * `<resourcesPath>/...` -- `process.resourcesPath` is Electron's own
@@ -59,21 +57,7 @@ function resolveBackendBinaryPath(): string {
   );
 }
 
-function resolveGuiBuilderCliPath(): string {
-  // Real, already-built `gui-builder/` npm project (§75.38-§75.53) -- the
-  // actual GUI Builder AST-sync/bundling engine, a sibling of `desktop/`
-  // at the repo root, not a dependency of it (deliberately its own
-  // separate npm project since day one, see its own README.md).
-  return resolveResourcePath(
-    "gui-builder CLI",
-    ["gui-builder", "dist", "cli.js"],
-    ["gui-builder", "cli.js"],
-    'run "npm run build" inside gui-builder/ first.'
-  );
-}
-
 let backend: BackendClient | null = null;
-let guiBuilder: GuiBuilderClient | null = null;
 // The one real main window. Tracked so a second launch attempt (see the
 // single-instance lock below) can focus/restore it rather than spawning a
 // second full instance (a second `spartan-backend` subprocess + a second
@@ -183,11 +167,7 @@ app.whenReady().then(() => {
   // this guard the whole `whenReady` callback would reject silently and a
   // packaged app would launch showing *nothing at all* -- no window, no
   // error. Instead, surface a real OS error dialog naming the problem and
-  // quit cleanly. `resolveGuiBuilderCliPath` is treated the same way, but
-  // the GUI Builder is a non-essential feature -- a missing CLI must not
-  // stop the whole editor from opening, so its failure is caught
-  // separately below and left as a real, degraded (Design-mode-only) gap
-  // rather than a hard exit.
+  // quit cleanly.
   let backendPath: string;
   try {
     backendPath = resolveBackendBinaryPath();
@@ -198,15 +178,6 @@ app.whenReady().then(() => {
     return;
   }
   backend = new BackendClient(backendPath);
-  try {
-    guiBuilder = new GuiBuilderClient(resolveGuiBuilderCliPath());
-  } catch (e) {
-    // Non-fatal: the editor still opens; only Design mode is unavailable.
-    console.error(
-      `[spartan] GUI Builder unavailable: ${e instanceof Error ? e.message : String(e)}`
-    );
-    guiBuilder = null;
-  }
 
   // Real, narrow set of IPC methods the renderer can invoke via
   // `preload.ts`'s `contextBridge` -- a 1:1 passthrough to the real
@@ -334,34 +305,6 @@ app.whenReady().then(() => {
       return backend.call(method, params);
     });
   }
-
-  // Real GUI Builder wiring (§75.62, user-requested: "the visual GUI
-  // Builder and live app preview are mandatory") -- routed to the real
-  // `gui-builder/` CLI, not `spartan-backend`, since it's pure Node/TS
-  // with zero Rust dependency; going through the Rust process would add
-  // a pointless extra hop.
-  ipcMain.handle("spartan:design_parse", async (_event, params: { path: string }) => {
-    if (!guiBuilder) throw new Error("gui-builder not ready");
-    return guiBuilder.parseComponent(params.path);
-  });
-  ipcMain.handle("spartan:design_bundle", async (_event, params: { path: string }) => {
-    if (!guiBuilder) throw new Error("gui-builder not ready");
-    return guiBuilder.bundleComponent(params.path);
-  });
-  ipcMain.handle(
-    "spartan:design_apply_edit",
-    async (_event, params: { edit: unknown; source: string }) => {
-      if (!guiBuilder) throw new Error("gui-builder not ready");
-      return guiBuilder.applyEdit(JSON.stringify(params.edit), params.source);
-    }
-  );
-  ipcMain.handle(
-    "spartan:design_components",
-    async (_event, params: { rootDir: string; fromFile?: string }) => {
-      if (!guiBuilder) throw new Error("gui-builder not ready");
-      return guiBuilder.discoverComponents(params.rootDir, params.fromFile);
-    }
-  );
 
   // Two real, deliberately narrow main-process-only conveniences for the
   // new Settings "Diagnostics"/"About" section (§75.76) -- neither routes

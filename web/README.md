@@ -197,7 +197,7 @@ forked/vendored either) — see the root `CLAUDE.md`.
 - **Single file open at a time, across both paths combined.** No tabs, no
   multi-file model — a real, narrow first-increment scope, the same kind
   of deliberate v1 cut this project's own history already applies
-  elsewhere (e.g. `gui-builder`'s own real v1 scope, §75.38).
+  elsewhere.
 - **Chromium-only.** The File System Access API is not implemented in
   Firefox or Safari. This is a real, permanent platform limit, not a bug —
   the app detects this and shows an honest message instead of failing

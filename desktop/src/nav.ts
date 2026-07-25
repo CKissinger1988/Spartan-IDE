@@ -7,6 +7,11 @@
 // structure rather than replacing it, per the user's own explicit
 // "with all of our features, functions, additions, and integrations
 // added" instruction.
+//
+// The "Design" screen (the GUI Builder) was removed at the user's
+// explicit request -- see CLAUDE.md's own entry for the full account of
+// what was deleted. It is not a placeholder or a deferred item; the
+// feature is gone, recoverable only from git history.
 
 export type ScreenId =
   | "editor"
@@ -15,7 +20,6 @@ export type ScreenId =
   | "review"
   | "analytics"
   | "usage"
-  | "design"
   | "agents"
   | "containers"
   | "workflows"
@@ -54,7 +58,6 @@ export const NAV: NavGroup[] = [
   {
     label: "Build",
     items: [
-      { id: "design", label: "Design" },
       { id: "agents", label: "Agents" },
       { id: "containers", label: "Dev Containers" },
       { id: "workflows", label: "Workflows" },

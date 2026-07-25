@@ -37,7 +37,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Core engine (rope, renderer, LSP/DAP) | §2, §20 |
 | Leo agent core, ModelProvider, LiteLLM, Ollama/HF | §3, §4, §41, §44 |
 | Android, ADB, debugging | §21, §32, §33 |
-| GUI builder (Design View, Open Design integration) | §6, §34, §38 |
+| GUI builder (Design View) — **REMOVED** from the product at the user's request; §6/§34/§38 are now historical spec only | §6, §34, §38 |
 | Engineering studio views (Test/Ops/Data/Manage) | §22–§26, §30 (Project Graph) |
 | Security/trust hardening — READ BEFORE TOUCHING AUTH, SANDBOXING, OR APPROVAL FLOWS | §9, §36 |
 | Settings taxonomy | §42 |
@@ -7516,6 +7516,54 @@ first — it's the parity reference until each row there is actually reimplement
   Design screen there at all, the same real platform scope every recent Design pass carries); the
   real Electron window remains unlaunchable in this session (same standing gap since §75.59).
 
+- **The GUI Builder was REMOVED from Spartan IDE, at the user's explicit instruction (task
+  #280)** -- not deprecated, not placeholdered, not deferred: deleted. The user said "Remove the
+  GUI Builder from Spartan IDE"; scope was confirmed via `AskUserQuestion` before anything was
+  touched, and they chose **full removal** over a softer "hide the nav entry, keep the code"
+  option. Everything below stays in this file as an accurate historical record of what was really
+  built and really verified -- §75.38 through §75.53, §75.62, §75.81, §75.90, and tasks #277-#279
+  all describe real, working, live-verified code -- but **none of it is in the product any more**.
+  What was deleted: the entire `gui-builder/` npm project (the Babel/recast AST engine, the
+  esbuild live-preview bundler, `annotate.ts`'s `data-spartan-id` injection, `components.ts`'s
+  component discovery, the CLI, and all 61 of its tests); `desktop/src/components/DesignScreen.tsx`
+  and `desktop/electron/gui-builder-client.ts`; the four `design_parse`/`design_bundle`/
+  `design_apply_edit`/`design_components` IPC methods (from `main.ts`'s handlers *and*
+  `preload.ts`'s allowlist, kept in lockstep per this repo's own drift-avoidance rule); the
+  "Design" nav item and its `ScreenId` variant; `desktop/package.json`'s `gui-builder`
+  `extraResources` entry; CI's whole `gui-builder` job and all three of `release.yml`'s
+  "Build gui-builder" steps plus their cache paths; and `docs/screenshots/desktop/05-design-screen.png`.
+  In the wgpu reference shell, `crates/spartan-editor-core` lost `gui_bridge.rs` (235 lines),
+  `webview_bridge.rs` (445 lines), `tests/gui_bridge_integration.rs` (249 lines), `build.rs`, and
+  every `main.rs` call site -- `design_content_bounds`/`design_hidden_bounds`/
+  `sync_webview_for_mode`/`sync_webview_content`/`sync_webview_file_info`, the three
+  `AboutToWait` poll blocks, and the `Resized` WebView-resize branch. **A real, load-bearing
+  consequence worth naming, not a side effect noticed later**: `wry` and `gtk` existed in this
+  crate *solely* to host the Design WebView, and the Windows `SetFocus`/`win32_hwnd` focus fix
+  (plus its `windows` and `raw-window-handle` dependencies) existed solely because that embedded
+  WebView could steal keyboard focus (§75.39/§47.11) -- confirmed by grep before removing any of
+  it, so all four dependencies and `build.rs`'s `WebView2Loader.dll` deployment step are gone
+  too, and the `GSETTINGS_BACKEND=memory` requirement that headless Linux `cargo run` used to
+  carry no longer applies. `AppMode::Design` is gone from `mode_toggle.rs` (five modes -> four,
+  `ALL` re-sized, the toggle text now `"Agent|Editor|Term|Flow"`, and its own hit-test/label
+  tests re-derived by hand against the new string rather than adjusted until they passed), and
+  `CommandId::SwitchToDesignMode` is gone from the command palette (`ALL` 8 -> 7). Ctrl+3/4/5 were
+  re-mapped to Ctrl+3 = Terminal, Ctrl+4 = Workflow, since leaving a hole would have made Ctrl+3
+  silently dead. Docs updated to record the removal rather than quietly drop the topic:
+  `docs/FUTURE_FEATURES.md`'s GUI Builder table is replaced by an explicit "removed" note (its
+  three shipped rows and three P3 rows are deliberately *not* repopulated -- they are not planned
+  work any more), and `README.md`/`desktop/README.md`/`web/README.md`/`spikes/README.md` had
+  every GUI-Builder-as-a-current-feature claim removed. Five Rust files carried GUI Builder
+  references in doc comments *only* (`spartan-editor-core::editor_view`, its own
+  `viewport_and_language.rs` test, `spartan-backend::format_integration`, `spartan-backend::lib`,
+  `spartan-android::lib`) -- each reworded to keep the real technical point it was making without
+  citing a deleted package, rather than deleted wholesale. `EditorView::replace_all_text` itself
+  is kept: it was originally the Canvas -> Code entry point, but a whole-document replace is
+  generally useful and has its own tests. Verification: `cargo fmt --all -- --check` clean,
+  `cargo clippy --workspace --release --all-targets` clean, the full workspace test suite green,
+  `desktop/`'s own `tsc --noEmit`/`npm run build:electron`/`npm run build` clean, and both
+  workflow YAML files re-validated with `yaml.safe_load`. Everything removed is recoverable from
+  git history (the commits immediately preceding this one).
+
 ## Build & test
 
 ```bash
@@ -7644,16 +7692,14 @@ cargo test --workspace --release   # 746 tests: 7 spikes + 18 real crates + xtas
 # (crates/plugins/Cargo.toml), excluded from the main workspace on purpose -- `cargo build
 # --workspace`/`cargo test --workspace` from the repo root never touch them; build them with
 # `cargo component build` from inside crates/plugins/<name> instead.
-# gui-builder/ (task #12, §75.38) is a real, separate npm/TypeScript project, not part of the
-# Cargo workspace at all -- `cd gui-builder && npm install && npm test` (35 tests, Node's built-in
-# `node:test` runner). Several of its own tests (§75.52, §75.53) perform a real `npm install` of a
-# temp react/react-dom fixture and self-skip if that install fails (no network reachable).
-# spartan-editor-core's Design mode now embeds a real wry WebView (§6.1, §75.39) -- on Linux, live
-# `cargo run`/manual testing in a minimal/headless environment (no real desktop D-Bus session, e.g.
-# this project's own Xvfb+fluxbox verification setup) needs `GSETTINGS_BACKEND=memory` set or
-# `gtk::init()` hangs indefinitely trying to reach a dconf service that isn't there -- a real
-# environment-only requirement, not something the binary sets itself (a real desktop always has a
-# working D-Bus session). See §75.39 for the full diagnosis.
+# gui-builder/ is GONE -- the GUI Builder was removed from Spartan IDE at the user's explicit
+# request. There is no `gui-builder/` npm project, no Design screen in `desktop/`, no `design_*`
+# IPC method, and no `AppMode::Design`/`webview_bridge`/`gui_bridge` in the wgpu reference shell.
+# `spartan-editor-core` consequently no longer depends on `wry`/`gtk`/`windows`/`raw-window-handle`
+# and has no `build.rs`, so the old `GSETTINGS_BACKEND=memory` requirement for live `cargo run`
+# on a headless Linux box (§75.39) no longer applies either. Every §75.x bullet below that
+# describes GUI Builder work is kept as an accurate historical record of what was really built;
+# none of it is in the product any more.
 # Real Windows cross-compilation/execution verification (§75.40): `rustup target add
 # x86_64-pc-windows-gnu` + `apt-get install mingw-w64` gets a real Windows GNU toolchain on Linux;
 # `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo check/clippy/test --no-run
@@ -7671,12 +7717,10 @@ cargo test --workspace --release   # 746 tests: 7 spikes + 18 real crates + xtas
 cargo build --release --workspace
 ```
 
-No other Rust build system exists. `gui-builder/` (task #12, §75.38) is a real, separate npm/
-TypeScript project — see its own README.md and `cd gui-builder && npm install && npm test`. It
-parses/edits `prototypes/*.jsx` as real AST data (proven against both real prototype files); it
-does **not** build or render them as a running app — there is still no dev server, no bundler
-config, no way to actually view either `.jsx` file in a browser. Don't add one without discussing
-it first; that's a separate, larger piece of §6.1's own "Canvas Engine" work, not yet started.
+No other Rust build system exists. `prototypes/*.jsx` remain reference-only React mockups with
+nothing that builds or renders them — the `gui-builder/` project that used to parse them as real
+AST data was removed along with the rest of the GUI Builder. Don't reintroduce one without
+discussing it first.
 
 `spikes/tree-sitter-wasm-spike/` (§75.86) is also a real, separate npm project, not a Cargo crate
 — `cd spikes/tree-sitter-wasm-spike && npm install && npm test`. It's pinned to

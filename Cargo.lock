@@ -5282,11 +5282,9 @@ dependencies = [
  "arboard",
  "bytemuck",
  "glyphon",
- "gtk",
  "pollster",
  "portable-pty",
  "rand 0.8.6",
- "raw-window-handle",
  "serde",
  "serde_json",
  "spartan-buffer",
@@ -5311,9 +5309,7 @@ dependencies = [
  "tree-sitter-typescript",
  "ttf-parser 0.19.2",
  "wgpu",
- "windows 0.56.0",
  "winit",
- "wry",
 ]
 
 [[package]]

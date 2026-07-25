@@ -31,11 +31,10 @@ pub enum CommandId {
     ToggleSidebar,
     SwitchToAgentMode,
     SwitchToEditorMode,
-    SwitchToDesignMode,
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 8] = [
+    pub const ALL: [CommandId; 7] = [
         CommandId::SaveFile,
         CommandId::Undo,
         CommandId::Redo,
@@ -43,7 +42,6 @@ impl CommandId {
         CommandId::ToggleSidebar,
         CommandId::SwitchToAgentMode,
         CommandId::SwitchToEditorMode,
-        CommandId::SwitchToDesignMode,
     ];
 
     pub fn label(self) -> &'static str {
@@ -55,7 +53,6 @@ impl CommandId {
             CommandId::ToggleSidebar => "Toggle Sidebar: File Tree / Source Control",
             CommandId::SwitchToAgentMode => "Switch to Agent Mode",
             CommandId::SwitchToEditorMode => "Switch to Editor Mode",
-            CommandId::SwitchToDesignMode => "Switch to Design Mode",
         }
     }
 }

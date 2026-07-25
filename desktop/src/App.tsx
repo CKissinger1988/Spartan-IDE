@@ -26,7 +26,6 @@ import DebugPanel, {
 import LogcatPanel from "./components/LogcatPanel";
 import Placeholder from "./components/Placeholder";
 import WorkflowsScreen from "./components/WorkflowsScreen";
-import DesignScreen from "./components/DesignScreen";
 import ConsoleScreen from "./components/ConsoleScreen";
 import SessionsScreen from "./components/SessionsScreen";
 import SettingsScreen from "./components/SettingsScreen";
@@ -916,20 +915,12 @@ export default function App(): React.ReactElement {
             </div>
             <div className="content-area">
               {screen === "workflows" && <WorkflowsScreen />}
-              {screen === "design" && (
-                <DesignScreen
-                  activeFile={activeFile}
-                  onContentChange={handleContentChange}
-                  projectRoot={ROOT}
-                />
-              )}
               {screen === "console" && <ConsoleScreen root={ROOT} />}
               {screen === "sessions" && <SessionsScreen root={ROOT} />}
               {screen === "settings" && <SettingsScreen />}
               {screen === "containers" && <DevContainersScreen root={ROOT} />}
               {screen === "models" && <ModelsScreen />}
               {screen !== "workflows" &&
-                screen !== "design" &&
                 screen !== "console" &&
                 screen !== "sessions" &&
                 screen !== "settings" &&

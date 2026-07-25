@@ -897,8 +897,8 @@ fn lsp_call_hierarchy(
 /// Real "Format Document" -- the real, previously-unwired `formatter`
 /// field on every language's own registry entry (§20.1) finally gets a
 /// real caller. Formats the *live in-memory buffer*, not the file on
-/// disk (matching `gui-builder`'s own established "operate on the live
-/// buffer" discipline, §75.42), so an unsaved edit still formats
+/// disk (the same "operate on the live buffer, never what's on disk"
+/// discipline §75.42 established), so an unsaved edit still formats
 /// correctly; the caller applies the real result through the normal
 /// `edit` IPC path, which is why this only ever reports formatted text
 /// back, never writes anything itself. Never blocks the single

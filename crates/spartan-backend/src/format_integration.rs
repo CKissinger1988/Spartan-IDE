@@ -3,8 +3,7 @@
 //! present since §20.1 but never wired to any real caller until now),
 //! piping the *live in-memory buffer* through stdin/stdout rather than
 //! the file on disk -- the same "operate on the live buffer, not disk"
-//! discipline `gui-builder`'s own Canvas -> Code `apply` mode already
-//! established (§75.42), so formatting an unsaved edit works correctly
+//! discipline §75.42 established, so formatting an unsaved edit works
 //! and a formatted result always applies through the normal `edit` IPC
 //! path, getting the same undo/dirty tracking as any other edit.
 //!

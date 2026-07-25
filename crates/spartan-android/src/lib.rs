@@ -154,9 +154,8 @@ pub fn detect_toolchain() -> AndroidToolchainStatus {
 /// application/library plugin id. Deliberately a plain substring check
 /// of the Gradle build file's own text, not a real Groovy/Kotlin-DSL
 /// parse -- the same "smallest real mechanism that actually works"
-/// choice this workspace's own `gui-builder` (§6.1) and windowed
-/// tree-sitter passes already established, not a corner cut unique to
-/// this crate.
+/// choice this workspace's own windowed tree-sitter passes already
+/// established, not a corner cut unique to this crate.
 pub fn is_android_project(root: &Path) -> bool {
     if root
         .join("app")

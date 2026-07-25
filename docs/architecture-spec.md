@@ -241,6 +241,14 @@ editor_api = ["diagnostics.publish", "commands.register"]
 
 ## 6. GUI Builder (Design View) — Deep
 
+> **REMOVED FROM THE PRODUCT.** The GUI Builder was deleted from Spartan IDE at the user's
+> explicit request (see CLAUDE.md's own entry for the full account of what was removed). This
+> section is retained **only** as a historical design record — its numbering is preserved so
+> every existing cross-reference in this file still resolves, per this repo's own rule against
+> renumbering. Nothing described below is implemented any more: there is no `gui-builder/`
+> project, no Design screen, no `design_*` IPC method, and no `AppMode::Design`. Do not treat
+> anything here as a spec for work to be done.
+
 ### 6.1 Canvas Engine
 
 - Runs in an isolated **WebView surface** (only place in the app using a WebView — everything else is native wgpu) since DOM/CSS layout is genuinely the right tool for a visual design canvas
@@ -956,6 +964,14 @@ The single `adb_command` tool from Section 21.6 is now backed by a full scoped t
 
 ## 34. Enhanced GUI Creation Studio (Design View, Deep Expansion)
 
+> **REMOVED FROM THE PRODUCT.** The GUI Builder was deleted from Spartan IDE at the user's
+> explicit request (see CLAUDE.md's own entry for the full account of what was removed). This
+> section is retained **only** as a historical design record — its numbering is preserved so
+> every existing cross-reference in this file still resolves, per this repo's own rule against
+> renumbering. Nothing described below is implemented any more: there is no `gui-builder/`
+> project, no Design screen, no `design_*` IPC method, and no `AppMode::Design`. Do not treat
+> anything here as a spec for work to be done.
+
 Section 6 established the core two-way sync mechanism; Section 17 added a first pass of extended features. This section rebuilds Design View into a genuinely complete visual authoring environment spanning every platform Spartan targets — web, Compose/Android, and native desktop — not just a React-focused canvas with a few extra panels bolted on.
 
 ### 34.1 Multi-Framework Canvas Engine
@@ -1317,6 +1333,14 @@ A full pass across the whole product, adding genuinely new capabilities rather t
 ---
 
 ## 38. Open Design Integration
+
+> **REMOVED FROM THE PRODUCT.** The GUI Builder was deleted from Spartan IDE at the user's
+> explicit request (see CLAUDE.md's own entry for the full account of what was removed). This
+> section is retained **only** as a historical design record — its numbering is preserved so
+> every existing cross-reference in this file still resolves, per this repo's own rule against
+> renumbering. Nothing described below is implemented any more: there is no `gui-builder/`
+> project, no Design screen, no `design_*` IPC method, and no `AppMode::Design`. Do not treat
+> anything here as a spec for work to be done.
 
 Confirmed against the current project: **Open Design** (open-design.ai, Apache-2.0, `github.com/nexu-io/open-design`) is a real, actively developed platform — a local-first, open-source, agent-native design layer, not a hands-on canvas tool. It sits in front of a coding agent (Claude Code, Cursor, Codex, and 20+ other CLIs), is fully BYOK with credentials never proxied through a vendor, captures brand systems as portable **DESIGN.md** files (a nine-section schema: color, typography, spacing, layout, components, motion, voice, brand, anti-patterns), ships roughly 150 ready-made design systems, and produces real runnable artifacts — HTML/CSS, decks, images, even short motion clips — rendered into a sandboxed preview and exported directly to PDF/PPTX/MP4 or handed off as real code<cite index="9-1,4-1">since screenshots, fonts, palettes, and confirmed artifacts accumulate as defaults for future sessions, and the platform ships a stdio MCP server with per-agent install scripts so any MCP-compatible agent can read a project's tokens, components, and entry HTML as a structured API</cite>.
 

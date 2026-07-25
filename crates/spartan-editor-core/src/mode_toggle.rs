@@ -1,36 +1,31 @@
-//! Real Agent/Editor/Design mode toggle (§8, §16.1, task #3) -- pure
-//! layout logic, no GPU dependency, mirroring `tab_bar.rs`/`file_tree.rs`/
-//! `git_panel.rs`'s own "pure logic, test it headlessly" split.
+//! Real Agent/Editor/Terminal/Workflow mode toggle (§8, §16.1, task #3)
+//! -- pure layout logic, no GPU dependency, mirroring `tab_bar.rs`/
+//! `file_tree.rs`/`git_panel.rs`'s own "pure logic, test it headlessly"
+//! split.
 //!
-//! Only `Editor` mode has real content behind it in this crate -- there is
-//! no Leo/`ModelProvider` (§3, §4) and no GUI Builder/WebView bridge (§6)
-//! anywhere in this workspace yet. `Agent` and `Design` modes are real,
-//! honestly-empty placeholder states, not simulated content: switching to
-//! either one shows a real message explaining exactly what's missing and
-//! why, the same "name the gap, don't fake it" discipline this crate's own
-//! §75.x history has followed throughout, applied here to a whole mode
-//! rather than one feature within a mode.
+//! A fifth mode, `Design`, used to sit between `Editor` and `Terminal` and
+//! hosted the GUI Builder's embedded WebView canvas. The GUI Builder was
+//! removed from Spartan IDE at the user's explicit request; the mode went
+//! with it, and every remaining mode here has real content behind it.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMode {
     Agent,
     Editor,
-    Design,
     /// Real integrated terminal (§75.56, user-requested: "I don't see...
-    /// a terminal") -- the fourth real mode, joining Agent/Editor/Design.
+    /// a terminal") -- the third real mode, joining Agent/Editor.
     Terminal,
     /// Real node-graph workflow builder (§75.57, user-requested) -- the
-    /// fifth real mode: a real draggable node/edge canvas for orchestrating
+    /// fourth real mode: a real draggable node/edge canvas for orchestrating
     /// multiple real external CLI-tool sessions (`cli_session.rs`) as one
     /// workflow, with a session-detail trace view and run comparison.
     Workflow,
 }
 
 impl AppMode {
-    pub const ALL: [AppMode; 5] = [
+    pub const ALL: [AppMode; 4] = [
         AppMode::Agent,
         AppMode::Editor,
-        AppMode::Design,
         AppMode::Terminal,
         AppMode::Workflow,
     ];
@@ -39,7 +34,6 @@ impl AppMode {
         match self {
             AppMode::Agent => "Agent",
             AppMode::Editor => "Editor",
-            AppMode::Design => "Design",
             AppMode::Terminal => "Term",
             AppMode::Workflow => "Flow",
         }
@@ -48,18 +42,13 @@ impl AppMode {
     /// The real, honest placeholder message shown in place of document
     /// content while this mode is active and has no real backing yet.
     /// `Editor` never needs one -- it's the one mode with real content.
-    /// `Design` no longer needs one either as of §75.39/task #12's WebView
-    /// bridge increment -- it now shows a real embedded WebView instead of
-    /// text (still honestly not a live component canvas yet; see
-    /// `webview_bridge.rs`'s own doc comment for exactly what it does
-    /// show). `Agent` no longer needs one either as of §75.47/task #5's
+    /// `Agent` no longer needs one either as of §75.47/task #5's
     /// real Leo UI wiring -- see `agent_panel.rs`'s own doc comment for
     /// exactly what it shows and doesn't.
     pub fn placeholder_message(self) -> Option<&'static str> {
         match self {
             AppMode::Agent => None,
             AppMode::Editor => None,
-            AppMode::Design => None,
             AppMode::Terminal => None,
             AppMode::Workflow => None,
         }
@@ -74,7 +63,7 @@ pub struct ModeHit {
     pub range: std::ops::Range<usize>,
 }
 
-/// Builds the real "Agent|Editor|Design|Term|Flow" display text plus each
+/// Builds the real "Agent|Editor|Term|Flow" display text plus each
 /// label's real char range, in document order. A tight `|` separator (no
 /// surrounding spaces) -- real room found tighter than expected once
 /// `Terminal` was added, same fix `activity_bar.rs` already needed for its
@@ -118,7 +107,7 @@ mod tests {
     #[test]
     fn build_mode_toggle_text_produces_the_expected_real_string() {
         let (text, _) = build_mode_toggle_text();
-        assert_eq!(text, "Agent|Editor|Design|Term|Flow");
+        assert_eq!(text, "Agent|Editor|Term|Flow");
     }
 
     #[test]
@@ -139,15 +128,14 @@ mod tests {
         let (_, hits) = build_mode_toggle_text();
         assert_eq!(hit_test(&hits, 0), Some(AppMode::Agent));
         assert_eq!(hit_test(&hits, 6), Some(AppMode::Editor));
-        assert_eq!(hit_test(&hits, 13), Some(AppMode::Design));
-        assert_eq!(hit_test(&hits, 20), Some(AppMode::Terminal));
-        assert_eq!(hit_test(&hits, 25), Some(AppMode::Workflow));
+        assert_eq!(hit_test(&hits, 13), Some(AppMode::Terminal));
+        assert_eq!(hit_test(&hits, 19), Some(AppMode::Workflow));
     }
 
     #[test]
     fn hit_test_on_the_separator_between_labels_resolves_to_none() {
         let (_, hits) = build_mode_toggle_text();
-        // "Agent|Editor|Design|Term|Flow"
+        // "Agent|Editor|Term|Flow"
         //  0123456789...
         // index 5 is the '|' separator between Agent (0..5) and Editor (6..12).
         assert_eq!(hit_test(&hits, 5), None);
@@ -163,13 +151,11 @@ mod tests {
 
     #[test]
     fn no_mode_has_a_placeholder_message_anymore() {
-        // Editor always had real content; Design gained a real embedded
-        // WebView in §75.39/task #12; Agent gained real Leo UI wiring in
-        // §75.47/task #5; Terminal gained a real PTY in §75.56; Workflow
-        // gained a real node-graph canvas in §75.57 -- every mode now
-        // shows real content.
+        // Editor always had real content; Agent gained real Leo UI wiring
+        // in §75.47/task #5; Terminal gained a real PTY in §75.56;
+        // Workflow gained a real node-graph canvas in §75.57 -- every mode
+        // now shows real content.
         assert!(AppMode::Editor.placeholder_message().is_none());
-        assert!(AppMode::Design.placeholder_message().is_none());
         assert!(AppMode::Agent.placeholder_message().is_none());
         assert!(AppMode::Terminal.placeholder_message().is_none());
         assert!(AppMode::Workflow.placeholder_message().is_none());

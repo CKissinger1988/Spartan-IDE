@@ -211,10 +211,11 @@ impl EditorView {
         }
     }
 
-    /// Replaces the entire document with `new_text` -- the real Canvas ->
-    /// Code entry point (§75.42): `gui-builder`'s own `applyCanvasEdit`
-    /// regenerates whole-file source, not a diff, so there's no smaller
-    /// edit to apply. Deliberately reuses the exact same
+    /// Replaces the entire document with `new_text` -- a whole-file swap
+    /// with no smaller edit to apply. (Originally the GUI Builder's
+    /// Canvas -> Code entry point, §75.42; that feature was removed at the
+    /// user's request, but a whole-document replace is generally useful
+    /// and stays.) Deliberately reuses the exact same
     /// select-everything-then-`insert_at_cursor` path a real drag-select
     /// followed by typing would take, rather than a new low-level
     /// `Document` mutation -- so a canvas-driven edit gets the same
