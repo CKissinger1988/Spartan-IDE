@@ -7324,6 +7324,79 @@ first — it's the parity reference until each row there is actually reimplement
   mismatch -- was only exercised through the error path's own code, not against a real refusing
   adapter); the real Electron window remains unlaunchable in this session (same standing gap since
   §75.59).
+- **Real, working code — real typed visual style controls in the GUI Builder's Design screen, and
+  two real verification-harness bugs correctly told apart from product bugs (task #277)**:
+  continues the same "prioritize and continue with future features" push. A real scoping decision
+  came first, not assumed: the Debugging table's one remaining P2 (`DAP for C#/Kotlin/Java/Go/TS`)
+  was checked against what's actually installed here -- only `lldb-dap-18` exists, no
+  `netcoredbg`/`kotlin-debug-adapter`/`dlv`/js-debug/Java adapter -- so it isn't honestly
+  live-verifiable in this environment and was deliberately **not** built, the same call this
+  project already made for `codeAction`, `workspace/symbol`, and type hierarchy. The
+  best fully-verifiable P2 was the GUI Builder's own "Visual style editing (color/spacing/
+  typography controls) | Raw key/value form today." Before this pass, a `StyleChange` meant typing
+  a property name and a value into two bare text inputs. Now `DesignScreen.tsx` carries a curated
+  `STYLE_PROPERTIES` catalog (35 real entries across Color/Typography/Spacing/Layout/Border/
+  Effects, rendered as real `<optgroup>`s preserving the catalog's own deliberate order rather
+  than alphabetizing) and a `StyleValueControl` that renders the widget matching each property's
+  real value space. Three real design decisions, each named in the code's own doc comments rather
+  than left implicit: (1) the **color** case renders a native `<input type="color">` swatch
+  *alongside* -- never instead of -- a text field, because that element can only ever hold a plain
+  `#rrggbb`, so making it authoritative would silently destroy a real `var(--accent)`/
+  `transparent`/`rgba(...)` value; `toColorInputValue` returns `null` (not a silent fallback) when
+  the value genuinely isn't a hex, which is exactly what lets the swatch only claim to agree when
+  it really does. (2) the **length** case is a number + unit pair (`px`/`rem`/`em`/`%`/`vh`/`vw`
+  plus a genuinely distinct unitless option -- a raw `lineHeight` or a `0` is meaningful, so
+  "no unit" can't be modelled as "not chosen yet"); a value the pair can't express (`auto`,
+  `inherit`, a `var(--x)`) is detected by `parseLength` and kept visible and editable in a third
+  field rather than silently dropped. (3) picking a property **seeds the control from the selected
+  node's real current style entry** via `currentStyleValue`, so the form opens showing what's
+  actually in the source -- with a deliberate exception: an `expression` entry (`color: C.text`)
+  seeds nothing, since overwriting a real design-token reference with its resolved literal would
+  be a silent, lossy edit. A `Custom…` sentinel keeps the exact prior raw key/value form reachable,
+  so no uncurated property regressed; `styleDef` is *derived* from `propKey` rather than held as
+  separate state, so the two can never disagree. One real bug was avoided by design rather than
+  discovered: `selectedNode` had to be lifted above `selectStyleProperty`'s `useCallback`
+  dependency array, since a `const` read before its declaration is a real TDZ `ReferenceError` at
+  first render, not a hoisting no-op -- named in its own comment so a future edit doesn't move it
+  back. **Two real verification-harness bugs were found and correctly distinguished from product
+  bugs, which is most of what this pass's debugging actually was.** (a) The Design screen crashed
+  the whole React tree with `TypeError: c is not a function`. Rather than assume it was the new
+  code, the change was stashed and the crash **reproduced without it** -- then an unminified
+  `--sourcemap --minify false` build traced it to React's own `Mj(a, b2, c) { try { c(); } }`,
+  which is the effect-*cleanup* invocation: some effect had returned a non-function. The real
+  cause was my own shim's `onEvent: (cb) => listeners.push(cb)` -- a concise-body arrow returning
+  `Array.push`'s **number** -- while the real `preload.ts` contract is `(listener) => (() => void)`
+  and `Editor.tsx` legitimately does `return unsubscribe;`. Product correct, harness wrong. (b) With
+  a real `npm install`ed react in the fixture, the live canvas rendered a page-wide wall of raw JS
+  text; traced to my `runCli` using `execFile`'s **1 MB default `maxBuffer`**, which truncates a
+  real ~1.1 MB react bundle into an error whose text the error panel then rendered. Checked
+  against the product before concluding: `gui-builder-client.ts` already sets `maxBuffer: 32 *
+  1024 * 1024`, so again product correct, harness wrong. A third, smaller correction: an early
+  assertion read the fixture off **disk** after an apply, but `applyEdit` writes the real live
+  buffer through the `edit` IPC and disk only changes on save -- the script was corrected to save
+  through the real Editor screen first, which is the stronger check anyway. **Real, live,
+  end-to-end Playwright verification against the actual compiled `gui-builder` CLI** (bridged via
+  `page.exposeFunction`, the exact technique §75.90 established for this screen, since `design_*`
+  is handled by Electron's own main process and not `spartan-backend`), driving the real
+  `desktop/dist` served by a real `spartan-devserver`, against a real `Card.jsx` + real
+  `npm install`ed react/react-dom: the dropdown rendered 35 options in 6 groups; selecting
+  "Text color" seeded the real `#3366cc` into **both** the swatch and the text field; a real
+  swatch change propagated to the text field; "Font size" seeded the real `24` split correctly
+  into `24` + `px`; and all five control paths wrote real regenerated source, confirmed by reading
+  the real bytes off disk after a real Ctrl+S -- `color: "#ff8800"` (swatch), `fontSize: "32px"`
+  (number), `marginTop: "3rem"` (a unit-only change), `fontWeight: "bold"` (enum select), and
+  `textTransform: "uppercase"` (through Custom…). Screenshotted with the live canvas genuinely
+  rendering the real component beside the structural tree and the active color control.
+  `desktop/`'s own `tsc --noEmit`/`npm run build` clean; no Rust touched (`cargo fmt --all --
+  check` re-confirmed clean anyway). **What this does not confirm**: no equivalent in `web/` --
+  that shell has no Design screen at all (confirmed via grep before starting), the same real
+  platform scope the Leo panel already carries, so this is honestly `desktop/`-only rather than a
+  deferred parity item; the catalog is curated, not exhaustive CSS (by design, with Custom… as the
+  escape hatch); no drag-and-drop, no component-library browser, no responsive/breakpoint preview
+  (the remaining real GUI Builder P2/P3 rows, untouched); the live canvas still re-bundles from
+  disk, so it shows the pre-edit render until save -- the same already-documented §75.42
+  stale-until-save behavior, unchanged by this pass; the real Electron window remains unlaunchable
+  in this session (same standing gap since §75.59).
 
 ## Build & test
 

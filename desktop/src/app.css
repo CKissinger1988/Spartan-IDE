@@ -2040,6 +2040,44 @@
   font-size: 12px;
 }
 
+/* Real typed style controls (task #277). A control row lays a widget
+   pair (swatch+text, number+unit) on one line; the children carry no
+   margin of their own since the row owns the panel's 12px gutter. */
+.design-control-row {
+  display: flex;
+  gap: 6px;
+  margin: 6px 12px 0;
+  align-items: center;
+}
+
+.design-control-row .design-input {
+  margin: 0;
+  min-width: 0;
+}
+
+.design-control-grow {
+  flex: 1;
+}
+
+.design-control-num {
+  width: 72px;
+}
+
+.design-control-unit {
+  width: 76px;
+}
+
+.design-color-swatch {
+  width: 32px;
+  height: 28px;
+  padding: 2px;
+  flex: none;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
 .design-edit-panel .leo-btn {
   margin: 10px 12px 0;
   align-self: flex-start;
