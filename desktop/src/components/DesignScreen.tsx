@@ -467,6 +467,47 @@ export default function DesignScreen({
     }
   }, []);
 
+  /** Applies one already-built `CanvasEdit` and re-syncs -- the single
+   * real path every edit in this screen goes through (the Apply button,
+   * the component palette, and a canvas drag all end up here), so none of
+   * them can drift apart in how they touch the live buffer. */
+  const applyEditObject = useCallback(
+    async (edit: Record<string, unknown>) => {
+      if (!activeFile) return;
+      try {
+        const result = (await window.spartan.call("design_apply_edit", {
+          edit,
+          source: activeFile.content,
+        })) as { source: string };
+        const oldLength = [...activeFile.content].length;
+        await window.spartan.call("edit", {
+          doc_id: activeFile.docId,
+          start_char: 0,
+          end_char: oldLength,
+          text: result.source,
+        });
+        onContentChange(activeFile.path, result.source);
+        await refresh(activeFile.path);
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [activeFile, onContentChange, refresh]
+  );
+
+  /** Real drag-to-reparent (task #279), shared by the canvas drop relay
+   * and the "Move into" form. `gui-builder`'s own `Reparent` already
+   * refuses a root move, a self-move, and a move into a descendant with
+   * real descriptive errors -- those surface here as ordinary errors
+   * rather than being pre-checked twice in two places. */
+  const applyReparentEdit = useCallback(
+    async (nodeId: string, newParentId: string) => {
+      if (!nodeId || !newParentId || nodeId === newParentId) return;
+      await applyEditObject({ kind: "Reparent", nodeId, newParentId });
+    },
+    [applyEditObject]
+  );
+
   useEffect(() => {
     if (activeFile && isComponentFile(activeFile.path)) {
       refresh(activeFile.path);
@@ -480,11 +521,17 @@ export default function DesignScreen({
     const handler = (event: MessageEvent) => {
       if (event.data?.type === "spartan-canvas-click") {
         setSelectedId(event.data.nodeId);
+      } else if (event.data?.type === "spartan-canvas-drop") {
+        // Real drag-to-reparent from the live canvas (task #279). Routed
+        // through the exact same `Reparent` edit the "Move into" form
+        // already uses -- including its own real refusals (moving a root,
+        // or into a descendant), which surface here as a normal error.
+        void applyReparentEdit(event.data.nodeId, event.data.newParentId);
       }
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, []);
+  }, [applyReparentEdit]);
 
   // Real, per-kind readiness check -- each structural kind names a
   // different second operand (`reparentTargetId` vs. `insertTagName`)
@@ -556,25 +603,9 @@ export default function DesignScreen({
         edit.importFrom = component.importFrom;
         edit.importIsDefault = component.isDefault;
       }
-      try {
-        const result = (await window.spartan.call("design_apply_edit", {
-          edit,
-          source: activeFile.content,
-        })) as { source: string };
-        const oldLength = [...activeFile.content].length;
-        await window.spartan.call("edit", {
-          doc_id: activeFile.docId,
-          start_char: 0,
-          end_char: oldLength,
-          text: result.source,
-        });
-        onContentChange(activeFile.path, result.source);
-        await refresh(activeFile.path);
-      } catch (e) {
-        setError((e as Error).message);
-      }
+      await applyEditObject(edit);
     },
-    [activeFile, selectedId, onContentChange, refresh]
+    [activeFile, selectedId, applyEditObject]
   );
 
   const applyEdit = useCallback(async () => {
@@ -593,28 +624,12 @@ export default function DesignScreen({
       if (!insertTagName.trim()) return;
       edit = { kind: "ComponentInsert", parentId: selectedId, tagName: insertTagName.trim() };
     }
-    try {
-      const result = (await window.spartan.call("design_apply_edit", {
-        edit,
-        source: activeFile.content,
-      })) as { source: string };
-      const oldLength = [...activeFile.content].length;
-      await window.spartan.call("edit", {
-        doc_id: activeFile.docId,
-        start_char: 0,
-        end_char: oldLength,
-        text: result.source,
-      });
-      onContentChange(activeFile.path, result.source);
-      setPropKey("");
-      setPropValue("");
-      setReparentTargetId("");
-      setInsertTagName("");
-      await refresh(activeFile.path);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, [activeFile, selectedId, propKey, propValue, editKind, reparentTargetId, insertTagName, onContentChange, refresh]);
+    await applyEditObject(edit);
+    setPropKey("");
+    setPropValue("");
+    setReparentTargetId("");
+    setInsertTagName("");
+  }, [activeFile, selectedId, propKey, propValue, editKind, reparentTargetId, insertTagName, applyEditObject]);
 
   if (!activeFile || !isComponentFile(activeFile.path)) {
     return (

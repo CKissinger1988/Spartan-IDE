@@ -7464,6 +7464,57 @@ first — it's the parity reference until each row there is actually reimplement
   GUI Builder rows, untouched); insertion always appends a self-closing element with no props, the
   same v1 shape `ComponentInsert` has had since §75.90; the real Electron window remains
   unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — real drag-to-reparent on the GUI Builder's live visual canvas (task
+  #279)**: continues the same "prioritize and continue with future features" push, closing the
+  `Drag-and-drop on the visual canvas` P2 row. The `Reparent` edit itself has been real and tested
+  in `gui-builder` since §75.90, and the canvas already carried a real `data-spartan-id` +
+  `postMessage` relay from §75.53 -- what was missing was any way to *express* a reparent by
+  direct manipulation rather than picking a target from a dropdown. **A real, deliberate mechanism
+  choice, named rather than defaulted into**: the drag is pointer-based (`mousedown`/`mousemove`/
+  `mouseup` delegated on the iframe document) rather than HTML5 drag-and-drop, for two independent
+  real reasons -- the canvas elements are rendered by the *user's own* React component and
+  re-created on every re-render, so a `draggable="true"` attribute would have to be continually
+  re-applied (the same reason §75.53's click relay is delegated on the document rather than bound
+  per-element), and HTML5 DnD additionally cannot be driven by ordinary synthetic mouse input,
+  which would have made the whole feature unverifiable here. A real **5px movement threshold**
+  distinguishes a drag from a click -- deliberately a pixel distance rather than §75.27's own
+  "did the ids differ" rule, because on a freeform canvas a plain click routinely lands and
+  releases on the very same element, so id comparison alone would classify every click as a
+  zero-distance drag. The prospective drop target gets a live outline while dragging (its previous
+  inline outline saved and restored, never clobbered), and the click that a completed drag also
+  generates is swallowed via a `suppressNextClick` flag so a reparent never doubles as a stray
+  selection change. **A real, incidental consolidation** rather than a fourth near-duplicate: all
+  three edit paths in the Design screen (the Apply button, the component palette from task #278,
+  and now the canvas drag) were routed onto one shared `applyEditObject`, so none of them can
+  drift apart in how they call `design_apply_edit`, feed the result through the real `edit` IPC,
+  and re-sync -- the drag itself adds no new edit plumbing at all, only a new way to trigger the
+  existing `Reparent`. `gui-builder`'s own refusals (moving a root, moving into a descendant, a
+  self-move) are deliberately *not* re-checked in the UI: they already produce real descriptive
+  errors, which surface here as ordinary errors rather than being validated twice in two places
+  that could disagree. 61 `gui-builder` tests unchanged and still green (the injected entry script
+  is generated browser code with no unit-test surface of its own, verified live instead, matching
+  the same precedent §75.53's own click relay set); `desktop/`'s `tsc --noEmit`/`npm run build`
+  clean; no Rust touched. **Real, live, end-to-end Playwright verification against the actual
+  compiled `gui-builder`** (bridged via `page.exposeFunction`, §75.90's technique, `maxBuffer`
+  matched to the real client's 32 MB) driving the real `desktop/dist` served by a real
+  `spartan-devserver`, against a real fixture with generously-padded `<h1>`/`<p>` siblings and real
+  `npm install`ed react -- with the drag driven by genuine `page.mouse.down`/`move`/`up` through
+  the real sandboxed iframe, not a synthetic event: **four** distinct behaviors were each
+  confirmed. A plain click (mouse down then up, no movement) correctly did *not* reparent; that
+  same click *did* still select (`<p> #n2` in the edit panel), confirming `suppressNextClick`
+  swallows only a drag's own click and never an ordinary one -- the real regression risk this
+  change introduced; a real multi-step drag of `<p>` onto `<h1>` produced a real reparent, with
+  `<p>` genuinely nested inside `<h1>` in the real bytes on disk after a real Ctrl+S; and the
+  selection after that drag was still `<p> #n2`, not the drop target, confirming no stray
+  selection. Zero page errors throughout. **What this does not confirm**: the structural tree and
+  the canvas both still show the pre-edit state until save -- confirmed live and unchanged by this
+  pass, since `refresh()` re-parses from disk while the edit lands in the live buffer, exactly the
+  already-documented §75.42 stale-until-save behavior (a real, named limitation, not a regression
+  introduced here); no drop-position control (a drag always appends into the target, never
+  reorders among its siblings -- `Reparent`'s own `index` param exists and is tested but has no UI
+  yet); no drag handle or drag preview beyond the target outline; no equivalent in `web/` (no
+  Design screen there at all, the same real platform scope every recent Design pass carries); the
+  real Electron window remains unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 

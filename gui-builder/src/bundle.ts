@@ -71,6 +71,15 @@ try {
   const root = createRoot(rootEl);
   root.render(React.createElement(Component));
 
+  // Shared drag state, declared before the click relay below because
+  // that handler reads \`suppressNextClick\`.
+  var dragFromId = null;
+  var dragStartX = 0;
+  var dragStartY = 0;
+  var dragging = false;
+  var suppressNextClick = false;
+  var hoverEl = null;
+
   // Real §75.53 click-to-select relay: this iframe is sandboxed
   // ("allow-scripts" only, no "allow-same-origin"), so it has an opaque
   // origin and can't reach the parent page's own JS directly -- postMessage
@@ -78,6 +87,12 @@ try {
   // the document root rather than per-element, so it keeps working after
   // React re-renders replace the underlying DOM nodes.
   document.addEventListener("click", function (event) {
+    // A drag that ended on this element also fires a click; swallow it
+    // so a reparent never doubles as a stray selection change.
+    if (suppressNextClick) {
+      suppressNextClick = false;
+      return;
+    }
     const target = event.target && event.target.closest
       ? event.target.closest("[data-spartan-id]")
       : null;
@@ -87,6 +102,77 @@ try {
         "*"
       );
     }
+  });
+
+  // Real drag-to-reparent relay (task #279). Deliberately pointer-based
+  // rather than HTML5 drag-and-drop: the elements here are rendered by
+  // the user's own React component and re-created on every re-render, so
+  // a \`draggable="true"\` attribute would have to be continually
+  // re-applied, and HTML5 DnD additionally can't be driven by ordinary
+  // synthetic mouse input. Plain mousedown/mousemove/mouseup delegated
+  // on the document survives every re-render for the same reason the
+  // click relay above does.
+  // A real pixel threshold, not "did the ids differ" -- on a freeform
+  // canvas a plain click routinely lands and releases on the same
+  // element, so only genuine movement should count as a drag.
+  var DRAG_THRESHOLD_PX = 5;
+
+  function clearHover() {
+    if (hoverEl) {
+      hoverEl.style.outline = hoverEl.__spartanPrevOutline || "";
+      hoverEl = null;
+    }
+  }
+
+  document.addEventListener("mousedown", function (event) {
+    const el = event.target && event.target.closest
+      ? event.target.closest("[data-spartan-id]")
+      : null;
+    if (!el) return;
+    dragFromId = el.getAttribute("data-spartan-id");
+    dragStartX = event.clientX;
+    dragStartY = event.clientY;
+    dragging = false;
+  });
+
+  document.addEventListener("mousemove", function (event) {
+    if (dragFromId === null) return;
+    if (!dragging) {
+      const dx = event.clientX - dragStartX;
+      const dy = event.clientY - dragStartY;
+      if (Math.sqrt(dx * dx + dy * dy) < DRAG_THRESHOLD_PX) return;
+      dragging = true;
+    }
+    const over = event.target && event.target.closest
+      ? event.target.closest("[data-spartan-id]")
+      : null;
+    if (over === hoverEl) return;
+    clearHover();
+    if (over && over.getAttribute("data-spartan-id") !== dragFromId) {
+      hoverEl = over;
+      hoverEl.__spartanPrevOutline = hoverEl.style.outline;
+      hoverEl.style.outline = "2px solid #2E7DFF";
+    }
+  });
+
+  document.addEventListener("mouseup", function (event) {
+    const from = dragFromId;
+    const wasDragging = dragging;
+    dragFromId = null;
+    dragging = false;
+    clearHover();
+    if (!wasDragging || from === null) return;
+    const over = event.target && event.target.closest
+      ? event.target.closest("[data-spartan-id]")
+      : null;
+    if (!over) return;
+    const to = over.getAttribute("data-spartan-id");
+    if (to === from) return;
+    suppressNextClick = true;
+    window.parent.postMessage(
+      { type: "spartan-canvas-drop", nodeId: from, newParentId: to },
+      "*"
+    );
   });
 } catch (e) {
   rootEl.innerHTML =
