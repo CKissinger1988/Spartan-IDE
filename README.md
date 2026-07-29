@@ -113,7 +113,8 @@ crates/spartan-git/         Real git integration (via libgit2) — status, stage
                              Leo's own checkpoint/rollback mechanism
 crates/spartan-settings/    Real persisted settings (~/.spartan/settings.json)
 crates/spartan-security/    Real secrets detection/redaction (credential-shaped regexes)
-crates/spartan-crash/       Real local-first crash reporter (panic hook, redacted, no upload)
+crates/spartan-crash/       Real local-first crash reporter (panic hook, redacted, real
+                             user-triggered upload — never automatic)
 crates/spartan-updater/     Real "check for updates" against this repo's own GitHub API
 crates/spartan-plugin-host/ Real WASM Component Model plugin host (wasmtime), capability-gated
 crates/spartan-devcontainer/ Real OCI/Docker dev containers (containers.dev spec) via bollard
