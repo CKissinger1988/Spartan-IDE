@@ -6,6 +6,15 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel a superseded run when a new commit lands on the same ref. Without
+# this, pushing three times in a row leaves three full runs competing for
+# runners -- and, worse, a stale run's failure webhook is indistinguishable
+# at a glance from the current head's, which genuinely caused a
+# misdiagnosis during this workflow's own debugging.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -13,8 +22,35 @@ jobs:
   rust:
     name: Rust workspace (fmt, clippy, test)
     runs-on: ubuntu-latest
+    # An explicit timeout, deliberately generous. Two consecutive runs of
+    # this job died ~50 and ~52 minutes into `cargo test` with the step
+    # still marked in_progress, the post-steps never run, and the logs
+    # unretrievable (HTTP 404) -- i.e. the runner itself went away rather
+    # than a test failing. With no timeout configured, the default is 6
+    # hours, so nothing here was terminating it. A real timeout ends the
+    # step from the runner's side, which *preserves the log*, turning the
+    # next occurrence into something diagnosable instead of a silent death.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+
+      - name: Free up runner disk space
+        # `cargo test --workspace --release` codegens ~80 test binaries,
+        # including llama-cpp-sys-2's vendored llama.cpp C++, wasmtime, and
+        # wry -- a genuinely large release target/ directory on a runner
+        # that ships with only ~14 GB free. Disk exhaustion is the leading
+        # hypothesis for the runner deaths described above, so this removes
+        # preinstalled toolchains this workspace never uses. The `df -h`
+        # lines are the point as much as the deletion is: they make the
+        # next run *measure* whether disk is actually the constraint,
+        # rather than leaving it a hypothesis.
+        run: |
+          echo "=== disk before cleanup ==="
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          echo "=== disk after cleanup ==="
+          df -h /
 
       - name: Install system dependencies
         # libgtk-3-dev / libwebkit2gtk-4.1-dev are real, environment-specific
@@ -50,6 +86,18 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy --workspace --release --all-targets
+
+      - name: cargo test --no-run (build test binaries)
+        # Split out from the run step on purpose. When this job died, the
+        # single combined `cargo test` step gave no way to tell whether the
+        # ~50 minutes went into release codegen or into actually executing
+        # tests. Separating them attributes the cost in the log.
+        run: cargo test --workspace --release --no-run
+
+      - name: Report disk usage after building test binaries
+        run: |
+          df -h /
+          du -sh target 2>/dev/null || true
 
       - name: cargo test
         # --test-threads=1: this workspace's own real subprocess-spawning
