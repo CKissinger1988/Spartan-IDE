@@ -9495,7 +9495,7 @@ time.sleep(10)
         let guard = state.lock().unwrap();
         assert!(
             !guard.download_cancellations.contains_key(&key),
-            "a real finished download must remove its own cancellation flag"
+            "a real cancelled download must remove its own cancellation flag"
         );
     }
 
