@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { highlightSource, languageForPath } from "../syntax";
+import { ensureGrammar, grammarReady } from "../treeSitter";
 import {
   adjustSnippetStops,
   expandSnippet,
@@ -1137,9 +1138,31 @@ export default function BackendEditor({
     setLineCount(file.content.split("\n").length);
   }, [file.content]);
 
+  // Real tree-sitter grammars load asynchronously (a real WASM fetch), so
+  // the first paint of a file uses `highlight.js` and this counter forces
+  // exactly one re-highlight once the grammar is genuinely ready. Bumping a
+  // counter rather than storing the grammar keeps `highlightSource`
+  // synchronous -- the render path is unchanged.
+  const [grammarGeneration, setGrammarGeneration] = useState(0);
+  useEffect(() => {
+    const language = languageForPath(file.path);
+    if (!language || grammarReady(language)) return;
+    let cancelled = false;
+    void ensureGrammar(language).then((entry) => {
+      if (!cancelled && entry) setGrammarGeneration((n) => n + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [file.path]);
+
   const highlightedHtml = useMemo(
     () => highlightSource(file.content, file.path),
-    [file.content, file.path]
+    // `grammarGeneration` is deliberately a dependency with no direct use in
+    // the body: it is the signal that a real grammar just became available,
+    // so the memo must recompute even though content/path are unchanged.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [file.content, file.path, grammarGeneration]
   );
 
   const diagnosticsByLine = useMemo(() => {

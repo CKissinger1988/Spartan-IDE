@@ -7610,13 +7610,25 @@ first — it's the parity reference until each row there is actually reimplement
   (`interface`/`Foo`/`string`), JavaScript, Java, Kotlin, and C#. Zero page errors. The grammars
   are emitted as 9 separate hashed build assets (~186 KB runtime + per-language, Kotlin/C# ~4 MB
   each) and fetched lazily only when a file of that language is opened, not inlined into the JS
-  bundle. `tsc --noEmit` and `npm run build`/`build:electron` clean. **What this does not
-  confirm**: `web/`'s two editors are **not** ported and still use `highlight.js` -- a real, named,
-  open follow-up, deliberately not attempted in this pass; highlighting still re-parses the whole
+  bundle. `tsc --noEmit` and `npm run build`/`build:electron` clean.
+  **`web/` was then ported in the same pass**, closing the follow-up this entry originally named
+  as open: `web/src/treeSitter.ts` is a verbatim copy (only the header differs), matching the
+  per-project-copy convention this repo already uses for `applyTheme.ts`/`syntax.ts`, wired into
+  both of `web/`'s editors (`Editor.tsx`, `BackendEditor.tsx`). Its live verification is a
+  slightly stronger check than `desktop/`'s and needed no shim at all, since `web/` runs directly
+  in a browser: for each of the 8 languages it captures `highlightSource` output *before*
+  `ensureGrammar`, awaits the real grammar load, captures it *again*, and asserts the two differ
+  -- a direct before/after on identical input, proving highlight.js output was genuinely replaced
+  rather than merely that the final markup looked plausible. All 8 reported `grammarReady=true`
+  and `changed=true`, zero page errors, with the grammars emitted as separate lazily-fetched
+  assets alongside `web/`'s own existing `spartan_buffer_wasm` asset. **What this does not
+  confirm**: highlighting still re-parses the whole
   document per keystroke (same as the `highlight.js` pass it replaces -- incremental re-parse,
   tree-sitter's real strength, remains a separate tracked backlog item and this pass is about
   correctness parity, not throughput); no injections/locals queries; no live Electron window
-  launch (same standing gap since §75.59).
+  launch (same standing gap since §75.59); `web/`'s pure client-side editor could not be driven
+  through its real File System Access API entry point headlessly, so its verification exercises
+  the real highlight pipeline directly rather than through a file-open click.
 
 ## Build & test
 
