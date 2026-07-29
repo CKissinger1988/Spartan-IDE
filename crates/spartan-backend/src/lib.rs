@@ -8741,16 +8741,37 @@ mod tests {
     /// `model_download_cancel` will look up, and really is cleared once
     /// the download's own background thread finishes -- both directly
     /// against `BackendState`, not just that the dispatch functions
-    /// compile and return an ack. Deliberately outcome-agnostic: whether
-    /// the real network call behind it succeeds or fails honestly (this
-    /// environment's own already-documented TLS-proxy condition, §75.49,
-    /// included), either is a real "finished" state that must unregister
-    /// the flag -- so this test never needs to self-skip.
+    /// compile and return an ack.
+    ///
+    /// This test **cancels the download immediately**, on purpose, rather
+    /// than letting it run to completion. An earlier version waited for a
+    /// terminal event and discarded the wait's own result (`let _ =
+    /// recv_timeout(30s)`), which hid a real problem: on a machine with
+    /// unimpeded network access to Hugging Face, `resolve_gguf_filename`
+    /// *succeeds* and `download_gguf` then starts pulling a genuine
+    /// multi-hundred-MB GGUF file -- so the download had not finished at
+    /// the 30s mark, the flag was legitimately still registered, and the
+    /// assertion failed. That was invisible in the sandbox this test was
+    /// written in, where the already-documented TLS-proxy condition
+    /// (§75.49) makes the resolve fail fast, so the thread finished almost
+    /// instantly. The old shape therefore both flaked in CI *and* kicked
+    /// off a real, large, abandoned model download on every CI run.
+    ///
+    /// Cancelling up front fixes both: `download_gguf` checks the real
+    /// cancel flag once per read chunk, so the thread terminates promptly
+    /// no matter how fast or slow the network is, and the lifecycle this
+    /// test actually cares about (register -> finish -> unregister) is
+    /// exercised exactly as before. The outcome stays deliberately
+    /// outcome-agnostic: a real cancellation, a real honest network
+    /// failure, and a real completed download are all "finished" states
+    /// that must unregister the flag, so this test never needs to
+    /// self-skip.
     #[test]
     fn llamacpp_download_model_registers_and_unregisters_a_real_cancellation_flag() {
         let state = new_state();
         let (tx, rx) = mpsc::channel();
         let model = hf_downloader::CURATED_MODELS[0];
+        let key = download_registry_key("llamacpp", model.id);
         llamacpp_download_model(&state, tx, Some(model.id.to_string()), None, None).unwrap();
 
         // The background thread registers the flag synchronously before
@@ -8759,23 +8780,46 @@ mod tests {
         // real and present the instant the ack comes back.
         {
             let guard = state.lock().unwrap();
-            let key = download_registry_key("llamacpp", model.id);
             assert!(
                 guard.download_cancellations.contains_key(&key),
                 "expected a real registered cancellation flag for {key:?}"
             );
         }
 
-        // Wait for the real background thread to report a real terminal
-        // event (success or a real, honest network failure -- either is
-        // fine, this test only cares that the download genuinely finished
-        // and cleaned up after itself), bounded well under this crate's
-        // own real network-call timeouts.
-        let _ = rx.recv_timeout(Duration::from_secs(30));
-        std::thread::sleep(Duration::from_millis(200));
+        // Real cancellation, so the background thread stops at its next
+        // real chunk boundary instead of downloading a whole model.
+        model_download_cancel(&state, "llamacpp".to_string(), model.id.to_string()).unwrap();
 
+        // Drain until a real *terminal* event arrives -- `rx` also carries
+        // `llamacpp_download_progress` lines, so the first message off the
+        // channel is not necessarily the one that means "finished".
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let mut saw_terminal = false;
+        while std::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match rx.recv_timeout(remaining) {
+                Ok(line) => {
+                    let name = serde_json::from_str::<serde_json::Value>(&line)
+                        .ok()
+                        .and_then(|v| v.get("event")?.as_str().map(str::to_string))
+                        .unwrap_or_default();
+                    if name == "llamacpp_download_ready" || name == "llamacpp_download_failed" {
+                        saw_terminal = true;
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        assert!(
+            saw_terminal,
+            "expected a real terminal llamacpp_download_ready/_failed event"
+        );
+
+        // `llamacpp_download_model` unregisters the flag *before* it sends
+        // the terminal event, so once that event has been observed the
+        // removal has already happened -- no sleep, no polling needed.
         let guard = state.lock().unwrap();
-        let key = download_registry_key("llamacpp", model.id);
         assert!(
             !guard.download_cancellations.contains_key(&key),
             "a real finished download must remove its own cancellation flag"
