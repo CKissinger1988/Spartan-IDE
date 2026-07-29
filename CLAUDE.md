@@ -7564,6 +7564,60 @@ first — it's the parity reference until each row there is actually reimplement
   workflow YAML files re-validated with `yaml.safe_load`. Everything removed is recoverable from
   git history (the commits immediately preceding this one).
 
+- **Real, working code — real tree-sitter syntax highlighting in the `desktop/` Electron shell,
+  closing `docs/FUTURE_FEATURES.md`'s own recommended-next-10 item #7 (task #281)**: the two items
+  ranked above it on that list are both architecturally blocked by the `<textarea>`-backed editor
+  (code folding, multi-cursor), and the one below it (LSP code actions) is blocked by this
+  environment only having pyright, which returns empty code-actions -- so this was the top
+  genuinely-unblocked item. New `desktop/src/treeSitter.ts` runs the real tree-sitter engine
+  in-process via `web-tree-sitter`, for all 8 languages with a bundled grammar (Rust, Python,
+  JavaScript, TypeScript, Go, Java, Kotlin, C#). `syntax.ts` became a real three-tier chain:
+  tree-sitter once a grammar is loaded, `highlight.js` while it loads and for the languages with
+  no bundled grammar (json/css/xml/markdown/bash), plain escaped text if both fail -- `highlight.js`
+  is deliberately **kept, not removed**, since it still covers real cases. Grammar loading is
+  async but `highlightSource` stays synchronous: `Editor.tsx` kicks off `ensureGrammar` in an
+  effect and bumps a counter to force exactly one re-highlight, so the render path is unchanged.
+  Capture names map onto the `hljs-*` CSS classes `app.css` already defines, so tree-sitter
+  highlighting inherits all seven existing themes for free rather than needing a parallel palette.
+  Built directly on `spikes/tree-sitter-wasm-spike` (§75.86) and its load-bearing version finding:
+  `tree-sitter-wasms`' prebuilt grammars load **only** under `web-tree-sitter@0.20.8`; both are
+  pinned for that reason.
+  **Two real bugs found, both by looking at real output rather than by inspection.** (1) The
+  queries are hand-authored against this grammar generation (upstream `.scm` files reference node
+  types these grammars lack). A first draft probed a *sample* of tokens and then expanded the
+  lists by hand -- which shipped `"crate"` in the Rust query and made the entire Rust grammar fail
+  to load at runtime (`Bad node name 'crate'`), silently falling back to highlight.js. Fixed by
+  probing **every** token individually against the real compiled grammar and then compiling each
+  complete query as a whole, with the generated lists spliced in rather than hand-transcribed. The
+  rejected tokens are recorded in the module header so nobody re-adds them: Rust `crate`/`mut`/
+  `self`/`super` (though `(self)` as a *node* is fine), Java `this`/`super`/`void`, C# `void`, and
+  Kotlin's `(null_literal)` node -- all real source text that simply isn't reachable as a query
+  token in the compiled grammar, the same class of finding §75.44 hit with Kotlin's `break`/
+  `continue`/`reified`. (2) A real **use-after-free across the WASM boundary**: the first version
+  called `tree.delete()` immediately after `query.captures()` and then read `node.startIndex`/
+  `endIndex` in the render loop. A web-tree-sitter `Node` is a handle into the tree's own WASM
+  heap, so those reads returned garbage instead of throwing -- rendering as a single span
+  swallowing most of the file. It did not reproduce in Node (nothing had freed the tree there) and
+  was caught only by dumping the real emitted HTML from a real browser. Fixed by extracting plain
+  `{name,start,end}` data *before* freeing, with the ordering documented as load-bearing.
+  **Real, live, end-to-end verification** against the actual built `dist/` served by a real `vite
+  preview`, driven by real Playwright/Chromium (mocking only the Electron `contextBridge` hop, the
+  established `desktop/` technique): all 8 grammar wasm assets fetched `200`, and all 8 languages
+  rendered genuine tree-sitter output -- confirmed by a real discriminator rather than by eye,
+  since `highlight.js` emits `hljs-title function_` and marks bare identifiers `hljs-variable`
+  while this pass emits a bare `hljs-title` and leaves them plain. Raw DOM confirmed for Rust
+  (`fn`/`main`/`let`/`42`/`// hi`), Python, Go (including `int` as a real `hljs-type`), TypeScript
+  (`interface`/`Foo`/`string`), JavaScript, Java, Kotlin, and C#. Zero page errors. The grammars
+  are emitted as 9 separate hashed build assets (~186 KB runtime + per-language, Kotlin/C# ~4 MB
+  each) and fetched lazily only when a file of that language is opened, not inlined into the JS
+  bundle. `tsc --noEmit` and `npm run build`/`build:electron` clean. **What this does not
+  confirm**: `web/`'s two editors are **not** ported and still use `highlight.js` -- a real, named,
+  open follow-up, deliberately not attempted in this pass; highlighting still re-parses the whole
+  document per keystroke (same as the `highlight.js` pass it replaces -- incremental re-parse,
+  tree-sitter's real strength, remains a separate tracked backlog item and this pass is about
+  correctness parity, not throughput); no injections/locals queries; no live Electron window
+  launch (same standing gap since §75.59).
+
 ## Build & test
 
 ```bash

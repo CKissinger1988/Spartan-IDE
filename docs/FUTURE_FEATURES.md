@@ -41,9 +41,12 @@ Priority key:
 6. ~~**Snippets / tab-completion expansion** (P1)~~ — ✅ **Shipped** (curated per-language
    snippets, prefix+Tab expansion, tab-stop navigation, in all three editing surfaces). See
    CLAUDE.md's own status entry.
-7. **tree-sitter syntax highlighting in the Electron shells** (P2) — replace the current
-   `highlight.js` lexical pass with the real tree-sitter engine already used in the wgpu shell
-   (via `web-tree-sitter`), for correctness parity.
+7. ~~**tree-sitter syntax highlighting in the Electron shells** (P2)~~ — ✅ **Shipped in
+   `desktop/`** (`desktop/src/treeSitter.ts`): real `web-tree-sitter` in-process parsing for all
+   8 languages with a bundled grammar (Rust/Python/JS/TS/Go/Java/Kotlin/C#), with `highlight.js`
+   kept as a genuine fallback for json/css/xml/markdown/bash and for the window before a grammar
+   finishes loading. Live-verified in a real browser across all 8. **`web/` is not yet ported** —
+   that remains the open follow-up. See CLAUDE.md's own status entry.
 8. ~~**Conditional breakpoints + logpoints** (P2)~~ — ✅ **done**. `spartan_dap::Breakpoint`
    carries `condition`/`log_message`, threaded through `dap_launch`'s `breakpoints:
    [{line, condition?, logMessage?}]` param (with a backward-compat `break_lines` fallback);
@@ -68,7 +71,7 @@ Priority key:
 | LSP inlay hints | P2 | A real, hand-rolled capability probe against `pyright-langserver`'s own `initialize` response found `inlayHintProvider: null` — not declared at all in this environment, confirmed before any code was written (task #182's own investigation). |
 | LSP semantic tokens (semantic highlighting) | P2 | The same real probe found `semanticTokensProvider: null` — not declared at all; Electron shells use lexical `highlight.js` instead. |
 | `workspace/symbol` (Go to Symbol in Workspace) | P2 | A real, live probe confirmed pyright *declares* `workspaceSymbolProvider: true`, but a real `workspace/symbol` request (both a specific query and an empty one, after the real ~90s indexing wait) returned `[]` every time in this dev environment — declared but not functionally exercisable here, the same class of finding as `codeAction`. |
-| tree-sitter highlighting in Electron shells | P2 | Reuse the wgpu shell's tree-sitter engine via `web-tree-sitter` (spike already proven, §75.86). |
+| tree-sitter highlighting in `web/` | P2 | Shipped in `desktop/` (see the recommended-next list above); `web/`'s two editors still use `highlight.js`. |
 | Incremental/windowed re-highlight | P2 | Current highlight re-tokenizes the whole document per keystroke; unmeasured cost at very large files. |
 | ~~LSP call hierarchy (incoming + outgoing)~~ / type hierarchy | ✅ call hierarchy done; type hierarchy P2 | Incoming (Shift+Alt+H) and outgoing (Shift+Alt+O) calls both shipped in both shells (`prepareCallHierarchy` + `incomingCalls`/`outgoingCalls`, live-verified against pyright). Type hierarchy remains a P2 follow-up. |
 | ~~Go to Type Definition~~ | ✅ done | Shipped — Ctrl+Shift+Click in both shells requests a real `textDocument/typeDefinition` (confirmed live and unlike `workspace/symbol`/semantic tokens/inlay hints above, this capability genuinely works here — a real query against `x: int = 1` returned a real location inside pyright's own bundled `typeshed-fallback/stdlib/builtins.pyi`). Reuses the exact same `Location \| Location[] \| LocationLink[] \| null` normalization and cross-file jump machinery go-to-definition already established. Live-verified end-to-end in both `desktop/` and `web/`, screenshotted landing exactly on `class int:`. |

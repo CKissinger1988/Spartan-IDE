@@ -1,16 +1,18 @@
-// Real client-side syntax highlighting (task from the §75.62 audit's own
-// prioritized backlog: "Editor.tsx is a plain unstyled textarea"). A
-// deliberate, named, pragmatic v1 choice, not an oversight: this uses
-// `highlight.js` (real, MIT-licensed, well-established) rather than
-// reusing this workspace's own real tree-sitter engine
-// (`spartan-languages`/`highlight.rs` in the original wgpu shell) --
-// wiring tree-sitter here would mean either a round trip through
-// `spartan-backend` per keystroke or a real `web-tree-sitter` WASM
-// grammar build for each of the 7 Tier 1 languages, both real,
-// substantial, separate pieces of work. Named honestly as real,
-// better-fidelity future work, not attempted this pass under this
-// timeline.
+// Real client-side syntax highlighting (originally from the §75.62 audit's
+// own prioritized backlog: "Editor.tsx is a plain unstyled textarea").
+//
+// This started as a deliberate, named `highlight.js`-only v1, with real
+// tree-sitter parity called out as future work. That work is now done:
+// `treeSitter.ts` runs the real tree-sitter engine in-process via
+// `web-tree-sitter`, and this module prefers it whenever a grammar is
+// loaded, keeping `highlight.js` as a genuine fallback rather than
+// removing it -- it still covers the languages with no bundled grammar
+// (json/css/xml/markdown/bash) and the window before a grammar finishes
+// loading. See `highlightSource` below for the exact tier order, and
+// `treeSitter.ts`'s header for the real version-pin and query-authoring
+// constraints that shape it.
 
+import { grammarReady, highlightWithTreeSitter } from "./treeSitter";
 import hljs from "highlight.js/lib/core";
 import rust from "highlight.js/lib/languages/rust";
 import typescript from "highlight.js/lib/languages/typescript";
@@ -84,13 +86,29 @@ function escapeHtml(text: string): string {
     .replace(/>/g, "&gt;");
 }
 
-/** Real, defensive highlighting -- a real parse error in `highlight.js`
- * itself (or an unrecognized language) degrades to plain escaped text,
- * never a crash or a blank editor, matching this whole codebase's own
- * "name the gap, don't fail the feature" discipline. */
+/** Real, defensive highlighting, in three tiers.
+ *
+ * 1. Real tree-sitter (`treeSitter.ts`), once that language's grammar has
+ *    finished loading -- a real parse, not a lexical guess, matching the
+ *    wgpu reference shell's own engine. This is the roadmap item this
+ *    module's original header comment named as future work.
+ * 2. `highlight.js`, used while a grammar is still loading, for languages
+ *    with no tree-sitter grammar bundled (json/css/xml/markdown/bash), and
+ *    if tree-sitter fails for any reason at all.
+ * 3. Plain escaped text if even that throws.
+ *
+ * Grammar loading is asynchronous and deliberately kept off this path:
+ * this function stays synchronous so the render path is unchanged. The
+ * caller (`Editor.tsx`) kicks off `ensureGrammar` and re-renders once it
+ * resolves, so the first paint is highlight.js and every subsequent one is
+ * tree-sitter. */
 export function highlightSource(source: string, path: string): string {
   const language = languageForPath(path);
   if (!language) return escapeHtml(source);
+  if (grammarReady(language)) {
+    const viaTreeSitter = highlightWithTreeSitter(source, language);
+    if (viaTreeSitter !== null) return viaTreeSitter;
+  }
   try {
     return hljs.highlight(source, { language, ignoreIllegals: true }).value;
   } catch {
