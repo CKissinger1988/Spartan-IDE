@@ -140,27 +140,30 @@ jobs:
       - name: cargo test -- foundation crates (buffer/languages/security/crash/settings/updater/model/xtask, fast spikes)
         timeout-minutes: 15
         run: |
-          cargo test --release -- --test-threads=1 \
+          cargo test --release \
             -p spartan-buffer -p spartan-buffer-wasm -p spartan-languages \
             -p spartan-security -p spartan-crash -p spartan-settings \
             -p spartan-updater -p spartan-model -p xtask \
-            -p rope-spike -p fallback-parser-spike -p wasm-buffer-spike
+            -p rope-spike -p fallback-parser-spike -p wasm-buffer-spike \
+            -- --test-threads=1
 
       - name: cargo test -- git + leo
         timeout-minutes: 15
-        run: cargo test --release -- --test-threads=1 -p spartan-git -p spartan-leo
+        run: cargo test --release -p spartan-git -p spartan-leo -- --test-threads=1
 
       - name: cargo test -- lsp + dap clients (real subprocess-spawning, self-skip if tools absent)
         timeout-minutes: 20
         run: |
-          cargo test --release -- --test-threads=1 \
-            -p spartan-lsp -p spartan-dap -p lsp-spike -p dap-spike
+          cargo test --release \
+            -p spartan-lsp -p spartan-dap -p lsp-spike -p dap-spike \
+            -- --test-threads=1
 
       - name: cargo test -- devcontainer + android + plugin-host (real Docker/Gradle/cargo-component)
         timeout-minutes: 20
         run: |
-          cargo test --release -- --test-threads=1 \
-            -p spartan-devcontainer -p spartan-android -p spartan-plugin-host
+          cargo test --release \
+            -p spartan-devcontainer -p spartan-android -p spartan-plugin-host \
+            -- --test-threads=1
 
       - name: cargo test -- spartan-backend (largest single crate, most integration tests)
         timeout-minutes: 25
@@ -169,8 +172,9 @@ jobs:
       - name: cargo test -- editor-core + remaining GPU/display spikes + devserver
         timeout-minutes: 15
         run: |
-          cargo test --release -- --test-threads=1 \
-            -p spartan-editor-core -p render-spike -p ui-shell-spike -p spartan-devserver
+          cargo test --release \
+            -p spartan-editor-core -p render-spike -p ui-shell-spike -p spartan-devserver \
+            -- --test-threads=1
 
       - name: Report memory usage after all test groups
         if: always()
