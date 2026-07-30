@@ -7,6 +7,7 @@ import {
   findSnippet,
   type SnippetSession,
 } from "../snippets";
+import { computeBracketPairMarks } from "../bracketPairs";
 import type { BackendClient } from "../backendClient";
 
 export interface BackendOpenFile {
@@ -1164,6 +1165,13 @@ export default function BackendEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [file.content, file.path, grammarGeneration]
   );
+
+  /** Real bracket-pair colorization marks, recomputed whenever the real
+   * document content changes -- a plain, pure `useMemo` over `file.content`
+   * (not `prevContentRef`), matching `highlightedHtml`'s own dependency
+   * exactly, since this is equally a pure function of the current content
+   * with no cursor/selection state involved. */
+  const bracketPairMarks = useMemo(() => computeBracketPairMarks(file.content), [file.content]);
 
   const diagnosticsByLine = useMemo(() => {
     const map = new Map<number, LspDiagnostic[]>();
@@ -2651,6 +2659,18 @@ export default function BackendEditor({
           aria-hidden="true"
           style={textStyle}
         >
+          {bracketPairMarks.map((m, i) => (
+            <div
+              key={`bp:${m.line}:${m.character}:${i}`}
+              className={`editor-bracket-pair-mark${m.colorIndex === -1 ? " editor-bracket-pair-mark-unmatched" : ` editor-bracket-pair-mark-${m.colorIndex}`}`}
+              style={{
+                top: m.line * lineHeightPx,
+                left: m.character * charWidth,
+                width: charWidth,
+                height: lineHeightPx,
+              }}
+            />
+          ))}
           {documentHighlights.map((h, i) => (
             <div
               key={`${h.startLine}:${h.startCharacter}:${h.endCharacter}:${i}`}

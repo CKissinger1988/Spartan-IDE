@@ -7,6 +7,7 @@ import {
   findSnippet,
   type SnippetSession,
 } from "../snippets";
+import { computeBracketPairMarks } from "../bracketPairs";
 import { writeFileText } from "../fsAccess";
 import type { WasmDocument } from "../buffer";
 
@@ -583,6 +584,13 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
     [file.content, file.path, grammarGeneration]
   );
 
+  /** Real bracket-pair colorization marks, recomputed whenever the real
+   * document content changes -- a plain, pure `useMemo` over `file.content`
+   * (not `prevContentRef`), matching `highlightedHtml`'s own dependency
+   * exactly, since this is equally a pure function of the current content
+   * with no cursor/selection state involved. */
+  const bracketPairMarks = useMemo(() => computeBracketPairMarks(file.content), [file.content]);
+
   const syncScroll = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -1115,6 +1123,18 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
           aria-hidden="true"
           style={textStyle}
         >
+          {bracketPairMarks.map((m, i) => (
+            <div
+              key={`bp:${m.line}:${m.character}:${i}`}
+              className={`editor-bracket-pair-mark${m.colorIndex === -1 ? " editor-bracket-pair-mark-unmatched" : ` editor-bracket-pair-mark-${m.colorIndex}`}`}
+              style={{
+                top: m.line * lineHeightPx,
+                left: m.character * charWidth,
+                width: charWidth,
+                height: lineHeightPx,
+              }}
+            />
+          ))}
           {bracketMatch?.map((offset) => {
             const { line, character } = offsetToLineChar(prevContentRef.current, offset);
             return (
