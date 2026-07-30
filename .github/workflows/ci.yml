@@ -22,14 +22,21 @@ jobs:
   rust:
     name: Rust workspace (fmt, clippy, test)
     runs-on: ubuntu-latest
-    # An explicit timeout, deliberately generous. Two consecutive runs of
-    # this job died ~50 and ~52 minutes into `cargo test` with the step
-    # still marked in_progress, the post-steps never run, and the logs
-    # unretrievable (HTTP 404) -- i.e. the runner itself went away rather
-    # than a test failing. With no timeout configured, the default is 6
-    # hours, so nothing here was terminating it. A real timeout ends the
-    # step from the runner's side, which *preserves the log*, turning the
-    # next occurrence into something diagnosable instead of a silent death.
+    # An explicit timeout, deliberately generous. Three consecutive runs of
+    # this job (one after adding a Docker-test watchdog, one after that
+    # with --test-threads=1 already active) all died ~50-56 minutes into
+    # `cargo test` with the step still marked in_progress, the post-steps
+    # never run, and the *entire job's* log unretrievable (HTTP 404
+    # BlobNotFound) -- not just the failing step's tail, the whole file,
+    # including steps (fmt/clippy) that visibly succeeded. That specific
+    # shape -- total log loss, no post-steps, the job eventually reported
+    # failed with no graceful step-level failure recorded -- points at the
+    # runner itself dying (an infra-level eviction or an OS-level OOM-kill
+    # taking the runner agent process down with it), not a test asserting
+    # false or even a userspace hang the runner's own tooling caught
+    # cleanly. A per-JOB timeout can't help here since every death has
+    # landed well under it; see the per-step split and per-step timeouts
+    # below instead, which are the real fix attempt this time.
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -94,22 +101,80 @@ jobs:
         # tests. Separating them attributes the cost in the log.
         run: cargo test --workspace --release --no-run
 
-      - name: Report disk usage after building test binaries
+      - name: Report disk and memory usage after building test binaries
+        # `free -h` alongside the existing `df -h` -- this workspace has
+        # never once measured real RAM headroom on this runner, only disk.
+        # If the actual cause of the runner deaths described above is
+        # memory exhaustion (a real, plausible read given the death
+        # consistently happens during test *execution*, not the heavier
+        # compile step, and this runner's real subprocess load only grows
+        # once execution starts -- real docker/gradle/language-server/
+        # debug-adapter child processes, when present), this is the first
+        # run that will actually show it.
         run: |
           df -h /
           du -sh target 2>/dev/null || true
+          free -h
 
-      - name: cargo test
-        # --test-threads=1: this workspace's own real subprocess-spawning
-        # test suites (LSP/DAP clients spawning real language
-        # servers/debug adapters when present on PATH) can flake under
-        # full parallelism from resource contention, not a functional bug
-        # -- see CLAUDE.md's own "Build & test" section for the same note.
-        # Tests requiring external tools not installed on this runner
-        # (rust-analyzer, lldb-dap, debugpy, cargo-component, a live
-        # Ollama instance) self-skip with a printed message rather than
-        # failing, matching this project's own established convention.
-        run: cargo test --workspace --release -- --test-threads=1
+      # The single combined `cargo test --workspace` step below (now
+      # removed) is exactly what died three times with a totally
+      # unretrievable log. Split into several smaller, sequential,
+      # per-step-timeout-bounded groups instead -- reusing the exact same
+      # already-built binaries from the `--no-run` step above, so this
+      # adds no extra compile time. Two real, distinct benefits over one
+      # monolithic step: (1) a per-step `timeout-minutes` here is enforced
+      # by the runner's own job-control, not GitHub's outer job-level
+      # mechanism -- if a group genuinely hangs, *that* group's process is
+      # killed while the runner keeps running normally, which should
+      # finally produce a real, retrievable log instead of another
+      # BlobNotFound; (2) even without a timeout firing, whichever named
+      # step never shows as completed next time narrows a ~50-minute
+      # blind spot down to a specific slice of the workspace. Every group
+      # still uses --test-threads=1 for the same real subprocess-
+      # contention reason the single step already documented; tests
+      # requiring an external tool not installed on this runner
+      # (rust-analyzer, pyright-langserver, lldb-dap, debugpy,
+      # cargo-component, LM Studio/litellm/a live Ollama instance, a real
+      # Android SDK) self-skip with a printed message, matching this
+      # project's own established convention.
+      - name: cargo test -- foundation crates (buffer/languages/security/crash/settings/updater/model/xtask, fast spikes)
+        timeout-minutes: 15
+        run: |
+          cargo test --release -- --test-threads=1 \
+            -p spartan-buffer -p spartan-buffer-wasm -p spartan-languages \
+            -p spartan-security -p spartan-crash -p spartan-settings \
+            -p spartan-updater -p spartan-model -p xtask \
+            -p rope-spike -p fallback-parser-spike -p wasm-buffer-spike
+
+      - name: cargo test -- git + leo
+        timeout-minutes: 15
+        run: cargo test --release -- --test-threads=1 -p spartan-git -p spartan-leo
+
+      - name: cargo test -- lsp + dap clients (real subprocess-spawning, self-skip if tools absent)
+        timeout-minutes: 20
+        run: |
+          cargo test --release -- --test-threads=1 \
+            -p spartan-lsp -p spartan-dap -p lsp-spike -p dap-spike
+
+      - name: cargo test -- devcontainer + android + plugin-host (real Docker/Gradle/cargo-component)
+        timeout-minutes: 20
+        run: |
+          cargo test --release -- --test-threads=1 \
+            -p spartan-devcontainer -p spartan-android -p spartan-plugin-host
+
+      - name: cargo test -- spartan-backend (largest single crate, most integration tests)
+        timeout-minutes: 25
+        run: cargo test --release -p spartan-backend -- --test-threads=1
+
+      - name: cargo test -- editor-core + remaining GPU/display spikes + devserver
+        timeout-minutes: 15
+        run: |
+          cargo test --release -- --test-threads=1 \
+            -p spartan-editor-core -p render-spike -p ui-shell-spike -p spartan-devserver
+
+      - name: Report memory usage after all test groups
+        if: always()
+        run: free -h
 
   desktop:
     name: desktop/ (Electron + React shell)
