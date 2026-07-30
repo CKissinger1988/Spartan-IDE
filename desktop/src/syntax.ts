@@ -106,7 +106,7 @@ export function highlightSource(source: string, path: string): string {
   const language = languageForPath(path);
   if (!language) return escapeHtml(source);
   if (grammarReady(language)) {
-    const viaTreeSitter = highlightWithTreeSitter(source, language);
+    const viaTreeSitter = highlightWithTreeSitter(source, language, path);
     if (viaTreeSitter !== null) return viaTreeSitter;
   }
   try {
