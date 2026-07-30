@@ -52,6 +52,17 @@ interface ChangedFile {
   status: string;
 }
 
+/** Real GitHub layer, first increment (task #284). Matches
+ * `spartan_backend::github::PullRequestSummary` exactly. */
+interface PullRequestSummary {
+  number: number;
+  title: string;
+  author: string;
+  html_url: string;
+  state: string;
+  draft: boolean;
+}
+
 interface ConflictEntry {
   path: string;
   ancestor: string | null;
@@ -398,6 +409,14 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
   const [stashMessage, setStashMessage] = useState("");
   // Real git tags.
   const [tags, setTags] = useState<{ name: string; target: string; annotated: boolean }[]>([]);
+  // Real GitHub layer, first increment (task #284): lists a repo's real,
+  // live open pull requests via `spartan_git::GitRepo::detect_github_remote`
+  // + a real `ureq` GET against `api.github.com`. Fetched fresh on every
+  // open, never cached, matching this panel's own established "state can
+  // change between opens" convention for branches/tags/history.
+  const [showGithub, setShowGithub] = useState(false);
+  const [pullRequests, setPullRequests] = useState<PullRequestSummary[] | null>(null);
+  const [githubError, setGithubError] = useState<string | null>(null);
   // Real merge-conflict resolution (task #270), mirroring desktop/'s own.
   const [mergeStatus, setMergeStatus] = useState<{
     inProgress: boolean;
@@ -928,6 +947,25 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
       .then((result) => setCommits((result as { commits: CommitInfo[] }).commits))
       .catch((e: Error) => setHistoryError(e.message));
   }, [client, root, showHistory]);
+
+  const toggleGithub = useCallback(() => {
+    if (showGithub) {
+      setShowGithub(false);
+      setGithubError(null);
+      return;
+    }
+    // Fetched fresh on every open -- a PR can open/close/merge between
+    // opens, matching every other section's own no-caching convention.
+    setShowGithub(true);
+    setGithubError(null);
+    setPullRequests(null);
+    client
+      .call("github_list_pull_requests", { project_root: root })
+      .then((result) =>
+        setPullRequests((result as { pull_requests: PullRequestSummary[] }).pull_requests)
+      )
+      .catch((e: Error) => setGithubError(e.message));
+  }, [client, root, showGithub]);
 
   const toggleCommit = useCallback(
     (oid: string) => {
@@ -1562,6 +1600,51 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
                 </div>
               )}
             </React.Fragment>
+          ))}
+        </div>
+      )}
+
+      <div
+        className="git-section-label mono"
+        onClick={toggleGithub}
+        style={{ cursor: "pointer" }}
+        title="Real, live open pull requests on this repository's GitHub remote"
+      >
+        GitHub {showGithub ? "▾" : "▸"}
+      </div>
+      {showGithub && (
+        <div className="git-section">
+          {githubError && <div className="git-panel-empty mono">{githubError}</div>}
+          {pullRequests === null && !githubError && (
+            <div className="git-panel-empty mono">Loading pull requests…</div>
+          )}
+          {pullRequests?.length === 0 && (
+            <div className="git-panel-empty mono">No open pull requests.</div>
+          )}
+          {pullRequests?.map((pr) => (
+            <a
+              key={pr.number}
+              className="git-row"
+              href={pr.html_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`${pr.state}${pr.draft ? " (draft)" : ""} — opened by ${pr.author}`}
+              style={{ textDecoration: "none", color: "inherit" }}
+            >
+              <span
+                className="mono"
+                style={{ color: "var(--accent)", fontSize: 11, flexShrink: 0 }}
+              >
+                #{pr.number}
+              </span>
+              <span className="mono git-row-path">
+                {pr.draft ? "[draft] " : ""}
+                {pr.title}
+              </span>
+              <span className="mono" style={{ opacity: 0.6, whiteSpace: "nowrap", fontSize: 11 }}>
+                {pr.author}
+              </span>
+            </a>
           ))}
         </div>
       )}

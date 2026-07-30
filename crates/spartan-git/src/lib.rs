@@ -99,6 +99,32 @@ pub struct StatusEntry {
     pub conflicted: bool,
 }
 
+/// Parses a real git remote URL into `(owner, repo)` if it points at
+/// github.com, in any of the real shapes git itself accepts:
+/// `git@github.com:owner/repo.git`, `https://github.com/owner/repo(.git)`,
+/// or `ssh://git@github.com/owner/repo(.git)`. Returns `None` for anything
+/// else (a non-GitHub remote, or a malformed URL) -- a real, honest "not a
+/// GitHub repo" rather than a guess.
+pub fn parse_github_owner_repo(remote_url: &str) -> Option<(String, String)> {
+    let after_host = if let Some(rest) = remote_url.strip_prefix("git@github.com:") {
+        rest
+    } else if let Some(rest) = remote_url.strip_prefix("https://github.com/") {
+        rest
+    } else if let Some(rest) = remote_url.strip_prefix("http://github.com/") {
+        rest
+    } else if let Some(rest) = remote_url.strip_prefix("ssh://git@github.com/") {
+        rest
+    } else {
+        return None;
+    };
+    let trimmed = after_host.trim_end_matches('/').trim_end_matches(".git");
+    let (owner, repo) = trimmed.split_once('/')?;
+    if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+        return None;
+    }
+    Some((owner.to_string(), repo.to_string()))
+}
+
 fn from_git_status(s: Status) -> (Option<FileStatus>, Option<FileStatus>, bool) {
     let staged = if s.is_index_new() {
         Some(FileStatus::Added)
@@ -1206,6 +1232,30 @@ impl GitRepo {
         Ok(out)
     }
 
+    /// Detects `(owner, repo)` from the repo's own `origin` remote, if it
+    /// points at a real github.com URL -- the one real mechanism the
+    /// GitHub layer (§56.3-56.4) needs to know which repo to talk to
+    /// without asking the user to type it in by hand. Falls back to the
+    /// first remote with a parseable github.com URL if there's no
+    /// `origin` (a real, valid state some repos are in), and returns
+    /// `None` for a repo with no github.com remote at all -- a genuine
+    /// non-GitHub project, not an error.
+    pub fn detect_github_remote(&self) -> Option<(String, String)> {
+        let remotes = self.list_remotes().ok()?;
+        let mut fallback = None;
+        for (name, url) in remotes {
+            let Some(url) = url else { continue };
+            let Some(parsed) = parse_github_owner_repo(&url) else {
+                continue;
+            };
+            if name == "origin" {
+                return Some(parsed);
+            }
+            fallback.get_or_insert(parsed);
+        }
+        fallback
+    }
+
     /// Real fetch from a configured remote using its own default refspecs
     /// (updates the remote-tracking refs; does not touch the working tree).
     pub fn fetch(&self, remote_name: &str) -> Result<(), git2::Error> {
@@ -2226,6 +2276,73 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&remote_dir);
+    }
+
+    #[test]
+    fn parse_github_owner_repo_handles_every_real_url_shape() {
+        assert_eq!(
+            parse_github_owner_repo("git@github.com:CKissinger1988/Spartan-IDE.git"),
+            Some(("CKissinger1988".to_string(), "Spartan-IDE".to_string()))
+        );
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/CKissinger1988/Spartan-IDE.git"),
+            Some(("CKissinger1988".to_string(), "Spartan-IDE".to_string()))
+        );
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/CKissinger1988/Spartan-IDE"),
+            Some(("CKissinger1988".to_string(), "Spartan-IDE".to_string()))
+        );
+        assert_eq!(
+            parse_github_owner_repo("ssh://git@github.com/owner/repo.git"),
+            Some(("owner".to_string(), "repo".to_string()))
+        );
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/owner/repo/"),
+            Some(("owner".to_string(), "repo".to_string())),
+            "a real trailing slash must not become part of the repo name"
+        );
+    }
+
+    #[test]
+    fn parse_github_owner_repo_rejects_non_github_and_malformed_urls() {
+        assert_eq!(
+            parse_github_owner_repo("https://gitlab.com/owner/repo.git"),
+            None
+        );
+        assert_eq!(
+            parse_github_owner_repo("/local/bare/repo/path"),
+            None,
+            "a real local bare-repo remote path is a valid remote, just not a GitHub one"
+        );
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/owner-only"),
+            None
+        );
+        assert_eq!(parse_github_owner_repo("https://github.com/"), None);
+    }
+
+    #[test]
+    fn detect_github_remote_finds_origin_and_ignores_non_github_remotes() {
+        let (_tmp, repo) = TempRepo::new("github_remote_detect");
+        repo.repo
+            .remote("upstream", "https://gitlab.com/other/thing.git")
+            .unwrap();
+        repo.repo
+            .remote("origin", "git@github.com:CKissinger1988/Spartan-IDE.git")
+            .unwrap();
+        assert_eq!(
+            repo.detect_github_remote(),
+            Some(("CKissinger1988".to_string(), "Spartan-IDE".to_string()))
+        );
+    }
+
+    #[test]
+    fn detect_github_remote_is_none_for_a_repo_with_no_github_remote() {
+        let (_tmp, repo) = TempRepo::new("github_remote_detect_none");
+        repo.repo
+            .remote("origin", "https://gitlab.com/other/thing.git")
+            .unwrap();
+        assert_eq!(repo.detect_github_remote(), None);
     }
 
     #[test]

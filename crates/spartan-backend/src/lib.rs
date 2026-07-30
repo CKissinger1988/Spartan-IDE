@@ -62,6 +62,7 @@ mod format_integration;
 /// (`tests/hf_pull_integration.rs`, `tests/litellm_integration.rs`, moved
 /// here alongside these modules) can exercise the real subprocess-spawning
 /// layer directly, the same real access they had in `spartan-devserver`.
+pub mod github;
 pub mod hf_downloader;
 pub mod litellm_proxy;
 /// Real Hugging Face -> llama.cpp GGUF downloader -- unlike
@@ -3784,6 +3785,31 @@ fn git_discard(project_root: &str, path: &str) -> Result<serde_json::Value, Stri
     Ok(serde_json::json!({ "ok": true }))
 }
 
+/// Real GitHub layer, first increment (task #284): lists a repo's real,
+/// live open pull requests. `spartan_git::GitRepo::detect_github_remote`
+/// (already real) supplies `owner`/`repo` from the repo's own real `origin`
+/// remote -- refuses honestly (not silently returning an empty list) if
+/// there's no git repository here at all, or no real GitHub remote
+/// configured. `github_token` is read fresh from Settings on every call
+/// (matching `build_leo_provider`'s own "load current settings, don't
+/// cache" discipline) so a token change takes effect on the very next
+/// request, with no reload/restart needed.
+fn github_list_pull_requests(project_root: &str) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let (owner, repo_name) = repo
+        .detect_github_remote()
+        .ok_or("this repository has no real GitHub remote configured")?;
+    let token = spartan_settings::load().github_token;
+    let prs = github::list_pull_requests(&owner, &repo_name, token.as_deref())
+        .map_err(|e| format!("GitHub pull request listing failed: {e}"))?;
+    Ok(serde_json::json!({
+        "owner": owner,
+        "repo": repo_name,
+        "pull_requests": prs,
+    }))
+}
+
 fn git_commit(project_root: &str, message: &str) -> Result<serde_json::Value, String> {
     let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
         .ok_or("no git repository found at or above this path")?;
@@ -4436,6 +4462,11 @@ struct SettingsPatch {
     /// other field here follows, one level deeper because this value can
     /// itself be absent.
     leo_verify_command: Option<Option<String>>,
+    /// Same nested-`Option` shape as `leo_verify_command` above, for the
+    /// same reason (task #284): the setting itself is `Option<String>`, so
+    /// the patch needs "not provided, keep current" / "provided empty,
+    /// clear it" / "provided, set it" as three distinct real states.
+    github_token: Option<Option<String>>,
 }
 
 fn settings_set(patch: SettingsPatch) -> Result<serde_json::Value, String> {
@@ -4456,6 +4487,7 @@ fn settings_set(patch: SettingsPatch) -> Result<serde_json::Value, String> {
         leo_verify_command: patch
             .leo_verify_command
             .unwrap_or(current.leo_verify_command),
+        github_token: patch.github_token.unwrap_or(current.github_token),
     };
     spartan_settings::save(&settings).map_err(|e| format!("save settings: {e}"))?;
     serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
@@ -4962,6 +4994,9 @@ pub fn handle_request(
             search_project(&project_root, &pattern, path)
         })(),
         "git_status" => get_str_param(&req.params, "project_root").and_then(|r| git_status(&r)),
+        "github_list_pull_requests" => {
+            get_str_param(&req.params, "project_root").and_then(|r| github_list_pull_requests(&r))
+        }
         "git_stage" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
             let path = get_str_param(&req.params, "path")?;
@@ -5233,6 +5268,19 @@ pub fn handle_request(
                     })
                 }
             };
+            // Same nested-`Option` parse as `leo_verify_command` above.
+            let github_token = match req.params.get("github_token") {
+                None => None,
+                Some(v) => {
+                    let s = v.as_str().ok_or("invalid github_token: must be a string")?;
+                    let trimmed = s.trim();
+                    Some(if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    })
+                }
+            };
             settings_set(SettingsPatch {
                 gpu_enabled,
                 gpu_layers,
@@ -5243,6 +5291,7 @@ pub fn handle_request(
                 crash_reporting,
                 onboarding_completed,
                 leo_verify_command,
+                github_token,
             })
         })(),
         "check_for_updates" => check_for_updates(out_tx.clone()),
@@ -6203,6 +6252,54 @@ mod tests {
         assert!(resp.result.is_none());
         assert!(resp.error.unwrap().contains("no git repository"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn github_list_pull_requests_through_the_real_dispatch_on_a_non_repo_path_errors_honestly() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-github-not-a-repo-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "github_list_pull_requests",
+            serde_json::json!({ "project_root": dir.to_string_lossy() }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("no git repository"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Deterministic, no-network: this repo has a real remote, but it's not
+    /// GitHub, so `detect_github_remote` correctly returns `None` before
+    /// this dispatch method ever makes a real HTTP call -- the module-level
+    /// `github::tests` are what actually exercise the real, live GitHub
+    /// call (and self-skip honestly if this sandbox's own network can't
+    /// reach it), keeping this dispatch-level test fast and reliable.
+    #[test]
+    fn github_list_pull_requests_through_the_real_dispatch_on_a_repo_with_no_github_remote_errors_honestly(
+    ) {
+        let tmp = TempRepo::new("github-no-remote");
+        let mut repo = spartan_git::GitRepo::discover(&tmp.dir).unwrap();
+        repo.raw_repo_mut()
+            .remote("origin", "https://gitlab.com/other/thing.git")
+            .unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "github_list_pull_requests",
+            serde_json::json!({ "project_root": tmp.dir.to_string_lossy() }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp
+            .error
+            .unwrap()
+            .contains("no real GitHub remote configured"));
     }
 
     #[test]

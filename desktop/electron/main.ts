@@ -257,6 +257,7 @@ app.whenReady().then(() => {
     "git_commit_files",
     "git_commit_diff",
     "git_blame",
+    "github_list_pull_requests",
     "git_remotes",
     "git_fetch",
     "git_push",
@@ -323,6 +324,21 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("spartan:open_repository_page", async () => {
     await shell.openExternal("https://github.com/CKissinger1988/Spartan-IDE");
+    return { ok: true };
+  });
+  // Real GitHub layer, first increment (task #284): opens a real pull
+  // request's `html_url` (renderer-supplied this time, unlike the two
+  // hardcoded targets above -- it comes from GitHub's own live API
+  // response, not directly from the user) in the OS default browser. A
+  // real, deliberate validation gate before `shell.openExternal` ever
+  // runs: only an `https://github.com/` URL is allowed through, so a
+  // compromised renderer (or a genuinely malformed API response) can't
+  // turn this into an arbitrary-protocol-handler launcher.
+  ipcMain.handle("spartan:open_pull_request_url", async (_event, params: { url: string }) => {
+    if (typeof params?.url !== "string" || !params.url.startsWith("https://github.com/")) {
+      throw new Error("refusing to open a non-GitHub URL");
+    }
+    await shell.openExternal(params.url);
     return { ok: true };
   });
   // Real "open project" action for the New Project wizard (and, later,

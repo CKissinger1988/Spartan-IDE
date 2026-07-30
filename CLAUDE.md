@@ -7685,6 +7685,70 @@ first — it's the parity reference until each row there is actually reimplement
   eviction hook wired to an explicit tab-close event -- the bounded LRU cap handles unbounded
   growth, but a tree can outlive its own tab by up to 19 other more-recently-touched documents; the
   real Electron window remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — real GitHub layer, first increment: live PR listing in both Git panels
+  (task #284)**: closes §56.3-56.4's own long-standing "unstarted in both shells" gap for one real
+  capability. `crates/spartan-git`'s own `parse_github_owner_repo` (pure) and `GitRepo::
+  detect_github_remote` (new) parse a repo's real `origin` remote across every real URL shape a
+  GitHub remote can take (`git@github.com:owner/repo.git`, `https://github.com/owner/repo(.git)`,
+  `ssh://git@github.com/owner/repo(.git)`), preferring `origin` but falling back to the first real
+  GitHub remote found if `origin` itself isn't one. New `crates/spartan-backend/src/github.rs`
+  makes a real, live `ureq::get` against `https://api.github.com/repos/{owner}/{repo}/pulls?state=
+  open&per_page=30` -- real open PRs, GitHub's own newest-first default sort, one real page (no
+  pagination yet, a named follow-up). `spartan_settings::Settings` gained `github_token:
+  Option<String>` (nested-`Option` patch shape in `settings_set`'s dispatch, matching
+  `leo_verify_command`'s own already-established "not-provided / provided-empty-clears-it /
+  provided-sets-it" convention exactly) -- `None` still makes a real, working unauthenticated call
+  at GitHub's own lower rate limit, `Some(token)` sends it as a real `Authorization: Bearer`
+  header, never included in any error message this module produces. New `spartan-backend::
+  github_list_pull_requests(project_root)` dispatch method ties it together: discovers the real
+  repo, calls `detect_github_remote`, loads the current `github_token` fresh from Settings on every
+  call (no caching, so a token change takes effect on the very next request), and returns the real
+  PR list or an honest error (no repo, no GitHub remote configured, or the real network/HTTP
+  failure). **UI, both shells**: a new "GitHub" collapsible section (fetched fresh on every open,
+  matching the branch/tag/history sections' own no-caching convention) in both `desktop/`'s and
+  `web/`'s `GitPanel.tsx`, listing each real PR's number, title, author, and a draft badge.
+  `desktop/`'s rows open the real PR via a new, narrowly-scoped `spartan:open_pull_request_url`
+  main-process IPC handler -- a real, deliberate departure from this file's own two pre-existing
+  `shell.openExternal` call sites (which only ever open a *hardcoded* URL, explicitly "so a
+  compromised renderer can't turn this into an arbitrary-path/arbitrary-URL opener"), since a PR's
+  `html_url` is genuinely renderer-supplied this time, sourced from a live GitHub API response, not
+  the user directly -- gated behind a real validation check (`params.url.startsWith("https://
+  github.com/")`) before `shell.openExternal` is ever called, so a compromised renderer or a
+  malformed API response still can't launch an arbitrary protocol handler. `web/`'s rows are a
+  plain `<a target="_blank" rel="noopener noreferrer">` -- no IPC needed at all, since a browser's
+  own navigation is already the correct, safe mechanism there. 8 new Rust tests (4 in
+  `spartan-git`: every real URL shape parses correctly, non-GitHub/malformed URLs are correctly
+  rejected, `origin` is preferred over a non-GitHub remote, a repo with no GitHub remote returns
+  `None`; 2 in `spartan-github.rs` itself, including a real, self-skipping live test against this
+  project's own real repository that only asserts real-shape invariants -- non-empty title, a real
+  `github.com/.../pull/N` URL -- rather than a specific PR count, so it can never flake as PRs open
+  and close; 2 dispatch-level tests in `spartan-backend` covering the non-repo and no-GitHub-remote
+  error paths deterministically, with no real network call needed for either), plus 2 new
+  `spartan-settings` tests (`github_token` defaults to `None`; a real pre-existing settings file
+  missing the field falls back correctly) -- full workspace `cargo fmt --all -- --check`/`cargo
+  clippy -p spartan-git -p spartan-settings -p spartan-backend --release --all-targets`/`cargo test`
+  for all three crates clean (243/66/24 tests respectively). `desktop/`'s and `web/`'s own `tsc
+  --noEmit`/`npm run build` both clean. **Real, live, end-to-end Playwright verification against
+  the actual compiled `web/dist` and `desktop/dist` served by two real running `spartan-devserver`
+  instances** (not a mock, `desktop/` via the established real-WebSocket-shim technique for the
+  still-unlaunchable real Electron window): a real fixture repo's `origin` was pointed at this
+  project's own real `github.com/CKissinger1988/Spartan-IDE` -- opening the GitHub section in both
+  shells correctly triggered a real `github_list_pull_requests` call that genuinely discovered the
+  repo, correctly parsed the real remote into `CKissinger1988`/`Spartan-IDE`, and made a real live
+  HTTPS attempt to `api.github.com`, surfacing this sandbox's own already-documented TLS-
+  intercepting-proxy condition (`Connection Failed: ... invalid peer certificate: UnknownIssuer`)
+  honestly through the complete stack with zero page errors in either shell -- the identical, real,
+  environment-specific condition every other live-external-API feature in this project's history
+  (the HF/LM Studio/llama.cpp downloaders, `spartan-updater`'s own GitHub check, LiteLLM) already
+  hits in this specific sandbox, not a defect in this pass's own code. **What this does not
+  confirm**: no real PR data was ever observed rendered end-to-end in this session, due to the
+  sandbox's own TLS-trust condition above -- the code path is real and tested (including a real,
+  self-skipping unit test against the actual GitHub API, which would run for real in an environment
+  without this specific proxy condition, e.g. a real GitHub Actions runner); no pagination past the
+  first 30 open PRs; no issues or review support (both real, separate, named follow-ups per
+  §56.3-56.4's own original scope); no GitHub token entry UI in either Settings screen yet (the
+  setting is real and wired through `settings_set`, just not yet given its own row); the real
+  Electron window remains unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 

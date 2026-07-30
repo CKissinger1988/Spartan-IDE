@@ -78,6 +78,7 @@ const ALLOWED_METHODS = new Set([
   "git_commit_files",
   "git_commit_diff",
   "git_blame",
+  "github_list_pull_requests",
   "git_remotes",
   "git_fetch",
   "git_push",
@@ -143,6 +144,8 @@ contextBridge.exposeInMainWorld("spartan", {
   openCrashReportsFolder: (): Promise<unknown> =>
     ipcRenderer.invoke("spartan:open_crash_reports_folder"),
   openRepositoryPage: (): Promise<unknown> => ipcRenderer.invoke("spartan:open_repository_page"),
+  openPullRequestUrl: (url: string): Promise<unknown> =>
+    ipcRenderer.invoke("spartan:open_pull_request_url", { url }),
   openProject: (root: string): Promise<unknown> =>
     ipcRenderer.invoke("spartan:open_project", { root }),
   pickFolder: (): Promise<unknown> => ipcRenderer.invoke("spartan:pick_folder"),
