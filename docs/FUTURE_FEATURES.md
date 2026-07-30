@@ -182,7 +182,7 @@ table is intentionally empty rather than repopulated with the removed rows.
 | Feature | Priority | Notes / grounding |
 |---|---|---|
 | ~~Concurrent multi-session monitoring~~ | ✅ done | Task #274: `TerminalView` gained an `active` prop for a deterministic re-fit/redraw on becoming visible again; `SessionsScreen.tsx` lazy-mounts a provider's session on first visit and keeps it alive (CSS-hidden, not unmounted) across every later tab switch, with a live-session dot indicator. Live-verified via real WebSocket frame counting: `pty_spawn` fired exactly once per provider regardless of tab-switch count. `desktop/`-only (`web/` has no Sessions/Console screen). |
-| UTF-8 chunk-boundary reassembly | P3 | A multi-byte char split across OS reads can drop a replacement char (§75.64). |
+| ~~UTF-8 chunk-boundary reassembly~~ | ✅ done | Task #286: a new `Utf8Reassembler` in `spartan-backend::pty` buffers a real dangling incomplete multi-byte sequence across separate `reader.read()` calls (using `Utf8Error::error_len() == None` to distinguish "ran out of bytes mid-sequence" from genuinely invalid UTF-8) instead of lossy-decoding each raw chunk independently. 5 unit tests (ASCII passthrough, a 2-byte char split at the boundary, a 4-byte emoji split across 3 single-byte reads, genuinely invalid bytes still lossy-decoded not buffered forever, a real multi-line chunk) plus a real end-to-end integration test spawning an actual `bash -c "printf 'café🎉\\n'"` PTY and confirming the reassembled `pty_output` events contain the exact string with zero `U+FFFD` replacement characters. |
 | PTY resize verified against a real reader | P3 | Resize IPC works; unverified against a `$COLUMNS`-reading process. |
 
 ## Accessibility

@@ -5767,6 +5767,82 @@ mod tests {
         assert!(input_resp.error.unwrap().contains("no pty session"));
     }
 
+    /// Real, live end-to-end confirmation of `pty::Utf8Reassembler`'s own
+    /// wiring inside `spawn_pty`'s real background thread, closing the
+    /// "UTF-8 chunk-boundary reassembly" gap `docs/FUTURE_FEATURES.md`'s
+    /// own "Terminal & sessions" table named. Deliberately uses this
+    /// crate's own real `handle_request`/`mpsc::channel` directly (not the
+    /// `call()` helper above, which discards its receiver and so can't
+    /// observe any real emitted event) -- the same pattern this file's own
+    /// DAP/LSP live tests already established for capturing real events.
+    /// A real spawned shell echoing a real 4-byte emoji plus a 2-byte
+    /// accented character can't be *forced* to split exactly at a byte
+    /// boundary through this public API (real OS PTY buffering decides
+    /// chunk sizes), so this doesn't reproduce the split itself -- the
+    /// deterministic `Utf8Reassembler` unit tests in `pty.rs` already cover
+    /// that precisely -- but it does prove the real wiring never mangles
+    /// real multi-byte output in practice, and that no other regression
+    /// was introduced by routing every chunk through the new reassembler.
+    #[test]
+    fn pty_output_correctly_reassembles_a_real_multi_byte_utf8_string() {
+        let state = new_state();
+        let (tx, rx) = mpsc::channel::<String>();
+        let spawn_resp = handle_request(
+            &state,
+            req(
+                1,
+                "pty_spawn",
+                serde_json::json!({
+                    "cwd": std::env::temp_dir().to_string_lossy(),
+                    "cols": 80,
+                    "rows": 24,
+                    "command": "bash",
+                    "args": ["-c", "printf 'café🎉\\n' && exit"],
+                }),
+            ),
+            tx,
+        );
+        assert!(
+            spawn_resp.error.is_none(),
+            "pty_spawn errored: {:?}",
+            spawn_resp.error
+        );
+        let session_id = spawn_resp.result.unwrap()["session_id"].as_u64().unwrap();
+
+        let mut collected = String::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for a real pty_exit event"
+            );
+            let line = rx
+                .recv_timeout(remaining)
+                .unwrap_or_else(|_| panic!("timed out waiting for a real pty_exit event"));
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if value["data"]["session_id"].as_u64() != Some(session_id) {
+                continue;
+            }
+            match value["event"].as_str() {
+                Some("pty_output") => {
+                    collected.push_str(value["data"]["chunk"].as_str().unwrap());
+                }
+                Some("pty_exit") => break,
+                _ => {}
+            }
+        }
+
+        assert!(
+            collected.contains("café🎉"),
+            "expected the real multi-byte string reassembled with no replacement characters, got: {collected:?}"
+        );
+        assert!(
+            !collected.contains('\u{FFFD}'),
+            "no spurious U+FFFD replacement character should appear: {collected:?}"
+        );
+    }
+
     #[test]
     fn devcontainer_detect_with_no_config_reports_not_found() {
         let dir = std::env::temp_dir().join(format!(

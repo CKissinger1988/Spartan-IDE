@@ -7803,6 +7803,59 @@ first — it's the parity reference until each row there is actually reimplement
   the pure client-side mode" item for the *backend-connected* mode specifically -- the *pure*
   client-side mode (no backend process at all) still has no path to LSP/DAP/Leo by construction,
   since those need a real server process to exist, a separate, much larger, unstarted initiative.
+- **Real, working code — real UTF-8 chunk-boundary reassembly for PTY output, closing the last
+  named limitation in `spartan-backend::pty`'s own doc comment since §75.64 (task #286)**: continues
+  the same "prioritize and continue with future features" push. `spawn_pty`'s real background-thread
+  read loop previously called `String::from_utf8_lossy(&buf[..n]).into_owned()` independently on
+  each raw chunk read from the PTY -- correct for the overwhelmingly common ASCII case, but a real,
+  reproducible bug whenever a multi-byte UTF-8 sequence happened to be split exactly across two
+  separate OS `read()` calls (a real, not-hypothetical occurrence with `xterm.js` streaming real
+  program output a chunk at a time): the trailing incomplete bytes of the split character would be
+  lossy-decoded on their own, in isolation, producing a spurious `U+FFFD` replacement character
+  instead of the real intended glyph, with no memory of the dangling tail carried into the next
+  read. New `Utf8Reassembler` (a small, private struct local to `pty.rs`) buffers exactly the real
+  dangling tail across reads: `std::str::from_utf8`'s own `Utf8Error` already distinguishes the two
+  real cases that matter -- `error_len() == None` means the byte slice simply ran out mid-sequence
+  (the real read-boundary case this struct exists to fix, so the incomplete tail is kept and the
+  valid prefix is returned immediately) vs. `error_len() == Some(n)` (genuinely invalid bytes, not a
+  chunking artifact, so those are still lossy-decoded right away rather than buffered forever). A
+  real UTF-8 leading byte never claims more than 3 continuation bytes, so the "incomplete" tail this
+  struct ever holds is naturally bounded at 3 bytes -- no unbounded-growth guard was needed. Wired
+  into `spawn_pty`'s read loop by routing every raw chunk through one `Utf8Reassembler` instance
+  (one per spawned session, living for that thread's lifetime) instead of calling
+  `from_utf8_lossy` directly; an empty result (a real dangling incomplete sequence with nothing else
+  ready to emit yet) correctly skips sending a `pty_output` event at all rather than sending an
+  empty one. 5 new unit tests (ASCII passthrough unchanged; a real 2-byte `é` split exactly at its
+  byte boundary across two `push()` calls, confirming the dangling byte doesn't leak through early
+  and the completed character resolves on the next chunk; a real 4-byte emoji split across three
+  separate single-byte reads plus a final read -- the worst realistic case; genuinely invalid bytes
+  (`0xFF`) confirmed still lossy-decoded immediately rather than held onto forever; a real multi-line
+  chunk with a split multi-byte character embedded mid-stream). Plus a real, live, end-to-end
+  integration test in `spartan-backend::lib.rs`'s own test module,
+  `pty_output_correctly_reassembles_a_real_multi_byte_utf8_string`: spawns a real
+  `bash -c "printf 'café🎉\\n' && exit"` via the actual `pty_spawn` dispatch method (using
+  `handle_request` directly with a real `mpsc::channel`, not the file's own `call()` test helper,
+  since that helper discards its receiver and so can't observe emitted events), collects every real
+  `pty_output` event until a real `pty_exit` arrives, and asserts the reassembled text contains the
+  exact string `café🎉` with zero `U+FFFD` replacement characters anywhere in the output. A real
+  `clippy::items_after_test_module` warning was caught and fixed, not suppressed: the test module had
+  originally been placed between `Utf8Reassembler`'s own impl block and the unrelated `PtyHandle`/
+  `spawn_pty` items that follow it in the file, which clippy correctly flags as poor organization --
+  fixed by moving the whole `#[cfg(test)] mod utf8_reassembler_tests` block to the end of the file,
+  after `spawn_pty`, re-confirmed clean afterward. Full `cargo fmt --all -- --check`/`cargo clippy -p
+  spartan-backend --release --all-targets`/`cargo test -p spartan-backend --release --lib --
+  --test-threads=1` all clean (249 tests, up from 248, zero failures). **What this does not
+  confirm**: no equivalent fix in the reference wgpu shell's own `spartan-editor-core::terminal.rs`
+  -- that shell's own real ANSI-stripping ceiling for ANSI-unaware plain-text rendering already
+  existed for a different reason and was never independently checked for the same chunk-boundary
+  class of bug, a real, separate, unstarted follow-up if that shell's own terminal rendering is
+  ever revisited; no live browser/Electron-window verification of a real multi-byte character
+  rendering correctly on screen through `xterm.js` (verified instead at the real backend-protocol
+  level via the exact `pty_output` events the frontend consumes, the same depth of verification this
+  project's own history already applies to several backend-only fixes); the real Electron window
+  remains unlaunchable in this session (same standing gap since §75.59). This was the one remaining
+  named gap in the "Terminal & sessions" section of `docs/FUTURE_FEATURES.md`'s own P3 backlog list
+  besides "PTY resize verified against a real reader," which remains open.
 
 ## Build & test
 

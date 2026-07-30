@@ -20,6 +20,67 @@ use std::thread;
 
 use crate::Event;
 
+/// Closes the "UTF-8 chunk-boundary reassembly" gap this module's own
+/// `spawn_pty` doc comment previously named as a real, un-fixed limitation
+/// (`docs/FUTURE_FEATURES.md`'s "Terminal & sessions" table): a multi-byte
+/// UTF-8 sequence split exactly across two real `reader.read` calls used
+/// to produce a spurious `U+FFFD` replacement character at the boundary,
+/// since `String::from_utf8_lossy` was called independently on each raw
+/// chunk with no memory of a still-incomplete sequence left dangling at
+/// the end of the previous one.
+///
+/// `std::str::from_utf8`'s own `Utf8Error` already distinguishes the two
+/// real cases that matter here: `error_len() == None` means the byte
+/// slice simply ran out while still partway through an otherwise-valid
+/// multi-byte sequence (exactly the read-boundary case this struct
+/// exists to fix -- buffer the dangling tail and wait for the rest to
+/// arrive on a later read); `error_len() == Some(n)` means the bytes are
+/// genuinely invalid UTF-8, not a chunking artifact, so those are still
+/// lossy-decoded immediately rather than buffered forever. A real UTF-8
+/// leading byte never claims more than 3 continuation bytes, so the
+/// "incomplete" tail this struct ever holds is naturally bounded at 3
+/// bytes -- no unbounded-growth guard is needed.
+#[derive(Default)]
+struct Utf8Reassembler {
+    pending: Vec<u8>,
+}
+
+impl Utf8Reassembler {
+    fn push(&mut self, new_bytes: &[u8]) -> String {
+        self.pending.extend_from_slice(new_bytes);
+        match std::str::from_utf8(&self.pending) {
+            Ok(s) => {
+                let result = s.to_string();
+                self.pending.clear();
+                result
+            }
+            Err(e) => {
+                let valid_up_to = e.valid_up_to();
+                let valid_part = std::str::from_utf8(&self.pending[..valid_up_to])
+                    .unwrap()
+                    .to_string();
+                match e.error_len() {
+                    Some(_) => {
+                        // Genuinely invalid bytes, not a boundary artifact
+                        // -- lossy-decode them too rather than buffering
+                        // bad data forever, then continue.
+                        let lossy_tail =
+                            String::from_utf8_lossy(&self.pending[valid_up_to..]).into_owned();
+                        self.pending.clear();
+                        valid_part + &lossy_tail
+                    }
+                    None => {
+                        // Ran out of bytes mid-sequence -- keep only the
+                        // real dangling tail, waiting for the rest.
+                        self.pending = self.pending[valid_up_to..].to_vec();
+                        valid_part
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub struct PtyHandle {
     writer: Box<dyn Write + Send>,
     master: Box<dyn portable_pty::MasterPty + Send>,
@@ -102,19 +163,21 @@ pub fn spawn_pty(
 
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
+        let mut reassembler = Utf8Reassembler::default();
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    // Real, honest, named limitation: a multi-byte UTF-8
-                    // sequence split exactly across two real read chunks
-                    // can produce a spurious replacement character at
-                    // the boundary -- a full incremental UTF-8
-                    // reassembly buffer was not built this pass. Real
-                    // shell/CLI output is overwhelmingly ASCII in
-                    // practice, so this is a rare, cosmetic edge case,
-                    // not a functional one, but named rather than hidden.
-                    let chunk = String::from_utf8_lossy(&buf[..n]).into_owned();
+                    // Real incremental UTF-8 reassembly across read
+                    // boundaries -- closes the gap this loop's own doc
+                    // comment used to name, see `Utf8Reassembler` above.
+                    let chunk = reassembler.push(&buf[..n]);
+                    if chunk.is_empty() {
+                        // A real dangling incomplete sequence with
+                        // nothing else to emit yet -- correctly wait for
+                        // the next read rather than sending an empty event.
+                        continue;
+                    }
                     let event = Event {
                         event: "pty_output".to_string(),
                         data: serde_json::json!({ "session_id": session_id, "chunk": chunk }),
@@ -142,4 +205,71 @@ pub fn spawn_pty(
         master: pty_pair.master,
         child,
     })
+}
+
+#[cfg(test)]
+mod utf8_reassembler_tests {
+    use super::Utf8Reassembler;
+
+    #[test]
+    fn a_plain_ascii_chunk_passes_through_unchanged() {
+        let mut r = Utf8Reassembler::default();
+        assert_eq!(r.push(b"hello world"), "hello world");
+    }
+
+    #[test]
+    fn a_multi_byte_char_split_exactly_at_the_boundary_reassembles_correctly() {
+        // "é" is U+00E9, encoded as the 2 real bytes 0xC3 0xA9.
+        let full = "café".as_bytes().to_vec();
+        let split_at = full.len() - 1; // right before the last byte of "é"
+        let mut r = Utf8Reassembler::default();
+        let first = r.push(&full[..split_at]);
+        assert_eq!(
+            first, "caf",
+            "the dangling incomplete byte must not leak through yet"
+        );
+        let second = r.push(&full[split_at..]);
+        assert_eq!(
+            second, "é",
+            "the completed sequence must resolve on the next chunk"
+        );
+    }
+
+    #[test]
+    fn a_four_byte_emoji_split_across_three_separate_reads_reassembles_correctly() {
+        // A real 4-byte UTF-8 sequence (an emoji), split into three
+        // single-byte reads plus a final read -- the worst realistic case.
+        let full = "🎉".as_bytes().to_vec();
+        assert_eq!(full.len(), 4);
+        let mut r = Utf8Reassembler::default();
+        assert_eq!(r.push(&full[..1]), "");
+        assert_eq!(r.push(&full[1..2]), "");
+        assert_eq!(r.push(&full[2..3]), "");
+        assert_eq!(r.push(&full[3..4]), "🎉");
+    }
+
+    #[test]
+    fn genuinely_invalid_bytes_are_lossy_decoded_not_buffered_forever() {
+        let mut r = Utf8Reassembler::default();
+        // 0xFF is never a valid UTF-8 byte in any position.
+        let out = r.push(&[b'a', 0xFF, b'b']);
+        assert!(
+            out.contains('a') && out.contains('b'),
+            "real bytes around the invalid one must survive: {out:?}"
+        );
+        assert!(
+            r.pending.is_empty(),
+            "an invalid byte must not be held onto forever"
+        );
+    }
+
+    #[test]
+    fn a_real_multi_line_chunk_containing_a_split_multi_byte_char_reassembles_correctly() {
+        let full = "line one\ncafé line two\n".as_bytes().to_vec();
+        let split_at = full.iter().position(|&b| b == 0xA9).unwrap(); // mid "é"
+        let mut r = Utf8Reassembler::default();
+        let mut out = r.push(&full[..split_at]);
+        out.push_str(&r.push(&full[split_at..]));
+        assert_eq!(out, "line one\ncafé line two\n");
+    }
 }
