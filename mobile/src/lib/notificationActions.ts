@@ -1,4 +1,5 @@
 import * as Notifications from 'expo-notifications';
+import { Platform } from 'react-native';
 import { navigationRef } from '../navigation/navigationRef';
 import { Artifact } from '../types/domain';
 import { recordDecision } from './decisionActions';
@@ -18,6 +19,12 @@ const LOW_STAKES_CATEGORY = 'review-actionable-low-stakes';
 const DESTRUCTIVE_CATEGORY = 'review-actionable-destructive';
 
 export async function registerNotificationCategories(): Promise<void> {
+  // expo-notifications doesn't implement notification categories on
+  // react-native-web — setNotificationCategoryAsync throws there. Nothing
+  // web-specific needs them (no push surface exists on web either), so skip
+  // rather than let an unhandled rejection hit every web load.
+  if (Platform.OS === 'web') return;
+
   await Notifications.setNotificationCategoryAsync(LOW_STAKES_CATEGORY, [
     { identifier: 'approve', buttonTitle: 'Approve' },
     { identifier: 'reject', buttonTitle: 'Reject', options: { isDestructive: true } },
