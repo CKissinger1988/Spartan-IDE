@@ -8,6 +8,7 @@ import {
   type SnippetSession,
 } from "../snippets";
 import { computeBracketPairMarks } from "../bracketPairs";
+import { shiftBreakpointsForEdit } from "../breakpointShift";
 import type { BackendClient } from "../backendClient";
 
 export interface BackendOpenFile {
@@ -1005,6 +1006,11 @@ interface BackendEditorProps {
   /** Real edit of a breakpoint's condition/log message (right-click a
    * gutter line). Empty strings for both clears them back to plain. */
   onEditBreakpoint?: (line: number, condition: string, logMessage: string) => void;
+  /** Real rope-anchored breakpoint shifting, ported verbatim from
+   * `desktop/src/components/Editor.tsx`'s own identical prop -- see
+   * that file's own doc comment and `breakpointShift.ts` for the full
+   * real reasoning. */
+  onBreakpointsShift?: (next: BreakpointSpec[]) => void;
   /** Real, 1-indexed line the active DAP session is currently stopped
    * at for this file, or `null`/`undefined` when nothing is stopped. */
   stoppedLine?: number | null;
@@ -1077,6 +1083,7 @@ export default function BackendEditor({
   breakpoints = [],
   onToggleBreakpoint,
   onEditBreakpoint,
+  onBreakpointsShift,
   stoppedLine = null,
   onJumpToDefinition,
   pendingJump = null,
@@ -2090,6 +2097,15 @@ export default function BackendEditor({
       if (snippetSessionRef.current) {
         adjustSnippetStops(snippetSessionRef.current, prevContentRef.current, newContent);
       }
+      // Real rope-anchored breakpoint shifting, ported verbatim from
+      // `desktop/`'s own identical wiring -- must run before
+      // `prevContentRef.current` is overwritten below.
+      if (breakpoints.length > 0 && onBreakpointsShift) {
+        const shifted = shiftBreakpointsForEdit(breakpoints, prevContentRef.current, newContent);
+        if (shifted !== breakpoints) {
+          onBreakpointsShift(shifted);
+        }
+      }
       prevContentRef.current = newContent;
       setLineCount(newContent.split("\n").length);
       onContentChange(file.path, newContent);
@@ -2117,7 +2133,16 @@ export default function BackendEditor({
         setSignatureHelpState(null);
       }
     },
-    [client, charWidth, lineHeightPx, file.docId, file.path, onContentChange]
+    [
+      client,
+      charWidth,
+      lineHeightPx,
+      file.docId,
+      file.path,
+      onContentChange,
+      breakpoints,
+      onBreakpointsShift,
+    ]
   );
 
   const handleChange = useCallback(

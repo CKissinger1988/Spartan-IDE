@@ -669,6 +669,18 @@ export default function App(): React.ReactElement {
     [activeBackendDocId]
   );
 
+  // Real rope-anchored breakpoint shifting, ported verbatim from
+  // `desktop/`'s own identical wiring -- see `breakpointShift.ts` for
+  // the full real reasoning.
+  const handleBreakpointsShift = useCallback(
+    (next: BreakpointSpec[]) => {
+      if (activeBackendDocId === null) return;
+      const docId = activeBackendDocId;
+      setBreakpointsByDoc((prev) => ({ ...prev, [docId]: next }));
+    },
+    [activeBackendDocId]
+  );
+
   // Real launch (task #133) -- always starts a fresh session for the
   // active file's own current breakpoint set, matching `desktop/`'s own
   // F5-style "a finished session is treated as gone" convention.
@@ -1149,6 +1161,7 @@ export default function App(): React.ReactElement {
                 breakpoints={breakpointsByDoc[activeContent.file.docId] ?? []}
                 onToggleBreakpoint={toggleBreakpoint}
                 onEditBreakpoint={editBreakpoint}
+                onBreakpointsShift={handleBreakpointsShift}
                 stoppedLine={
                   dapSessionByDoc[activeContent.file.docId]?.status === "stopped"
                     ? (dapSessionByDoc[activeContent.file.docId]?.stopped?.frame?.line ?? null)

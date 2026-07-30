@@ -8,6 +8,7 @@ import {
   type SnippetSession,
 } from "../snippets";
 import { computeBracketPairMarks } from "../bracketPairs";
+import { shiftBreakpointsForEdit } from "../breakpointShift";
 
 export interface OpenFile {
   path: string;
@@ -1212,6 +1213,15 @@ interface EditorProps {
    * with no existing breakpoint gains one when a condition/logpoint is
    * set on it. */
   onEditBreakpoint?: (line: number, condition: string, logMessage: string) => void;
+  /** Real rope-anchored breakpoint shifting (closes the §75.8-named
+   * "line-number only" gap) -- called with the full, already-shifted
+   * breakpoint array whenever a real edit moves or invalidates one or
+   * more breakpoints' lines (see `breakpointShift.ts`'s own doc
+   * comment for the exact rule). Only called when the result actually
+   * differs from the current `breakpoints` prop, matching
+   * `onToggleBreakpoint`'s own "`App.tsx` owns the real set" division
+   * of responsibility. */
+  onBreakpointsShift?: (next: BreakpointSpec[]) => void;
   /** Real, 1-indexed line the active DAP session is currently stopped
    * at for this file, or `null`/`undefined` when no session is stopped
    * here -- matches `DapFrame::line`'s own real 1-indexed DAP-spec
@@ -1312,6 +1322,7 @@ export default function Editor({
   breakpoints = [],
   onToggleBreakpoint,
   onEditBreakpoint,
+  onBreakpointsShift,
   stoppedLine = null,
   onJumpToDefinition,
   pendingJump = null,
@@ -2499,6 +2510,15 @@ export default function Editor({
       if (snippetSessionRef.current) {
         adjustSnippetStops(snippetSessionRef.current, prevContentRef.current, newContent);
       }
+      // Real rope-anchored breakpoint shifting -- must run before
+      // `prevContentRef.current` is overwritten below, since it needs
+      // the real pre-edit text to compute what moved.
+      if (breakpoints.length > 0 && onBreakpointsShift) {
+        const shifted = shiftBreakpointsForEdit(breakpoints, prevContentRef.current, newContent);
+        if (shifted !== breakpoints) {
+          onBreakpointsShift(shifted);
+        }
+      }
       prevContentRef.current = newContent;
       setLineCount(newContent.split("\n").length);
       onContentChange(file.path, newContent);
@@ -2545,7 +2565,15 @@ export default function Editor({
         setSignatureHelpState(null);
       }
     },
-    [charWidth, lineHeightPx, file.docId, file.path, onContentChange]
+    [
+      charWidth,
+      lineHeightPx,
+      file.docId,
+      file.path,
+      onContentChange,
+      breakpoints,
+      onBreakpointsShift,
+    ]
   );
 
   const handleChange = useCallback(
