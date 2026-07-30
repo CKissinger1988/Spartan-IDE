@@ -22,22 +22,45 @@ jobs:
   rust:
     name: Rust workspace (fmt, clippy, test)
     runs-on: ubuntu-latest
-    # An explicit timeout, deliberately generous. Three consecutive runs of
-    # this job (one after adding a Docker-test watchdog, one after that
-    # with --test-threads=1 already active) all died ~50-56 minutes into
-    # `cargo test` with the step still marked in_progress, the post-steps
-    # never run, and the *entire job's* log unretrievable (HTTP 404
-    # BlobNotFound) -- not just the failing step's tail, the whole file,
-    # including steps (fmt/clippy) that visibly succeeded. That specific
-    # shape -- total log loss, no post-steps, the job eventually reported
-    # failed with no graceful step-level failure recorded -- points at the
-    # runner itself dying (an infra-level eviction or an OS-level OOM-kill
-    # taking the runner agent process down with it), not a test asserting
-    # false or even a userspace hang the runner's own tooling caught
-    # cleanly. A per-JOB timeout can't help here since every death has
-    # landed well under it; see the per-step split and per-step timeouts
-    # below instead, which are the real fix attempt this time.
+    # An explicit timeout, deliberately generous. Several consecutive runs of
+    # this job died mid-`cargo test`, at increasingly precise diagnoses: the
+    # first three (before the per-step split below existed) died ~50-56
+    # minutes in with the *entire job's* log unretrievable (BlobNotFound),
+    # post-steps never run -- consistent with the runner itself dying, not a
+    # graceful test failure, but only a hypothesis at the time. The per-step
+    # split (see below) was pushed specifically to make a recurrence
+    # diagnosable; the very next run confirmed it works (a real, fast,
+    # fully-logged failure from an unrelated `-p`/`--` argument-order bug),
+    # and the run *after that fix* died again -- this time with GitHub's own
+    # real job-page annotation, not a guess: "The hosted runner lost
+    # communication with the server. Anything in your workflow that
+    # terminates the runner process, starves it for CPU/Memory, or blocks
+    # its network access can cause this error," at 58m17s. That's a
+    # GitHub-confirmed resource-exhaustion class of failure -- most likely
+    # memory, since it consistently lands during real test *execution*
+    # (docker/gradle/language-server/debug-adapter child processes,
+    # sequential ~90s-class real `pyright-langserver` subprocess tests in
+    # `spartan-lsp`/`spartan-backend`), not the heavier `--no-run` compile
+    # step, which always completes cleanly first. Crucially: if the runner's
+    # own agent process is itself OOM-killed, a per-step `timeout-minutes`
+    # can't help -- that mechanism depends on the agent staying alive long
+    # enough to notice and enforce it. `CARGO_BUILD_JOBS` below caps build-
+    # time parallelism (real memory pressure from compiling several heavy
+    # crates -- wasmtime, llama-cpp-sys-2's vendored C++ -- concurrently);
+    # a `free -h` after every group (not just once, previously) is the real,
+    # additional diagnostic this pass adds so a further recurrence pinpoints
+    # exactly which group's memory was already critical beforehand, closing
+    # the remaining gap between "confirmed resource exhaustion" and "known
+    # exactly where."
     timeout-minutes: 120
+    env:
+      # A conservative, explicit cap rather than trusting cargo's own
+      # nproc-based default, which can pick a build parallelism higher than
+      # the runner's real memory can support when several heavy crates
+      # (wasmtime, llama-cpp-sys-2's vendored llama.cpp C++) compile at
+      # once -- exactly the kind of build-time memory spike GitHub's own
+      # "starves it for CPU/Memory" annotation names as a real cause class.
+      CARGO_BUILD_JOBS: "4"
     steps:
       - uses: actions/checkout@v4
 
@@ -147,9 +170,17 @@ jobs:
             -p rope-spike -p fallback-parser-spike -p wasm-buffer-spike \
             -- --test-threads=1
 
+      - name: Report memory after foundation-crates group
+        if: always()
+        run: free -h
+
       - name: cargo test -- git + leo
         timeout-minutes: 15
         run: cargo test --release -p spartan-git -p spartan-leo -- --test-threads=1
+
+      - name: Report memory after git+leo group
+        if: always()
+        run: free -h
 
       - name: cargo test -- lsp + dap clients (real subprocess-spawning, self-skip if tools absent)
         timeout-minutes: 20
@@ -158,6 +189,10 @@ jobs:
             -p spartan-lsp -p spartan-dap -p lsp-spike -p dap-spike \
             -- --test-threads=1
 
+      - name: Report memory after lsp+dap group
+        if: always()
+        run: free -h
+
       - name: cargo test -- devcontainer + android + plugin-host (real Docker/Gradle/cargo-component)
         timeout-minutes: 20
         run: |
@@ -165,9 +200,17 @@ jobs:
             -p spartan-devcontainer -p spartan-android -p spartan-plugin-host \
             -- --test-threads=1
 
+      - name: Report memory after devcontainer+android+plugin-host group
+        if: always()
+        run: free -h
+
       - name: cargo test -- spartan-backend (largest single crate, most integration tests)
         timeout-minutes: 25
         run: cargo test --release -p spartan-backend -- --test-threads=1
+
+      - name: Report memory after spartan-backend group
+        if: always()
+        run: free -h
 
       - name: cargo test -- editor-core + remaining GPU/display spikes + devserver
         timeout-minutes: 15
