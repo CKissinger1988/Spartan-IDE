@@ -365,9 +365,9 @@ function DiffView({ diff }: { diff: string }): React.ReactElement {
  *
  * A deliberate, named v1 scope cut, matching this whole `desktop/`
  * effort's own established pattern of naming what's deferred rather than
- * silently omitting it: no per-line (sub-hunk) selection, no unstage-a-
- * hunk (whole-file unstage only), no stash-during-merge interplay, no
- * branch delete/rename, no merging via drag-and-drop.
+ * silently omitting it: no per-line (sub-hunk) selection, no stash-
+ * during-merge interplay, no branch delete/rename, no merging via
+ * drag-and-drop.
  */
 export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [status, setStatus] = useState<GitStatus | null>(null);
@@ -778,14 +778,15 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
     [root, refresh]
   );
 
-  // Real per-hunk fetch (task #271), reused both when opening an unstaged
-  // row's expansion and after a hunk is staged (whose own staging changes
-  // the real remaining hunk list, so it's always refetched fresh, never
-  // patched client-side).
+  // Real per-hunk fetch (task #271, extended by the staged-hunks pass to
+  // cover both directions), reused when opening either an unstaged or a
+  // staged row's expansion and after a hunk is staged/unstaged (whose own
+  // action changes the real remaining hunk list, so it's always refetched
+  // fresh, never patched client-side).
   const refreshHunks = useCallback(
-    (path: string) => {
+    (path: string, staged: boolean) => {
       window.spartan
-        .call("git_diff_hunks", { project_root: root, path })
+        .call("git_diff_hunks", { project_root: root, path, staged })
         .then((result) => setHunks((result as { hunks: HunkInfo[] }).hunks))
         .catch((err: Error) => setHunksError(err.message));
     },
@@ -814,9 +815,7 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
         .then((result) => setDiffContent((result as { diff: string }).diff))
         .catch((err: Error) => setDiffError(err.message))
         .finally(() => setDiffLoading(false));
-      // Hunks only make sense for an *unstaged* row -- a staged diff has
-      // nothing left to hunk-stage.
-      if (!staged) refreshHunks(path);
+      refreshHunks(path, staged);
     },
     [root, expandedDiff, refreshHunks]
   );
@@ -833,7 +832,26 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
         .call("git_stage_hunk", { project_root: root, path, hunk_index: hunkIndex })
         .then(() => {
           refresh();
-          refreshHunks(path);
+          refreshHunks(path, false);
+        })
+        .catch((err: Error) => setHunksError(err.message))
+        .finally(() => setHunkBusy(false));
+    },
+    [root, refresh, refreshHunks]
+  );
+
+  // Real "unstage this one hunk" -- the direct mirror of `stageHunk`,
+  // refreshing the real *staged* hunk list afterward (the one it just
+  // came from), not the unstaged one.
+  const unstageHunk = useCallback(
+    (path: string, hunkIndex: number) => {
+      setHunkBusy(true);
+      setHunksError(null);
+      window.spartan
+        .call("git_unstage_hunk", { project_root: root, path, hunk_index: hunkIndex })
+        .then(() => {
+          refresh();
+          refreshHunks(path, true);
         })
         .catch((err: Error) => setHunksError(err.message))
         .finally(() => setHunkBusy(false));
@@ -1486,6 +1504,24 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
                 {diffLoading && <div className="git-panel-empty mono">Loading diff…</div>}
                 {diffError && <div className="git-panel-empty mono">{diffError}</div>}
                 {diffContent !== null && <DiffView diff={diffContent} />}
+                {hunksError && <div className="git-panel-empty mono">{hunksError}</div>}
+                {hunks?.map((h) => (
+                  <div key={h.index} className="git-hunk-block">
+                    <div className="git-hunk-header mono">
+                      <span>{h.header}</span>
+                      <button
+                        type="button"
+                        className="editor-find-btn"
+                        disabled={hunkBusy}
+                        onClick={() => unstageHunk(entry.path, h.index)}
+                        title="Unstage only this hunk"
+                      >
+                        Unstage this hunk
+                      </button>
+                    </div>
+                    <DiffView diff={h.body} />
+                  </div>
+                ))}
               </div>
             )}
           </React.Fragment>

@@ -8006,6 +8006,67 @@ first — it's the parity reference until each row there is actually reimplement
   number-only scope, matching the established "Electron-shells-only" pattern every recent DAP/
   editor-ergonomics pass has carried); the real Electron window remains unlaunchable in this
   session (same standing gap since §75.59).
+- **Real, working code — real "unstage a hunk," the direct mirror of already-shipped per-hunk
+  staging (task #271), completing the per-hunk staging row in both Git panels (task #293)**:
+  continues the same "continue the road map" push, immediately after rope-anchored breakpoints
+  (task #291-292). `spartan_git` gained `diff_hunks_staged(path)` (the exact mirror-image direction
+  of `diff_hunks` — a real `git2::Patch::from_buffers` diffing the HEAD blob (old) against the index
+  blob (new), instead of `diff_hunks`'s own index-vs-workdir direction) and `unstage_hunk(path,
+  hunk_index)` (the direct mirror of `stage_hunk` — re-diffs fresh on every call, then splices the
+  chosen hunk's *old* (HEAD) side back into the index content at `new_start`/`new_lines`, the
+  reverse of `stage_hunk`'s own splice-the-new-side-into-old-content direction, written via the
+  same `Index::add_frombuffer` mechanism). `spartan-backend::git_diff_hunks` gained a `staged: bool`
+  param (default `false`, so every existing caller's behavior is unchanged) branching between the
+  two real diff directions; a new `git_unstage_hunk` dispatch method mirrors `git_stage_hunk`
+  exactly. Both Git panels' (`desktop/`, `web/`) staged-row diff expansion gained the identical
+  hunks-with-buttons block the unstaged row already had, now reading "Unstage this hunk" and calling
+  the new `unstageHunk` function — a direct, symmetric port of the existing `stageHunk`/`refreshHunks`
+  functions, with `refreshHunks` itself extended to take the same `staged` flag so it fetches the
+  correct real diff direction regardless of which row it was opened from. The stale "no unstage-a-
+  hunk (whole-file unstage only)" v1-scope-cut note in both components' own doc comments was removed
+  now that it's closed. 6 new `spartan-git` tests (a real two-separated-staged-hunks fixture; an
+  empty-list case for a brand-new fully-staged file; unstaging one hunk leaving the other's real
+  change genuinely staged; unstaging both hunks in sequence returning the index to exactly HEAD; an
+  out-of-range error; a real pure-staged-addition-at-end-of-file edge case), 72 `spartan-git` tests
+  total; 2 new dispatch-level tests in `spartan-backend` (a full round trip through `handle_request`;
+  an honest out-of-range error), 251 `spartan-backend` lib tests total — all clean, `cargo fmt`/
+  `clippy` clean for both crates after two real reformatting passes (a wrapped function signature, a
+  reformatted `ok_or_else` closure). Both shells' own `tsc --noEmit`/`npm run build` clean. **Real,
+  live, end-to-end Playwright verification in both shells against a real git fixture with two
+  genuinely separated staged hunks** (a `-100+` line file with two edits far enough apart that git's
+  own default 3-line context-merge threshold keeps them as two real, distinct hunks — a first
+  fixture attempt with edits only 6 lines apart was caught merging into one real hunk by the fixture
+  -setup script's own `git diff --staged` output, a real, correctly-diagnosed test-fixture mistake,
+  not a product bug, fixed by spacing the edits further apart and reconfirmed via the real `git`
+  CLI before testing the UI): `web/` was driven against the actual compiled `web/dist` served by a
+  real running `spartan-devserver` binary, `web/`'s own genuine `BackendClient.connect()` with no
+  shim of any kind — 2 real hunks rendered with 2 "Unstage this hunk" buttons, clicking the first
+  correctly left exactly 1 real hunk remaining staged, and the real fixture repo's own `git status`/
+  `git diff --staged`/`git diff` output was independently re-read afterward and matched exactly:
+  the second hunk's change remained staged, the first hunk's change landed correctly in the real
+  unstaged diff. `desktop/` was independently re-verified via the established "real
+  `spartan-devserver` serving `desktop/dist`, a mocked `window.spartan` forwarding every call over
+  a genuine WebSocket" technique for the still-unlaunchable real Electron window — byte-identical
+  results (2 hunks, 2 buttons, 1 remaining after unstaging one, "Changes (1)" reflecting the newly-
+  unstaged hunk), independently cross-checked against the real `git` CLI a second time on a fresh
+  copy of the same fixture, zero page errors in either shell. **A real test-navigation lesson
+  recorded here, not fabricated as a product bug**: the first `desktop/` verification attempt raced
+  ahead of a real, async `settings_get` round trip over the WebSocket that gates first-run
+  onboarding (`onboardingState === "checking"`) — Playwright's own `waitUntil: "networkidle"` does
+  **not** cover WebSocket traffic, so a plain `isVisible()` check (which itself does not wait) ran
+  while the page was still genuinely blank, and the script's own `.first()` text-locator click
+  action then auto-waited and landed on the wrong element (a plain feature-description paragraph
+  containing the word "Editor," not the real nav item) once the onboarding screen finally rendered.
+  Fixed by properly waiting for one of several real possible post-load states (`Get Started`,
+  `button.onboarding-skip`, or the real `.nav-item` sidebar) before acting, rather than assuming an
+  instant, non-waiting check reflects the page's eventual settled state — recorded so a future
+  verification pass against this same onboarding gate doesn't rediscover it from scratch. **What
+  this does not confirm**: no per-line (sub-hunk) selection within a hunk (whole-hunk stage/unstage
+  only, matching this feature's own already-documented v1 scope, unchanged by this pass); no
+  unstage-a-hunk UI in the reference wgpu shell (that shell has no Git panel to extend, matching the
+  established "Electron-shells-only" scope every recent Git pass has carried); the real Electron
+  window remains unlaunchable in this session (same standing gap since §75.59). This closes the last
+  named follow-up in the per-hunk-staging backlog row.
 
 ## Build & test
 

@@ -443,6 +443,143 @@ impl GitRepo {
         index.write()
     }
 
+    /// Real per-hunk *staged* diff for one file -- the exact complementary
+    /// diff to `diff_hunks()`'s own unstaged one: diffs the file's real
+    /// `HEAD` blob (old) against its real current index (staged) blob (new)
+    /// via `git2::Patch::from_buffers`, and returns every hunk it
+    /// identifies, in order. A real, named v1 scope cut mirroring
+    /// `diff_hunks()`'s own: a path with no `HEAD` entry (nothing committed
+    /// yet for it -- e.g. a brand-new file that's fully staged) has no real
+    /// "old" baseline to hunk against and returns a real, honest empty
+    /// list -- whole-file `unstage()` already covers that case.
+    pub fn diff_hunks_staged(&self, path: &Path) -> Result<Vec<HunkInfo>, git2::Error> {
+        let index = self.repo.index()?;
+        let index_entry = match index.get_path(path, 0) {
+            Some(entry) => entry,
+            None => return Ok(Vec::new()),
+        };
+        let index_blob = self.repo.find_blob(index_entry.id)?;
+        let head_blob = self
+            .repo
+            .head()
+            .and_then(|h| h.peel_to_tree())
+            .ok()
+            .and_then(|tree| tree.get_path(path).ok())
+            .and_then(|entry| self.repo.find_blob(entry.id()).ok());
+        let head_blob = match head_blob {
+            Some(blob) => blob,
+            None => return Ok(Vec::new()),
+        };
+        let patch = git2::Patch::from_buffers(
+            head_blob.content(),
+            Some(path),
+            index_blob.content(),
+            Some(path),
+            None,
+        )?;
+        let mut hunks = Vec::with_capacity(patch.num_hunks());
+        for i in 0..patch.num_hunks() {
+            let (hunk, line_count) = patch.hunk(i)?;
+            let mut body = String::new();
+            for l in 0..line_count {
+                let line = patch.line_in_hunk(i, l)?;
+                let origin = line.origin();
+                if origin == '+' || origin == '-' || origin == ' ' {
+                    body.push(origin);
+                }
+                body.push_str(&String::from_utf8_lossy(line.content()));
+            }
+            hunks.push(HunkInfo {
+                index: i,
+                header: String::from_utf8_lossy(hunk.header())
+                    .trim_end()
+                    .to_string(),
+                body,
+            });
+        }
+        Ok(hunks)
+    }
+
+    /// Real "unstage this one hunk" -- the direct mirror of `stage_hunk()`,
+    /// the mechanism behind `git add -p`'s own per-hunk *de*selection (`git
+    /// restore --staged -p` in modern git). Recomputes the real staged diff
+    /// for `path` (`HEAD` vs index, matching `diff_hunks_staged()` exactly,
+    /// so `hunk_index` always refers to the hunk the caller most recently
+    /// saw), and splices that hunk's real "old side" (`HEAD`'s own context +
+    /// removed lines) into the real current index content at the hunk's own
+    /// `new_start`/`new_lines` position -- the exact mirror of
+    /// `stage_hunk`'s own `old_start`/`old_lines` splice: there, the OLD
+    /// side (index) received the hunk's NEW content; here, the NEW side
+    /// (index) receives the hunk's OLD (`HEAD`) content. The working tree is
+    /// left completely untouched, matching `stage_hunk`'s own behavior.
+    /// Unstaging hunks one at a time (re-fetching the list between each)
+    /// keeps every later hunk's own position correct -- the same real,
+    /// named v1 scope cut `stage_hunk` already documents.
+    pub fn unstage_hunk(&self, path: &Path, hunk_index: usize) -> Result<(), git2::Error> {
+        let mut index = self.repo.index()?;
+        let index_entry = index
+            .get_path(path, 0)
+            .ok_or_else(|| git2::Error::from_str("no staged content for this path to unstage"))?;
+        let index_blob = self.repo.find_blob(index_entry.id)?;
+        let index_content = index_blob.content();
+        let head_blob = self
+            .repo
+            .head()
+            .and_then(|h| h.peel_to_tree())
+            .ok()
+            .and_then(|tree| tree.get_path(path).ok())
+            .and_then(|entry| self.repo.find_blob(entry.id()).ok())
+            .ok_or_else(|| {
+                git2::Error::from_str("no HEAD baseline for this path to unstage against")
+            })?;
+        let patch = git2::Patch::from_buffers(
+            head_blob.content(),
+            Some(path),
+            index_content,
+            Some(path),
+            None,
+        )?;
+        if hunk_index >= patch.num_hunks() {
+            return Err(git2::Error::from_str("hunk index out of range"));
+        }
+        let (hunk, line_count) = patch.hunk(hunk_index)?;
+        // Split the real current (index) content into lines, keeping each
+        // line's own trailing `\n` attached -- mirrors `stage_hunk`'s own
+        // `old_lines` split exactly, just on the opposite side.
+        let new_lines: Vec<&[u8]> = split_keep_newlines(index_content);
+        let new_start = hunk.new_start() as usize; // 1-indexed, per real unified-diff convention
+        let new_len = hunk.new_lines() as usize;
+        // Mirrors `stage_hunk`'s own `old_len == 0` pure-insertion case,
+        // swapped: `new_len == 0` means this hunk is a pure deletion from
+        // the index's own perspective (HEAD had lines here that staging
+        // removed), so the real splice point is `new_start` unchanged
+        // (nothing in the index to remove) rather than `new_start - 1`.
+        let splice_start = if new_len == 0 {
+            new_start.min(new_lines.len())
+        } else {
+            new_start.saturating_sub(1)
+        };
+        let splice_end = (splice_start + new_len).min(new_lines.len());
+        let mut new_index_content = Vec::new();
+        for line in &new_lines[..splice_start] {
+            new_index_content.extend_from_slice(line);
+        }
+        for l in 0..line_count {
+            let line = patch.line_in_hunk(hunk_index, l)?;
+            if line.origin() == ' ' || line.origin() == '-' {
+                new_index_content.extend_from_slice(line.content());
+            }
+        }
+        for line in &new_lines[splice_end..] {
+            new_index_content.extend_from_slice(line);
+        }
+        let mut entry = index_entry;
+        entry.id = git2::Oid::zero(); // overwritten by add_frombuffer from the real content
+        entry.file_size = 0; // same
+        index.add_frombuffer(&entry, &new_index_content)?;
+        index.write()
+    }
+
     /// Real "discard changes" -- restores this one path's working-tree file
     /// to the version in the index (a `git checkout -- <path>`, i.e. it
     /// discards *unstaged* modifications but keeps whatever is staged). A
@@ -2752,5 +2889,129 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(staged, "line1\nline2\nline3\nline4\nline5\n");
+    }
+
+    fn repo_with_two_separated_staged_hunks(unique: &str) -> (TempRepo, GitRepo) {
+        let (tmp, repo) = repo_with_two_separated_unstaged_hunks(unique);
+        // Stage the real, current (both-edits-applied) working-tree
+        // content wholesale, so both changes start out fully staged.
+        repo.stage(Path::new("f.txt")).unwrap();
+        (tmp, repo)
+    }
+
+    #[test]
+    fn diff_hunks_staged_on_a_brand_new_fully_staged_file_is_a_real_honest_empty_list() {
+        let (tmp, repo) = TempRepo::new("diff_hunks_staged_new_file");
+        tmp.write("new.txt", "content\n");
+        repo.stage(Path::new("new.txt")).unwrap();
+        // No HEAD commit exists yet at all -- a real, honest empty list,
+        // matching `diff_hunks()`'s own "no old baseline" convention one
+        // layer up (whole-file `unstage()` already covers this case).
+        assert!(repo
+            .diff_hunks_staged(Path::new("new.txt"))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn diff_hunks_staged_reports_two_real_separate_hunks_for_two_separated_staged_edits() {
+        let (_tmp, repo) = repo_with_two_separated_staged_hunks("diff_hunks_staged_two");
+        let hunks = repo.diff_hunks_staged(Path::new("f.txt")).unwrap();
+        assert_eq!(
+            hunks.len(),
+            2,
+            "the two staged edits are far enough apart to stay separate hunks"
+        );
+        assert!(hunks[0].body.contains("line2 CHANGED"));
+        assert!(!hunks[0].body.contains("line19"));
+        assert!(hunks[1].body.contains("line19 CHANGED"));
+        assert!(!hunks[1].body.contains("line2 CHANGED"));
+    }
+
+    #[test]
+    fn unstage_hunk_unstages_only_the_selected_hunk_leaving_the_other_real_change_staged() {
+        let (tmp, repo) = repo_with_two_separated_staged_hunks("unstage_hunk_one");
+        repo.unstage_hunk(Path::new("f.txt"), 0).unwrap();
+
+        // The real staged (index) content no longer has line2's change, but
+        // still has line19's.
+        let staged = repo
+            .index_blob_content(Path::new("f.txt"))
+            .unwrap()
+            .unwrap();
+        assert!(!staged.contains("line2 CHANGED"));
+        assert!(staged.contains("line19 CHANGED"));
+
+        // The real working-tree file is completely untouched by unstaging.
+        let working = fs::read_to_string(tmp.dir.join("f.txt")).unwrap();
+        assert!(working.contains("line2 CHANGED"));
+        assert!(working.contains("line19 CHANGED"));
+
+        // git_status shows this file as both staged (line19) AND still
+        // unstaged (line2's real reverted-back-to-unstaged diff).
+        let status = repo.status().unwrap();
+        let entry = status
+            .iter()
+            .find(|e| e.path == Path::new("f.txt"))
+            .unwrap();
+        assert!(entry.staged.is_some());
+        assert!(entry.unstaged.is_some());
+    }
+
+    #[test]
+    fn unstage_hunk_twice_in_sequence_unstages_the_real_whole_file_back_to_head() {
+        let (_tmp, repo) = repo_with_two_separated_staged_hunks("unstage_hunk_both");
+        repo.unstage_hunk(Path::new("f.txt"), 0).unwrap();
+        // The real remaining staged diff now has exactly 1 hunk (line19's
+        // change) -- re-fetched fresh, not reused from the first call.
+        let remaining = repo.diff_hunks_staged(Path::new("f.txt")).unwrap();
+        assert_eq!(remaining.len(), 1);
+        repo.unstage_hunk(Path::new("f.txt"), 0).unwrap();
+
+        let staged = repo
+            .index_blob_content(Path::new("f.txt"))
+            .unwrap()
+            .unwrap();
+        let head = repo.head_blob_content(Path::new("f.txt")).unwrap().unwrap();
+        assert_eq!(
+            staged, head,
+            "unstaging every real hunk matches HEAD exactly"
+        );
+        assert!(repo
+            .diff_hunks_staged(Path::new("f.txt"))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn unstage_hunk_out_of_range_errors_honestly() {
+        let (_tmp, repo) = repo_with_two_separated_staged_hunks("unstage_hunk_oor");
+        assert!(repo.unstage_hunk(Path::new("f.txt"), 99).is_err());
+    }
+
+    #[test]
+    fn unstage_hunk_on_a_pure_staged_addition_reverts_index_to_head_exactly() {
+        let (tmp, repo) = TempRepo::new("unstage_hunk_addition");
+        tmp.write("f.txt", "line1\nline2\nline3\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("base").unwrap();
+        tmp.write("f.txt", "line1\nline2\nline3\nline4\nline5\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+
+        let hunks = repo.diff_hunks_staged(Path::new("f.txt")).unwrap();
+        assert_eq!(hunks.len(), 1);
+        repo.unstage_hunk(Path::new("f.txt"), 0).unwrap();
+
+        let staged = repo
+            .index_blob_content(Path::new("f.txt"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(staged, "line1\nline2\nline3\n");
+        // The real working-tree file still has the addition -- only the
+        // index reverted.
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "line1\nline2\nline3\nline4\nline5\n"
+        );
     }
 }
