@@ -17,6 +17,7 @@ import DebugPanel, {
   type WatchEntry,
 } from "./components/DebugPanel";
 import LogcatPanel from "./components/LogcatPanel";
+import LeoChatPanel from "./components/LeoChatPanel";
 import { ensureBufferWasmInit, Document as WasmDocument } from "./buffer";
 import { isFileSystemAccessSupported, pickProjectDirectory, readFileText } from "./fsAccess";
 import { applyTheme, THEME_LABELS, type ThemeName } from "./applyTheme";
@@ -977,7 +978,7 @@ export default function App(): React.ReactElement {
         </button>
         <span className="toolbar-note">
           {backendReady
-            ? "Connected to a local devserver -- git and backend-mode editing (with live LSP diagnostics and DAP debugging) are live, no Leo yet"
+            ? "Connected to a local devserver -- git, Leo, and backend-mode editing (with live LSP diagnostics and DAP debugging) are all live"
             : "Client-side only in this increment -- no LSP/DAP/Leo/git yet, see README.md"}
         </span>
         <select
@@ -1290,6 +1291,7 @@ export default function App(): React.ReactElement {
           </button>
         )}
       </div>
+      {backendReady && backendClient && <LeoChatPanel client={backendClient} />}
     </div>
   );
 }

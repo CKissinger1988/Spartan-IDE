@@ -52,8 +52,9 @@ Priority key:
    [{line, condition?, logMessage?}]` param (with a backward-compat `break_lines` fallback);
    right-click a gutter line in either shell to set a condition/logpoint. Live-verified against a
    real `debugpy` session — a conditional breakpoint on a loop correctly stopped only when `i == 3`.
-9. **Web app: LSP/DAP/Leo/git in the pure client-side mode** (P2) — currently these only work in
-   backend-connected mode; wiring them to the WebSocket transport closes the biggest `web/` gap.
+9. ~~**Web app: Leo chat panel in backend-connected mode**~~ — ✅ **Shipped** (task #285). Closes
+   the "web/ has no Leo UI at all" gap; LSP/DAP/git were already live in backend-connected mode.
+   The *pure client-side* mode (no backend process) remains a real, much larger, unstarted P3.
 10. **Auto-update download + install + restart** (P2) — the checker exists (§75.49); completing
     the apply path (once code signing lands) makes updates real, not just detected.
 
@@ -113,7 +114,8 @@ Priority key:
 
 | Feature | Priority | Notes / grounding |
 |---|---|---|
-| LSP/DAP/Leo/git in pure client-side mode | P2 | Only backend-connected mode has them; wire to the WebSocket transport. |
+| ~~Leo chat panel (backend-connected mode)~~ | ✅ done | Shipped (task #285) — `web/src/components/LeoChatPanel.tsx`, a close port of `desktop/`'s own, using `BackendClient` directly (`.call()`/`.onEvent()` instead of `window.spartan`). Closes the "web/ has no Leo UI at all" gap named across every prior Leo-panel feature. Live-verified end-to-end against a real devserver: real `leo_start_task`/`leo_retry` calls fired with correct params, real `leo_plan_failed` event handling. |
+| LSP/DAP/Leo/git in the *pure client-side* mode (no backend process at all) | P3 | A structurally different, much larger problem than the now-closed backend-connected-mode gap above — these need a real server process (a language server, a debugger, git plumbing, a model call) to exist at all, which the pure client-side mode (File System Access API + WASM, zero backend) has none of by construction. Not "wire to the WebSocket transport" (that's exactly what backend-connected mode already does) — would need in-browser equivalents (e.g. a WASM-compiled language server) for each capability, unstarted. |
 | ~~Multi-file tabs~~ | ✅ done | Shipped — `web/App.tsx` now tracks `openTabs`/`activeIndex` (both file kinds), with a real tab bar (switch + close), live-verified against a real devserver. §75.89's single-file gap closed. |
 | ~~Redo in the WASM buffer~~ | ✅ done | Shipped — `WasmDocument` now builds a real `redo_stack` layer above `Document` (same pattern as `spartan-backend`/wgpu shell); Ctrl+Shift+Z/Ctrl+Y wired into `web/Editor.tsx`, verified through the real compiled WASM module in Node. |
 | Firefox/Safari support | P3 | File System Access API is Chromium-only; needs a fallback storage backend (OPFS/`lightning-fs`). |

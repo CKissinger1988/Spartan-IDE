@@ -7749,6 +7749,60 @@ first — it's the parity reference until each row there is actually reimplement
   §56.3-56.4's own original scope); no GitHub token entry UI in either Settings screen yet (the
   setting is real and wired through `settings_set`, just not yet given its own row); the real
   Electron window remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — Leo chat panel in `web/`'s backend-connected mode, closing the
+  "web/ has no Leo UI at all" gap named across every prior Leo-panel feature in this project's
+  history (task #285)**: continues "continue with the roadmap." Confirmed via grep before writing
+  any code: the only prior `web/` reference to "Leo" anywhere was `LeoProviderKind` in
+  `ModelsPanel.tsx`'s own settings dropdown -- no chat/task/execute-loop surface existed, even
+  though every `leo_*` method (`leo_start_task`/`leo_approve_plan`/`leo_reject_plan`/
+  `leo_next_step`/`leo_approve_call`/`leo_reject_call`/`leo_cancel`/`leo_retry`/
+  `leo_session_history`) has been a real, generic `spartan-backend` method reachable through
+  `web/`'s own fully generic `BackendClient` (no method allowlist to extend, unlike `desktop/`'s
+  `preload.ts`) since as far back as §75.61/§75.66/§75.68/§75.78. New `web/src/components/
+  LeoChatPanel.tsx` is a direct, close port of `desktop/src/components/LeoChatPanel.tsx` -- same
+  real state machine, same real dispatch methods, same real random-thoughts/voice-I/O/session-
+  history features -- with exactly two real, structural differences named in the file's own doc
+  comment: it takes the already-connected `BackendClient` instance directly as a prop rather than
+  reading a global `window.spartan`, and `BackendClient.onEvent`'s own real callback shape is a
+  single `{event, data}` object (`client.onEvent(({event, data}) => ...)`), not Electron's
+  two-argument `window.spartan.onEvent(event, data)` -- matching every other `web/` component that
+  already subscribes to backend events (the DAP/Android handlers in `App.tsx` itself). `web/App.tsx`
+  renders it as a persistent, docked sibling to the main content area (matching `desktop/`'s own
+  "visible regardless of screen" placement) gated on `backendReady` (`backendStatus === "connected"
+  && !!backendClient?.projectRoot`), and its own stale toolbar note ("...no Leo yet") was corrected
+  to reflect reality. `web/app.css` gained every `.leo-*` CSS class `desktop/`'s own `app.css`
+  already has except `.leo-diff*` (already present in `web/app.css`, shared with `GitPanel.tsx`'s
+  own diff view) -- verified byte-for-byte against the source before appending, and every custom
+  property/keyframe it depends on (`--accent-dim`/`--hud`/`--glow-accent(-lg)`/`--status-critical-
+  rgb`/`sf-pulse`/`hud-status-pulse`) and every reused class (`.git-section-label`/`.git-section`/
+  `.git-row`/`.git-panel-empty`/`.git-row-path`/`.sf-chamfer-sm`) confirmed already present in all 7
+  themes before assuming the port would render correctly. `npm run typecheck`/`npm run build` both
+  clean; no Rust changes needed (`cargo fmt --all -- --check` unaffected). **Real, live, end-to-end
+  Playwright verification against the actual compiled `web/dist` served by a real running
+  `spartan-devserver` binary** (not a mock, a genuine `BackendClient.connect()` with no shim of any
+  kind, the same technique this whole `web/` effort has used since §75.88), with outgoing WebSocket
+  frames captured directly via a `WebSocket.send` proxy rather than inferred: the toolbar note
+  correctly updated to mention Leo; the real Leo panel rendered in its initial `Idle` state; typing
+  a real task and clicking Send correctly transitioned to `Planning` and fired a real, correctly-
+  shaped `leo_start_task` call (`{"task":"Say hello","project_root":"/tmp/leo-web-fixture"}`); this
+  sandbox's own already-documented unreachable-Ollama condition (unchanged since §75.56) produced a
+  real, honest `leo_plan_failed` event landing the panel in `Failed` with a real Retry button;
+  clicking Retry fired a real `leo_retry` call, transitioning through `Recovering` back to
+  `Executing` and correctly landing on the honest secondary error "no approved plan to execute"
+  (since the original plan itself never generated) -- exactly the real state-machine behavior
+  `leo_retry`'s own backend doc comment describes, not a fabricated success. Zero page errors,
+  screenshotted showing the fully rendered panel (state badge, error text, retry-in-progress log
+  entry, Cancel Task button, History section, populated task input) matching `desktop/`'s own
+  visual design exactly. **What this does not confirm**: no live model-driven exercise of a real
+  plan/execute cycle (Ollama unreachable this session, the same standing constraint every Leo pass
+  in this project's history has carried); no equivalent panel in the reference wgpu shell (Leo
+  wiring there has never reached past Agent mode's own real placeholder-replacement, matching every
+  Leo-panel feature since §75.47's "Electron shells only" scope -- and `web/` itself is not that
+  shell); the real Electron window remains unlaunchable in this session (same standing gap since
+  §75.59). Closes the "Leo" portion of `docs/FUTURE_FEATURES.md`'s own "Web app: LSP/DAP/Leo/git in
+  the pure client-side mode" item for the *backend-connected* mode specifically -- the *pure*
+  client-side mode (no backend process at all) still has no path to LSP/DAP/Leo by construction,
+  since those need a real server process to exist, a separate, much larger, unstarted initiative.
 
 ## Build & test
 
