@@ -66,6 +66,29 @@ function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
 
 const VOICE_OUTPUT_STORAGE_KEY = "spartan.leo.voiceOutputEnabled";
 
+/** Real, deliberate guards: a plain `localStorage` access can throw a real
+ * `SecurityError` (private-browsing mode in some browsers, or a real
+ * storage-blocked embedding context, e.g. a third-party-cookie-blocked
+ * iframe) -- and since `readVoiceOutputPref` is called from inside a
+ * `useState` initializer, an uncaught throw there happens *during render*,
+ * which no surrounding event-handler `try/catch` can protect against and
+ * would take the whole panel down with no error boundary in place. */
+function readVoiceOutputPref(): boolean {
+  try {
+    return window.localStorage.getItem(VOICE_OUTPUT_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeVoiceOutputPref(enabled: boolean): void {
+  try {
+    window.localStorage.setItem(VOICE_OUTPUT_STORAGE_KEY, enabled ? "1" : "0");
+  } catch {
+    /* storage unavailable -- preference is real, but session-only now */
+  }
+}
+
 /** Same curated, hand-written array as `desktop/`'s own copy (no Gemini
  * CLI code read or copied -- see that file's own doc comment for the
  * full account of what this behavior is and isn't based on). */
@@ -226,7 +249,7 @@ export default function LeoChatPanel({ client }: LeoChatPanelProps): React.React
   );
   const [listening, setListening] = useState(false);
   const [voiceOutputEnabled, setVoiceOutputEnabled] = useState(
-    () => typeof window !== "undefined" && window.localStorage.getItem(VOICE_OUTPUT_STORAGE_KEY) === "1"
+    () => typeof window !== "undefined" && readVoiceOutputPref()
   );
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
@@ -243,7 +266,7 @@ export default function LeoChatPanel({ client }: LeoChatPanelProps): React.React
   const toggleVoiceOutput = useCallback(() => {
     setVoiceOutputEnabled((prev) => {
       const next = !prev;
-      window.localStorage.setItem(VOICE_OUTPUT_STORAGE_KEY, next ? "1" : "0");
+      writeVoiceOutputPref(next);
       if (!next) window.speechSynthesis?.cancel();
       return next;
     });

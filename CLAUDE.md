@@ -8187,6 +8187,33 @@ first — it's the parity reference until each row there is actually reimplement
   low-value) and no attempt was made to fix the pre-existing, unrelated transitive `postcss`
   vulnerability `npm audit` reports in `web/` (out of scope for this review-response pass, not
   something CodeRabbit itself flagged).
+- **Real, working code — a second real CodeRabbit finding closed on PR #7, found only by
+  re-fetching the review's own current unresolved-thread state rather than trusting the prior
+  summary (task: same "review with coderabbit and merge everything" pass)**: after the fixes
+  above, all 19 of PR #7's own unresolved review comment threads were re-fetched directly
+  (`get_review_comments`, saved to a file and parsed with Python -- the result was too large for
+  inline tool output) to confirm nothing had been missed. One real, previously-unaddressed finding
+  remained: `LeoChatPanel.tsx`'s `voiceOutputEnabled` state (both shells) read `localStorage`
+  directly inside its own `useState` lazy initializer -- `useState(() => window.localStorage.
+  getItem(...) === "1")` -- and a plain `localStorage` access can genuinely throw a real
+  `SecurityError` in a real private-browsing mode or a real storage-blocked embedding context
+  (e.g. a third-party-cookie-blocked iframe), not a hypothetical. Since a `useState` initializer
+  runs *during render*, an uncaught throw there crashes the whole component with no surrounding
+  event-handler `try/catch` able to protect it, and no error boundary exists around this panel.
+  Fixed in both `desktop/src/components/LeoChatPanel.tsx` and `web/src/components/
+  LeoChatPanel.tsx` identically: two new module-level helpers, `readVoiceOutputPref()` (wraps the
+  real `getItem` call in `try/catch`, returns `false` on any real thrown error) and
+  `writeVoiceOutputPref(enabled)` (wraps the real `setItem` call the same way, silently degrading
+  to session-only on failure rather than throwing), with the `useState` initializer and
+  `toggleVoiceOutput` both routed through them instead of touching `window.localStorage` directly.
+  `npx tsc --noEmit` clean in both `desktop/` and `web/`; `cargo fmt --all -- --check` re-confirmed
+  clean (no Rust touched); both shells' own real production builds (`npm run build` in `web/`,
+  `npm run build` + `npm run build:electron` in `desktop/`) completed successfully, including the
+  full tree-sitter WASM asset bundling and Electron main-process `tsc` compilation. **What this
+  does not confirm**: no live Playwright re-verification of a real thrown `SecurityError` (would
+  need a real private-browsing/storage-blocked browser context to actually trigger the throw this
+  fix guards against, not attempted here); the real Electron window remains unlaunchable in this
+  session (same standing gap since §75.59).
 
 ## Build & test
 
