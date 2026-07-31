@@ -8224,6 +8224,51 @@ first — it's the parity reference until each row there is actually reimplement
   need a real private-browsing/storage-blocked browser context to actually trigger the throw this
   fix guards against, not attempted here); the real Electron window remains unlaunchable in this
   session (same standing gap since §75.59).
+- **Real, working code — formatter coverage for Kotlin (ktlint) and Java (google-java-format),
+  closing two-thirds of the `docs/FUTURE_FEATURES.md` "Formatter coverage" backlog row (task
+  #293)**: user-requested ("Continue adding future features"). Before writing any product code,
+  both tools were installed and driven live in this sandboxed session: `ktlint` 1.8.0's own real
+  `--stdin --format` flags (plus `--stdin-path` for its path-keyed `.editorconfig` resolution, the
+  same reasoning `prettier`'s existing `--stdin-filepath` already established) genuinely reformat
+  a real Kotlin fixture on stdout; `google-java-format` 1.24.0's own real bare `-` argument does
+  the identical thing for Java. `format_integration::resolve_formatter_command` gained both real
+  invocations, and `languages.toml`'s Java entry gained a real `[language.formatter]` for the
+  first time -- closing a real, previously-total gap named explicitly since §186 ("Java has no
+  formatter configured at all"). `dotnet format` (C#) was investigated and confirmed to genuinely
+  have no stdin/stdout filter mode at all -- not a flag this crate merely hadn't found, a real
+  limitation of the tool itself -- and stays the one, honestly-named unclosed third of this
+  backlog row; the existing trailing-whitespace-trim fallback (§220-222) still covers it. **A
+  real, live-caught test-fixture mistake, not a product bug**: the first ktlint test used a
+  lowercase file path (`/tmp/x.kt`) and failed with a real ktlint `standard:filename` rule
+  violation (`File name 'x.kt' should conform PascalCase`) -- a genuine, correct constraint of
+  ktlint itself; fixed by renaming the test fixture to the conventional `Main.kt`, not by weakening
+  the check. **A second real, pre-existing test needed retargeting, not because of a regression
+  but because its own premise became stale**: `format_document_on_a_real_language_with_no_
+  configured_formatter_errors_honestly` had used Java specifically as "the one Tier 1 language
+  with no formatter entry at all" -- with that no longer true, and every curated language now
+  carrying *some* formatter entry, the "no formatter is configured for language" error path can no
+  longer be reached at all through the curated registry; retargeted to C#'s own genuinely distinct
+  "has a formatter entry but no stdin/stdout filter mode" error path instead, the one real gap that
+  remains. 6 new tests (5 in `spartan-backend::format_integration` -- the six-formatter resolve
+  list, ktlint's exact invocation args, and two real, self-skipping live-formatting tests against
+  actual installed `ktlint`/`google-java-format` binaries confirmed passing in this session, not
+  just compiling; 1 in `spartan-languages` confirming the Java profile's new formatter field) plus
+  1 new self-skipping end-to-end dispatch test in `spartan-backend::lib.rs` (`format_document`
+  through the real IPC dispatch against a real installed `google-java-format`, confirmed passing),
+  262 `spartan-backend` lib tests total (up from 261, plus the live-dependent ones), full `cargo
+  fmt --all -- --check`/`cargo clippy -p spartan-backend -p spartan-languages --release
+  --all-targets` clean. **No frontend changes were needed in either shell**: `desktop/Editor.tsx`'s
+  and `web/BackendEditor.tsx`'s own trailing-whitespace-trim fallback (§220-222) already matches
+  both `"no formatter"` and `"no supported stdin/stdout formatting mode"` generically, so Kotlin
+  and Java files now correctly reach the real formatter path instead of the fallback, while C#
+  correctly still falls back, with zero code changes on either side of that boundary. **What this
+  does not confirm**: neither `ktlint` nor `google-java-format` is installed by default in this
+  project's own CI or dev environment (both self-skipping tests were verified live against locally
+  installed binaries this session, then confirmed to self-skip cleanly without them); no live
+  Playwright verification of the frontend fallback boundary specifically for this pass (the
+  underlying error-message-matching logic was unchanged, and Format Document's own end-to-end UI
+  behavior was already live-verified for other languages in §186/§220-222); the real Electron
+  window remains unlaunchable in this session (same standing gap since §75.59).
 
 ## Build & test
 
