@@ -90,11 +90,21 @@ desktop/                    Real Electron + React desktop shell — the current,
 
 crates/spartan-backend/     Real Rust IPC service the Electron shell drives — wraps every
                              other crate below behind a newline-delimited JSON-RPC protocol
+crates/spartan-devserver/   Real localhost-only wrapper around spartan-backend for web/ —
+                             adds WebSocket transport + a few devserver-only methods, falls
+                             through to spartan-backend for everything else
 crates/spartan-buffer/      Real rope-based document/buffer model — branching undo tree,
                              bounded checkpoint ring, char-indexed edits
+crates/spartan-buffer-wasm/ Real wasm-bindgen wrapper around spartan-buffer — the exact same
+                             engine, compiled for the browser, backing web/'s client-side edits
 crates/spartan-languages/   Real LanguageProfile registry — LSP/DAP commands, build systems,
                              marker-file project detection, for 7 languages (Rust, TS/JS,
                              Python, Kotlin, Java, Go, C#)
+crates/spartan-lsp/         Real LSP client + session management (diagnostics, hover,
+                             completion, go-to-definition, rename, and more) shared by any
+                             surface that wants live language intelligence off the render loop
+crates/spartan-dap/         Real DAP client + session management (breakpoints, step, variable
+                             inspection) — the debugging sibling of spartan-lsp, same design
 crates/spartan-leo/         Real agentic core — state machine, sandboxed tool execution,
                              risk-classified approval gating, project-tier memory
 crates/spartan-model/       Real ModelProvider implementations — Ollama, Claude, LiteLLM,
@@ -103,7 +113,8 @@ crates/spartan-git/         Real git integration (via libgit2) — status, stage
                              Leo's own checkpoint/rollback mechanism
 crates/spartan-settings/    Real persisted settings (~/.spartan/settings.json)
 crates/spartan-security/    Real secrets detection/redaction (credential-shaped regexes)
-crates/spartan-crash/       Real local-first crash reporter (panic hook, redacted, no upload)
+crates/spartan-crash/       Real local-first crash reporter (panic hook, redacted, real
+                             user-triggered upload — never automatic)
 crates/spartan-updater/     Real "check for updates" against this repo's own GitHub API
 crates/spartan-plugin-host/ Real WASM Component Model plugin host (wasmtime), capability-gated
 crates/spartan-devcontainer/ Real OCI/Docker dev containers (containers.dev spec) via bollard
@@ -113,8 +124,10 @@ crates/spartan-editor-core/ The original wgpu-native shell — kept as the teste
                              feature it proved was later promoted into the crates above
 
 web/                        Real, separate Vite+React npm project — a vscode.dev-inspired
-                             browser IDE, first increment: File System Access API + a real
-                             WASM-compiled spartan-buffer, no LSP/DAP/Leo/git yet
+                             browser IDE with two real editing paths: fully client-side
+                             (File System Access API + a real WASM-compiled spartan-buffer,
+                             no backend needed) and backend-connected (a real spartan-devserver
+                             over WebSocket, adding real LSP/DAP/git — no Leo chat UI here yet)
 mobile/                     Real Expo/React Native companion app — Spartan Mobile IDE
 spikes/                     Real Tier 0 risk-gate spikes (rope perf, LSP/DAP clients, GPU
                              rendering, local-model tool-call parsing) — not the product itself
@@ -256,11 +269,13 @@ touching security, sandboxing, or approval flows (§9, §36).
   install flow, emulator/device management, Compose LSP/preview, JDWP debugging, or UI
   surface yet — §35.9 itself names Android as Tier 1's biggest scope risk and explicitly
   sanctions shipping without it, which is exactly where this stands.
-- **Not yet built**: a packaged/signed Electron installer, LSP/DAP/Leo/git connectivity for
-  `web/` (pending an open token-delivery design question for its WebSocket transport), and
-  the larger design-stage surface (§35 is the prioritized roadmap). Local-first crash
-  reporting now has a real, user-triggered *upload* path too (never automatic) — see
-  `crates/spartan-crash`.
+- **Not yet built**: a *signed* Electron installer (the unsigned one is real — see above), a
+  Leo chat UI in `web/` specifically (every `leo_*` backend method is already reachable
+  there over the real WebSocket transport, `web/` just has no chat panel calling them yet —
+  LSP/DAP/git *are* real in `web/`'s backend-connected path, see
+  [`web/README.md`](web/README.md)), and the larger design-stage surface (§35 is the
+  prioritized roadmap). Local-first crash reporting now has a real, user-triggered
+  *upload* path too (never automatic) — see `crates/spartan-crash`.
 
 This project's own history includes real bugs found only by actually running code and
 adversarially testing it — a UTF-8 char-boundary panic, a cross-adapter DAP deadlock, an
