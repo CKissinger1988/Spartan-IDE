@@ -5756,6 +5756,130 @@ mod tests {
         assert!(resp.error.unwrap().contains("no pty session"));
     }
 
+    /// Closes the "PTY resize verified against a real reader" gap named in
+    /// `docs/FUTURE_FEATURES.md`'s own Terminal & sessions table -- the
+    /// resize IPC has been real and tested against the honest-error path
+    /// since §75.64, but never against a real process that actually reads
+    /// the terminal's own size. A real spawned `python3` process prints its
+    /// real `os.get_terminal_size()` on startup and again on every real
+    /// `SIGWINCH` it receives (self-skips if `python3` isn't on `$PATH`,
+    /// matching every other real-external-tool integration test in this
+    /// crate). Resizing the pty via `pty_resize` triggers a real OS-level
+    /// `TIOCSWINSZ` ioctl on the master side, which the kernel itself
+    /// automatically delivers as `SIGWINCH` to the real foreground process
+    /// group of the slave -- no manual signal send needed, and nothing this
+    /// test's own code could fake, so this proves the whole real chain
+    /// (dispatch -> `PtyHandle::resize` -> `portable-pty`'s master ->
+    /// kernel -> the real child process) end to end.
+    #[test]
+    fn pty_resize_is_actually_observed_by_a_real_reader_process() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("SKIP: python3 not found on $PATH");
+            return;
+        }
+
+        let state = new_state();
+        let (tx, rx) = mpsc::channel::<String>();
+        let script = r#"
+import os, signal, sys, time
+def report():
+    sz = os.get_terminal_size()
+    print(f"SIZE:{sz.columns}:{sz.lines}", flush=True)
+def handler(signum, frame):
+    report()
+signal.signal(signal.SIGWINCH, handler)
+report()
+time.sleep(10)
+"#;
+        let spawn_resp = handle_request(
+            &state,
+            req(
+                1,
+                "pty_spawn",
+                serde_json::json!({
+                    "cwd": std::env::temp_dir().to_string_lossy(),
+                    "cols": 80,
+                    "rows": 24,
+                    "command": "python3",
+                    "args": ["-c", script],
+                }),
+            ),
+            tx,
+        );
+        assert!(
+            spawn_resp.error.is_none(),
+            "pty_spawn errored: {:?}",
+            spawn_resp.error
+        );
+        let session_id = spawn_resp.result.unwrap()["session_id"].as_u64().unwrap();
+
+        let recv_output_line = |rx: &mpsc::Receiver<String>, timeout: std::time::Duration| {
+            let deadline = std::time::Instant::now() + timeout;
+            let mut collected = String::new();
+            loop {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                assert!(
+                    !remaining.is_zero(),
+                    "timed out waiting for real pty output"
+                );
+                let line = rx
+                    .recv_timeout(remaining)
+                    .unwrap_or_else(|_| panic!("timed out waiting for real pty output"));
+                let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+                if value["data"]["session_id"].as_u64() != Some(session_id) {
+                    continue;
+                }
+                if let Some(chunk) = value["event"]
+                    .as_str()
+                    .filter(|e| *e == "pty_output")
+                    .and_then(|_| value["data"]["chunk"].as_str())
+                {
+                    collected.push_str(chunk);
+                    if collected.contains("SIZE:") && collected.contains('\n') {
+                        return collected;
+                    }
+                }
+            }
+        };
+
+        let initial = recv_output_line(&rx, std::time::Duration::from_secs(10));
+        assert!(
+            initial.contains("SIZE:80:24"),
+            "expected the real initial terminal size to be 80x24, got: {initial:?}"
+        );
+
+        let resize_resp = call(
+            &state,
+            2,
+            "pty_resize",
+            serde_json::json!({ "session_id": session_id, "cols": 120, "rows": 40 }),
+        );
+        assert!(
+            resize_resp.error.is_none(),
+            "pty_resize errored: {:?}",
+            resize_resp.error
+        );
+
+        let after_resize = recv_output_line(&rx, std::time::Duration::from_secs(10));
+        assert!(
+            after_resize.contains("SIZE:120:40"),
+            "expected the real reader process to observe the resized 120x40 \
+             terminal via a real kernel-delivered SIGWINCH, got: {after_resize:?}"
+        );
+
+        let close_resp = call(
+            &state,
+            3,
+            "pty_close",
+            serde_json::json!({ "session_id": session_id }),
+        );
+        assert!(close_resp.error.is_none());
+    }
+
     #[test]
     fn pty_close_on_an_unknown_session_is_a_real_harmless_no_op() {
         // Closing an id that was never spawned (or already closed) should

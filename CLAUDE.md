@@ -8067,6 +8067,33 @@ first — it's the parity reference until each row there is actually reimplement
   established "Electron-shells-only" scope every recent Git pass has carried); the real Electron
   window remains unlaunchable in this session (same standing gap since §75.59). This closes the last
   named follow-up in the per-hunk-staging backlog row.
+- **Real, working code — PTY resize verified against a real reader process, closing the last
+  named row in the Terminal & sessions backlog table (task #294)**: continues the same "continue
+  the road map" push. `pty_resize`/`PtyHandle::resize` have been real, dispatched, and tested
+  against the honest unknown-session error path since §75.64, but no test had ever confirmed a
+  real process actually *observes* the new size, only that the IPC call itself didn't error. New
+  `pty_resize_is_actually_observed_by_a_real_reader_process` (`crates/spartan-backend/src/lib.rs`)
+  spawns a real `python3` process (self-skipping if `python3` isn't found on `$PATH`, matching
+  every other real-external-tool integration test in this crate) that prints its own real
+  `os.get_terminal_size()` on startup and again on every real `SIGWINCH` signal it receives, spawned
+  through the exact same `pty_spawn` dispatch path both shells' `TerminalView` components already
+  use. Calling the real `pty_resize` dispatch method to 120x40 (from an initial 80x24) triggers a
+  real OS-level `TIOCSWINSZ` ioctl on the pty master via `portable-pty`, which the kernel itself
+  automatically delivers as a real `SIGWINCH` to the real foreground process group of the slave --
+  no manual signal send needed anywhere in the test, and nothing the test's own code could fake --
+  so a correctly-observed new size proves the entire real chain end to end (dispatch ->
+  `PtyHandle::resize` -> the pty master -> the kernel -> the real child process), not just that the
+  IPC call returns `Ok`. **No product bug was found**, reported plainly rather than manufacturing
+  one: the pre-existing `pty_resize` implementation was already correct, confirmed passing
+  consistently across 6 repeated runs (~70-80ms each, well within a real signal-delivery timescale,
+  no flakiness observed). 252 `spartan-backend` lib tests total (up from 251), full `cargo fmt --all
+  -- --check`/`cargo clippy -p spartan-backend --release --all-targets` both clean. **What this does
+  not confirm**: no equivalent verification in the reference wgpu shell's own `terminal.rs` (that
+  shell's terminal predates this crate and was never independently checked for the same class of
+  gap); no verification against any process besides a real `python3` reader (the underlying
+  `TIOCSWINSZ`/`SIGWINCH` mechanism is OS-level and process-agnostic, but only one real reader was
+  exercised); the real Electron window remains unlaunchable in this session (same standing gap
+  since §75.59). This closes the last named row in the Terminal & sessions backlog table.
 
 ## Build & test
 
