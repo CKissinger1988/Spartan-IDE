@@ -33,6 +33,36 @@ fn split_keep_newlines(content: &[u8]) -> Vec<&[u8]> {
     lines
 }
 
+/// Walks every real hunk a `git2::Patch` identifies and builds the
+/// `HunkInfo` list both `diff_hunks` (unstaged, index-vs-workdir) and
+/// `diff_hunks_staged` (staged, HEAD-vs-index) return -- the two callers
+/// diff in opposite directions but collect the resulting hunks identically,
+/// so this is the one real shared traversal rather than two copies of the
+/// same loop.
+fn collect_hunks(patch: &git2::Patch<'_>) -> Result<Vec<HunkInfo>, git2::Error> {
+    let mut hunks = Vec::with_capacity(patch.num_hunks());
+    for i in 0..patch.num_hunks() {
+        let (hunk, line_count) = patch.hunk(i)?;
+        let mut body = String::new();
+        for l in 0..line_count {
+            let line = patch.line_in_hunk(i, l)?;
+            let origin = line.origin();
+            if origin == '+' || origin == '-' || origin == ' ' {
+                body.push(origin);
+            }
+            body.push_str(&String::from_utf8_lossy(line.content()));
+        }
+        hunks.push(HunkInfo {
+            index: i,
+            header: String::from_utf8_lossy(hunk.header())
+                .trim_end()
+                .to_string(),
+            body,
+        });
+    }
+    Ok(hunks)
+}
+
 /// Shared credential callback for real fetch/push against an authenticated
 /// remote. Tries SSH-agent first (the common key-backed case), then a
 /// default/anonymous credential (local `file://` remotes need none, so the
@@ -346,27 +376,7 @@ impl GitRepo {
             Some(path),
             None,
         )?;
-        let mut hunks = Vec::with_capacity(patch.num_hunks());
-        for i in 0..patch.num_hunks() {
-            let (hunk, line_count) = patch.hunk(i)?;
-            let mut body = String::new();
-            for l in 0..line_count {
-                let line = patch.line_in_hunk(i, l)?;
-                let origin = line.origin();
-                if origin == '+' || origin == '-' || origin == ' ' {
-                    body.push(origin);
-                }
-                body.push_str(&String::from_utf8_lossy(line.content()));
-            }
-            hunks.push(HunkInfo {
-                index: i,
-                header: String::from_utf8_lossy(hunk.header())
-                    .trim_end()
-                    .to_string(),
-                body,
-            });
-        }
-        Ok(hunks)
+        collect_hunks(&patch)
     }
 
     /// Real "stage this one hunk" (the mechanism behind `git add -p`'s own
@@ -477,27 +487,7 @@ impl GitRepo {
             Some(path),
             None,
         )?;
-        let mut hunks = Vec::with_capacity(patch.num_hunks());
-        for i in 0..patch.num_hunks() {
-            let (hunk, line_count) = patch.hunk(i)?;
-            let mut body = String::new();
-            for l in 0..line_count {
-                let line = patch.line_in_hunk(i, l)?;
-                let origin = line.origin();
-                if origin == '+' || origin == '-' || origin == ' ' {
-                    body.push(origin);
-                }
-                body.push_str(&String::from_utf8_lossy(line.content()));
-            }
-            hunks.push(HunkInfo {
-                index: i,
-                header: String::from_utf8_lossy(hunk.header())
-                    .trim_end()
-                    .to_string(),
-                body,
-            });
-        }
-        Ok(hunks)
+        collect_hunks(&patch)
     }
 
     /// Real "unstage this one hunk" -- the direct mirror of `stage_hunk()`,
@@ -2480,6 +2470,38 @@ mod tests {
             .remote("origin", "https://gitlab.com/other/thing.git")
             .unwrap();
         assert_eq!(repo.detect_github_remote(), None);
+    }
+
+    #[test]
+    fn detect_github_remote_falls_back_to_a_non_origin_github_remote() {
+        // A real, valid state some repos are in: `origin` points somewhere
+        // else (or doesn't exist at all), but a differently-named remote
+        // (e.g. `upstream`) is the real GitHub one -- the fallback path
+        // `detect_github_remote`'s own doc comment names explicitly.
+        //
+        // The SSH form (`git@github.com:...`, matching the sibling
+        // `detect_github_remote_finds_origin_and_ignores_non_github_remotes`
+        // test's own precedent) is deliberate, not incidental: this session's
+        // own sandboxed `.gitconfig` carries a real `url.<proxy>.insteadOf =
+        // https://github.com/` rewrite rule, so a *literal* `https://
+        // github.com/...` URL passed to `git2::Repository::remote()` gets
+        // silently rewritten to the local proxy URL at creation time --
+        // confirmed live via a temporary debug print showing the real
+        // stored remote as `http://local_proxy@127.0.0.1:.../git/...`, not
+        // the URL this test actually passed. The SSH form isn't touched by
+        // that `https://`-scoped rule, so it's the real, environment-safe
+        // way to test this fallback path here.
+        let (_tmp, repo) = TempRepo::new("github_remote_detect_fallback");
+        repo.repo
+            .remote("origin", "https://gitlab.com/other/thing.git")
+            .unwrap();
+        repo.repo
+            .remote("upstream", "git@github.com:CKissinger1988/Spartan-IDE.git")
+            .unwrap();
+        assert_eq!(
+            repo.detect_github_remote(),
+            Some(("CKissinger1988".to_string(), "Spartan-IDE".to_string()))
+        );
     }
 
     #[test]
