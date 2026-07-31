@@ -47,11 +47,18 @@ const BRACKET_CLOSE_TO_OPEN: Record<string, string> = { ")": "(", "]": "[", "}":
 
 export function computeBracketPairMarks(content: string): BracketPairMark[] {
   const marks: BracketPairMark[] = [];
-  const stack: { markIndex: number; char: string }[] = [];
+  // `markIndex` is `null` for an opener scanned after the real output cap
+  // was already hit -- matching (stack push/pop) still tracks it for
+  // correctness, it just has no rendered mark of its own. Deliberately
+  // *not* the same condition as the loop bound below: matching must run
+  // over the whole real document regardless of the cap, or a real opener
+  // pushed just before the cap would be misreported as unmatched the
+  // instant its own real closer past the cap is never even scanned.
+  const stack: { markIndex: number | null; char: string }[] = [];
   let line = 0;
   let character = 0;
 
-  for (let i = 0; i < content.length && marks.length < MAX_BRACKET_PAIR_MARKS; i++) {
+  for (let i = 0; i < content.length; i++) {
     const ch = content[i];
     if (ch === "\n") {
       line++;
@@ -60,17 +67,26 @@ export function computeBracketPairMarks(content: string): BracketPairMark[] {
     }
     if (BRACKET_OPENERS.has(ch)) {
       const colorIndex = stack.length % BRACKET_PAIR_COLOR_COUNT;
-      marks.push({ line, character, colorIndex });
-      stack.push({ markIndex: marks.length - 1, char: ch });
+      let markIndex: number | null = null;
+      if (marks.length < MAX_BRACKET_PAIR_MARKS) {
+        marks.push({ line, character, colorIndex });
+        markIndex = marks.length - 1;
+      }
+      stack.push({ markIndex, char: ch });
     } else if (ch in BRACKET_CLOSE_TO_OPEN) {
       const expectedOpen = BRACKET_CLOSE_TO_OPEN[ch];
       const top = stack[stack.length - 1];
       if (top && top.char === expectedOpen) {
         stack.pop();
         // Shares the same color as its already-recorded opener, so a
-        // pair reads as one visually matched unit.
-        marks.push({ line, character, colorIndex: marks[top.markIndex].colorIndex });
-      } else {
+        // pair reads as one visually matched unit -- only if both the
+        // opener and this closer landed inside the real cap; `markIndex`
+        // growth is monotonic, so a `null` opener here always also means
+        // the cap is already exceeded for this closer too.
+        if (top.markIndex !== null && marks.length < MAX_BRACKET_PAIR_MARKS) {
+          marks.push({ line, character, colorIndex: marks[top.markIndex].colorIndex });
+        }
+      } else if (marks.length < MAX_BRACKET_PAIR_MARKS) {
         // A real stray closer -- nothing valid on the stack to pair with.
         marks.push({ line, character, colorIndex: -1 });
       }
@@ -81,8 +97,12 @@ export function computeBracketPairMarks(content: string): BracketPairMark[] {
   // Any openers still on the stack were never validly closed by
   // end-of-document -- reclassify their already-pushed mark as unmatched
   // rather than leaving it colored as if it were a real, closed pair.
+  // `markIndex === null` means this opener was scanned past the real
+  // output cap and never had a mark to reclassify in the first place.
   for (const { markIndex } of stack) {
-    marks[markIndex] = { ...marks[markIndex], colorIndex: -1 };
+    if (markIndex !== null) {
+      marks[markIndex] = { ...marks[markIndex], colorIndex: -1 };
+    }
   }
 
   return marks;

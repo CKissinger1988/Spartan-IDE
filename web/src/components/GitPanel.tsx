@@ -971,6 +971,24 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
       .catch((e: Error) => setHistoryError(e.message));
   }, [client, root, showHistory]);
 
+  // `github_list_pull_requests` answers asynchronously (a real, live GitHub
+  // API call, bounded but still potentially several seconds) -- the resolved
+  // promise below is only ever the real `{"status": "checking"}` ack; the
+  // actual PR list (or a real, honest network failure) arrives as a
+  // separate `github_pull_requests_result`/`github_pull_requests_failed`
+  // event, the same "ack now, event later" shape this whole app's own
+  // `LeoChatPanel.tsx`/DAP event handling already established.
+  useEffect(() => {
+    const unsubscribe = client.onEvent(({ event, data }) => {
+      if (event === "github_pull_requests_result") {
+        setPullRequests((data as { pull_requests: PullRequestSummary[] }).pull_requests);
+      } else if (event === "github_pull_requests_failed") {
+        setGithubError((data as { error: string }).error);
+      }
+    });
+    return unsubscribe;
+  }, [client]);
+
   const toggleGithub = useCallback(() => {
     if (showGithub) {
       setShowGithub(false);
@@ -984,9 +1002,6 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
     setPullRequests(null);
     client
       .call("github_list_pull_requests", { project_root: root })
-      .then((result) =>
-        setPullRequests((result as { pull_requests: PullRequestSummary[] }).pull_requests)
-      )
       .catch((e: Error) => setGithubError(e.message));
   }, [client, root, showGithub]);
 

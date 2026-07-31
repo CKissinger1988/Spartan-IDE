@@ -1534,8 +1534,10 @@
   color: #f87171;
   background: rgba(248, 113, 113, 0.12);
   border-color: rgba(248, 113, 113, 0.35);
+
   --status-glow-rgb: var(--status-critical-rgb);
   --pulse-speed: 0.9s;
+
   animation: hud-status-pulse 0.9s ease-in-out infinite;
 }
 
@@ -1702,7 +1704,7 @@
   font-size: 11.5px;
   line-height: 1.5;
   margin-top: 8px;
-  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .leo-input-row {
@@ -1743,7 +1745,7 @@
   padding: 4px 8px;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.03);
-  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .leo-log-call {
@@ -1793,7 +1795,7 @@
   max-height: 160px;
   overflow-y: auto;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: break-word;
   margin: 0 0 8px;
 }
 

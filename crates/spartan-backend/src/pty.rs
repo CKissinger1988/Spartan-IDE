@@ -79,6 +79,24 @@ impl Utf8Reassembler {
             }
         }
     }
+
+    /// Real, deliberate termination-path flush: if the real reader loop
+    /// hits EOF (`Ok(0)`) or a real read error while a genuinely incomplete
+    /// multi-byte sequence is still buffered (waiting on a read that will
+    /// now never arrive), that tail must not simply vanish -- lossy-decode
+    /// whatever real bytes are left (the same `U+FFFD`-substitution
+    /// convention `push`'s own `Some(_)` branch already uses for genuinely
+    /// invalid bytes) rather than silently dropping the process's own last
+    /// few real output bytes. Returns an empty string (a real, harmless
+    /// no-op for the caller) when nothing was pending.
+    fn flush(&mut self) -> String {
+        if self.pending.is_empty() {
+            return String::new();
+        }
+        let result = String::from_utf8_lossy(&self.pending).into_owned();
+        self.pending.clear();
+        result
+    }
 }
 
 pub struct PtyHandle {
@@ -191,6 +209,21 @@ pub fn spawn_pty(
                 Err(_) => break,
             }
         }
+        // A genuinely incomplete multi-byte sequence can still be sitting
+        // in `reassembler` at real EOF/error time -- the read that would
+        // have completed it is never coming, so flush whatever real bytes
+        // are left (lossy-decoded, matching `push`'s own convention for
+        // genuinely invalid bytes) instead of silently discarding them.
+        let tail = reassembler.flush();
+        if !tail.is_empty() {
+            let event = Event {
+                event: "pty_output".to_string(),
+                data: serde_json::json!({ "session_id": session_id, "chunk": tail }),
+            };
+            if let Ok(line) = serde_json::to_string(&event) {
+                let _ = out_tx.send(line);
+            }
+        }
         let event = Event {
             event: "pty_exit".to_string(),
             data: serde_json::json!({ "session_id": session_id }),
@@ -253,10 +286,10 @@ mod utf8_reassembler_tests {
         let mut r = Utf8Reassembler::default();
         // 0xFF is never a valid UTF-8 byte in any position.
         let out = r.push(&[b'a', 0xFF, b'b']);
-        assert!(
-            out.contains('a') && out.contains('b'),
-            "real bytes around the invalid one must survive: {out:?}"
-        );
+        // Exact real output, not just "the surrounding real bytes survive":
+        // `String::from_utf8_lossy` replaces the one invalid byte with
+        // exactly one real U+FFFD replacement character.
+        assert_eq!(out, "a\u{FFFD}b");
         assert!(
             r.pending.is_empty(),
             "an invalid byte must not be held onto forever"
@@ -271,5 +304,32 @@ mod utf8_reassembler_tests {
         let mut out = r.push(&full[..split_at]);
         out.push_str(&r.push(&full[split_at..]));
         assert_eq!(out, "line one\ncafé line two\n");
+    }
+
+    #[test]
+    fn flush_lossy_decodes_a_real_dangling_tail_left_at_termination() {
+        // "é" split so only its leading byte (0xC3) ever arrives -- the
+        // read that would deliver the rest (0xA9) never comes because the
+        // real process has already exited.
+        let full = "café".as_bytes().to_vec();
+        let split_at = full.len() - 1;
+        let mut r = Utf8Reassembler::default();
+        let before_eof = r.push(&full[..split_at]);
+        assert_eq!(before_eof, "caf");
+        assert!(!r.pending.is_empty(), "the dangling byte must be buffered");
+
+        let flushed = r.flush();
+        assert_eq!(
+            flushed, "\u{FFFD}",
+            "the real dangling byte is lossy-decoded, not dropped"
+        );
+        assert!(r.pending.is_empty(), "flush must clear the buffer");
+    }
+
+    #[test]
+    fn flush_on_a_clean_boundary_is_a_real_harmless_no_op() {
+        let mut r = Utf8Reassembler::default();
+        assert_eq!(r.push(b"hello"), "hello");
+        assert_eq!(r.flush(), "", "nothing was pending, so flush emits nothing");
     }
 }

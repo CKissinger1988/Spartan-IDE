@@ -179,21 +179,25 @@ function formatAge(unixSeconds: number): string {
 }
 
 function describeCall(call: PendingCall): string {
+  // `args` defaults to `{}` -- a malformed/unexpected real payload (an
+  // absent `args` field) must never throw here, since a throw inside this
+  // function would otherwise propagate out of the caller's event handler.
+  const args = call.args ?? {};
   switch (call.tool) {
     case "read_file":
-      return `Read file: ${call.args.path}`;
+      return `Read file: ${args.path}`;
     case "edit_file":
-      return `Edit file: ${call.args.path}`;
+      return `Edit file: ${args.path}`;
     case "run_terminal":
-      return `Run command: ${call.args.command}`;
+      return `Run command: ${args.command}`;
     case "search_files":
-      return call.args.path
-        ? `Search for "${call.args.pattern}" in ${call.args.path}`
-        : `Search project for "${call.args.pattern}"`;
+      return args.path
+        ? `Search for "${args.pattern}" in ${args.path}`
+        : `Search project for "${args.pattern}"`;
     case "list_directory":
-      return call.args.path ? `List directory: ${call.args.path}` : "List project root";
+      return args.path ? `List directory: ${args.path}` : "List project root";
     default:
-      return `${call.tool}(${JSON.stringify(call.args)})`;
+      return `${call.tool}(${JSON.stringify(args)})`;
   }
 }
 
@@ -249,6 +253,13 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
   const [task, setTask] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pendingCall, setPendingCall] = useState<PendingCall | null>(null);
+  // Real, deliberate in-flight guard: without it, a fast real double-click
+  // (or a slow real IPC round trip) on Approve/Reject could fire the same
+  // `leo_approve_call`/`leo_reject_call` twice concurrently against the
+  // exact same `pendingCall` -- the second call would race the first's own
+  // `requestNextStep()` and could double-execute or double-log a real
+  // agent action.
+  const [callInFlight, setCallInFlight] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
@@ -368,24 +379,49 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         setPlan(r?.plan ?? null);
         setPendingCall(r?.pending_call ?? null);
       })
-      .catch(() => {});
+      .catch((e) => console.warn("leo_status probe failed:", e));
   }, []);
 
   useEffect(() => {
+    // Real, deliberate defensive parsing + isolation, matching `web/`'s own
+    // copy of this panel: a malformed/unexpected payload for any of these
+    // events must never throw and interrupt delivery to any other real
+    // listener -- `preload.ts`'s own `onEvent` already wraps this callback
+    // in a try/catch at the IPC-bridge level, but this handler doesn't rely
+    // on that alone, matching the belt-and-suspenders discipline this
+    // project already applies elsewhere (e.g. `BackendClient`'s own
+    // per-listener isolation in `web/`).
     const unsubscribe = window.spartan.onEvent((event, data) => {
+      try {
+        handleLeoEvent(event, data);
+      } catch (e) {
+        console.error("LeoChatPanel event handler threw:", e);
+      }
+    });
+
+    function handleLeoEvent(event: string, data: unknown): void {
+      const d = (data ?? {}) as Record<string, unknown>;
       if (event === "leo_plan_ready") {
-        const readyPlan = data as LeoPlan;
-        setPlan(readyPlan);
+        const goal = typeof d.goal === "string" ? d.goal : "";
+        setPlan(d as unknown as LeoPlan);
         setAgentState("AwaitingApproval");
         setError(null);
-        speak(`Leo has a plan: ${readyPlan.goal}`);
+        speak(`Leo has a plan: ${goal}`);
       } else if (event === "leo_plan_failed") {
-        const failMessage = (data as { error: string }).error;
+        const failMessage = typeof d.error === "string" ? d.error : "Leo's plan failed.";
         setError(failMessage);
         setAgentState("Failed");
         speak(`Leo ran into an error: ${failMessage}`);
       } else if (event === "leo_action_proposed") {
-        const call = data as PendingCall;
+        // `args` defaults to `{}` -- both this handler's own `describeCall`
+        // call and the render-time `pendingCall.args.content` access
+        // further down assume it's always present, matching the real
+        // (non-optional) `PendingCall.args` type; a malformed real payload
+        // missing it must not throw during render.
+        const call = {
+          ...(d as unknown as PendingCall),
+          args: (d.args as Record<string, unknown> | undefined) ?? {},
+        };
         setThinking(false);
         setPendingCall(call);
         setLog((prev) => [...prev, { kind: "call", text: describeCall(call) }]);
@@ -393,7 +429,7 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         // Real §75.69 auto-approved Safe call -- Leo already ran this
         // itself (AutoApproveSafe mode) with no UI round trip; still
         // logged for real visibility into what it actually did.
-        const step = data as PendingCall;
+        const step = d as unknown as PendingCall;
         setLog((prev) => [
           ...prev,
           { kind: "auto", text: `Auto-approved: ${describeCall(step)}` },
@@ -402,23 +438,39 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         setThinking(false);
         setPendingCall(null);
         setAgentState("Done");
-        const { summary: s, memory_saved } = data as { summary: string; memory_saved: boolean };
+        const s = typeof d.summary === "string" ? d.summary : "Task completed.";
+        const memorySavedValue = typeof d.memory_saved === "boolean" ? d.memory_saved : null;
         setSummary(s);
-        setMemorySaved(memory_saved);
+        setMemorySaved(memorySavedValue);
         setLog((prev) => [...prev, { kind: "done", text: s }]);
         speak(s);
       } else if (event === "leo_execute_failed") {
         setThinking(false);
         setPendingCall(null);
         setAgentState("Failed");
-        const e = (data as { error: string }).error;
+        const e = typeof d.error === "string" ? d.error : "Leo's execute loop failed.";
         setError(e);
         setLog((prev) => [...prev, { kind: "failed", text: e }]);
         speak(`Leo ran into an error: ${e}`);
       }
-    });
+    }
+
     return unsubscribe;
   }, [speak]);
+
+  /** Real, deliberate normalization: `leo_approve_plan`/`leo_reject_plan`/
+   * `leo_cancel`/`leo_retry` all return `{state}`, but a malformed or
+   * unexpected response must never set the real UI state to `undefined` --
+   * `LeoState`'s own type includes a bare `string` fallback, so TypeScript
+   * won't catch a missing `state` field at compile time, and an `undefined`
+   * `agentState` would match none of this component's `agentState === "X"`
+   * checks, leaving the panel in a real, silent, unrecoverable limbo.
+   * Matches the same defensive-default convention the `leo_status`
+   * bootstrap already established. */
+  function applyState(result: unknown): void {
+    const state = (result as { state?: LeoState } | undefined)?.state;
+    setAgentState(state ?? "Idle");
+  }
 
   const submitTask = useCallback(async () => {
     if (!task.trim()) return;
@@ -439,8 +491,8 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
 
   const approve = useCallback(async () => {
     try {
-      const result = (await window.spartan.call("leo_approve_plan")) as { state: LeoState };
-      setAgentState(result.state);
+      const result = await window.spartan.call("leo_approve_plan");
+      applyState(result);
       requestNextStep();
     } catch (e) {
       setError((e as Error).message);
@@ -449,8 +501,8 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
 
   const reject = useCallback(async () => {
     try {
-      const result = (await window.spartan.call("leo_reject_plan")) as { state: LeoState };
-      setAgentState(result.state);
+      const result = await window.spartan.call("leo_reject_plan");
+      applyState(result);
       setPlan(null);
       setTask("");
     } catch (e) {
@@ -472,8 +524,8 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
    * synchronous `Idle` transition. */
   const cancelTask = useCallback(async () => {
     try {
-      const result = (await window.spartan.call("leo_cancel")) as { state: LeoState };
-      setAgentState(result.state);
+      const result = await window.spartan.call("leo_cancel");
+      applyState(result);
       setPlan(null);
       setPendingCall(null);
       setThinking(false);
@@ -499,8 +551,8 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
   const retryTask = useCallback(async () => {
     setError(null);
     try {
-      const result = (await window.spartan.call("leo_retry")) as { state: LeoState };
-      setAgentState(result.state);
+      const result = await window.spartan.call("leo_retry");
+      applyState(result);
       setLog((prev) => [...prev, { kind: "auto", text: "Retrying failed task..." }]);
       requestNextStep();
     } catch (e) {
@@ -509,7 +561,8 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
   }, [requestNextStep]);
 
   const approveCall = useCallback(async () => {
-    if (!pendingCall) return;
+    if (!pendingCall || callInFlight) return;
+    setCallInFlight(true);
     try {
       const result = (await window.spartan.call("leo_approve_call")) as {
         ok: boolean;
@@ -549,10 +602,14 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
       requestNextStep();
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setCallInFlight(false);
     }
-  }, [pendingCall, requestNextStep]);
+  }, [pendingCall, callInFlight, requestNextStep]);
 
   const rejectCall = useCallback(async () => {
+    if (callInFlight) return;
+    setCallInFlight(true);
     try {
       await window.spartan.call("leo_reject_call");
       setPendingCall(null);
@@ -560,8 +617,16 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
       requestNextStep();
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setCallInFlight(false);
     }
-  }, [requestNextStep]);
+  }, [callInFlight, requestNextStep]);
+
+  // Extracted once rather than spelled out at each of its three real call
+  // sites (the textarea, the mic button, and the Send button) -- a single
+  // source of truth so a future new blocking state can't drift out of sync
+  // across them.
+  const busy = agentState === "Planning" || agentState === "Executing" || agentState === "Verifying";
 
   const toggleHistory = useCallback(() => {
     if (historyOpen) {
@@ -674,10 +739,14 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
                     </pre>
                   ))}
                 <div className="leo-plan-actions">
-                  <button className="leo-btn leo-btn-approve sf-chamfer-sm" onClick={approveCall}>
+                  <button
+                    className="leo-btn leo-btn-approve sf-chamfer-sm"
+                    onClick={approveCall}
+                    disabled={callInFlight}
+                  >
                     Approve
                   </button>
-                  <button className="leo-btn leo-btn-reject" onClick={rejectCall}>
+                  <button className="leo-btn leo-btn-reject" onClick={rejectCall} disabled={callInFlight}>
                     Reject
                   </button>
                 </div>
@@ -712,8 +781,17 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         <div
           className="git-section-label mono"
           onClick={toggleHistory}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              toggleHistory();
+            }
+          }}
           style={{ cursor: "pointer" }}
           title="Past Leo tasks this session"
+          aria-expanded={historyOpen}
         >
           History {historyOpen ? "▾" : "▸"}
         </div>
@@ -763,13 +841,13 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
               submitTask();
             }
           }}
-          disabled={agentState === "Planning" || agentState === "Executing" || agentState === "Verifying"}
+          disabled={busy}
         />
         {voiceInputSupported && (
           <button
             className={`leo-btn leo-btn-mic${listening ? " leo-btn-mic-active" : ""}`}
             onClick={toggleListening}
-            disabled={agentState === "Planning" || agentState === "Executing" || agentState === "Verifying"}
+            disabled={busy}
             title={listening ? "Stop dictating" : "Dictate task"}
           >
             {listening ? "\u{1F534}" : "\u{1F3A4}"}
@@ -778,12 +856,7 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         <button
           className="leo-btn leo-btn-send sf-chamfer-sm"
           onClick={submitTask}
-          disabled={
-            agentState === "Planning" ||
-            agentState === "Executing" ||
-            agentState === "Verifying" ||
-            !task.trim()
-          }
+          disabled={busy || !task.trim()}
         >
           Send
         </button>

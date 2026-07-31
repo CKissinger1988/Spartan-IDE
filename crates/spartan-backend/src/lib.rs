@@ -3794,20 +3794,75 @@ fn git_discard(project_root: &str, path: &str) -> Result<serde_json::Value, Stri
 /// (matching `build_leo_provider`'s own "load current settings, don't
 /// cache" discipline) so a token change takes effect on the very next
 /// request, with no reload/restart needed.
-fn github_list_pull_requests(project_root: &str) -> Result<serde_json::Value, String> {
+///
+/// The two local checks above (`GitRepo::discover`, `detect_github_remote`)
+/// stay synchronous -- they're fast, in-process, no-network operations, so
+/// returning their real errors immediately keeps this dispatch method's own
+/// fast-fail behavior for a non-repo or non-GitHub-remote path unchanged.
+/// The real *network* call is not: `handle_request`'s callers (both the
+/// stdio transport `desktop/` drives and a single WebSocket connection
+/// `web/` drives) process one request at a time on a single thread, so a
+/// plain synchronous `github::list_pull_requests` call here -- bounded at
+/// up to `GITHUB_REQUEST_TIMEOUT` (10s) -- would otherwise stall every
+/// *other* real IPC method (file open/save/edit, LSP, git, Leo, PTY) for
+/// that same duration. Matches `check_for_updates`'s own exact real "ack
+/// now, event later" shape (a real background thread, a real
+/// `github_pull_requests_result`/`github_pull_requests_failed` event) --
+/// the same established pattern this crate already uses for every other
+/// real external-network call.
+fn github_list_pull_requests(
+    project_root: &str,
+    out_tx: Sender<String>,
+) -> Result<serde_json::Value, String> {
     let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
         .ok_or("no git repository found at or above this path")?;
     let (owner, repo_name) = repo
         .detect_github_remote()
         .ok_or("this repository has no real GitHub remote configured")?;
-    let token = spartan_settings::load().github_token;
-    let prs = github::list_pull_requests(&owner, &repo_name, token.as_deref())
-        .map_err(|e| format!("GitHub pull request listing failed: {e}"))?;
-    Ok(serde_json::json!({
-        "owner": owner,
-        "repo": repo_name,
-        "pull_requests": prs,
-    }))
+    spawn_github_pr_fetch(owner, repo_name, out_tx);
+    Ok(serde_json::json!({ "status": "checking" }))
+}
+
+/// The real, deferred half of `github_list_pull_requests` above, extracted
+/// so it's directly unit-testable against a known-good `(owner, repo)`
+/// pair without needing `detect_github_remote` to first resolve a real
+/// git remote URL -- a real, environment-specific complication found while
+/// writing exactly that test: this sandbox's own outbound-HTTPS proxy
+/// setup rewrites any `https://github.com/...` remote URL via a real,
+/// global `url.*.insteadOf` git config rule (confirmed via `git config
+/// --global --get-regexp 'url\..*\.insteadof'`), the same real mechanism a
+/// production `git remote -v` would apply -- so a test fixture that sets a
+/// literal `github.com` remote URL and expects `detect_github_remote` to
+/// recognize it back can't be made to pass in this specific sandboxed
+/// session (it would on a real end-user machine with no such rewrite
+/// rule). Extracting this half sidesteps that environment quirk entirely
+/// rather than working around it with something intrusive like process-
+/// wide `git2::opts::set_search_path` overrides.
+fn spawn_github_pr_fetch(owner: String, repo_name: String, out_tx: Sender<String>) {
+    thread::spawn(move || {
+        let token = spartan_settings::load().github_token;
+        let event = match github::list_pull_requests(&owner, &repo_name, token.as_deref()) {
+            Ok(prs) => Event {
+                event: "github_pull_requests_result".to_string(),
+                data: serde_json::json!({
+                    "owner": owner,
+                    "repo": repo_name,
+                    "pull_requests": prs,
+                }),
+            },
+            Err(e) => Event {
+                event: "github_pull_requests_failed".to_string(),
+                data: serde_json::json!({
+                    "owner": owner,
+                    "repo": repo_name,
+                    "error": format!("GitHub pull request listing failed: {e}"),
+                }),
+            },
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
 }
 
 fn git_commit(project_root: &str, message: &str) -> Result<serde_json::Value, String> {
@@ -5021,9 +5076,8 @@ pub fn handle_request(
             search_project(&project_root, &pattern, path)
         })(),
         "git_status" => get_str_param(&req.params, "project_root").and_then(|r| git_status(&r)),
-        "github_list_pull_requests" => {
-            get_str_param(&req.params, "project_root").and_then(|r| github_list_pull_requests(&r))
-        }
+        "github_list_pull_requests" => get_str_param(&req.params, "project_root")
+            .and_then(|r| github_list_pull_requests(&r, out_tx.clone())),
         "git_stage" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
             let path = get_str_param(&req.params, "path")?;
@@ -6542,6 +6596,59 @@ time.sleep(10)
             .error
             .unwrap()
             .contains("no real GitHub remote configured"));
+    }
+
+    /// Real, live confirmation that the deferred half of
+    /// `github_list_pull_requests` genuinely answers asynchronously (task:
+    /// CodeRabbit review fix) -- a real `github_pull_requests_result`/
+    /// `github_pull_requests_failed` event arrives on `out_tx`, not a
+    /// direct return value. Tolerates either real outcome (success or a
+    /// real network failure) rather than asserting one specific result,
+    /// matching this crate's own established pattern for a real live
+    /// external-network call in a sandboxed environment whose own outbound
+    /// HTTPS reachability isn't guaranteed (see `github::tests::
+    /// list_pull_requests_against_this_real_project_s_own_repo`'s own
+    /// identical tolerance).
+    ///
+    /// Deliberately calls `spawn_github_pr_fetch` directly rather than
+    /// going through the full `github_list_pull_requests` dispatch (which
+    /// would need a fixture repo whose `origin` remote real-resolves as a
+    /// GitHub URL via `detect_github_remote`): this sandbox's own outbound
+    /// -HTTPS proxy setup rewrites any `https://github.com/...` remote URL
+    /// via a real, global `url.*.insteadOf` git config rule (confirmed via
+    /// `git config --global --get-regexp 'url\..*\.insteadof'`, the same
+    /// real mechanism `git remote -v` itself would apply on a real
+    /// machine with such a rule configured), so a dispatch-level fixture
+    /// using a literal `github.com` remote URL can't be made to correctly
+    /// exercise the async-ack path in this specific session -- confirmed
+    /// with a standalone repro before concluding this, not assumed. The
+    /// two existing dispatch-level tests above already cover
+    /// `github_list_pull_requests`'s own synchronous fast-fail checks (no
+    /// repo, no GitHub remote) end to end; this one covers the deferred
+    /// network-call half in isolation, independent of that environment
+    /// quirk.
+    #[test]
+    fn spawn_github_pr_fetch_genuinely_answers_asynchronously() {
+        let (tx, rx) = mpsc::channel();
+        spawn_github_pr_fetch("CKissinger1988".to_string(), "Spartan-IDE".to_string(), tx);
+
+        let line = rx
+            .recv_timeout(std::time::Duration::from_secs(15))
+            .expect("a real github_pull_requests_result/_failed event within 15s");
+        let event: serde_json::Value = serde_json::from_str(&line).unwrap();
+        match event["event"].as_str().unwrap() {
+            "github_pull_requests_result" => {
+                assert_eq!(event["data"]["owner"], "CKissinger1988");
+                assert_eq!(event["data"]["repo"], "Spartan-IDE");
+                assert!(event["data"]["pull_requests"].is_array());
+            }
+            "github_pull_requests_failed" => {
+                assert_eq!(event["data"]["owner"], "CKissinger1988");
+                assert_eq!(event["data"]["repo"], "Spartan-IDE");
+                assert!(!event["data"]["error"].as_str().unwrap().is_empty());
+            }
+            other => panic!("unexpected event: {other}"),
+        }
     }
 
     #[test]

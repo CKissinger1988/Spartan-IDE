@@ -6,6 +6,14 @@
 //! this crate never guesses or parses a remote URL itself.
 
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+/// Matches `spartan-updater`'s own identical real GitHub-API timeout
+/// convention -- without a bound, a real, wedged TLS/TCP handshake
+/// (this sandboxed environment's own already-documented
+/// `UnknownIssuer`-class proxy conditions are one real example) could
+/// otherwise leave this synchronous dispatch method hanging indefinitely.
+const GITHUB_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A real GitHub pull request, trimmed to what a Git panel actually shows.
 /// Deliberately not the raw GitHub API shape (dozens of fields this UI has
@@ -53,7 +61,8 @@ pub fn list_pull_requests(
     let url = format!("https://api.github.com/repos/{owner}/{repo}/pulls?state=open&per_page=30");
     let mut request = ureq::get(&url)
         .set("User-Agent", "spartan-ide/spartan-backend")
-        .set("Accept", "application/vnd.github+json");
+        .set("Accept", "application/vnd.github+json")
+        .timeout(GITHUB_REQUEST_TIMEOUT);
     if let Some(t) = token {
         request = request.set("Authorization", &format!("Bearer {t}"));
     }

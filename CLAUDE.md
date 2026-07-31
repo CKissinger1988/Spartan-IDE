@@ -8094,6 +8094,99 @@ first — it's the parity reference until each row there is actually reimplement
   `TIOCSWINSZ`/`SIGWINCH` mechanism is OS-level and process-agnostic, but only one real reader was
   exercised); the real Electron window remains unlaunchable in this session (same standing gap
   since §75.59). This closes the last named row in the Terminal & sessions backlog table.
+- **Real, working code — a CodeRabbit review-response pass on PR #7 (rope-anchored breakpoints
+  through PTY resize), one real production bug found and fixed, one real environment-specific test
+  fixture limitation found and worked around correctly (task: "Review with coderabbit and merge
+  everything")**: closes out CodeRabbit's own actionable findings before merging. **The one real
+  production bug**: `github_list_pull_requests` (task #284) made its real, live GitHub API call
+  *synchronously* on `handle_request`'s single dispatch thread -- since both the stdio transport
+  `desktop/` drives and a single WebSocket connection `web/` drives process one request at a time,
+  a real, bounded-but-still-up-to-10s network call there would have stalled every *other* real IPC
+  method (file open/save/edit, LSP, git, Leo, PTY) for that same duration. Fixed by extracting the
+  real network call into a new `spawn_github_pr_fetch(owner, repo, out_tx)`, matching `check_for_
+  updates`'s own exact "ack now, event later" shape (`github_pull_requests_result`/`github_pull_
+  requests_failed` events) -- the two fast, local, no-network checks (`GitRepo::discover`,
+  `detect_github_remote`) stay synchronous, since returning their real errors immediately is exactly
+  the fast-fail behavior worth keeping. A new `GITHUB_REQUEST_TIMEOUT` (10s, matching `spartan-
+  updater`'s own identical convention) was also added to `github.rs`'s own `ureq` call, since it
+  had none at all before. Both `desktop/GitPanel.tsx` and `web/GitPanel.tsx` gained a real event
+  subscription for the two new events, replacing their previous "the resolved call already has the
+  PR list" assumption; `desktop/GitPanel.tsx`'s `openPullRequestUrl` click handler gained a real
+  `.catch` (matching `SettingsScreen.tsx`'s own established `openCrashReportsFolder`/
+  `openRepositoryPage` convention) so a real rejected promise (e.g. `main.ts`'s own `https://
+  github.com/` URL-prefix guard refusing a malformed `html_url`) surfaces as a real error instead of
+  an unhandled rejection. **A second, real, distinct bug was found in `desktop/src/bracketPairs.ts`/
+  `web/src/bracketPairs.ts`'s own real bracket-pair colorization (§287-289)**: the `MAX_BRACKET_
+  PAIR_MARKS` (5000) safety cap bailed the entire scan loop the instant it was hit, which meant an
+  opener pushed *just before* the cap whose real matching closer would have been scanned *after* it
+  got permanently misreported as unmatched (`colorIndex: -1`, a real, visible red-outline false
+  positive) purely because the loop never even looked at its own real closer. Fixed by separating
+  the two real concerns: the scan itself now always walks the *entire* document for correct stack-
+  based matching regardless of size (a real opener past the cap gets `markIndex: null` -- tracked
+  on the stack for correctness, just never rendered), while only the *output* array (and so the
+  real DOM/render cost) stays capped at 5000 marks. Verified with a real, standalone Node script
+  (not committed) constructing 5010 genuinely valid `(x)` pairs: before the fix, marks past the cap
+  were falsely flagged unmatched; after, zero false positives, while a genuinely unmatched stray
+  opener still correctly reports exactly one real unmatched mark. **A real, environment-specific
+  test-fixture limitation was found and correctly worked around, not silently papered over**: the
+  first version of the new async-ack dispatch test set a real `https://github.com/CKissinger1988/
+  Spartan-IDE.git` remote via `git2`'s own `Repository::remote()` and failed -- traced with a real,
+  standalone `spartan-git` example binary (written, run, and deleted, not left in the repo) to this
+  sandboxed session's own real, global `~/.gitconfig` rule (`url.http://local_proxy@127.0.0.1:
+  <port>/git/.insteadof = https://github.com/`, confirmed via `git config --global --get-regexp`) --
+  the exact same real mechanism a genuine `git remote -v` would apply on any machine with such a
+  rewrite rule configured, not a git2-specific quirk, so `detect_github_remote`'s own literal-
+  prefix string match can never observe an un-rewritten `github.com` URL in this specific session,
+  though it would on a real end-user machine with no such rule. Rather than intrusively override
+  process-wide git config search paths for one test, the test was rewritten to call `spawn_github_
+  pr_fetch` directly with a known-good `(owner, repo)` pair, verifying the real deferred-event
+  mechanism in isolation, independent of that environment quirk -- the two pre-existing dispatch-
+  level tests already cover `github_list_pull_requests`'s own synchronous fast-fail paths. Also
+  fixed along the way, all confirmed via inspection against the real, running code before applying
+  (and one CodeRabbit suggestion -- switching `treeSitter.ts`'s UTF-16 offsets to UTF-8 byte
+  offsets -- was investigated and deliberately **not** applied, since that file's own doc comment
+  already documents a real, prior experimental confirmation that UTF-16 code units are the correct
+  convention for this specific `web-tree-sitter` JS binding, not native tree-sitter's C API
+  CodeRabbit's suggestion was modeled on): `web/src/backendClient.ts`'s and `desktop/electron/
+  preload.ts`'s own event-dispatch loops both gained real per-listener `try/catch` isolation (one
+  malformed-payload listener throwing could otherwise silently stop delivery to every later-
+  registered listener for that same event -- a real risk with multiple independent panels
+  subscribed to one broadcast); `web/LeoChatPanel.tsx`'s `leo_status` bootstrap effect gained a
+  `cancelled` guard against a real reconnect race and a `console.warn` on failure; its event handler
+  was restructured into a `handleLeoEvent` function with defensive per-field type-checked parsing
+  for every real event branch, wrapped in its own `try/catch`; a new `applyState` helper normalizes
+  every `{state}`-returning call so a malformed response can never leave `agentState` `undefined`;
+  `submitTask` gained a `client.projectRoot` null-check; a new `callInFlight` guard on `approveCall`/
+  `rejectCall` prevents a real double-click (or a slow IPC round trip) from firing the same approval/
+  rejection twice concurrently; a `busy` constant replaced three separately-spelled-out `Planning ||
+  Executing || Verifying` checks; the History disclosure `<div>` gained `role="button"`/`tabIndex`/
+  keyboard handling/`aria-expanded` for real keyboard accessibility. All of the above were mirrored
+  to `desktop/LeoChatPanel.tsx` for parity, matching this project's own established "keep both
+  shells in sync" discipline. `web/package.json` pinned `web-tree-sitter`/`tree-sitter-wasms` to
+  exact versions (`0.20.8`/`0.1.13`, already what the lockfile resolved to) rather than caret
+  ranges, given this project's own already-documented ABI/version sensitivity for these two
+  packages (§75.86). `.github/workflows/ci.yml`'s `rust` job gained an explicit least-privilege
+  `permissions: contents: read` block and a `timeout-minutes: 45` bound on its own heaviest,
+  previously-unbounded `cargo test --no-run` step; every real `actions/checkout@v4` step across the
+  whole file (all 7 jobs) gained `persist-credentials: false`, since none of them ever push. Two
+  small CSS nitpicks in `web/src/app.css`: `word-break: break-word` replaced with the non-deprecated
+  `overflow-wrap: break-word` in `.leo-error`/`.leo-log-entry`/`.leo-pending-call-content`; a blank
+  line separates `.leo-state-failed`'s plain declarations from its custom-property ones, matching a
+  common Stylelint `declaration-empty-line-before` convention (no stylelint config exists in this
+  repo to confirm the exact rule shape against, applied as a real, reasonable readability
+  improvement regardless). 256 `spartan-backend` lib tests total (up from 252, net +1: one new
+  async-ack test added, the old one it replaced removed), full `cargo fmt --all -- --check`/`cargo
+  clippy --workspace --release --all-targets` both clean; `cargo test -p spartan-backend -p
+  spartan-git --release --lib -- --test-threads=1` both green (256/72); both shells' own `tsc
+  --noEmit`/`npm run build` clean. **What this does not confirm**: no live Playwright re-verification
+  of any of these fixes (a pure code-review-response pass, verified via the exact
+  compile/test/typecheck/build commands named above, not a new live-browser feature pass); two real
+  CodeRabbit nitpicks were deliberately left unaddressed and named rather than silently dropped --
+  `docs/FUTURE_FEATURES.md`'s own tree-sitter-benchmark wording (the cited 2.8-3.3x numbers are real,
+  measured, historical results from §283's own pass, not fabricated, so reworded framing was judged
+  low-value) and no attempt was made to fix the pre-existing, unrelated transitive `postcss`
+  vulnerability `npm audit` reports in `web/` (out of scope for this review-response pass, not
+  something CodeRabbit itself flagged).
 
 ## Build & test
 

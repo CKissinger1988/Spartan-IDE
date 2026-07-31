@@ -1009,6 +1009,34 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
       .catch((e: Error) => setHistoryError(e.message));
   }, [root, showHistory]);
 
+  // `github_list_pull_requests` answers asynchronously (a real, live GitHub
+  // API call, bounded but still potentially several seconds) -- the resolved
+  // promise below is only ever the real `{"status": "checking"}` ack; the
+  // actual PR list (or a real, honest network failure) arrives as a
+  // separate `github_pull_requests_result`/`github_pull_requests_failed`
+  // event, the same "ack now, event later" shape `check_for_updates`'s own
+  // `SettingsScreen.tsx` subscription already established.
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event === "github_pull_requests_result") {
+        setPullRequests((data as { pull_requests: PullRequestSummary[] }).pull_requests);
+      } else if (event === "github_pull_requests_failed") {
+        setGithubError((data as { error: string }).error);
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  // Matches `SettingsScreen.tsx`'s own established convention for a
+  // fire-and-forget `window.spartan.*` main-process action (`openCrash
+  // ReportsFolder`/`openRepositoryPage`) -- a real rejected promise here
+  // (e.g. `main.ts`'s own real `https://github.com/` URL-prefix guard
+  // refusing a malformed `html_url`) must surface as a real error, not an
+  // unhandled promise rejection silently logged to the console.
+  const openPullRequest = useCallback((url: string) => {
+    window.spartan.openPullRequestUrl(url).catch((e: Error) => setGithubError(e.message));
+  }, []);
+
   const toggleGithub = useCallback(() => {
     if (showGithub) {
       setShowGithub(false);
@@ -1022,9 +1050,6 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
     setPullRequests(null);
     window.spartan
       .call("github_list_pull_requests", { project_root: root })
-      .then((result) =>
-        setPullRequests((result as { pull_requests: PullRequestSummary[] }).pull_requests)
-      )
       .catch((e: Error) => setGithubError(e.message));
   }, [root, showGithub]);
 
@@ -1708,7 +1733,7 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
               key={pr.number}
               className="git-row"
               title={`${pr.state}${pr.draft ? " (draft)" : ""} — opened by ${pr.author}`}
-              onClick={() => window.spartan.openPullRequestUrl(pr.html_url)}
+              onClick={() => openPullRequest(pr.html_url)}
               style={{ cursor: "pointer" }}
             >
               <span

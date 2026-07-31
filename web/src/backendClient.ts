@@ -111,7 +111,19 @@ export class BackendClient {
     // An event has an `event` field and no `id`; a response always has `id`.
     if ("event" in msg && !("id" in msg)) {
       const event = msg as BackendEvent;
-      for (const listener of this.listeners) listener(event);
+      // Real, deliberate per-listener isolation: a plain `for...of` loop
+      // with no try/catch means one listener throwing on a malformed/
+      // unexpected payload would silently stop every *later*-registered
+      // listener from ever seeing this event, not just fail loudly for
+      // itself -- a real risk with multiple independent panels (Leo, DAP,
+      // git) all subscribed to the same broadcast.
+      for (const listener of this.listeners) {
+        try {
+          listener(event);
+        } catch (e) {
+          console.error("BackendClient event listener threw:", e);
+        }
+      }
       return;
     }
 

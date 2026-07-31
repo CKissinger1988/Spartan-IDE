@@ -22,6 +22,12 @@ jobs:
   rust:
     name: Rust workspace (fmt, clippy, test)
     runs-on: ubuntu-latest
+    # Real, explicit least-privilege: this job only ever checks out the repo,
+    # builds, and runs tests -- it never pushes, comments, or touches any
+    # GitHub API surface, so the default token's write access is dropped
+    # entirely rather than left implicit.
+    permissions:
+      contents: read
     # An explicit timeout, deliberately generous. Several consecutive runs of
     # this job died mid-`cargo test`, at increasingly precise diagnoses: the
     # first three (before the per-step split below existed) died ~50-56
@@ -63,6 +69,8 @@ jobs:
       CARGO_BUILD_JOBS: "4"
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Free up runner disk space
         # `cargo test --workspace --release` codegens ~80 test binaries,
@@ -122,6 +130,15 @@ jobs:
         # single combined `cargo test` step gave no way to tell whether the
         # ~50 minutes went into release codegen or into actually executing
         # tests. Separating them attributes the cost in the log.
+        #
+        # A real, explicit per-step bound, matching every test-execution
+        # group below rather than leaving this the one unbounded step in
+        # the job -- generous (this is the single heaviest step, compiling
+        # ~80 test binaries including wasmtime/llama-cpp-sys-2's vendored
+        # C++/wry) but still a real safety net if release codegen itself
+        # ever wedges, not just the test-execution groups this file already
+        # bounds.
+        timeout-minutes: 45
         run: cargo test --workspace --release --no-run
 
       - name: Report disk and memory usage after building test binaries
@@ -228,6 +245,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Node
         uses: actions/setup-node@v4
@@ -257,6 +276,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Node
         uses: actions/setup-node@v4
@@ -278,6 +299,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -313,6 +336,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Node
         uses: actions/setup-node@v4
@@ -334,6 +359,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Node
         uses: actions/setup-node@v4
@@ -355,6 +382,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
