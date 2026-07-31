@@ -626,6 +626,20 @@ export default function App(): React.ReactElement {
     [activeFile]
   );
 
+  // Real rope-anchored breakpoint shifting (closes the §75.8-named
+  // "line-number only" gap) -- `Editor.tsx` already computed the full,
+  // correctly shifted/dropped array via `shiftBreakpointsForEdit`; this
+  // just commits it to the real owned state, the same division of
+  // responsibility `toggleBreakpoint`/`editBreakpoint` already use.
+  const handleBreakpointsShift = useCallback(
+    (next: BreakpointSpec[]) => {
+      if (!activeFile) return;
+      const docId = activeFile.docId;
+      setBreakpointsByDoc((prev) => ({ ...prev, [docId]: next }));
+    },
+    [activeFile]
+  );
+
   // Real launch (§132) -- always starts a fresh session for the active
   // file's own current breakpoint set, matching the reference wgpu
   // shell's own F5 convention (an already-finished session is treated
@@ -875,6 +889,7 @@ export default function App(): React.ReactElement {
                       breakpoints={breakpointsByDoc[activeFile.docId] ?? []}
                       onToggleBreakpoint={toggleBreakpoint}
                       onEditBreakpoint={editBreakpoint}
+                      onBreakpointsShift={handleBreakpointsShift}
                       stoppedLine={
                         dapSessionByDoc[activeFile.docId]?.status === "stopped"
                           ? (dapSessionByDoc[activeFile.docId]?.stopped?.frame?.line ?? null)

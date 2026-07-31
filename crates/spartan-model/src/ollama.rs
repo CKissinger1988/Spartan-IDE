@@ -333,13 +333,51 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            // Drain the real request (headers + JSON body) before replying,
-            // matching how a real HTTP server behaves -- read until the
-            // client has sent everything (a short read loop is enough since
-            // this test's own request body is small and sent all at once).
-            let mut buf = [0u8; 4096];
-            let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(200)));
-            let _ = stream.read(&mut buf);
+            // Drain the real request (headers + JSON body) *completely* before
+            // replying, matching how a real HTTP server behaves. This has to be
+            // a genuine loop, not a single `read()`: TCP is free to split the
+            // client's request across several segments, and one `read()` only
+            // ever returns what has arrived so far. If this thread then replies
+            // and returns, `stream` drops with unread bytes still sitting in the
+            // socket's receive buffer -- and closing a socket in that state makes
+            // the OS send a real RST instead of a graceful FIN, which tears down
+            // the connection under the client and surfaces as the client-side
+            // `Connection reset by peer` this test used to flake with (~25% of
+            // runs at default `cargo test` parallelism, never single-threaded,
+            // because load is what makes the request get split in the first
+            // place). Read headers first, then exactly `Content-Length` bytes.
+            let mut buf: Vec<u8> = Vec::new();
+            let mut chunk = [0u8; 1024];
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
+
+            // Phase 1: read until the end of the header block.
+            let header_end = loop {
+                if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break Some(i + 4);
+                }
+                match stream.read(&mut chunk) {
+                    Ok(0) => break None, // client closed early
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break None, // timed out; give up draining
+                }
+            };
+
+            // Phase 2: read the declared body, if any, so nothing is left unread.
+            if let Some(header_end) = header_end {
+                let headers = String::from_utf8_lossy(&buf[..header_end]).to_lowercase();
+                let content_length = headers
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while buf.len() - header_end < content_length {
+                    match stream.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                        Err(_) => break,
+                    }
+                }
+            }
 
             let body_prefix =
                 "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\n\r\n".to_string();

@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { highlightSource, languageForPath } from "../syntax";
+import { ensureGrammar, grammarReady } from "../treeSitter";
 import {
   adjustSnippetStops,
   expandSnippet,
   findSnippet,
   type SnippetSession,
 } from "../snippets";
+import { computeBracketPairMarks } from "../bracketPairs";
 import { writeFileText } from "../fsAccess";
 import type { WasmDocument } from "../buffer";
 
@@ -555,10 +557,39 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
     setLineCount(file.content.split("\n").length);
   }, [file.content]);
 
+  // Real tree-sitter grammars load asynchronously (a real WASM fetch), so
+  // the first paint of a file uses `highlight.js` and this counter forces
+  // exactly one re-highlight once the grammar is genuinely ready. Bumping a
+  // counter rather than storing the grammar keeps `highlightSource`
+  // synchronous -- the render path is unchanged.
+  const [grammarGeneration, setGrammarGeneration] = useState(0);
+  useEffect(() => {
+    const language = languageForPath(file.path);
+    if (!language || grammarReady(language)) return;
+    let cancelled = false;
+    void ensureGrammar(language).then((entry) => {
+      if (!cancelled && entry) setGrammarGeneration((n) => n + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [file.path]);
+
   const highlightedHtml = useMemo(
     () => highlightSource(file.content, file.path),
-    [file.content, file.path]
+    // `grammarGeneration` is deliberately a dependency with no direct use in
+    // the body: it is the signal that a real grammar just became available,
+    // so the memo must recompute even though content/path are unchanged.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [file.content, file.path, grammarGeneration]
   );
+
+  /** Real bracket-pair colorization marks, recomputed whenever the real
+   * document content changes -- a plain, pure `useMemo` over `file.content`
+   * (not `prevContentRef`), matching `highlightedHtml`'s own dependency
+   * exactly, since this is equally a pure function of the current content
+   * with no cursor/selection state involved. */
+  const bracketPairMarks = useMemo(() => computeBracketPairMarks(file.content), [file.content]);
 
   const syncScroll = useCallback(() => {
     const el = textareaRef.current;
@@ -1092,6 +1123,18 @@ export default function Editor({ file, onContentChange }: EditorProps): React.Re
           aria-hidden="true"
           style={textStyle}
         >
+          {bracketPairMarks.map((m, i) => (
+            <div
+              key={`bp:${m.line}:${m.character}:${i}`}
+              className={`editor-bracket-pair-mark${m.colorIndex === -1 ? " editor-bracket-pair-mark-unmatched" : ` editor-bracket-pair-mark-${m.colorIndex}`}`}
+              style={{
+                top: m.line * lineHeightPx,
+                left: m.character * charWidth,
+                width: charWidth,
+                height: lineHeightPx,
+              }}
+            />
+          ))}
           {bracketMatch?.map((offset) => {
             const { line, character } = offsetToLineChar(prevContentRef.current, offset);
             return (

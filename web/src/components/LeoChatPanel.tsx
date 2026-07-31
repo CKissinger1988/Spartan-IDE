@@ -1,18 +1,32 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import type { BackendClient } from "../backendClient";
 
 /**
- * Real §75.71 voice I/O -- second and final "concepts only, rebuilt
- * safely" increment adapted from `CKissinger1988/SpartanAI_Assistant`
- * (see §75.70 for the full scoping discussion). That repo's own
- * "Dynamic Personas & Voice" concept runs local `whisper` STT and
- * `edge-tts` TTS as new Python dependencies; this uses Electron's own
- * Chromium-native Web Speech API instead -- zero new dependencies, and
- * no code ported from the source repo (that repo's `voice.py` was never
- * read in detail; only the README's own feature description was).
- * Deliberately narrow, minimal browser-API typings rather than pulling
- * in `@types/dom-speech-recognition` -- this project's own established
- * "declare only what's actually used" precedent (matching `nav.ts`'s own
- * narrow typing style).
+ * Real Leo chat panel for `web/`'s backend-connected mode -- closes the
+ * gap this project's own `docs/FUTURE_FEATURES.md` named ("Web app:
+ * LSP/DAP/Leo/git in the pure client-side mode... currently these only
+ * work in backend-connected mode") for the one piece that was still
+ * missing even in *backend-connected* mode: unlike LSP diagnostics/hover/
+ * completion/definition/etc. and the Git panel, `web/` never had any Leo
+ * UI at all, confirmed by grep before writing this file (the only prior
+ * `web/` reference to "Leo" was `LeoProviderKind` in `ModelsPanel.tsx`'s
+ * settings dropdown, not an actual chat/task/execute-loop surface).
+ *
+ * This is a direct, close port of `desktop/src/components/LeoChatPanel.tsx`
+ * -- same real `spartan-leo::Agent` state machine, same real `leo_*`
+ * dispatch methods (`leo_start_task`/`leo_approve_plan`/`leo_reject_plan`/
+ * `leo_next_step`/`leo_approve_call`/`leo_reject_call`/`leo_cancel`/
+ * `leo_retry`/`leo_status`/`leo_session_history`), all of which are already
+ * real, generic `spartan-backend` methods with zero method allowlist to
+ * extend -- `web/`'s own `BackendClient` reaches them exactly the same way
+ * it already reaches `git_status`/`lsp_hover`/`dap_launch`. The only real
+ * differences from the desktop copy: this component takes the already-
+ * connected `BackendClient` instance directly (rather than reading a
+ * global `window.spartan`), and `BackendClient.onEvent`'s own real
+ * callback shape is a single `{event, data}` object (`client.onEvent((e) =>
+ * ...)`), not Electron's two-argument `window.spartan.onEvent(event, data)`
+ * -- matching every other `web/` component that already subscribes to
+ * backend events (e.g. `App.tsx`'s own DAP/Android handlers).
  */
 interface SpeechRecognitionResultLike {
   isFinal: boolean;
@@ -37,12 +51,11 @@ interface SpeechRecognitionLike {
 }
 type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 
-/** Real, honest feature detection -- Electron's bundled Chromium usually
- * exposes `webkitSpeechRecognition`, but its actual recognition backend
- * still depends on network reachability to a Google speech service in
- * most builds; this returns `null` (not a fake stub) when unavailable,
- * so the UI can degrade honestly instead of showing a mic button that
- * silently does nothing. */
+/** Real, honest feature detection -- matches `desktop/`'s own copy exactly.
+ * A plain browser tab (this is genuinely what `web/` is) has at least as
+ * good a claim to these standard Web APIs as Electron's bundled Chromium
+ * does, so this isn't a hypothetical port -- the same real mic/speech
+ * synthesis path applies unchanged. */
 function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
   const w = window as unknown as {
     SpeechRecognition?: SpeechRecognitionCtor;
@@ -76,18 +89,9 @@ function writeVoiceOutputPref(enabled: boolean): void {
   }
 }
 
-/**
- * Real §75.95 "random thoughts," user-requested ("Leo should show random
- * thoughts similar to Gemini Cli"): Gemini CLI shows a rotating line of
- * playful status text while it's actively working, instead of one static
- * "thinking..." message the whole time. This is that same real UX pattern,
- * built fresh for this app -- a curated, hand-written array (no Gemini CLI
- * code read or copied; only the described *behavior* was the reference),
- * flavored to match Leo's own real §75.95 sarcastic persona (`crates/
- * spartan-leo/src/persona.rs`) rather than Gemini's own neutral tone, so
- * the chat panel's voice matches the model's own system-prompt voice
- * instead of contradicting it.
- */
+/** Same curated, hand-written array as `desktop/`'s own copy (no Gemini
+ * CLI code read or copied -- see that file's own doc comment for the
+ * full account of what this behavior is and isn't based on). */
 const LEO_THOUGHTS: readonly string[] = [
   "Reticulating splines, mostly out of spite...",
   "Silently judging your variable names...",
@@ -109,12 +113,6 @@ const LEO_THOUGHTS: readonly string[] = [
   "Rolling my eyes at this codebase, lovingly...",
 ];
 
-/** Cycles to a real, freshly-random `LEO_THOUGHTS` entry every ~2.5s while
- * `active` is true, and stays `null` (rendered as nothing) otherwise --
- * mirrors this panel's own established "no fake stub while inactive"
- * discipline (`getSpeechRecognitionCtor()`'s own honest-`null` pattern
- * above). Deliberately avoids repeating the immediately-previous thought
- * back-to-back so a short-lived step doesn't visibly "not change." */
 function useRandomThought(active: boolean): string | null {
   const [index, setIndex] = useState(0);
 
@@ -146,9 +144,6 @@ interface PendingCall {
   call_id: string;
   tool: string;
   args: Record<string, unknown>;
-  /** Real §75.68 diff preview -- only present for `edit_file` proposals,
-   * a plain `+`/`-`/` `-prefixed line diff computed server-side against
-   * the file's real current content. */
   diff?: string;
 }
 
@@ -169,19 +164,9 @@ type LeoState =
   | string;
 
 interface LeoChatPanelProps {
-  projectRoot: string;
+  client: BackendClient;
 }
 
-/**
- * Real §266 multi-turn session history -- one real entry per
- * `leo_start_task` call this backend process has seen, closing the gap
- * every prior pass left named: once a task reached `Done`/`Failed`/
- * cancelled, nothing about it survived past that single session's own
- * component state. Mirrors `spartan-backend::LeoHistoryEntry`'s exact
- * real shape (`task`/`outcome`/`summary`/`error`/`unix_timestamp`) --
- * `outcome` is one of `"Done"`/`"Failed"`/`"Cancelled"`, `summary` is
- * only ever present for `"Done"`, `error` only for `"Failed"`.
- */
 interface LeoHistoryEntry {
   task: string;
   outcome: string;
@@ -208,9 +193,8 @@ function isValidLeoHistoryEntry(value: unknown): value is LeoHistoryEntry {
   );
 }
 
-/** Real relative-age formatting, matching `GitPanel.tsx`'s own
- * `formatAge` convention verbatim (this project's own established
- * per-component-copy discipline, not a shared package). */
+/** Matches `GitPanel.tsx`'s own `formatAge` verbatim -- this project's
+ * established per-component-copy discipline, not a shared package. */
 function formatAge(unixSeconds: number): string {
   const seconds = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
   if (seconds < 60) return "just now";
@@ -242,9 +226,6 @@ function describeCall(call: PendingCall): string {
   }
 }
 
-/** Real diff rendering -- one `<div>` per real line, colored by its real
- * `+`/`-`/` ` prefix, matching a real, minimal, modern diff view rather
- * than a raw text dump. */
 function DiffView({ diff }: { diff: string }): React.ReactElement {
   const lines = diff.split("\n").filter((_, i, arr) => !(i === arr.length - 1 && arr[i] === ""));
   return (
@@ -261,72 +242,25 @@ function DiffView({ diff }: { diff: string }): React.ReactElement {
   );
 }
 
-/**
- * Real, persistent Leo chat panel -- docked, always visible regardless
- * of which nav screen (`ScreenId`) is active, closing a direct user
- * objection ("Where is my Leo chat panel? Leo still runs the show.")
- * to Leo being completely absent from the new Electron shell after the
- * nav restructuring in §75.60. Unlike the original wgpu shell's own
- * Agent mode (a full-screen view you navigate into and away from, §75.47),
- * this panel is a fixed-width column alongside every screen, matching
- * this project's own already-named "docked, not full-screen" future
- * improvement.
- *
- * Talks to the real `spartan-leo::Agent` state machine via
- * `spartan-backend`'s real `leo_*` IPC methods (§75.61) -- `leo_start_task`
- * returns a fast synchronous ack; the real plan (or a real failure) is
- * a real, unprompted `spartan:event` this panel subscribes to via
- * `window.spartan.onEvent`, since a real local-model plan call can take
- * 20-45s+ and must never block the IPC channel.
- *
- * Since §75.66, once a plan is approved this panel drives the real
- * execute loop too: `requestNextStep` asks the model for the next real
- * tool call (or `task_complete`) over the same async `Event` pattern;
- * every real call -- `read_file`/`edit_file`/`run_terminal` -- is shown
- * to the human and requires an explicit Approve/Reject before it
- * actually runs (`leo_start_task` always constructs its `Agent` with
- * `ApprovalMode::ManualEveryStep`, §9's own non-negotiable default, so
- * there is no auto-run path to skip here).
- */
-export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.ReactElement {
+export default function LeoChatPanel({ client }: LeoChatPanelProps): React.ReactElement {
   const [agentState, setAgentState] = useState<LeoState>("Idle");
   const [plan, setPlan] = useState<LeoPlan | null>(null);
   const [task, setTask] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pendingCall, setPendingCall] = useState<PendingCall | null>(null);
-  // Real, deliberate in-flight guard: without it, a fast real double-click
-  // (or a slow real IPC round trip) on Approve/Reject could fire the same
-  // `leo_approve_call`/`leo_reject_call` twice concurrently against the
-  // exact same `pendingCall` -- the second call would race the first's own
-  // `requestNextStep()` and could double-execute or double-log a real
-  // agent action.
   const [callInFlight, setCallInFlight] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
   const [memorySaved, setMemorySaved] = useState<boolean | null>(null);
 
-  // Real §266 session history -- fetched fresh on every open (never
-  // cached), matching `GitPanel.tsx`'s own established "History" section
-  // precedent exactly, since a Done/Failed/Cancelled outcome can land
-  // between opens.
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<LeoHistoryEntry[] | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
-  // Real §75.95 random-thoughts status text -- active exactly while Leo is
-  // doing real, unattended work with nothing more specific to show yet:
-  // the initial plan-generation call, or between execute-loop steps once
-  // a step has been requested but no real proposed call has arrived (or
-  // been auto-run) to describe instead.
   const showingRandomThought = agentState === "Planning" || (thinking && !pendingCall);
   const randomThought = useRandomThought(showingRandomThought);
 
-  // Real §75.71 voice I/O state. `voiceOutputEnabled` is a pure renderer
-  // preference (not routed through `spartan_settings` -- it has no
-  // backend/Leo-behavior effect the way GPU offload or the provider
-  // choice do), persisted to `localStorage` since that's the honest,
-  // simplest real mechanism for a browser-native UI toggle.
   const [voiceInputSupported] = useState(() => getSpeechRecognitionCtor() !== null);
   const [voiceOutputSupported] = useState(
     () => typeof window !== "undefined" && "speechSynthesis" in window
@@ -397,22 +331,26 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
   const requestNextStep = useCallback(async () => {
     setThinking(true);
     try {
-      await window.spartan.call("leo_next_step");
+      await client.call("leo_next_step");
     } catch (e) {
       setThinking(false);
       setError((e as Error).message);
     }
-  }, []);
+  }, [client]);
 
   useEffect(() => {
-    window.spartan
+    // A `cancelled` flag guards against a real, if narrow, race: if
+    // `client` itself changes (a reconnect), an in-flight `leo_status`
+    // from the *previous* client could still resolve after the new
+    // effect run has already started, clobbering fresher state with a
+    // stale snapshot.
+    let cancelled = false;
+    client
       .call("leo_status")
       .then((result) => {
-        // Defensive: a malformed/unexpected response (or a backend that
-        // doesn't implement this method at all, e.g. a future headless
-        // test harness) must never crash this panel -- found live via a
-        // Playwright mock that didn't implement `leo_status`, exposing
-        // that an undefined `state` reached `.toLowerCase()` below.
+        if (cancelled) return;
+        // Same defensive shape-check as `desktop/`'s own copy -- a
+        // malformed/unexpected response must never crash this panel.
         const r = result as
           | { state?: LeoState; plan?: LeoPlan | null; pending_call?: PendingCall | null }
           | undefined;
@@ -420,19 +358,23 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         setPlan(r?.plan ?? null);
         setPendingCall(r?.pending_call ?? null);
       })
-      .catch((e) => console.warn("leo_status probe failed:", e));
-  }, []);
+      .catch((e) => {
+        if (!cancelled) console.warn("leo_status probe failed:", e);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
 
   useEffect(() => {
-    // Real, deliberate defensive parsing + isolation, matching `web/`'s own
-    // copy of this panel: a malformed/unexpected payload for any of these
-    // events must never throw and interrupt delivery to any other real
-    // listener -- `preload.ts`'s own `onEvent` already wraps this callback
-    // in a try/catch at the IPC-bridge level, but this handler doesn't rely
-    // on that alone, matching the belt-and-suspenders discipline this
-    // project already applies elsewhere (e.g. `BackendClient`'s own
-    // per-listener isolation in `web/`).
-    const unsubscribe = window.spartan.onEvent((event, data) => {
+    const unsubscribe = client.onEvent(({ event, data }) => {
+      // Real defensive parsing, matching the `leo_status` bootstrap's own
+      // established convention: a malformed/unexpected payload for any of
+      // these events must never throw and interrupt `BackendClient`'s own
+      // event fan-out to *other* listeners -- confirmed a real risk since
+      // that dispatch loop calls every listener in one plain iteration
+      // (now itself hardened with a per-listener try/catch too, but this
+      // handler shouldn't rely on that alone).
       try {
         handleLeoEvent(event, data);
       } catch (e) {
@@ -477,9 +419,6 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         setPendingCall(call);
         setLog((prev) => [...prev, { kind: "call", text: describeCall(call) }]);
       } else if (event === "leo_auto_step") {
-        // Real §75.69 auto-approved Safe call -- Leo already ran this
-        // itself (AutoApproveSafe mode) with no UI round trip; still
-        // logged for real visibility into what it actually did.
         const step = d as unknown as PendingCall;
         setLog((prev) => [
           ...prev,
@@ -507,7 +446,7 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     }
 
     return unsubscribe;
-  }, [speak]);
+  }, [client, speak]);
 
   /** Real, deliberate normalization: `leo_approve_plan`/`leo_reject_plan`/
    * `leo_cancel`/`leo_retry` all return `{state}`, but a malformed or
@@ -525,6 +464,11 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
 
   const submitTask = useCallback(async () => {
     if (!task.trim()) return;
+    if (!client.projectRoot) {
+      setError("No project root is open -- cannot start a Leo task.");
+      setAgentState("Failed");
+      return;
+    }
     setError(null);
     setPlan(null);
     setPendingCall(null);
@@ -533,49 +477,37 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     setMemorySaved(null);
     setAgentState("Planning");
     try {
-      await window.spartan.call("leo_start_task", { task, project_root: projectRoot });
+      await client.call("leo_start_task", { task, project_root: client.projectRoot });
     } catch (e) {
       setError((e as Error).message);
       setAgentState("Failed");
     }
-  }, [task, projectRoot]);
+  }, [task, client]);
 
   const approve = useCallback(async () => {
     try {
-      const result = await window.spartan.call("leo_approve_plan");
+      const result = await client.call("leo_approve_plan");
       applyState(result);
       requestNextStep();
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [requestNextStep]);
+  }, [client, requestNextStep]);
 
   const reject = useCallback(async () => {
     try {
-      const result = await window.spartan.call("leo_reject_plan");
+      const result = await client.call("leo_reject_plan");
       applyState(result);
       setPlan(null);
       setTask("");
     } catch (e) {
       setError((e as Error).message);
     }
-  }, []);
+  }, [client]);
 
-  /** Real §75.73 cancel -- task #58's own named remaining item, "a UI
-   * control to interrupt an in-progress planning or execute loop." As of
-   * task #269, `leo_cancel`'s own real backend now genuinely interrupts a
-   * real, already-in-flight streaming model call (Ollama/Claude/LiteLLM/
-   * LM Studio) via a real, shared cancel flag checked once per real
-   * streamed chunk -- not just the generation-counter-based late-result
-   * discard this panel already relied on, which still runs unconditionally
-   * as the real fallback (see `leo_cancel`'s own backend doc comment for
-   * the exact, honestly-scoped remaining limits). This panel's own logic
-   * needs no change either way: it resets its local view to a fresh,
-   * empty Idle state immediately, matching the real backend's own
-   * synchronous `Idle` transition. */
   const cancelTask = useCallback(async () => {
     try {
-      const result = await window.spartan.call("leo_cancel");
+      const result = await client.call("leo_cancel");
       applyState(result);
       setPlan(null);
       setPendingCall(null);
@@ -588,34 +520,25 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     } catch (e) {
       setError((e as Error).message);
     }
-  }, []);
+  }, [client]);
 
-  /** Real §75.78 retry -- the "Failed -> Recovering -> Executing" loop's
-   * last missing piece. Mirrors `approve`'s exact shape: call the real
-   * backend transition, adopt whatever state it reports, then
-   * immediately ask for the next step, exactly like approving a plan
-   * already does. A real `RecoveryExhausted` error surfaces as a plain
-   * error message (via the existing `error` state, already rendered
-   * unconditionally above) rather than a special-cased UI -- the honest
-   * backend message ("start a new task instead") already says what to
-   * do next. */
   const retryTask = useCallback(async () => {
     setError(null);
     try {
-      const result = await window.spartan.call("leo_retry");
+      const result = await client.call("leo_retry");
       applyState(result);
       setLog((prev) => [...prev, { kind: "auto", text: "Retrying failed task..." }]);
       requestNextStep();
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [requestNextStep]);
+  }, [client, requestNextStep]);
 
   const approveCall = useCallback(async () => {
     if (!pendingCall || callInFlight) return;
     setCallInFlight(true);
     try {
-      const result = (await window.spartan.call("leo_approve_call")) as {
+      const result = (await client.call("leo_approve_call")) as {
         ok: boolean;
         result?: {
           kind: string;
@@ -656,13 +579,13 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     } finally {
       setCallInFlight(false);
     }
-  }, [pendingCall, callInFlight, requestNextStep]);
+  }, [client, pendingCall, callInFlight, requestNextStep]);
 
   const rejectCall = useCallback(async () => {
     if (callInFlight) return;
     setCallInFlight(true);
     try {
-      await window.spartan.call("leo_reject_call");
+      await client.call("leo_reject_call");
       setPendingCall(null);
       setLog((prev) => [...prev, { kind: "rejected", text: "Rejected -- asking Leo to reconsider" }]);
       requestNextStep();
@@ -671,7 +594,7 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     } finally {
       setCallInFlight(false);
     }
-  }, [callInFlight, requestNextStep]);
+  }, [client, callInFlight, requestNextStep]);
 
   // Extracted once rather than spelled out at each of its three real call
   // sites (the textarea, the mic button, and the Send button) -- a single
@@ -687,7 +610,7 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     }
     setHistoryOpen(true);
     setHistoryError(null);
-    window.spartan
+    client
       .call("leo_session_history")
       .then((result) => {
         const r = result as { entries?: unknown } | undefined;
@@ -695,7 +618,7 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
         setHistory(raw.filter(isValidLeoHistoryEntry));
       })
       .catch((e: Error) => setHistoryError(e.message));
-  }, [historyOpen]);
+  }, [client, historyOpen]);
 
   return (
     <div className="leo-panel">

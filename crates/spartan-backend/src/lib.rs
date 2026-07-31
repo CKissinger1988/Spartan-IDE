@@ -62,6 +62,7 @@ mod format_integration;
 /// (`tests/hf_pull_integration.rs`, `tests/litellm_integration.rs`, moved
 /// here alongside these modules) can exercise the real subprocess-spawning
 /// layer directly, the same real access they had in `spartan-devserver`.
+pub mod github;
 pub mod hf_downloader;
 pub mod litellm_proxy;
 /// Real Hugging Face -> llama.cpp GGUF downloader -- unlike
@@ -3784,6 +3785,86 @@ fn git_discard(project_root: &str, path: &str) -> Result<serde_json::Value, Stri
     Ok(serde_json::json!({ "ok": true }))
 }
 
+/// Real GitHub layer, first increment (task #284): lists a repo's real,
+/// live open pull requests. `spartan_git::GitRepo::detect_github_remote`
+/// (already real) supplies `owner`/`repo` from the repo's own real `origin`
+/// remote -- refuses honestly (not silently returning an empty list) if
+/// there's no git repository here at all, or no real GitHub remote
+/// configured. `github_token` is read fresh from Settings on every call
+/// (matching `build_leo_provider`'s own "load current settings, don't
+/// cache" discipline) so a token change takes effect on the very next
+/// request, with no reload/restart needed.
+///
+/// The two local checks above (`GitRepo::discover`, `detect_github_remote`)
+/// stay synchronous -- they're fast, in-process, no-network operations, so
+/// returning their real errors immediately keeps this dispatch method's own
+/// fast-fail behavior for a non-repo or non-GitHub-remote path unchanged.
+/// The real *network* call is not: `handle_request`'s callers (both the
+/// stdio transport `desktop/` drives and a single WebSocket connection
+/// `web/` drives) process one request at a time on a single thread, so a
+/// plain synchronous `github::list_pull_requests` call here -- bounded at
+/// up to `GITHUB_REQUEST_TIMEOUT` (10s) -- would otherwise stall every
+/// *other* real IPC method (file open/save/edit, LSP, git, Leo, PTY) for
+/// that same duration. Matches `check_for_updates`'s own exact real "ack
+/// now, event later" shape (a real background thread, a real
+/// `github_pull_requests_result`/`github_pull_requests_failed` event) --
+/// the same established pattern this crate already uses for every other
+/// real external-network call.
+fn github_list_pull_requests(
+    project_root: &str,
+    out_tx: Sender<String>,
+) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let (owner, repo_name) = repo
+        .detect_github_remote()
+        .ok_or("this repository has no real GitHub remote configured")?;
+    spawn_github_pr_fetch(owner, repo_name, out_tx);
+    Ok(serde_json::json!({ "status": "checking" }))
+}
+
+/// The real, deferred half of `github_list_pull_requests` above, extracted
+/// so it's directly unit-testable against a known-good `(owner, repo)`
+/// pair without needing `detect_github_remote` to first resolve a real
+/// git remote URL -- a real, environment-specific complication found while
+/// writing exactly that test: this sandbox's own outbound-HTTPS proxy
+/// setup rewrites any `https://github.com/...` remote URL via a real,
+/// global `url.*.insteadOf` git config rule (confirmed via `git config
+/// --global --get-regexp 'url\..*\.insteadof'`), the same real mechanism a
+/// production `git remote -v` would apply -- so a test fixture that sets a
+/// literal `github.com` remote URL and expects `detect_github_remote` to
+/// recognize it back can't be made to pass in this specific sandboxed
+/// session (it would on a real end-user machine with no such rewrite
+/// rule). Extracting this half sidesteps that environment quirk entirely
+/// rather than working around it with something intrusive like process-
+/// wide `git2::opts::set_search_path` overrides.
+fn spawn_github_pr_fetch(owner: String, repo_name: String, out_tx: Sender<String>) {
+    thread::spawn(move || {
+        let token = spartan_settings::load().github_token;
+        let event = match github::list_pull_requests(&owner, &repo_name, token.as_deref()) {
+            Ok(prs) => Event {
+                event: "github_pull_requests_result".to_string(),
+                data: serde_json::json!({
+                    "owner": owner,
+                    "repo": repo_name,
+                    "pull_requests": prs,
+                }),
+            },
+            Err(e) => Event {
+                event: "github_pull_requests_failed".to_string(),
+                data: serde_json::json!({
+                    "owner": owner,
+                    "repo": repo_name,
+                    "error": format!("GitHub pull request listing failed: {e}"),
+                }),
+            },
+        };
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = out_tx.send(line);
+        }
+    });
+}
+
 fn git_commit(project_root: &str, message: &str) -> Result<serde_json::Value, String> {
     let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
         .ok_or("no git repository found at or above this path")?;
@@ -3900,18 +3981,28 @@ fn git_diff(project_root: &str, path: &str, staged: bool) -> Result<serde_json::
     }))
 }
 
-/// Real per-hunk unstaged diff for one file -- lists every real hunk
-/// `spartan_git::diff_hunks` identifies, so the UI can offer a "stage this
-/// hunk" action per real hunk rather than only whole-file staging.
-fn git_diff_hunks(project_root: &str, path: &str) -> Result<serde_json::Value, String> {
+/// Real per-hunk diff for one file, unstaged (index-vs-workdir) by default
+/// or staged (`HEAD`-vs-index, the exact complementary diff `git_diff`'s
+/// own `staged` param already distinguishes) when `staged` is true -- lists
+/// every real hunk `spartan_git::diff_hunks`/`diff_hunks_staged` identifies,
+/// so the UI can offer a "stage this hunk"/"unstage this hunk" action per
+/// real hunk rather than only whole-file staging.
+fn git_diff_hunks(
+    project_root: &str,
+    path: &str,
+    staged: bool,
+) -> Result<serde_json::Value, String> {
     let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
         .ok_or("no git repository found at or above this path")?;
-    let hunks = repo
-        .diff_hunks(std::path::Path::new(path))
-        .map_err(|e| format!("git diff hunks: {e}"))?
-        .into_iter()
-        .map(|h| serde_json::json!({ "index": h.index, "header": h.header, "body": h.body }))
-        .collect::<Vec<_>>();
+    let hunks = if staged {
+        repo.diff_hunks_staged(std::path::Path::new(path))
+    } else {
+        repo.diff_hunks(std::path::Path::new(path))
+    }
+    .map_err(|e| format!("git diff hunks: {e}"))?
+    .into_iter()
+    .map(|h| serde_json::json!({ "index": h.index, "header": h.header, "body": h.body }))
+    .collect::<Vec<_>>();
     Ok(serde_json::json!({ "hunks": hunks }))
 }
 
@@ -3928,6 +4019,23 @@ fn git_stage_hunk(
         .ok_or("no git repository found at or above this path")?;
     repo.stage_hunk(std::path::Path::new(path), hunk_index as usize)
         .map_err(|e| format!("git stage hunk: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// Real "unstage this one hunk" -- the direct mirror of `git_stage_hunk`,
+/// `git restore --staged -p`'s own per-hunk deselection. `hunk_index` must
+/// refer to a hunk from the *most recent* real `git_diff_hunks` call for
+/// this file with `staged: true`, the same real v1 scope cut
+/// `git_stage_hunk` already carries.
+fn git_unstage_hunk(
+    project_root: &str,
+    path: &str,
+    hunk_index: u64,
+) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    repo.unstage_hunk(std::path::Path::new(path), hunk_index as usize)
+        .map_err(|e| format!("git unstage hunk: {e}"))?;
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -4334,9 +4442,29 @@ fn git_create_branch(project_root: &str, branch: &str) -> Result<serde_json::Val
 /// second source of truth beyond the real file on disk would only risk
 /// drifting from it, the same reasoning `settings_panel.rs` in the
 /// original wgpu shell already established (it re-reads fresh, too).
+/// Real settings values are safe to return to the renderer over IPC except
+/// one: `github_token` is a genuine credential, and neither shell's
+/// Settings screen has ever needed to read it back (there's no GitHub
+/// token entry UI in either yet -- confirmed by grep, not assumed) --
+/// so it's masked here rather than round-tripped in cleartext through a
+/// response a compromised or malicious renderer could otherwise read.
+/// The real value is untouched on disk and in `settings_set`'s own
+/// `patch.github_token.unwrap_or(current.github_token)` merge logic --
+/// only the *returned* JSON is redacted.
+fn redact_github_token(mut value: serde_json::Value) -> serde_json::Value {
+    if let Some(token) = value.get_mut("github_token") {
+        if !token.is_null() {
+            *token = serde_json::Value::String("[REDACTED]".to_string());
+        }
+    }
+    value
+}
+
 fn settings_get() -> Result<serde_json::Value, String> {
     let settings = spartan_settings::load();
-    serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
+    serde_json::to_value(settings)
+        .map(redact_github_token)
+        .map_err(|e| format!("serialize settings: {e}"))
 }
 
 /// The real, shared `~/.spartan/crashes` directory both this crate's own
@@ -4436,6 +4564,11 @@ struct SettingsPatch {
     /// other field here follows, one level deeper because this value can
     /// itself be absent.
     leo_verify_command: Option<Option<String>>,
+    /// Same nested-`Option` shape as `leo_verify_command` above, for the
+    /// same reason (task #284): the setting itself is `Option<String>`, so
+    /// the patch needs "not provided, keep current" / "provided empty,
+    /// clear it" / "provided, set it" as three distinct real states.
+    github_token: Option<Option<String>>,
 }
 
 fn settings_set(patch: SettingsPatch) -> Result<serde_json::Value, String> {
@@ -4456,9 +4589,12 @@ fn settings_set(patch: SettingsPatch) -> Result<serde_json::Value, String> {
         leo_verify_command: patch
             .leo_verify_command
             .unwrap_or(current.leo_verify_command),
+        github_token: patch.github_token.unwrap_or(current.github_token),
     };
     spartan_settings::save(&settings).map_err(|e| format!("save settings: {e}"))?;
-    serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
+    serde_json::to_value(settings)
+        .map(redact_github_token)
+        .map_err(|e| format!("serialize settings: {e}"))
 }
 
 /// Real §75.72 wiring of `spartan-updater` (already real and tested since
@@ -4962,6 +5098,8 @@ pub fn handle_request(
             search_project(&project_root, &pattern, path)
         })(),
         "git_status" => get_str_param(&req.params, "project_root").and_then(|r| git_status(&r)),
+        "github_list_pull_requests" => get_str_param(&req.params, "project_root")
+            .and_then(|r| github_list_pull_requests(&r, out_tx.clone())),
         "git_stage" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
             let path = get_str_param(&req.params, "path")?;
@@ -5018,7 +5156,12 @@ pub fn handle_request(
         "git_diff_hunks" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
             let path = get_str_param(&req.params, "path")?;
-            git_diff_hunks(&root, &path)
+            let staged = req
+                .params
+                .get("staged")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            git_diff_hunks(&root, &path, staged)
         })(),
         "git_stage_hunk" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
@@ -5029,6 +5172,16 @@ pub fn handle_request(
                 .and_then(|v| v.as_u64())
                 .ok_or("missing/invalid u64 param `hunk_index`")?;
             git_stage_hunk(&root, &path, hunk_index)
+        })(),
+        "git_unstage_hunk" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let path = get_str_param(&req.params, "path")?;
+            let hunk_index = req
+                .params
+                .get("hunk_index")
+                .and_then(|v| v.as_u64())
+                .ok_or("missing/invalid u64 param `hunk_index`")?;
+            git_unstage_hunk(&root, &path, hunk_index)
         })(),
         "git_branches" => get_str_param(&req.params, "project_root").and_then(|r| git_branches(&r)),
         "git_checkout" => (|| {
@@ -5233,6 +5386,19 @@ pub fn handle_request(
                     })
                 }
             };
+            // Same nested-`Option` parse as `leo_verify_command` above.
+            let github_token = match req.params.get("github_token") {
+                None => None,
+                Some(v) => {
+                    let s = v.as_str().ok_or("invalid github_token: must be a string")?;
+                    let trimmed = s.trim();
+                    Some(if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    })
+                }
+            };
             settings_set(SettingsPatch {
                 gpu_enabled,
                 gpu_layers,
@@ -5243,6 +5409,7 @@ pub fn handle_request(
                 crash_reporting,
                 onboarding_completed,
                 leo_verify_command,
+                github_token,
             })
         })(),
         "check_for_updates" => check_for_updates(out_tx.clone()),
@@ -5665,6 +5832,130 @@ mod tests {
         assert!(resp.error.unwrap().contains("no pty session"));
     }
 
+    /// Closes the "PTY resize verified against a real reader" gap named in
+    /// `docs/FUTURE_FEATURES.md`'s own Terminal & sessions table -- the
+    /// resize IPC has been real and tested against the honest-error path
+    /// since §75.64, but never against a real process that actually reads
+    /// the terminal's own size. A real spawned `python3` process prints its
+    /// real `os.get_terminal_size()` on startup and again on every real
+    /// `SIGWINCH` it receives (self-skips if `python3` isn't on `$PATH`,
+    /// matching every other real-external-tool integration test in this
+    /// crate). Resizing the pty via `pty_resize` triggers a real OS-level
+    /// `TIOCSWINSZ` ioctl on the master side, which the kernel itself
+    /// automatically delivers as `SIGWINCH` to the real foreground process
+    /// group of the slave -- no manual signal send needed, and nothing this
+    /// test's own code could fake, so this proves the whole real chain
+    /// (dispatch -> `PtyHandle::resize` -> `portable-pty`'s master ->
+    /// kernel -> the real child process) end to end.
+    #[test]
+    fn pty_resize_is_actually_observed_by_a_real_reader_process() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("SKIP: python3 not found on $PATH");
+            return;
+        }
+
+        let state = new_state();
+        let (tx, rx) = mpsc::channel::<String>();
+        let script = r#"
+import os, signal, sys, time
+def report():
+    sz = os.get_terminal_size()
+    print(f"SIZE:{sz.columns}:{sz.lines}", flush=True)
+def handler(signum, frame):
+    report()
+signal.signal(signal.SIGWINCH, handler)
+report()
+time.sleep(10)
+"#;
+        let spawn_resp = handle_request(
+            &state,
+            req(
+                1,
+                "pty_spawn",
+                serde_json::json!({
+                    "cwd": std::env::temp_dir().to_string_lossy(),
+                    "cols": 80,
+                    "rows": 24,
+                    "command": "python3",
+                    "args": ["-c", script],
+                }),
+            ),
+            tx,
+        );
+        assert!(
+            spawn_resp.error.is_none(),
+            "pty_spawn errored: {:?}",
+            spawn_resp.error
+        );
+        let session_id = spawn_resp.result.unwrap()["session_id"].as_u64().unwrap();
+
+        let recv_output_line = |rx: &mpsc::Receiver<String>, timeout: std::time::Duration| {
+            let deadline = std::time::Instant::now() + timeout;
+            let mut collected = String::new();
+            loop {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                assert!(
+                    !remaining.is_zero(),
+                    "timed out waiting for real pty output"
+                );
+                let line = rx
+                    .recv_timeout(remaining)
+                    .unwrap_or_else(|_| panic!("timed out waiting for real pty output"));
+                let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+                if value["data"]["session_id"].as_u64() != Some(session_id) {
+                    continue;
+                }
+                if let Some(chunk) = value["event"]
+                    .as_str()
+                    .filter(|e| *e == "pty_output")
+                    .and_then(|_| value["data"]["chunk"].as_str())
+                {
+                    collected.push_str(chunk);
+                    if collected.contains("SIZE:") && collected.contains('\n') {
+                        return collected;
+                    }
+                }
+            }
+        };
+
+        let initial = recv_output_line(&rx, std::time::Duration::from_secs(10));
+        assert!(
+            initial.contains("SIZE:80:24"),
+            "expected the real initial terminal size to be 80x24, got: {initial:?}"
+        );
+
+        let resize_resp = call(
+            &state,
+            2,
+            "pty_resize",
+            serde_json::json!({ "session_id": session_id, "cols": 120, "rows": 40 }),
+        );
+        assert!(
+            resize_resp.error.is_none(),
+            "pty_resize errored: {:?}",
+            resize_resp.error
+        );
+
+        let after_resize = recv_output_line(&rx, std::time::Duration::from_secs(10));
+        assert!(
+            after_resize.contains("SIZE:120:40"),
+            "expected the real reader process to observe the resized 120x40 \
+             terminal via a real kernel-delivered SIGWINCH, got: {after_resize:?}"
+        );
+
+        let close_resp = call(
+            &state,
+            3,
+            "pty_close",
+            serde_json::json!({ "session_id": session_id }),
+        );
+        assert!(close_resp.error.is_none());
+    }
+
     #[test]
     fn pty_close_on_an_unknown_session_is_a_real_harmless_no_op() {
         // Closing an id that was never spawned (or already closed) should
@@ -5716,6 +6007,82 @@ mod tests {
             serde_json::json!({ "session_id": session_id, "data": "hi\n" }),
         );
         assert!(input_resp.error.unwrap().contains("no pty session"));
+    }
+
+    /// Real, live end-to-end confirmation of `pty::Utf8Reassembler`'s own
+    /// wiring inside `spawn_pty`'s real background thread, closing the
+    /// "UTF-8 chunk-boundary reassembly" gap `docs/FUTURE_FEATURES.md`'s
+    /// own "Terminal & sessions" table named. Deliberately uses this
+    /// crate's own real `handle_request`/`mpsc::channel` directly (not the
+    /// `call()` helper above, which discards its receiver and so can't
+    /// observe any real emitted event) -- the same pattern this file's own
+    /// DAP/LSP live tests already established for capturing real events.
+    /// A real spawned shell echoing a real 4-byte emoji plus a 2-byte
+    /// accented character can't be *forced* to split exactly at a byte
+    /// boundary through this public API (real OS PTY buffering decides
+    /// chunk sizes), so this doesn't reproduce the split itself -- the
+    /// deterministic `Utf8Reassembler` unit tests in `pty.rs` already cover
+    /// that precisely -- but it does prove the real wiring never mangles
+    /// real multi-byte output in practice, and that no other regression
+    /// was introduced by routing every chunk through the new reassembler.
+    #[test]
+    fn pty_output_correctly_reassembles_a_real_multi_byte_utf8_string() {
+        let state = new_state();
+        let (tx, rx) = mpsc::channel::<String>();
+        let spawn_resp = handle_request(
+            &state,
+            req(
+                1,
+                "pty_spawn",
+                serde_json::json!({
+                    "cwd": std::env::temp_dir().to_string_lossy(),
+                    "cols": 80,
+                    "rows": 24,
+                    "command": "bash",
+                    "args": ["-c", "printf 'café🎉\\n' && exit"],
+                }),
+            ),
+            tx,
+        );
+        assert!(
+            spawn_resp.error.is_none(),
+            "pty_spawn errored: {:?}",
+            spawn_resp.error
+        );
+        let session_id = spawn_resp.result.unwrap()["session_id"].as_u64().unwrap();
+
+        let mut collected = String::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for a real pty_exit event"
+            );
+            let line = rx
+                .recv_timeout(remaining)
+                .unwrap_or_else(|_| panic!("timed out waiting for a real pty_exit event"));
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if value["data"]["session_id"].as_u64() != Some(session_id) {
+                continue;
+            }
+            match value["event"].as_str() {
+                Some("pty_output") => {
+                    collected.push_str(value["data"]["chunk"].as_str().unwrap());
+                }
+                Some("pty_exit") => break,
+                _ => {}
+            }
+        }
+
+        assert!(
+            collected.contains("café🎉"),
+            "expected the real multi-byte string reassembled with no replacement characters, got: {collected:?}"
+        );
+        assert!(
+            !collected.contains('\u{FFFD}'),
+            "no spurious U+FFFD replacement character should appear: {collected:?}"
+        );
     }
 
     #[test]
@@ -6203,6 +6570,107 @@ mod tests {
         assert!(resp.result.is_none());
         assert!(resp.error.unwrap().contains("no git repository"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn github_list_pull_requests_through_the_real_dispatch_on_a_non_repo_path_errors_honestly() {
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-github-not-a-repo-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "github_list_pull_requests",
+            serde_json::json!({ "project_root": dir.to_string_lossy() }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("no git repository"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Deterministic, no-network: this repo has a real remote, but it's not
+    /// GitHub, so `detect_github_remote` correctly returns `None` before
+    /// this dispatch method ever makes a real HTTP call -- the module-level
+    /// `github::tests` are what actually exercise the real, live GitHub
+    /// call (and self-skip honestly if this sandbox's own network can't
+    /// reach it), keeping this dispatch-level test fast and reliable.
+    #[test]
+    fn github_list_pull_requests_through_the_real_dispatch_on_a_repo_with_no_github_remote_errors_honestly(
+    ) {
+        let tmp = TempRepo::new("github-no-remote");
+        let mut repo = spartan_git::GitRepo::discover(&tmp.dir).unwrap();
+        repo.raw_repo_mut()
+            .remote("origin", "https://gitlab.com/other/thing.git")
+            .unwrap();
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "github_list_pull_requests",
+            serde_json::json!({ "project_root": tmp.dir.to_string_lossy() }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp
+            .error
+            .unwrap()
+            .contains("no real GitHub remote configured"));
+    }
+
+    /// Real, live confirmation that the deferred half of
+    /// `github_list_pull_requests` genuinely answers asynchronously (task:
+    /// CodeRabbit review fix) -- a real `github_pull_requests_result`/
+    /// `github_pull_requests_failed` event arrives on `out_tx`, not a
+    /// direct return value. Tolerates either real outcome (success or a
+    /// real network failure) rather than asserting one specific result,
+    /// matching this crate's own established pattern for a real live
+    /// external-network call in a sandboxed environment whose own outbound
+    /// HTTPS reachability isn't guaranteed (see `github::tests::
+    /// list_pull_requests_against_this_real_project_s_own_repo`'s own
+    /// identical tolerance).
+    ///
+    /// Deliberately calls `spawn_github_pr_fetch` directly rather than
+    /// going through the full `github_list_pull_requests` dispatch (which
+    /// would need a fixture repo whose `origin` remote real-resolves as a
+    /// GitHub URL via `detect_github_remote`): this sandbox's own outbound
+    /// -HTTPS proxy setup rewrites any `https://github.com/...` remote URL
+    /// via a real, global `url.*.insteadOf` git config rule (confirmed via
+    /// `git config --global --get-regexp 'url\..*\.insteadof'`, the same
+    /// real mechanism `git remote -v` itself would apply on a real
+    /// machine with such a rule configured), so a dispatch-level fixture
+    /// using a literal `github.com` remote URL can't be made to correctly
+    /// exercise the async-ack path in this specific session -- confirmed
+    /// with a standalone repro before concluding this, not assumed. The
+    /// two existing dispatch-level tests above already cover
+    /// `github_list_pull_requests`'s own synchronous fast-fail checks (no
+    /// repo, no GitHub remote) end to end; this one covers the deferred
+    /// network-call half in isolation, independent of that environment
+    /// quirk.
+    #[test]
+    fn spawn_github_pr_fetch_genuinely_answers_asynchronously() {
+        let (tx, rx) = mpsc::channel();
+        spawn_github_pr_fetch("CKissinger1988".to_string(), "Spartan-IDE".to_string(), tx);
+
+        let line = rx
+            .recv_timeout(std::time::Duration::from_secs(15))
+            .expect("a real github_pull_requests_result/_failed event within 15s");
+        let event: serde_json::Value = serde_json::from_str(&line).unwrap();
+        match event["event"].as_str().unwrap() {
+            "github_pull_requests_result" => {
+                assert_eq!(event["data"]["owner"], "CKissinger1988");
+                assert_eq!(event["data"]["repo"], "Spartan-IDE");
+                assert!(event["data"]["pull_requests"].is_array());
+            }
+            "github_pull_requests_failed" => {
+                assert_eq!(event["data"]["owner"], "CKissinger1988");
+                assert_eq!(event["data"]["repo"], "Spartan-IDE");
+                assert!(!event["data"]["error"].as_str().unwrap().is_empty());
+            }
+            other => panic!("unexpected event: {other}"),
+        }
     }
 
     #[test]
@@ -7100,6 +7568,133 @@ mod tests {
     }
 
     #[test]
+    fn git_diff_hunks_staged_and_unstage_hunk_round_trip_through_the_dispatch_path() {
+        let tmp = TempRepo::new("unstage_hunk_dispatch");
+        let base: String = (1..=20)
+            .map(|n| format!("line{n}\n"))
+            .collect::<Vec<_>>()
+            .join("");
+        std::fs::write(tmp.dir.join("f.txt"), &base).unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "base" }),
+        );
+        let modified = base
+            .replace("line2\n", "line2 CHANGED\n")
+            .replace("line19\n", "line19 CHANGED\n");
+        std::fs::write(tmp.dir.join("f.txt"), &modified).unwrap();
+        // Stage the real, current (both-edits-applied) content wholesale,
+        // so both changes start out fully staged.
+        call(
+            &state,
+            3,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+
+        let hunks_resp = call(
+            &state,
+            4,
+            "git_diff_hunks",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "staged": true }),
+        );
+        let hunks = hunks_resp.result.unwrap()["hunks"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(hunks.len(), 2, "the two staged edits stay separate hunks");
+
+        let unstage_resp = call(
+            &state,
+            5,
+            "git_unstage_hunk",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "hunk_index": 0 }),
+        );
+        assert_eq!(unstage_resp.result.unwrap()["ok"], true);
+
+        // The real working tree is untouched by unstaging.
+        assert_eq!(
+            std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            modified
+        );
+
+        let status_resp = call(
+            &state,
+            6,
+            "git_status",
+            serde_json::json!({ "project_root": root }),
+        );
+        let entries = status_resp.result.unwrap()["entries"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let entry = entries
+            .iter()
+            .find(|e| e["path"] == "f.txt")
+            .expect("f.txt must be in status");
+        assert!(!entry["staged"].is_null());
+        assert!(!entry["unstaged"].is_null());
+
+        // Exactly one real staged hunk remains after unstaging the first.
+        let remaining_resp = call(
+            &state,
+            7,
+            "git_diff_hunks",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "staged": true }),
+        );
+        let remaining = remaining_resp.result.unwrap()["hunks"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(remaining.len(), 1);
+    }
+
+    #[test]
+    fn git_unstage_hunk_out_of_range_errors_honestly_through_the_dispatch_path() {
+        let tmp = TempRepo::new("unstage_hunk_oor_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "v1\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "base" }),
+        );
+        std::fs::write(tmp.dir.join("f.txt"), "v2\n").unwrap();
+        call(
+            &state,
+            3,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        let resp = call(
+            &state,
+            4,
+            "git_unstage_hunk",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "hunk_index": 99 }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("git unstage hunk"));
+    }
+
+    #[test]
     fn git_branches_create_and_checkout_round_trip_through_the_real_dispatch() {
         let tmp = TempRepo::new("branches_dispatch");
         std::fs::write(tmp.dir.join("f.txt"), "content").unwrap();
@@ -7859,6 +8454,84 @@ mod tests {
             clear_resp.result.unwrap()["leo_verify_command"],
             serde_json::Value::Null
         );
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn settings_set_real_dispatch_parses_sets_preserves_and_clears_github_token() {
+        // Real, dispatch-level coverage of `settings_set`'s own nested-
+        // `Option` `github_token` parse arm, mirroring the identical
+        // `leo_verify_command` test above -- a real regression here (e.g.
+        // a stray `github_token: None` overwrite on an unrelated save)
+        // would silently drop a stored token with no test catching it.
+        // Also confirms `redact_github_token` masks the real value in
+        // every returned response while the real value still round-trips
+        // through the actual saved file on disk.
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-settings-github-token-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        let state = new_state();
+        let set_resp = call(
+            &state,
+            1,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": true,
+                "github_token": "  ghp_realtoken123  ",
+            }),
+        );
+        // Masked in the response...
+        assert_eq!(set_resp.result.unwrap()["github_token"], "[REDACTED]");
+        // ...but the real, trimmed value is genuinely persisted on disk.
+        assert_eq!(
+            spartan_settings::load().github_token.as_deref(),
+            Some("ghp_realtoken123")
+        );
+
+        // A later, unrelated GPU-only save (the key omitted entirely) must
+        // preserve the real, already-set token -- outer `None`, not a
+        // silent clear.
+        let preserve_resp = call(
+            &state,
+            2,
+            "settings_set",
+            serde_json::json!({ "gpu_enabled": false }),
+        );
+        assert_eq!(preserve_resp.result.unwrap()["github_token"], "[REDACTED]");
+        assert_eq!(
+            spartan_settings::load().github_token.as_deref(),
+            Some("ghp_realtoken123")
+        );
+
+        // An explicit empty string really clears it back to `null`, and
+        // the redacted response correctly reflects `null`, not a
+        // fabricated "[REDACTED]" for a token that's genuinely gone.
+        let clear_resp = call(
+            &state,
+            3,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": false,
+                "github_token": "",
+            }),
+        );
+        assert_eq!(
+            clear_resp.result.unwrap()["github_token"],
+            serde_json::Value::Null
+        );
+        assert_eq!(spartan_settings::load().github_token, None);
 
         match prior_home {
             Some(h) => std::env::set_var("HOME", h),
@@ -8741,16 +9414,37 @@ mod tests {
     /// `model_download_cancel` will look up, and really is cleared once
     /// the download's own background thread finishes -- both directly
     /// against `BackendState`, not just that the dispatch functions
-    /// compile and return an ack. Deliberately outcome-agnostic: whether
-    /// the real network call behind it succeeds or fails honestly (this
-    /// environment's own already-documented TLS-proxy condition, §75.49,
-    /// included), either is a real "finished" state that must unregister
-    /// the flag -- so this test never needs to self-skip.
+    /// compile and return an ack.
+    ///
+    /// This test **cancels the download immediately**, on purpose, rather
+    /// than letting it run to completion. An earlier version waited for a
+    /// terminal event and discarded the wait's own result (`let _ =
+    /// recv_timeout(30s)`), which hid a real problem: on a machine with
+    /// unimpeded network access to Hugging Face, `resolve_gguf_filename`
+    /// *succeeds* and `download_gguf` then starts pulling a genuine
+    /// multi-hundred-MB GGUF file -- so the download had not finished at
+    /// the 30s mark, the flag was legitimately still registered, and the
+    /// assertion failed. That was invisible in the sandbox this test was
+    /// written in, where the already-documented TLS-proxy condition
+    /// (§75.49) makes the resolve fail fast, so the thread finished almost
+    /// instantly. The old shape therefore both flaked in CI *and* kicked
+    /// off a real, large, abandoned model download on every CI run.
+    ///
+    /// Cancelling up front fixes both: `download_gguf` checks the real
+    /// cancel flag once per read chunk, so the thread terminates promptly
+    /// no matter how fast or slow the network is, and the lifecycle this
+    /// test actually cares about (register -> finish -> unregister) is
+    /// exercised exactly as before. The outcome stays deliberately
+    /// outcome-agnostic: a real cancellation, a real honest network
+    /// failure, and a real completed download are all "finished" states
+    /// that must unregister the flag, so this test never needs to
+    /// self-skip.
     #[test]
     fn llamacpp_download_model_registers_and_unregisters_a_real_cancellation_flag() {
         let state = new_state();
         let (tx, rx) = mpsc::channel();
         let model = hf_downloader::CURATED_MODELS[0];
+        let key = download_registry_key("llamacpp", model.id);
         llamacpp_download_model(&state, tx, Some(model.id.to_string()), None, None).unwrap();
 
         // The background thread registers the flag synchronously before
@@ -8759,23 +9453,46 @@ mod tests {
         // real and present the instant the ack comes back.
         {
             let guard = state.lock().unwrap();
-            let key = download_registry_key("llamacpp", model.id);
             assert!(
                 guard.download_cancellations.contains_key(&key),
                 "expected a real registered cancellation flag for {key:?}"
             );
         }
 
-        // Wait for the real background thread to report a real terminal
-        // event (success or a real, honest network failure -- either is
-        // fine, this test only cares that the download genuinely finished
-        // and cleaned up after itself), bounded well under this crate's
-        // own real network-call timeouts.
-        let _ = rx.recv_timeout(Duration::from_secs(30));
-        std::thread::sleep(Duration::from_millis(200));
+        // Real cancellation, so the background thread stops at its next
+        // real chunk boundary instead of downloading a whole model.
+        model_download_cancel(&state, "llamacpp".to_string(), model.id.to_string()).unwrap();
 
+        // Drain until a real *terminal* event arrives -- `rx` also carries
+        // `llamacpp_download_progress` lines, so the first message off the
+        // channel is not necessarily the one that means "finished".
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let mut saw_terminal = false;
+        while std::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match rx.recv_timeout(remaining) {
+                Ok(line) => {
+                    let name = serde_json::from_str::<serde_json::Value>(&line)
+                        .ok()
+                        .and_then(|v| v.get("event")?.as_str().map(str::to_string))
+                        .unwrap_or_default();
+                    if name == "llamacpp_download_ready" || name == "llamacpp_download_failed" {
+                        saw_terminal = true;
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        assert!(
+            saw_terminal,
+            "expected a real terminal llamacpp_download_ready/_failed event"
+        );
+
+        // `llamacpp_download_model` unregisters the flag *before* it sends
+        // the terminal event, so once that event has been observed the
+        // removal has already happened -- no sleep, no polling needed.
         let guard = state.lock().unwrap();
-        let key = download_registry_key("llamacpp", model.id);
         assert!(
             !guard.download_cancellations.contains_key(&key),
             "a real finished download must remove its own cancellation flag"

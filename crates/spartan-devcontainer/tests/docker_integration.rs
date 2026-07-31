@@ -7,10 +7,49 @@
 //! version` succeeds against the CLI, but there is no
 //! `/var/run/docker.sock` to connect to), so this test is expected to
 //! self-skip here, not a gap being papered over.
+//!
+//! A real, separate finding from auditing this crate for CI-only risk:
+//! GitHub-hosted `ubuntu-latest` runners ship a real Docker daemon
+//! running by default -- unlike this development sandbox, where the
+//! self-skip above always fires and these two tests have therefore
+//! *never* actually executed anywhere until they run in real CI for the
+//! first time. `docker::pull_image`/`spawn_interactive_exec` set no read
+//! timeout of their own (confirmed by reading `docker.rs`), and a stalled
+//! Docker Hub pull -- anonymous pulls are rate-limited per source IP, and
+//! shared CI runner IP pools hit that limit routinely -- would hang with
+//! no bound at all. `run_with_watchdog` below turns that into a fast,
+//! diagnosed test failure instead of an unbounded hang that could take
+//! the whole CI job down with it the same way an unrelated ~50-minute
+//! runner death already did once in this project's own history.
 
 use spartan_devcontainer::docker;
 use spartan_devcontainer::spec::DevContainerConfig;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// Runs `f` on its own thread and fails fast if it hasn't finished within
+/// `timeout`, instead of letting a real network stall hang indefinitely.
+/// A timed-out `f` is deliberately abandoned rather than joined -- the
+/// test binary's own process exit at the end of the run reclaims it, the
+/// same way this workspace's other bounded-wait tests already accept an
+/// abandoned thread as the price of a hard deadline. Any panic inside `f`
+/// (a real, honest assertion failure) is relayed to the caller so the
+/// test still fails with its own real message, not a generic timeout.
+fn run_with_watchdog(timeout: Duration, f: impl FnOnce() + Send + 'static) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(())) => {}
+        Ok(Err(payload)) => std::panic::resume_unwind(payload),
+        Err(_) => panic!(
+            "test exceeded its {timeout:?} watchdog bound -- most likely a real network \
+             stall (e.g. Docker Hub anonymous-pull rate limiting on a shared CI runner IP) \
+             rather than a bug in this crate's own code; failing fast instead of hanging"
+        ),
+    }
+}
 
 #[test]
 fn real_container_lifecycle_pull_create_exec_stop_remove() {
@@ -18,7 +57,10 @@ fn real_container_lifecycle_pull_create_exec_stop_remove() {
         eprintln!("SKIP: no real Docker daemon reachable in this environment");
         return;
     }
+    run_with_watchdog(Duration::from_secs(300), lifecycle_test_body);
+}
 
+fn lifecycle_test_body() {
     let image = "alpine:latest";
     let mut pulled_lines = Vec::new();
     docker::pull_image(image, |line| pulled_lines.push(line)).expect("real image pull failed");
@@ -88,7 +130,10 @@ fn real_interactive_exec_round_trip() {
         eprintln!("SKIP: no real Docker daemon reachable in this environment");
         return;
     }
+    run_with_watchdog(Duration::from_secs(180), interactive_exec_test_body);
+}
 
+fn interactive_exec_test_body() {
     let image = "alpine:latest";
     docker::pull_image(image, |_| {}).expect("real image pull failed");
 

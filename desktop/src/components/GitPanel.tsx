@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 interface StatusEntry {
   path: string;
@@ -45,6 +45,17 @@ interface CommitInfo {
 interface ChangedFile {
   path: string;
   status: string;
+}
+
+/** Real GitHub layer, first increment (task #284). Matches
+ * `spartan_backend::github::PullRequestSummary` exactly. */
+interface PullRequestSummary {
+  number: number;
+  title: string;
+  author: string;
+  html_url: string;
+  state: string;
+  draft: boolean;
 }
 
 interface ConflictEntry {
@@ -354,9 +365,9 @@ function DiffView({ diff }: { diff: string }): React.ReactElement {
  *
  * A deliberate, named v1 scope cut, matching this whole `desktop/`
  * effort's own established pattern of naming what's deferred rather than
- * silently omitting it: no per-line (sub-hunk) selection, no unstage-a-
- * hunk (whole-file unstage only), no stash-during-merge interplay, no
- * branch delete/rename, no merging via drag-and-drop.
+ * silently omitting it: no per-line (sub-hunk) selection, no stash-
+ * during-merge interplay, no branch delete/rename, no merging via
+ * drag-and-drop.
  */
 export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [status, setStatus] = useState<GitStatus | null>(null);
@@ -417,6 +428,14 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [stashMessage, setStashMessage] = useState("");
   // Real git tags.
   const [tags, setTags] = useState<{ name: string; target: string; annotated: boolean }[]>([]);
+  // Real GitHub layer, first increment (task #284): lists a repo's real,
+  // live open pull requests via `spartan_git::GitRepo::detect_github_remote`
+  // + a real `ureq` GET against `api.github.com`. Fetched fresh on every
+  // open, never cached, matching this panel's own established "state can
+  // change between opens" convention for branches/tags/history.
+  const [showGithub, setShowGithub] = useState(false);
+  const [pullRequests, setPullRequests] = useState<PullRequestSummary[] | null>(null);
+  const [githubError, setGithubError] = useState<string | null>(null);
   // Real merge-conflict resolution (task #270). `mergeStatus` reflects
   // `git_merge_status`'s real `RepositoryState::Merge` check plus every
   // real conflicted file's ancestor/ours/theirs content -- refetched
@@ -759,16 +778,35 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
     [root, refresh]
   );
 
-  // Real per-hunk fetch (task #271), reused both when opening an unstaged
-  // row's expansion and after a hunk is staged (whose own staging changes
-  // the real remaining hunk list, so it's always refetched fresh, never
-  // patched client-side).
+  // Real per-hunk fetch (task #271, extended by the staged-hunks pass to
+  // cover both directions), reused when opening either an unstaged or a
+  // staged row's expansion and after a hunk is staged/unstaged (whose own
+  // action changes the real remaining hunk list, so it's always refetched
+  // fresh, never patched client-side).
+  // Real, deliberate stale-response guard: two overlapping `git_diff_hunks`
+  // fetches (rapidly switching which row is expanded, or `stageHunk`/
+  // `unstageHunk` re-triggering this same fetch while a slower earlier
+  // one is still in flight) can resolve out of order. Without tracking
+  // which expansion is actually current, a slow response for a *previous*
+  // file could land after a newer one and silently overwrite `hunks` with
+  // the wrong file's data -- which `stageHunk`/`unstageHunk` would then
+  // mis-target against `entry.path`, writing to the wrong index entry.
+  const expandedDiffKeyRef = useRef<string | null>(null);
+
   const refreshHunks = useCallback(
-    (path: string) => {
+    (path: string, staged: boolean) => {
+      const key = `${path} ${staged}`;
+      expandedDiffKeyRef.current = key;
       window.spartan
-        .call("git_diff_hunks", { project_root: root, path })
-        .then((result) => setHunks((result as { hunks: HunkInfo[] }).hunks))
-        .catch((err: Error) => setHunksError(err.message));
+        .call("git_diff_hunks", { project_root: root, path, staged })
+        .then((result) => {
+          if (expandedDiffKeyRef.current !== key) return;
+          setHunks((result as { hunks: HunkInfo[] }).hunks);
+        })
+        .catch((err: Error) => {
+          if (expandedDiffKeyRef.current !== key) return;
+          setHunksError(err.message);
+        });
     },
     [root]
   );
@@ -777,6 +815,7 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
     (path: string, staged: boolean, e: React.MouseEvent) => {
       e.stopPropagation();
       if (expandedDiff && expandedDiff.path === path && expandedDiff.staged === staged) {
+        expandedDiffKeyRef.current = null;
         setExpandedDiff(null);
         setDiffContent(null);
         setDiffError(null);
@@ -795,9 +834,7 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
         .then((result) => setDiffContent((result as { diff: string }).diff))
         .catch((err: Error) => setDiffError(err.message))
         .finally(() => setDiffLoading(false));
-      // Hunks only make sense for an *unstaged* row -- a staged diff has
-      // nothing left to hunk-stage.
-      if (!staged) refreshHunks(path);
+      refreshHunks(path, staged);
     },
     [root, expandedDiff, refreshHunks]
   );
@@ -814,7 +851,26 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
         .call("git_stage_hunk", { project_root: root, path, hunk_index: hunkIndex })
         .then(() => {
           refresh();
-          refreshHunks(path);
+          refreshHunks(path, false);
+        })
+        .catch((err: Error) => setHunksError(err.message))
+        .finally(() => setHunkBusy(false));
+    },
+    [root, refresh, refreshHunks]
+  );
+
+  // Real "unstage this one hunk" -- the direct mirror of `stageHunk`,
+  // refreshing the real *staged* hunk list afterward (the one it just
+  // came from), not the unstaged one.
+  const unstageHunk = useCallback(
+    (path: string, hunkIndex: number) => {
+      setHunkBusy(true);
+      setHunksError(null);
+      window.spartan
+        .call("git_unstage_hunk", { project_root: root, path, hunk_index: hunkIndex })
+        .then(() => {
+          refresh();
+          refreshHunks(path, true);
         })
         .catch((err: Error) => setHunksError(err.message))
         .finally(() => setHunkBusy(false));
@@ -971,6 +1027,50 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
       .then((result) => setCommits((result as { commits: CommitInfo[] }).commits))
       .catch((e: Error) => setHistoryError(e.message));
   }, [root, showHistory]);
+
+  // `github_list_pull_requests` answers asynchronously (a real, live GitHub
+  // API call, bounded but still potentially several seconds) -- the resolved
+  // promise below is only ever the real `{"status": "checking"}` ack; the
+  // actual PR list (or a real, honest network failure) arrives as a
+  // separate `github_pull_requests_result`/`github_pull_requests_failed`
+  // event, the same "ack now, event later" shape `check_for_updates`'s own
+  // `SettingsScreen.tsx` subscription already established.
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event === "github_pull_requests_result") {
+        setPullRequests((data as { pull_requests: PullRequestSummary[] }).pull_requests);
+      } else if (event === "github_pull_requests_failed") {
+        setGithubError((data as { error: string }).error);
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  // Matches `SettingsScreen.tsx`'s own established convention for a
+  // fire-and-forget `window.spartan.*` main-process action (`openCrash
+  // ReportsFolder`/`openRepositoryPage`) -- a real rejected promise here
+  // (e.g. `main.ts`'s own real `https://github.com/` URL-prefix guard
+  // refusing a malformed `html_url`) must surface as a real error, not an
+  // unhandled promise rejection silently logged to the console.
+  const openPullRequest = useCallback((url: string) => {
+    window.spartan.openPullRequestUrl(url).catch((e: Error) => setGithubError(e.message));
+  }, []);
+
+  const toggleGithub = useCallback(() => {
+    if (showGithub) {
+      setShowGithub(false);
+      setGithubError(null);
+      return;
+    }
+    // Fetched fresh on every open -- a PR can open/close/merge between
+    // opens, matching every other section's own no-caching convention.
+    setShowGithub(true);
+    setGithubError(null);
+    setPullRequests(null);
+    window.spartan
+      .call("github_list_pull_requests", { project_root: root })
+      .catch((e: Error) => setGithubError(e.message));
+  }, [root, showGithub]);
 
   const toggleCommit = useCallback(
     (oid: string) => {
@@ -1448,6 +1548,24 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
                 {diffLoading && <div className="git-panel-empty mono">Loading diff…</div>}
                 {diffError && <div className="git-panel-empty mono">{diffError}</div>}
                 {diffContent !== null && <DiffView diff={diffContent} />}
+                {hunksError && <div className="git-panel-empty mono">{hunksError}</div>}
+                {hunks?.map((h) => (
+                  <div key={h.index} className="git-hunk-block">
+                    <div className="git-hunk-header mono">
+                      <span>{h.header}</span>
+                      <button
+                        type="button"
+                        className="editor-find-btn"
+                        disabled={hunkBusy}
+                        onClick={() => unstageHunk(entry.path, h.index)}
+                        title="Unstage only this hunk"
+                      >
+                        Unstage this hunk
+                      </button>
+                    </div>
+                    <DiffView diff={h.body} />
+                  </div>
+                ))}
               </div>
             )}
           </React.Fragment>
@@ -1608,6 +1726,66 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
                 </div>
               )}
             </React.Fragment>
+          ))}
+        </div>
+      )}
+
+      <div
+        className="git-section-label mono"
+        onClick={toggleGithub}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggleGithub();
+          }
+        }}
+        style={{ cursor: "pointer" }}
+        title="Real, live open pull requests on this repository's GitHub remote"
+        aria-expanded={showGithub}
+      >
+        GitHub {showGithub ? "▾" : "▸"}
+      </div>
+      {showGithub && (
+        <div className="git-section">
+          {githubError && <div className="git-panel-empty mono">{githubError}</div>}
+          {pullRequests === null && !githubError && (
+            <div className="git-panel-empty mono">Loading pull requests…</div>
+          )}
+          {pullRequests?.length === 0 && (
+            <div className="git-panel-empty mono">No open pull requests.</div>
+          )}
+          {pullRequests?.map((pr) => (
+            <div
+              key={pr.number}
+              className="git-row"
+              title={`${pr.state}${pr.draft ? " (draft)" : ""} — opened by ${pr.author}`}
+              onClick={() => openPullRequest(pr.html_url)}
+              role="link"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  openPullRequest(pr.html_url);
+                }
+              }}
+              style={{ cursor: "pointer" }}
+            >
+              <span
+                className="mono"
+                style={{ color: "var(--accent)", fontSize: 11, flexShrink: 0 }}
+              >
+                #{pr.number}
+              </span>
+              <span className="mono git-row-path">
+                {pr.draft ? "[draft] " : ""}
+                {pr.title}
+              </span>
+              <span className="mono" style={{ opacity: 0.6, whiteSpace: "nowrap", fontSize: 11 }}>
+                {pr.author}
+              </span>
+            </div>
           ))}
         </div>
       )}

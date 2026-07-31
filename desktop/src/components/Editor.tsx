@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { highlightSource, languageForPath } from "../syntax";
+import { ensureGrammar, grammarReady } from "../treeSitter";
 import {
   adjustSnippetStops,
   expandSnippet,
   findSnippet,
   type SnippetSession,
 } from "../snippets";
+import { computeBracketPairMarks } from "../bracketPairs";
+import { shiftBreakpointsForEdit } from "../breakpointShift";
 
 export interface OpenFile {
   path: string;
@@ -1210,6 +1213,15 @@ interface EditorProps {
    * with no existing breakpoint gains one when a condition/logpoint is
    * set on it. */
   onEditBreakpoint?: (line: number, condition: string, logMessage: string) => void;
+  /** Real rope-anchored breakpoint shifting (closes the §75.8-named
+   * "line-number only" gap) -- called with the full, already-shifted
+   * breakpoint array whenever a real edit moves or invalidates one or
+   * more breakpoints' lines (see `breakpointShift.ts`'s own doc
+   * comment for the exact rule). Only called when the result actually
+   * differs from the current `breakpoints` prop, matching
+   * `onToggleBreakpoint`'s own "`App.tsx` owns the real set" division
+   * of responsibility. */
+  onBreakpointsShift?: (next: BreakpointSpec[]) => void;
   /** Real, 1-indexed line the active DAP session is currently stopped
    * at for this file, or `null`/`undefined` when no session is stopped
    * here -- matches `DapFrame::line`'s own real 1-indexed DAP-spec
@@ -1310,6 +1322,7 @@ export default function Editor({
   breakpoints = [],
   onToggleBreakpoint,
   onEditBreakpoint,
+  onBreakpointsShift,
   stoppedLine = null,
   onJumpToDefinition,
   pendingJump = null,
@@ -1322,6 +1335,30 @@ export default function Editor({
   const symbolHighlightRef = useRef<HTMLDivElement>(null);
   const [lineCount, setLineCount] = useState(1);
   const prevContentRef = useRef(file.content);
+
+  /** Real, shared breakpoint-shift step (a real, confirmed follow-up gap
+   * from task #291's own rope-anchored breakpoints pass): every real
+   * content replacement -- not just `applyProgrammaticEdit`'s own typed/
+   * programmatic edits, but also completion-accept, a real format-apply
+   * result, the no-formatter trim fallback, and undo/redo, none of which
+   * route through that function -- needs this exact same "shift or drop
+   * each breakpoint against what actually changed" step run against the
+   * real pre-replace text before it's overwritten, or a breakpoint set
+   * before one of those other paths ran would silently point at the
+   * wrong line afterward. One implementation, called from every real
+   * content-replacing call site in this component instead of five
+   * separately-duplicated copies. */
+  const shiftBreakpointsBeforeReplace = useCallback(
+    (oldContent: string, newContent: string) => {
+      if (breakpoints.length > 0 && onBreakpointsShift) {
+        const shifted = shiftBreakpointsForEdit(breakpoints, oldContent, newContent);
+        if (shifted !== breakpoints) {
+          onBreakpointsShift(shifted);
+        }
+      }
+    },
+    [breakpoints, onBreakpointsShift]
+  );
 
   /** Real inline git blame (P1 backlog) -- per-line commit attribution
    * from the real backend `git_blame` (spartan-git). Alt+B toggles it.
@@ -1382,9 +1419,31 @@ export default function Editor({
     setLineCount(file.content.split("\n").length);
   }, [file.content]);
 
+  // Real tree-sitter grammars load asynchronously (a real WASM fetch), so
+  // the first paint of a file uses `highlight.js` and this counter forces
+  // exactly one re-highlight once the grammar is genuinely ready. Bumping a
+  // counter rather than storing the grammar keeps `highlightSource`
+  // synchronous -- the render path is unchanged.
+  const [grammarGeneration, setGrammarGeneration] = useState(0);
+  useEffect(() => {
+    const language = languageForPath(file.path);
+    if (!language || grammarReady(language)) return;
+    let cancelled = false;
+    void ensureGrammar(language).then((entry) => {
+      if (!cancelled && entry) setGrammarGeneration((n) => n + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [file.path]);
+
   const highlightedHtml = useMemo(
     () => highlightSource(file.content, file.path),
-    [file.content, file.path]
+    // `grammarGeneration` is deliberately a dependency with no direct use in
+    // the body: it is the signal that a real grammar just became available,
+    // so the memo must recompute even though content/path are unchanged.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [file.content, file.path, grammarGeneration]
   );
 
   const breakpointMap = useMemo(() => {
@@ -1600,6 +1659,7 @@ export default function Editor({
         prevContentRef.current.slice(0, insertAt) +
         item.insertText +
         prevContentRef.current.slice(replaceEnd);
+      shiftBreakpointsBeforeReplace(prevContentRef.current, newContent);
       prevContentRef.current = newContent;
       setLineCount(newContent.split("\n").length);
       onContentChange(file.path, newContent);
@@ -1618,7 +1678,7 @@ export default function Editor({
         requestAnimationFrame(() => el.setSelectionRange(newPos, newPos));
       }
     },
-    [completionState, file.docId, file.path, onContentChange]
+    [completionState, file.docId, file.path, onContentChange, shiftBreakpointsBeforeReplace]
   );
 
   /** Converts a real 0-indexed LSP line/character into a real absolute
@@ -2128,6 +2188,7 @@ export default function Editor({
         } else {
           const oldLength = [...prevContentRef.current].length;
           const caret = textareaRef.current?.selectionStart ?? 0;
+          shiftBreakpointsBeforeReplace(prevContentRef.current, d.formatted);
           prevContentRef.current = d.formatted;
           setLineCount(d.formatted.split("\n").length);
           onContentChange(file.path, d.formatted);
@@ -2161,7 +2222,7 @@ export default function Editor({
       }
     });
     return unsubscribe;
-  }, [file.docId, file.path, onContentChange]);
+  }, [file.docId, file.path, onContentChange, shiftBreakpointsBeforeReplace]);
 
   /** Triggers a real format cycle and returns a promise that resolves once
    * it's fully settled (applied, already-formatted, or failed) -- Ctrl+
@@ -2199,6 +2260,7 @@ export default function Editor({
           if (trimmed !== prevContentRef.current) {
             const oldLength = [...prevContentRef.current].length;
             const caret = el.selectionStart;
+            shiftBreakpointsBeforeReplace(prevContentRef.current, trimmed);
             prevContentRef.current = trimmed;
             setLineCount(trimmed.split("\n").length);
             onContentChange(file.path, trimmed);
@@ -2232,7 +2294,7 @@ export default function Editor({
         }
       }, 10000);
     });
-  }, [file.docId, file.path, onContentChange]);
+  }, [file.docId, file.path, onContentChange, shiftBreakpointsBeforeReplace]);
 
   /** Real "Find & Replace" (Ctrl+F / Ctrl+H) -- pure client-side, no LSP/
    * backend query needed, distinct from the already-real, cross-file
@@ -2400,6 +2462,13 @@ export default function Editor({
     return marks;
   }, [findState, findMatches]);
 
+  /** Real bracket-pair colorization marks, recomputed whenever the real
+   * document content changes -- a plain, pure `useMemo` over `file.content`
+   * (not `prevContentRef`), matching `highlightedHtml`'s own dependency
+   * exactly, since this is equally a pure function of the current content
+   * with no cursor/selection state involved. */
+  const bracketPairMarks = useMemo(() => computeBracketPairMarks(file.content), [file.content]);
+
   const diagnosticsByLine = useMemo(() => {
     const map = new Map<number, LspDiagnostic[]>();
     for (const d of diagnostics) {
@@ -2468,6 +2537,10 @@ export default function Editor({
       if (snippetSessionRef.current) {
         adjustSnippetStops(snippetSessionRef.current, prevContentRef.current, newContent);
       }
+      // Real rope-anchored breakpoint shifting -- must run before
+      // `prevContentRef.current` is overwritten below, since it needs
+      // the real pre-edit text to compute what moved.
+      shiftBreakpointsBeforeReplace(prevContentRef.current, newContent);
       prevContentRef.current = newContent;
       setLineCount(newContent.split("\n").length);
       onContentChange(file.path, newContent);
@@ -2514,7 +2587,14 @@ export default function Editor({
         setSignatureHelpState(null);
       }
     },
-    [charWidth, lineHeightPx, file.docId, file.path, onContentChange]
+    [
+      charWidth,
+      lineHeightPx,
+      file.docId,
+      file.path,
+      onContentChange,
+      shiftBreakpointsBeforeReplace,
+    ]
   );
 
   const handleChange = useCallback(
@@ -2988,6 +3068,7 @@ export default function Editor({
           .then((result) => {
             const r = result as { changed: boolean; content: string };
             if (r.changed) {
+              shiftBreakpointsBeforeReplace(prevContentRef.current, r.content);
               prevContentRef.current = r.content;
               onContentChange(file.path, r.content);
             }
@@ -3017,6 +3098,7 @@ export default function Editor({
       onContentChange,
       prefs.tabSize,
       prefs.formatOnSave,
+      shiftBreakpointsBeforeReplace,
     ]
   );
 
@@ -3144,6 +3226,28 @@ export default function Editor({
           aria-hidden="true"
           style={textStyle}
         >
+          {/* Real, deliberate scope limit: these marks are positioned from
+           * the source line/character grid, which only matches the
+           * rendered visual row when word wrap is off -- a soft-wrapped
+           * line adds visual rows the mark's own `line * lineHeightPx`
+           * math knows nothing about, so a mark after the wrap point
+           * would render at the wrong spot. Gated off entirely with word
+           * wrap on rather than shown wrong; real visual-row-aware
+           * positioning is separate, larger work this pass doesn't
+           * attempt. */}
+          {!prefs.wordWrap &&
+            bracketPairMarks.map((m, i) => (
+              <div
+                key={`bp:${m.line}:${m.character}:${i}`}
+                className={`editor-bracket-pair-mark${m.colorIndex === -1 ? " editor-bracket-pair-mark-unmatched" : ` editor-bracket-pair-mark-${m.colorIndex}`}`}
+                style={{
+                  top: m.line * lineHeightPx,
+                  left: m.character * charWidth,
+                  width: charWidth,
+                  height: lineHeightPx,
+                }}
+              />
+            ))}
           {documentHighlights.map((h, i) => (
             <div
               key={`${h.startLine}:${h.startCharacter}:${h.endCharacter}:${i}`}

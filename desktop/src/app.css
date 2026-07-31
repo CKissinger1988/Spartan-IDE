@@ -1019,6 +1019,49 @@
   background: rgba(212, 175, 55, 0.22);
 }
 
+/* Real bracket-pair colorization -- one of `BRACKET_PAIR_COLOR_COUNT`
+ * (4) real colors cycling by nesting depth, so a bracket and its own
+ * real match always share a color even across many lines. A real,
+ * deliberate scope decision: a semi-transparent background tint behind
+ * the bracket glyph (matching every other mark in this layer's own
+ * established style), not a foreground-color recolor of the glyph
+ * itself -- the latter would need injecting spans into the already-
+ * generated syntax-highlight HTML rather than this layer's existing
+ * absolute-positioned-div technique. Two of the four reuse this app's
+ * own existing brand tokens (`--hud-rgb`/`--accent-rgb`, gold/blue,
+ * already theme-varying); the other two are fixed hues not tied to any
+ * theme, a real, named, minor simplification given this feature's own
+ * scope. A genuinely unmatched bracket (a stray closer, or an opener
+ * never closed by end-of-document) gets a distinct red outline instead
+ * of a color-cycle fill -- the same "unmatched" convention real
+ * bracket-pair colorizers use to flag a real syntax problem. */
+.editor-bracket-pair-mark {
+  position: absolute;
+  border-radius: 2px;
+}
+
+.editor-bracket-pair-mark-0 {
+  background: rgba(var(--hud-rgb, 212, 175, 55), 0.24);
+}
+
+.editor-bracket-pair-mark-1 {
+  background: rgba(var(--accent-rgb, 46, 125, 255), 0.24);
+}
+
+.editor-bracket-pair-mark-2 {
+  background: rgba(168, 85, 247, 0.24);
+}
+
+.editor-bracket-pair-mark-3 {
+  background: rgba(45, 212, 191, 0.24);
+}
+
+.editor-bracket-pair-mark-unmatched {
+  box-sizing: border-box;
+  background: rgba(220, 38, 38, 0.22);
+  border: 1px solid rgba(220, 38, 38, 0.7);
+}
+
 /* Real matching-bracket highlight -- a distinct outlined box (not a
  * filled background, unlike occurrence highlighting above) so a
  * bracket pair reads as "this is the boundary of a scope," not "this

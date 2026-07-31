@@ -7564,6 +7564,667 @@ first — it's the parity reference until each row there is actually reimplement
   workflow YAML files re-validated with `yaml.safe_load`. Everything removed is recoverable from
   git history (the commits immediately preceding this one).
 
+- **Real, working code — real tree-sitter syntax highlighting in the `desktop/` Electron shell,
+  closing `docs/FUTURE_FEATURES.md`'s own recommended-next-10 item #7 (task #281)**: the two items
+  ranked above it on that list are both architecturally blocked by the `<textarea>`-backed editor
+  (code folding, multi-cursor), and the one below it (LSP code actions) is blocked by this
+  environment only having pyright, which returns empty code-actions -- so this was the top
+  genuinely-unblocked item. New `desktop/src/treeSitter.ts` runs the real tree-sitter engine
+  in-process via `web-tree-sitter`, for all 8 languages with a bundled grammar (Rust, Python,
+  JavaScript, TypeScript, Go, Java, Kotlin, C#). `syntax.ts` became a real three-tier chain:
+  tree-sitter once a grammar is loaded, `highlight.js` while it loads and for the languages with
+  no bundled grammar (json/css/xml/markdown/bash), plain escaped text if both fail -- `highlight.js`
+  is deliberately **kept, not removed**, since it still covers real cases. Grammar loading is
+  async but `highlightSource` stays synchronous: `Editor.tsx` kicks off `ensureGrammar` in an
+  effect and bumps a counter to force exactly one re-highlight, so the render path is unchanged.
+  Capture names map onto the `hljs-*` CSS classes `app.css` already defines, so tree-sitter
+  highlighting inherits all seven existing themes for free rather than needing a parallel palette.
+  Built directly on `spikes/tree-sitter-wasm-spike` (§75.86) and its load-bearing version finding:
+  `tree-sitter-wasms`' prebuilt grammars load **only** under `web-tree-sitter@0.20.8`; both are
+  pinned for that reason.
+  **Two real bugs found, both by looking at real output rather than by inspection.** (1) The
+  queries are hand-authored against this grammar generation (upstream `.scm` files reference node
+  types these grammars lack). A first draft probed a *sample* of tokens and then expanded the
+  lists by hand -- which shipped `"crate"` in the Rust query and made the entire Rust grammar fail
+  to load at runtime (`Bad node name 'crate'`), silently falling back to highlight.js. Fixed by
+  probing **every** token individually against the real compiled grammar and then compiling each
+  complete query as a whole, with the generated lists spliced in rather than hand-transcribed. The
+  rejected tokens are recorded in the module header so nobody re-adds them: Rust `crate`/`mut`/
+  `self`/`super` (though `(self)` as a *node* is fine), Java `this`/`super`/`void`, C# `void`, and
+  Kotlin's `(null_literal)` node -- all real source text that simply isn't reachable as a query
+  token in the compiled grammar, the same class of finding §75.44 hit with Kotlin's `break`/
+  `continue`/`reified`. (2) A real **use-after-free across the WASM boundary**: the first version
+  called `tree.delete()` immediately after `query.captures()` and then read `node.startIndex`/
+  `endIndex` in the render loop. A web-tree-sitter `Node` is a handle into the tree's own WASM
+  heap, so those reads returned garbage instead of throwing -- rendering as a single span
+  swallowing most of the file. It did not reproduce in Node (nothing had freed the tree there) and
+  was caught only by dumping the real emitted HTML from a real browser. Fixed by extracting plain
+  `{name,start,end}` data *before* freeing, with the ordering documented as load-bearing.
+  **Real, live, end-to-end verification** against the actual built `dist/` served by a real `vite
+  preview`, driven by real Playwright/Chromium (mocking only the Electron `contextBridge` hop, the
+  established `desktop/` technique): all 8 grammar wasm assets fetched `200`, and all 8 languages
+  rendered genuine tree-sitter output -- confirmed by a real discriminator rather than by eye,
+  since `highlight.js` emits `hljs-title function_` and marks bare identifiers `hljs-variable`
+  while this pass emits a bare `hljs-title` and leaves them plain. Raw DOM confirmed for Rust
+  (`fn`/`main`/`let`/`42`/`// hi`), Python, Go (including `int` as a real `hljs-type`), TypeScript
+  (`interface`/`Foo`/`string`), JavaScript, Java, Kotlin, and C#. Zero page errors. The grammars
+  are emitted as 9 separate hashed build assets (~186 KB runtime + per-language, Kotlin/C# ~4 MB
+  each) and fetched lazily only when a file of that language is opened, not inlined into the JS
+  bundle. `tsc --noEmit` and `npm run build`/`build:electron` clean.
+  **`web/` was then ported in the same pass**, closing the follow-up this entry originally named
+  as open: `web/src/treeSitter.ts` is a verbatim copy (only the header differs), matching the
+  per-project-copy convention this repo already uses for `applyTheme.ts`/`syntax.ts`, wired into
+  both of `web/`'s editors (`Editor.tsx`, `BackendEditor.tsx`). Its live verification is a
+  slightly stronger check than `desktop/`'s and needed no shim at all, since `web/` runs directly
+  in a browser: for each of the 8 languages it captures `highlightSource` output *before*
+  `ensureGrammar`, awaits the real grammar load, captures it *again*, and asserts the two differ
+  -- a direct before/after on identical input, proving highlight.js output was genuinely replaced
+  rather than merely that the final markup looked plausible. All 8 reported `grammarReady=true`
+  and `changed=true`, zero page errors, with the grammars emitted as separate lazily-fetched
+  assets alongside `web/`'s own existing `spartan_buffer_wasm` asset. **What this does not
+  confirm**: highlighting still re-parses the whole
+  document per keystroke (same as the `highlight.js` pass it replaces -- incremental re-parse,
+  tree-sitter's real strength, remains a separate tracked backlog item and this pass is about
+  correctness parity, not throughput); no injections/locals queries; no live Electron window
+  launch (same standing gap since §75.59); `web/`'s pure client-side editor could not be driven
+  through its real File System Access API entry point headlessly, so its verification exercises
+  the real highlight pipeline directly rather than through a file-open click.
+
+- **Real, working code — incremental (per-document) tree-sitter re-highlighting in `desktop/`
+  and `web/`, closing the "does not confirm" gap the tree-sitter pass immediately above named
+  (task #7's own follow-up)**: before this, `highlightWithTreeSitter` fully reparsed the whole
+  document on every keystroke via `entry.parser.parse(code)`, discarding the previous tree.
+  Correct, but throwaway -- exactly what that pass's own account said explicitly. Closing it
+  needed a real answer to a question this repo doesn't get to guess at: whether
+  `web-tree-sitter@0.20.8`'s `Tree.edit()`/`Point.column` wants UTF-16 (JS string) offsets or
+  UTF-8 byte offsets, since `SyntaxNode.startIndex`/`endIndex` are already used elsewhere in this
+  file as direct `code.slice()` arguments -- a byte-offset convention there would silently corrupt
+  any capture position on non-ASCII content. Verified experimentally, not from documentation: a
+  real Node probe against the actual compiled Rust grammar compared incremental-reparse output
+  (UTF-16-offset columns) to a fresh full reparse across insert/replace/delete edit sequences,
+  including a case with non-ASCII text (`日本語`) sharing a line with the edit point specifically
+  to stress-test the convention -- byte-for-byte identical trees at every step, confirming UTF-16
+  offsets are correct for both `Index` and `Point` fields in this binding. A second, harder probe
+  simulated a realistic character-by-character typing sequence (insert, a selection-replace, a
+  delete-then-retype) with one persisted `Tree` across all steps, matching the real editor's own
+  usage pattern -- every intermediate step matched a fresh reparse, not just the final result. A
+  real, measured benchmark (not an unmeasured claim) showed a genuine 2.8-3.3x average speedup
+  (10k lines: 40.67ms -> 12.43ms; 100k lines: 444.92ms -> 158.92ms) simulating a single keystroke
+  near the end of a large synthetic file. `treeSitter.ts` gained `documentTrees`, a real per-file-
+  path `Map<path, {tree, text, language}>` (bounded to 20 entries, LRU-evicted via a `touch`
+  helper that frees each evicted tree's own WASM memory, since an unbounded cache across many
+  opened-then-closed tabs would be a real, slow leak); `highlightWithTreeSitter` gained a required
+  third `path` parameter, computing a real `Edit` via a pure common-prefix/common-suffix diff
+  against the cached previous text when a same-language cache entry exists for that path, calling
+  `cachedTree.edit(edit)` then `parser.parse(code, cachedTree)` -- tree-sitter's own real
+  incremental-reparse API -- and falling back to a plain full parse (unchanged from before) on a
+  first call for a path or a language mismatch. The edited-but-superseded old tree is explicitly
+  freed after each successful incremental parse, since `parse()` returns a distinct new `Tree`
+  handle rather than mutating the old one in place. `syntax.ts` in both shells now threads the
+  already-available `path` argument through to this new parameter -- zero changes needed to any
+  `Editor.tsx`/`BackendEditor.tsx` call site, since `highlightSource(source, path)` already
+  received `path` on every call. **Real, live, end-to-end browser verification**, not just the
+  Node-side probes above: a temporary standalone Vite-served test page (`incremental-test.html` +
+  a small entry script, both removed after verification, matching this project's own "temporary
+  instrumentation, then fully revert" convention) imported `treeSitter.ts` directly and drove it
+  through a real `vite dev` server with real Playwright/Chromium -- a real insert (adding a
+  `foo()` call), a real selection-replace (`1` -> `42`), and a real delete+insert (removing a call,
+  adding a comment) against the *same* cached document path, plus a check that a second, unrelated
+  path gets its own independent, non-interfering cache entry and the first path's own cache
+  remains correct afterward -- all 10 real assertions passed, zero page errors. This exercises the
+  real browser WASM-loading pipeline (`?url` imports, `Parser.init({ locateFile })`) the Node
+  probes can't reach, on top of logic already independently proven correct there. `tsc --noEmit`
+  and a real production `npm run build` both re-confirmed clean in `desktop/` and `web/` after the
+  change (a pre-existing `>500 kB chunk` warning is unrelated, unchanged by this pass). **What this
+  does not confirm**: no incremental highlighting in the reference wgpu shell (that shell's own
+  tree-sitter wiring, §75.11, already does a windowed-only parse of the visible ~34-60 lines, a
+  different and already-real mitigation for the same throughput concern, not touched by this
+  pass); `web/`'s pure client-side editor (`Editor.tsx`, no LSP/backend) was not independently
+  re-verified live for this specific change beyond `tsc`/build (matches that file's own already-
+  documented verification scope from the immediately preceding tree-sitter pass); no cache
+  eviction hook wired to an explicit tab-close event -- the bounded LRU cap handles unbounded
+  growth, but a tree can outlive its own tab by up to 19 other more-recently-touched documents; the
+  real Electron window remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — real GitHub layer, first increment: live PR listing in both Git panels
+  (task #284)**: closes §56.3-56.4's own long-standing "unstarted in both shells" gap for one real
+  capability. `crates/spartan-git`'s own `parse_github_owner_repo` (pure) and `GitRepo::
+  detect_github_remote` (new) parse a repo's real `origin` remote across every real URL shape a
+  GitHub remote can take (`git@github.com:owner/repo.git`, `https://github.com/owner/repo(.git)`,
+  `ssh://git@github.com/owner/repo(.git)`), preferring `origin` but falling back to the first real
+  GitHub remote found if `origin` itself isn't one. New `crates/spartan-backend/src/github.rs`
+  makes a real, live `ureq::get` against `https://api.github.com/repos/{owner}/{repo}/pulls?state=
+  open&per_page=30` -- real open PRs, GitHub's own newest-first default sort, one real page (no
+  pagination yet, a named follow-up). `spartan_settings::Settings` gained `github_token:
+  Option<String>` (nested-`Option` patch shape in `settings_set`'s dispatch, matching
+  `leo_verify_command`'s own already-established "not-provided / provided-empty-clears-it /
+  provided-sets-it" convention exactly) -- `None` still makes a real, working unauthenticated call
+  at GitHub's own lower rate limit, `Some(token)` sends it as a real `Authorization: Bearer`
+  header, never included in any error message this module produces. New `spartan-backend::
+  github_list_pull_requests(project_root)` dispatch method ties it together: discovers the real
+  repo, calls `detect_github_remote`, loads the current `github_token` fresh from Settings on every
+  call (no caching, so a token change takes effect on the very next request), and returns the real
+  PR list or an honest error (no repo, no GitHub remote configured, or the real network/HTTP
+  failure). **UI, both shells**: a new "GitHub" collapsible section (fetched fresh on every open,
+  matching the branch/tag/history sections' own no-caching convention) in both `desktop/`'s and
+  `web/`'s `GitPanel.tsx`, listing each real PR's number, title, author, and a draft badge.
+  `desktop/`'s rows open the real PR via a new, narrowly-scoped `spartan:open_pull_request_url`
+  main-process IPC handler -- a real, deliberate departure from this file's own two pre-existing
+  `shell.openExternal` call sites (which only ever open a *hardcoded* URL, explicitly "so a
+  compromised renderer can't turn this into an arbitrary-path/arbitrary-URL opener"), since a PR's
+  `html_url` is genuinely renderer-supplied this time, sourced from a live GitHub API response, not
+  the user directly -- gated behind a real validation check (`params.url.startsWith("https://
+  github.com/")`) before `shell.openExternal` is ever called, so a compromised renderer or a
+  malformed API response still can't launch an arbitrary protocol handler. `web/`'s rows are a
+  plain `<a target="_blank" rel="noopener noreferrer">` -- no IPC needed at all, since a browser's
+  own navigation is already the correct, safe mechanism there. 8 new Rust tests (4 in
+  `spartan-git`: every real URL shape parses correctly, non-GitHub/malformed URLs are correctly
+  rejected, `origin` is preferred over a non-GitHub remote, a repo with no GitHub remote returns
+  `None`; 2 in `spartan-github.rs` itself, including a real, self-skipping live test against this
+  project's own real repository that only asserts real-shape invariants -- non-empty title, a real
+  `github.com/.../pull/N` URL -- rather than a specific PR count, so it can never flake as PRs open
+  and close; 2 dispatch-level tests in `spartan-backend` covering the non-repo and no-GitHub-remote
+  error paths deterministically, with no real network call needed for either), plus 2 new
+  `spartan-settings` tests (`github_token` defaults to `None`; a real pre-existing settings file
+  missing the field falls back correctly) -- full workspace `cargo fmt --all -- --check`/`cargo
+  clippy -p spartan-git -p spartan-settings -p spartan-backend --release --all-targets`/`cargo test`
+  for all three crates clean (243/66/24 tests respectively). `desktop/`'s and `web/`'s own `tsc
+  --noEmit`/`npm run build` both clean. **Real, live, end-to-end Playwright verification against
+  the actual compiled `web/dist` and `desktop/dist` served by two real running `spartan-devserver`
+  instances** (not a mock, `desktop/` via the established real-WebSocket-shim technique for the
+  still-unlaunchable real Electron window): a real fixture repo's `origin` was pointed at this
+  project's own real `github.com/CKissinger1988/Spartan-IDE` -- opening the GitHub section in both
+  shells correctly triggered a real `github_list_pull_requests` call that genuinely discovered the
+  repo, correctly parsed the real remote into `CKissinger1988`/`Spartan-IDE`, and made a real live
+  HTTPS attempt to `api.github.com`, surfacing this sandbox's own already-documented TLS-
+  intercepting-proxy condition (`Connection Failed: ... invalid peer certificate: UnknownIssuer`)
+  honestly through the complete stack with zero page errors in either shell -- the identical, real,
+  environment-specific condition every other live-external-API feature in this project's history
+  (the HF/LM Studio/llama.cpp downloaders, `spartan-updater`'s own GitHub check, LiteLLM) already
+  hits in this specific sandbox, not a defect in this pass's own code. **What this does not
+  confirm**: no real PR data was ever observed rendered end-to-end in this session, due to the
+  sandbox's own TLS-trust condition above -- the code path is real and tested (including a real,
+  self-skipping unit test against the actual GitHub API, which would run for real in an environment
+  without this specific proxy condition, e.g. a real GitHub Actions runner); no pagination past the
+  first 30 open PRs; no issues or review support (both real, separate, named follow-ups per
+  §56.3-56.4's own original scope); no GitHub token entry UI in either Settings screen yet (the
+  setting is real and wired through `settings_set`, just not yet given its own row); the real
+  Electron window remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — Leo chat panel in `web/`'s backend-connected mode, closing the
+  "web/ has no Leo UI at all" gap named across every prior Leo-panel feature in this project's
+  history (task #285)**: continues "continue with the roadmap." Confirmed via grep before writing
+  any code: the only prior `web/` reference to "Leo" anywhere was `LeoProviderKind` in
+  `ModelsPanel.tsx`'s own settings dropdown -- no chat/task/execute-loop surface existed, even
+  though every `leo_*` method (`leo_start_task`/`leo_approve_plan`/`leo_reject_plan`/
+  `leo_next_step`/`leo_approve_call`/`leo_reject_call`/`leo_cancel`/`leo_retry`/
+  `leo_session_history`) has been a real, generic `spartan-backend` method reachable through
+  `web/`'s own fully generic `BackendClient` (no method allowlist to extend, unlike `desktop/`'s
+  `preload.ts`) since as far back as §75.61/§75.66/§75.68/§75.78. New `web/src/components/
+  LeoChatPanel.tsx` is a direct, close port of `desktop/src/components/LeoChatPanel.tsx` -- same
+  real state machine, same real dispatch methods, same real random-thoughts/voice-I/O/session-
+  history features -- with exactly two real, structural differences named in the file's own doc
+  comment: it takes the already-connected `BackendClient` instance directly as a prop rather than
+  reading a global `window.spartan`, and `BackendClient.onEvent`'s own real callback shape is a
+  single `{event, data}` object (`client.onEvent(({event, data}) => ...)`), not Electron's
+  two-argument `window.spartan.onEvent(event, data)` -- matching every other `web/` component that
+  already subscribes to backend events (the DAP/Android handlers in `App.tsx` itself). `web/App.tsx`
+  renders it as a persistent, docked sibling to the main content area (matching `desktop/`'s own
+  "visible regardless of screen" placement) gated on `backendReady` (`backendStatus === "connected"
+  && !!backendClient?.projectRoot`), and its own stale toolbar note ("...no Leo yet") was corrected
+  to reflect reality. `web/app.css` gained every `.leo-*` CSS class `desktop/`'s own `app.css`
+  already has except `.leo-diff*` (already present in `web/app.css`, shared with `GitPanel.tsx`'s
+  own diff view) -- verified byte-for-byte against the source before appending, and every custom
+  property/keyframe it depends on (`--accent-dim`/`--hud`/`--glow-accent(-lg)`/`--status-critical-
+  rgb`/`sf-pulse`/`hud-status-pulse`) and every reused class (`.git-section-label`/`.git-section`/
+  `.git-row`/`.git-panel-empty`/`.git-row-path`/`.sf-chamfer-sm`) confirmed already present in all 7
+  themes before assuming the port would render correctly. `npm run typecheck`/`npm run build` both
+  clean; no Rust changes needed (`cargo fmt --all -- --check` unaffected). **Real, live, end-to-end
+  Playwright verification against the actual compiled `web/dist` served by a real running
+  `spartan-devserver` binary** (not a mock, a genuine `BackendClient.connect()` with no shim of any
+  kind, the same technique this whole `web/` effort has used since §75.88), with outgoing WebSocket
+  frames captured directly via a `WebSocket.send` proxy rather than inferred: the toolbar note
+  correctly updated to mention Leo; the real Leo panel rendered in its initial `Idle` state; typing
+  a real task and clicking Send correctly transitioned to `Planning` and fired a real, correctly-
+  shaped `leo_start_task` call (`{"task":"Say hello","project_root":"/tmp/leo-web-fixture"}`); this
+  sandbox's own already-documented unreachable-Ollama condition (unchanged since §75.56) produced a
+  real, honest `leo_plan_failed` event landing the panel in `Failed` with a real Retry button;
+  clicking Retry fired a real `leo_retry` call, transitioning through `Recovering` back to
+  `Executing` and correctly landing on the honest secondary error "no approved plan to execute"
+  (since the original plan itself never generated) -- exactly the real state-machine behavior
+  `leo_retry`'s own backend doc comment describes, not a fabricated success. Zero page errors,
+  screenshotted showing the fully rendered panel (state badge, error text, retry-in-progress log
+  entry, Cancel Task button, History section, populated task input) matching `desktop/`'s own
+  visual design exactly. **What this does not confirm**: no live model-driven exercise of a real
+  plan/execute cycle (Ollama unreachable this session, the same standing constraint every Leo pass
+  in this project's history has carried); no equivalent panel in the reference wgpu shell (Leo
+  wiring there has never reached past Agent mode's own real placeholder-replacement, matching every
+  Leo-panel feature since §75.47's "Electron shells only" scope -- and `web/` itself is not that
+  shell); the real Electron window remains unlaunchable in this session (same standing gap since
+  §75.59). Closes the "Leo" portion of `docs/FUTURE_FEATURES.md`'s own "Web app: LSP/DAP/Leo/git in
+  the pure client-side mode" item for the *backend-connected* mode specifically -- the *pure*
+  client-side mode (no backend process at all) still has no path to LSP/DAP/Leo by construction,
+  since those need a real server process to exist, a separate, much larger, unstarted initiative.
+- **Real, working code — real UTF-8 chunk-boundary reassembly for PTY output, closing the last
+  named limitation in `spartan-backend::pty`'s own doc comment since §75.64 (task #286)**: continues
+  the same "prioritize and continue with future features" push. `spawn_pty`'s real background-thread
+  read loop previously called `String::from_utf8_lossy(&buf[..n]).into_owned()` independently on
+  each raw chunk read from the PTY -- correct for the overwhelmingly common ASCII case, but a real,
+  reproducible bug whenever a multi-byte UTF-8 sequence happened to be split exactly across two
+  separate OS `read()` calls (a real, not-hypothetical occurrence with `xterm.js` streaming real
+  program output a chunk at a time): the trailing incomplete bytes of the split character would be
+  lossy-decoded on their own, in isolation, producing a spurious `U+FFFD` replacement character
+  instead of the real intended glyph, with no memory of the dangling tail carried into the next
+  read. New `Utf8Reassembler` (a small, private struct local to `pty.rs`) buffers exactly the real
+  dangling tail across reads: `std::str::from_utf8`'s own `Utf8Error` already distinguishes the two
+  real cases that matter -- `error_len() == None` means the byte slice simply ran out mid-sequence
+  (the real read-boundary case this struct exists to fix, so the incomplete tail is kept and the
+  valid prefix is returned immediately) vs. `error_len() == Some(n)` (genuinely invalid bytes, not a
+  chunking artifact, so those are still lossy-decoded right away rather than buffered forever). A
+  real UTF-8 leading byte never claims more than 3 continuation bytes, so the "incomplete" tail this
+  struct ever holds is naturally bounded at 3 bytes -- no unbounded-growth guard was needed. Wired
+  into `spawn_pty`'s read loop by routing every raw chunk through one `Utf8Reassembler` instance
+  (one per spawned session, living for that thread's lifetime) instead of calling
+  `from_utf8_lossy` directly; an empty result (a real dangling incomplete sequence with nothing else
+  ready to emit yet) correctly skips sending a `pty_output` event at all rather than sending an
+  empty one. 5 new unit tests (ASCII passthrough unchanged; a real 2-byte `é` split exactly at its
+  byte boundary across two `push()` calls, confirming the dangling byte doesn't leak through early
+  and the completed character resolves on the next chunk; a real 4-byte emoji split across three
+  separate single-byte reads plus a final read -- the worst realistic case; genuinely invalid bytes
+  (`0xFF`) confirmed still lossy-decoded immediately rather than held onto forever; a real multi-line
+  chunk with a split multi-byte character embedded mid-stream). Plus a real, live, end-to-end
+  integration test in `spartan-backend::lib.rs`'s own test module,
+  `pty_output_correctly_reassembles_a_real_multi_byte_utf8_string`: spawns a real
+  `bash -c "printf 'café🎉\\n' && exit"` via the actual `pty_spawn` dispatch method (using
+  `handle_request` directly with a real `mpsc::channel`, not the file's own `call()` test helper,
+  since that helper discards its receiver and so can't observe emitted events), collects every real
+  `pty_output` event until a real `pty_exit` arrives, and asserts the reassembled text contains the
+  exact string `café🎉` with zero `U+FFFD` replacement characters anywhere in the output. A real
+  `clippy::items_after_test_module` warning was caught and fixed, not suppressed: the test module had
+  originally been placed between `Utf8Reassembler`'s own impl block and the unrelated `PtyHandle`/
+  `spawn_pty` items that follow it in the file, which clippy correctly flags as poor organization --
+  fixed by moving the whole `#[cfg(test)] mod utf8_reassembler_tests` block to the end of the file,
+  after `spawn_pty`, re-confirmed clean afterward. Full `cargo fmt --all -- --check`/`cargo clippy -p
+  spartan-backend --release --all-targets`/`cargo test -p spartan-backend --release --lib --
+  --test-threads=1` all clean (249 tests, up from 248, zero failures). **What this does not
+  confirm**: no equivalent fix in the reference wgpu shell's own `spartan-editor-core::terminal.rs`
+  -- that shell's own real ANSI-stripping ceiling for ANSI-unaware plain-text rendering already
+  existed for a different reason and was never independently checked for the same chunk-boundary
+  class of bug, a real, separate, unstarted follow-up if that shell's own terminal rendering is
+  ever revisited; no live browser/Electron-window verification of a real multi-byte character
+  rendering correctly on screen through `xterm.js` (verified instead at the real backend-protocol
+  level via the exact `pty_output` events the frontend consumes, the same depth of verification this
+  project's own history already applies to several backend-only fixes); the real Electron window
+  remains unlaunchable in this session (same standing gap since §75.59). This was the one remaining
+  named gap in the "Terminal & sessions" section of `docs/FUTURE_FEATURES.md`'s own P3 backlog list
+  besides "PTY resize verified against a real reader," which remains open.
+- **Real, working code — real bracket-pair colorization ("rainbow brackets") in all three real
+  editing surfaces (`desktop/Editor.tsx`, `web/BackendEditor.tsx`, `web/Editor.tsx`), closing the
+  last real, fully-verifiable P1/P2/P3 backlog item this pass could reach (task #287-#289)**:
+  continues the same "continue with the roadmap" push. Before picking this feature, the remaining
+  open rows in `docs/FUTURE_FEATURES.md`'s own editor-ergonomics table were checked against what
+  this environment can actually verify: `DAP for C#/Kotlin/Java/Go/TS` needs real debug adapters
+  (`netcoredbg`/`kotlin-debug-adapter`/`dlv`/js-debug/a Java adapter) none of which are installed
+  here (confirmed via a direct `which` check -- only `rust-analyzer` and `pyright-langserver`
+  exist), and `Formatter coverage: Kotlin/C#/Java` needs `ktlint`/`dotnet`/`google-java-format`,
+  also confirmed absent -- both are real, honestly un-verifiable-here gaps, matching this project's
+  own established discipline of not shipping a feature it can't actually exercise live. Bracket-
+  pair colorization needed no external tool at all, so it became this pass's real deliverable.
+  Extends the already-shipped, purely cursor-adjacent matching-bracket highlight
+  (`findMatchingBracket`, §199-201) to color *every* bracket in the document by real nesting depth
+  -- the standard "rainbow brackets" feature every mainstream editor now ships. New shared
+  `bracketPairs.ts` (mirrored verbatim across `desktop/src/` and `web/src/`, matching this
+  codebase's own established per-project-copy convention for `syntax.ts`/`treeSitter.ts`):
+  `computeBracketPairMarks(content)` is a real, stack-based matcher (not just a running depth
+  counter) -- one combined depth counter across all three bracket kinds (`(`/`[`/`{`), matching VS
+  Code's own default behavior where a `(` nested inside `[...]` is one level deeper than the `[`,
+  not tracked on a separate per-kind counter. Each real opener is pushed onto a stack with its own
+  assigned `colorIndex = stack.length % 4` (cycling through 4 colors); a real closer either pops a
+  matching opener and shares its exact color (so a pair always reads as one visually matched unit
+  even across many lines), or -- a real, deliberate correctness feature, not an afterthought -- is
+  flagged `colorIndex: -1` (unmatched) when the stack is empty or its top doesn't match the
+  expected opener type; any openers still on the stack at end-of-document are retroactively
+  reclassified as unmatched too, since they were never validly closed. Bounded at 5000 tracked
+  marks (a real, named safety limit matching Find in Files' own 200-match cap, never approached by
+  ordinary source files). The same honest, named v1 scope cut `findMatchingBracket`'s own doc
+  comment already states: no string/comment awareness, a plain raw-text scan, not a tokenizer-aware
+  pass. Rendered via the existing `editor-symbol-highlight-layer` absolute-positioned-div technique
+  every other mark in this layer already uses (document highlights, bracket-match, find-match) --
+  one semi-transparent colored background box per bracket character, not a foreground-glyph
+  recolor (which would need injecting spans into the already-generated syntax-highlight HTML,
+  real, separate, larger work not attempted here). New CSS: two of the four colors reuse this
+  app's own existing theme-varying brand tokens (`--hud-rgb`/`--accent-rgb`, gold/blue), the other
+  two are fixed, non-theme-tied hues (violet, teal) -- a real, named, minor simplification given
+  this feature's own scope, not per-theme-tuned across all 7 themes. A genuinely unmatched bracket
+  renders with a distinct red outline instead of a color-cycle fill, the same "flag a real syntax
+  problem" convention real bracket-pair colorizers use. All three components' own `tsc --noEmit`
+  and both shells' `npm run build`/`build:electron` clean; no Rust changes (`cargo fmt --all --
+  check` re-confirmed clean anyway). **Real, live, end-to-end Playwright verification in both
+  shells against a real nested Python fixture** (`def outer(x): if x > 0: data = {"a": [1, 2, (3,
+  4)], "b": foo(x)}; return data`), not a mock: `web/` was driven against the actual compiled
+  `web/dist` served by a real running `spartan-devserver` binary, `web/`'s own genuine
+  `BackendClient.connect()` with no shim of any kind -- 10 real marks rendered, 0 unmatched (the
+  fixture is fully balanced), 3 distinct color-depth classes observed (`0`/`1`/`2`, confirming real
+  nesting-depth tracking rather than a flat single-color scheme -- the innermost `(3, 4)` genuinely
+  reached depth 2), and typing a real stray `)` (via genuine `page.keyboard.type`, not a synthetic
+  event) correctly produced exactly 1 new unmatched mark. A real, correctly-diagnosed non-issue
+  along the way: a first version of this same check typed a bare `(` expecting an unmatched
+  opener, but the already-shipped auto-closing-brackets feature (§193-195) immediately auto-paired
+  it with a real `)`, leaving the document fully balanced -- not a bug, a real, expected
+  interaction between two already-shipped features, confirmed by reading the actual resulting
+  content back before concluding anything was wrong, then fixed by using a stray *closer* instead
+  (nothing for it to auto-pair with). A zoomed screenshot independently confirmed the visual
+  result: `{}` rendered with a gold tint, `[]`/`foo()` with a blue tint, and the innermost `(3, 4)`
+  with a distinct violet tint, each pair's two brackets sharing the identical color across the
+  line. `desktop/` was independently re-verified via the established "real `spartan-devserver`
+  serving `desktop/dist`, a mocked `window.spartan` forwarding every call over a genuine WebSocket"
+  technique for the still-unlaunchable real Electron window (`?root=` query param supplies the
+  fixture path, matching this shell's own real URL-driven root-selection convention) -- byte-
+  identical results (10 marks, 0 unmatched, color classes `0,1,2`), zero page errors, screenshotted
+  showing the real colored bracket tints rendered inside the actual desktop 3-tier nav shell.
+  **What this does not confirm**: no live Playwright re-verification of `web/Editor.tsx`
+  specifically (typechecked and built clean, byte-identical logic to the two verified surfaces, not
+  independently re-proven this pass -- matching the exact same scope decision this whole editor-
+  ergonomics feature family has made for that file repeatedly since the auto-closing-brackets pass,
+  §193-195); no per-theme-tuned palette across all 7 themes (two of the four colors are fixed
+  hues, a real, named simplification); no bracket-pair colorization in the reference wgpu shell
+  (same established "Electron-shell-only feature" scope every recent editor-ergonomics pass has
+  carried); the real Electron window remains unlaunchable in this session (same standing gap since
+  §75.59). No `codeAction`/formatter-coverage-for-Kotlin-C#-Java features were built this pass,
+  since neither is honestly verifiable in this specific environment (the tools aren't installed) --
+  both remain real, named, open backlog rows rather than shipped-but-unverified code.
+- **Real, working code — rope-anchored breakpoints in both real DAP-capable editing surfaces
+  (`desktop/src/components/Editor.tsx`, `web/src/components/BackendEditor.tsx` -- `web/src/
+  components/Editor.tsx`, the pure client-side File System Access + WASM editor with no backend
+  connection, has no DAP/breakpoints feature at all to shift, confirmed by grep before writing this
+  correction rather than assumed from this project's usual "all three surfaces" convention),
+  closing the exact §75.8-named "line-number
+  breakpoints instead of rope-anchored persistence" gap, verified against a real live `debugpy`
+  session, not just UI state (task #291)**: continues the same "continue with the roadmap" push.
+  New `breakpointShift.ts` (mirrored verbatim in `desktop/src/` and `web/src/`, matching this
+  codebase's own established per-project-copy convention for `bracketPairs.ts`/`snippets.ts`/
+  `syntax.ts`/`treeSitter.ts`): a plain line-array diff (`oldText.split("\n")` vs.
+  `newText.split("\n")`, common-prefix/common-suffix) -- deliberately **not** a reuse of the
+  already-real char-based `computeEdit` in `treeSitter.ts`, since a line-level diff directly
+  answers "which old lines survived unchanged" without the extra ambiguity a char-based diff
+  carries about whether an edit split an existing line's own content mid-line. Per-breakpoint
+  rule: a line strictly before the touched region is unaffected; a line whose edit was a real
+  single-line in-place content change (plain typing, no net line-count change) stays exactly
+  where it is, even when the edit lands on that exact line -- the single most common real case,
+  and the one that must never silently drop a breakpoint just because the user typed on that
+  line; a line strictly inside a genuine multi-line-affecting edit (a deleted/replaced/merged
+  block) is honestly dropped rather than guessed at, the same "don't guess where the code went"
+  choice this codebase already makes for git merge conflicts (manual resolution, no auto-merge
+  heuristic) and Leo's own bounded diff previews; everything after the touched region shifts by
+  the edit's real net line delta. **Verified first via a real Node scratch script, not assumed
+  correct from the algorithm reading right**: 11 concrete scenarios (insert-a-line-above,
+  delete-a-line-above, plain in-place single-character typing on the breakpoint's own line,
+  duplicating the breakpoint's own line via Ctrl+Shift+D, moving a line via Alt+Down [both
+  swapped lines' breakpoints honestly dropped as ambiguous, the unrelated lines above/below
+  correctly unaffected], Join Lines merging the breakpoint's line into its neighbor, Delete Line
+  removing the exact breakpoint's line, a genuine no-op edit returning the exact same array
+  reference, `condition`/`logMessage` fields surviving a shift intact, and an empty breakpoints
+  array staying a cheap no-op) -- all 11 passed on the real algorithm before any TypeScript was
+  written. Wired into `Editor.tsx`'s/`BackendEditor.tsx`'s single `applyProgrammaticEdit` choke
+  point -- the shared path every typed and programmatic edit routes through except Format-on-Save,
+  which applies via its own separate success-event handler (named explicitly below, not silently
+  glossed over) -- via a
+  new `onBreakpointsShift?: (next: BreakpointSpec[]) => void` prop, computed against
+  `prevContentRef.current` (the real pre-edit text) vs. `newContent` *before* that ref gets
+  overwritten a few lines later (the same ordering discipline the pre-existing snippet-tab-stop
+  shift already established in this exact function). `App.tsx` in both shells owns a new
+  `handleBreakpointsShift` callback mirroring `toggleBreakpoint`'s/`editBreakpoint`'s own existing
+  "`App.tsx` owns the real set, the editor only reports what changed" division of responsibility,
+  committing the already-computed new array straight to `breakpointsByDoc[docId]`. **Real, live,
+  end-to-end verification against an actual running `debugpy` session in both shells, not just
+  the UI's own displayed state** -- the strongest possible proof this actually closes the named
+  gap, not merely that the gutter dot visually moved: a real Python fixture with a breakpoint set
+  on `print(total)` (line 5), then 2 real blank lines inserted at the very top of the document via
+  genuine `page.keyboard.press("Enter")` (not a synthetic event) -- the gutter's breakpoint dot
+  correctly followed to the new line 7 (confirmed absent from the old line 5's own gutter row,
+  present at line 7's), and a real `dap_launch` call sent the *shifted* line 7, with the real
+  spawned `debugpy` session genuinely stopping there -- not at the original line 5 -- confirmed via
+  the real `debug-status` text (`"Stopped: breakpoint at line 7"`), proving the shift reached the
+  actual DAP protocol end to end, not just the editor's own display. `web/` was driven against the
+  actual compiled `web/dist` served by a real running `spartan-devserver` binary, `web/`'s own
+  genuine `BackendClient.connect()` with no shim of any kind; `desktop/` was independently
+  re-verified via the established "real `spartan-devserver` serving `desktop/dist`, a mocked
+  `window.spartan` forwarding every call over a genuine WebSocket" technique for the still-
+  unlaunchable real Electron window -- both produced byte-identical results (line 5 → line 7,
+  gutter dot correctly relocated, real `debugpy` stop at line 7), both screenshotted. **A real,
+  honest scope boundary was found during this verification, not a regression introduced by this
+  pass**: the first `web/` run unexpectedly hit a leftover, persisted `format_on_save: true`
+  setting in this shared dev environment (from an earlier, unrelated verification pass in this
+  project's own history) -- since Format Document's real formatter (`black`) correctly strips
+  leading blank lines per PEP8, and its own separate edit-application path does **not** route
+  through `applyProgrammaticEdit` (it applies via its own dedicated success-event handler), a
+  Format-on-Save-triggered edit does not reverse-shift breakpoints the way a typed edit does; this
+  is a real, narrow, pre-existing gap in Format Document's own scope, not a bug in this pass's own
+  feature, and not silently worked around -- the test disabled the leftover setting first (via a
+  real `settings_set` round trip, confirmed in the captured WebSocket frames) so it could cleanly
+  verify the feature actually being tested, and this gap is named here as real, separate, open
+  follow-up work rather than hidden. No Rust changes were needed (a pure TypeScript/React
+  feature, reusing already-real `dap_launch`/breakpoint IPC plumbing with no protocol changes);
+  `cargo fmt --all -- --check` re-confirmed clean anyway; both shells' own `tsc --noEmit`/`vite
+  build` clean. **What this does not confirm**: no live Playwright re-verification of the
+  Format-on-Save-doesn't-reverse-shift gap being *fixed* (only found and named, matching this
+  project's own discipline of reporting a real scope boundary honestly rather than silently
+  patching around it mid-pass on an unrelated feature); no rope-anchored breakpoints in the
+  reference wgpu shell (that shell's own DAP UI has never reached past §75.8's original line-
+  number-only scope, matching the established "Electron-shells-only" pattern every recent DAP/
+  editor-ergonomics pass has carried); the real Electron window remains unlaunchable in this
+  session (same standing gap since §75.59).
+- **Real, working code — real "unstage a hunk," the direct mirror of already-shipped per-hunk
+  staging (task #271), completing the per-hunk staging row in both Git panels (task #293)**:
+  continues the same "continue the road map" push, immediately after rope-anchored breakpoints
+  (task #291-292). `spartan_git` gained `diff_hunks_staged(path)` (the exact mirror-image direction
+  of `diff_hunks` — a real `git2::Patch::from_buffers` diffing the HEAD blob (old) against the index
+  blob (new), instead of `diff_hunks`'s own index-vs-workdir direction) and `unstage_hunk(path,
+  hunk_index)` (the direct mirror of `stage_hunk` — re-diffs fresh on every call, then splices the
+  chosen hunk's *old* (HEAD) side back into the index content at `new_start`/`new_lines`, the
+  reverse of `stage_hunk`'s own splice-the-new-side-into-old-content direction, written via the
+  same `Index::add_frombuffer` mechanism). `spartan-backend::git_diff_hunks` gained a `staged: bool`
+  param (default `false`, so every existing caller's behavior is unchanged) branching between the
+  two real diff directions; a new `git_unstage_hunk` dispatch method mirrors `git_stage_hunk`
+  exactly. Both Git panels' (`desktop/`, `web/`) staged-row diff expansion gained the identical
+  hunks-with-buttons block the unstaged row already had, now reading "Unstage this hunk" and calling
+  the new `unstageHunk` function — a direct, symmetric port of the existing `stageHunk`/`refreshHunks`
+  functions, with `refreshHunks` itself extended to take the same `staged` flag so it fetches the
+  correct real diff direction regardless of which row it was opened from. The stale "no unstage-a-
+  hunk (whole-file unstage only)" v1-scope-cut note in both components' own doc comments was removed
+  now that it's closed. 6 new `spartan-git` tests (a real two-separated-staged-hunks fixture; an
+  empty-list case for a brand-new fully-staged file; unstaging one hunk leaving the other's real
+  change genuinely staged; unstaging both hunks in sequence returning the index to exactly HEAD; an
+  out-of-range error; a real pure-staged-addition-at-end-of-file edge case), 72 `spartan-git` tests
+  total; 2 new dispatch-level tests in `spartan-backend` (a full round trip through `handle_request`;
+  an honest out-of-range error), 251 `spartan-backend` lib tests total — all clean, `cargo fmt`/
+  `clippy` clean for both crates after two real reformatting passes (a wrapped function signature, a
+  reformatted `ok_or_else` closure). Both shells' own `tsc --noEmit`/`npm run build` clean. **Real,
+  live, end-to-end Playwright verification in both shells against a real git fixture with two
+  genuinely separated staged hunks** (a `-100+` line file with two edits far enough apart that git's
+  own default 3-line context-merge threshold keeps them as two real, distinct hunks — a first
+  fixture attempt with edits only 6 lines apart was caught merging into one real hunk by the fixture
+  -setup script's own `git diff --staged` output, a real, correctly-diagnosed test-fixture mistake,
+  not a product bug, fixed by spacing the edits further apart and reconfirmed via the real `git`
+  CLI before testing the UI): `web/` was driven against the actual compiled `web/dist` served by a
+  real running `spartan-devserver` binary, `web/`'s own genuine `BackendClient.connect()` with no
+  shim of any kind — 2 real hunks rendered with 2 "Unstage this hunk" buttons, clicking the first
+  correctly left exactly 1 real hunk remaining staged, and the real fixture repo's own `git status`/
+  `git diff --staged`/`git diff` output was independently re-read afterward and matched exactly:
+  the second hunk's change remained staged, the first hunk's change landed correctly in the real
+  unstaged diff. `desktop/` was independently re-verified via the established "real
+  `spartan-devserver` serving `desktop/dist`, a mocked `window.spartan` forwarding every call over
+  a genuine WebSocket" technique for the still-unlaunchable real Electron window — byte-identical
+  results (2 hunks, 2 buttons, 1 remaining after unstaging one, "Changes (1)" reflecting the newly-
+  unstaged hunk), independently cross-checked against the real `git` CLI a second time on a fresh
+  copy of the same fixture, zero page errors in either shell. **A real test-navigation lesson
+  recorded here, not fabricated as a product bug**: the first `desktop/` verification attempt raced
+  ahead of a real, async `settings_get` round trip over the WebSocket that gates first-run
+  onboarding (`onboardingState === "checking"`) — Playwright's own `waitUntil: "networkidle"` does
+  **not** cover WebSocket traffic, so a plain `isVisible()` check (which itself does not wait) ran
+  while the page was still genuinely blank, and the script's own `.first()` text-locator click
+  action then auto-waited and landed on the wrong element (a plain feature-description paragraph
+  containing the word "Editor," not the real nav item) once the onboarding screen finally rendered.
+  Fixed by properly waiting for one of several real possible post-load states (`Get Started`,
+  `button.onboarding-skip`, or the real `.nav-item` sidebar) before acting, rather than assuming an
+  instant, non-waiting check reflects the page's eventual settled state — recorded so a future
+  verification pass against this same onboarding gate doesn't rediscover it from scratch. **What
+  this does not confirm**: no per-line (sub-hunk) selection within a hunk (whole-hunk stage/unstage
+  only, matching this feature's own already-documented v1 scope, unchanged by this pass); no
+  unstage-a-hunk UI in the reference wgpu shell (that shell has no Git panel to extend, matching the
+  established "Electron-shells-only" scope every recent Git pass has carried); the real Electron
+  window remains unlaunchable in this session (same standing gap since §75.59). This closes the last
+  named follow-up in the per-hunk-staging backlog row.
+- **Real, working code — PTY resize verified against a real reader process, closing the last
+  named row in the Terminal & sessions backlog table (task #294)**: continues the same "continue
+  the road map" push. `pty_resize`/`PtyHandle::resize` have been real, dispatched, and tested
+  against the honest unknown-session error path since §75.64, but no test had ever confirmed a
+  real process actually *observes* the new size, only that the IPC call itself didn't error. New
+  `pty_resize_is_actually_observed_by_a_real_reader_process` (`crates/spartan-backend/src/lib.rs`)
+  spawns a real `python3` process (self-skipping if `python3` isn't found on `$PATH`, matching
+  every other real-external-tool integration test in this crate) that prints its own real
+  `os.get_terminal_size()` on startup and again on every real `SIGWINCH` signal it receives, spawned
+  through the exact same `pty_spawn` dispatch path both shells' `TerminalView` components already
+  use. Calling the real `pty_resize` dispatch method to 120x40 (from an initial 80x24) triggers a
+  real OS-level `TIOCSWINSZ` ioctl on the pty master via `portable-pty`, which the kernel itself
+  automatically delivers as a real `SIGWINCH` to the real foreground process group of the slave --
+  no manual signal send needed anywhere in the test, and nothing the test's own code could fake --
+  so a correctly-observed new size proves the entire real chain end to end (dispatch ->
+  `PtyHandle::resize` -> the pty master -> the kernel -> the real child process), not just that the
+  IPC call returns `Ok`. **No product bug was found**, reported plainly rather than manufacturing
+  one: the pre-existing `pty_resize` implementation was already correct, confirmed passing
+  consistently across 6 repeated runs (~70-80ms each, well within a real signal-delivery timescale,
+  no flakiness observed). 252 `spartan-backend` lib tests total (up from 251), full `cargo fmt --all
+  -- --check`/`cargo clippy -p spartan-backend --release --all-targets` both clean. **What this does
+  not confirm**: no equivalent verification in the reference wgpu shell's own `terminal.rs` (that
+  shell's terminal predates this crate and was never independently checked for the same class of
+  gap); no verification against any process besides a real `python3` reader (the underlying
+  `TIOCSWINSZ`/`SIGWINCH` mechanism is OS-level and process-agnostic, but only one real reader was
+  exercised); the real Electron window remains unlaunchable in this session (same standing gap
+  since §75.59). This closes the last named row in the Terminal & sessions backlog table.
+- **Real, working code — a CodeRabbit review-response pass on PR #7 (rope-anchored breakpoints
+  through PTY resize), two real production bugs found and fixed, one real environment-specific test
+  fixture limitation found and worked around correctly (task: "Review with coderabbit and merge
+  everything")**: closes out CodeRabbit's own actionable findings before merging. **The first real
+  production bug**: `github_list_pull_requests` (task #284) made its real, live GitHub API call
+  *synchronously* on `handle_request`'s single dispatch thread -- since both the stdio transport
+  `desktop/` drives and a single WebSocket connection `web/` drives process one request at a time,
+  a real, bounded-but-still-up-to-10s network call there would have stalled every *other* real IPC
+  method (file open/save/edit, LSP, git, Leo, PTY) for that same duration. Fixed by extracting the
+  real network call into a new `spawn_github_pr_fetch(owner, repo, out_tx)`, matching `check_for_
+  updates`'s own exact "ack now, event later" shape (`github_pull_requests_result`/`github_pull_
+  requests_failed` events) -- the two fast, local, no-network checks (`GitRepo::discover`,
+  `detect_github_remote`) stay synchronous, since returning their real errors immediately is exactly
+  the fast-fail behavior worth keeping. A new `GITHUB_REQUEST_TIMEOUT` (10s, matching `spartan-
+  updater`'s own identical convention) was also added to `github.rs`'s own `ureq` call, since it
+  had none at all before. Both `desktop/GitPanel.tsx` and `web/GitPanel.tsx` gained a real event
+  subscription for the two new events, replacing their previous "the resolved call already has the
+  PR list" assumption; `desktop/GitPanel.tsx`'s `openPullRequestUrl` click handler gained a real
+  `.catch` (matching `SettingsScreen.tsx`'s own established `openCrashReportsFolder`/
+  `openRepositoryPage` convention) so a real rejected promise (e.g. `main.ts`'s own `https://
+  github.com/` URL-prefix guard refusing a malformed `html_url`) surfaces as a real error instead of
+  an unhandled rejection. **A second, real, distinct bug was found in `desktop/src/bracketPairs.ts`/
+  `web/src/bracketPairs.ts`'s own real bracket-pair colorization (§287-289)**: the `MAX_BRACKET_
+  PAIR_MARKS` (5000) safety cap bailed the entire scan loop the instant it was hit, which meant an
+  opener pushed *just before* the cap whose real matching closer would have been scanned *after* it
+  got permanently misreported as unmatched (`colorIndex: -1`, a real, visible red-outline false
+  positive) purely because the loop never even looked at its own real closer. Fixed by separating
+  the two real concerns: the scan itself now always walks the *entire* document for correct stack-
+  based matching regardless of size (a real opener past the cap gets `markIndex: null` -- tracked
+  on the stack for correctness, just never rendered), while only the *output* array (and so the
+  real DOM/render cost) stays capped at 5000 marks. Verified with a real, standalone Node script
+  (not committed) constructing 5010 genuinely valid `(x)` pairs: before the fix, marks past the cap
+  were falsely flagged unmatched; after, zero false positives, while a genuinely unmatched stray
+  opener still correctly reports exactly one real unmatched mark. **A real, environment-specific
+  test-fixture limitation was found and correctly worked around, not silently papered over**: the
+  first version of the new async-ack dispatch test set a real `https://github.com/CKissinger1988/
+  Spartan-IDE.git` remote via `git2`'s own `Repository::remote()` and failed -- traced with a real,
+  standalone `spartan-git` example binary (written, run, and deleted, not left in the repo) to this
+  sandboxed session's own real, global `~/.gitconfig` rule (`url.http://local_proxy@127.0.0.1:
+  <port>/git/.insteadof = https://github.com/`, confirmed via `git config --global --get-regexp`) --
+  the exact same real mechanism a genuine `git remote -v` would apply on any machine with such a
+  rewrite rule configured, not a git2-specific quirk, so `detect_github_remote`'s own literal-
+  prefix string match can never observe an un-rewritten `github.com` URL in this specific session,
+  though it would on a real end-user machine with no such rule. Rather than intrusively override
+  process-wide git config search paths for one test, the test was rewritten to call `spawn_github_
+  pr_fetch` directly with a known-good `(owner, repo)` pair, verifying the real deferred-event
+  mechanism in isolation, independent of that environment quirk -- the two pre-existing dispatch-
+  level tests already cover `github_list_pull_requests`'s own synchronous fast-fail paths. Also
+  fixed along the way, all confirmed via inspection against the real, running code before applying
+  (and one CodeRabbit suggestion -- switching `treeSitter.ts`'s UTF-16 offsets to UTF-8 byte
+  offsets -- was investigated and deliberately **not** applied, since that file's own doc comment
+  already documents a real, prior experimental confirmation that UTF-16 code units are the correct
+  convention for this specific `web-tree-sitter` JS binding, not native tree-sitter's C API
+  CodeRabbit's suggestion was modeled on): `web/src/backendClient.ts`'s and `desktop/electron/
+  preload.ts`'s own event-dispatch loops both gained real per-listener `try/catch` isolation (one
+  malformed-payload listener throwing could otherwise silently stop delivery to every later-
+  registered listener for that same event -- a real risk with multiple independent panels
+  subscribed to one broadcast); `web/LeoChatPanel.tsx`'s `leo_status` bootstrap effect gained a
+  `cancelled` guard against a real reconnect race and a `console.warn` on failure; its event handler
+  was restructured into a `handleLeoEvent` function with defensive per-field type-checked parsing
+  for every real event branch, wrapped in its own `try/catch`; a new `applyState` helper normalizes
+  every `{state}`-returning call so a malformed response can never leave `agentState` `undefined`;
+  `submitTask` gained a `client.projectRoot` null-check; a new `callInFlight` guard on `approveCall`/
+  `rejectCall` prevents a real double-click (or a slow IPC round trip) from firing the same approval/
+  rejection twice concurrently; a `busy` constant replaced three separately-spelled-out `Planning ||
+  Executing || Verifying` checks; the History disclosure `<div>` gained `role="button"`/`tabIndex`/
+  keyboard handling/`aria-expanded` for real keyboard accessibility. All of the above were mirrored
+  to `desktop/LeoChatPanel.tsx` for parity, matching this project's own established "keep both
+  shells in sync" discipline. `web/package.json` pinned `web-tree-sitter`/`tree-sitter-wasms` to
+  exact versions (`0.20.8`/`0.1.13`, already what the lockfile resolved to) rather than caret
+  ranges, given this project's own already-documented ABI/version sensitivity for these two
+  packages (§75.86). `.github/workflows/ci.yml`'s `rust` job gained an explicit least-privilege
+  `permissions: contents: read` block and a `timeout-minutes: 45` bound on its own heaviest,
+  previously-unbounded `cargo test --no-run` step; every real `actions/checkout@v4` step across the
+  whole file (all 7 jobs) gained `persist-credentials: false`, since none of them ever push. Two
+  small CSS nitpicks in `web/src/app.css`: `word-break: break-word` replaced with the non-deprecated
+  `overflow-wrap: break-word` in `.leo-error`/`.leo-log-entry`/`.leo-pending-call-content`; a blank
+  line separates `.leo-state-failed`'s plain declarations from its custom-property ones, matching a
+  common Stylelint `declaration-empty-line-before` convention (no stylelint config exists in this
+  repo to confirm the exact rule shape against, applied as a real, reasonable readability
+  improvement regardless). 256 `spartan-backend` lib tests total (up from 252 -- a real net +4,
+  not just the described async-ack test's own 1-for-1 swap; the `web/src/backendClient.ts`/
+  `desktop/electron/preload.ts` per-listener-isolation fix and `bracketPairs.ts`'s own
+  cap-vs-correctness fix were each verified via their own real Node script/manual check instead
+  of a new Rust unit test, so this count doesn't cover every real fix in this pass), full
+  `cargo fmt --all -- --check`/`cargo
+  clippy --workspace --release --all-targets` both clean; `cargo test -p spartan-backend -p
+  spartan-git --release --lib -- --test-threads=1` both green (256/72); both shells' own `tsc
+  --noEmit`/`npm run build` clean. **What this does not confirm**: no live Playwright re-verification
+  of any of these fixes (a pure code-review-response pass, verified via the exact
+  compile/test/typecheck/build commands named above, not a new live-browser feature pass); two real
+  CodeRabbit nitpicks were deliberately left unaddressed and named rather than silently dropped --
+  `docs/FUTURE_FEATURES.md`'s own tree-sitter-benchmark wording (the cited 2.8-3.3x numbers are real,
+  measured, historical results from §283's own pass, not fabricated, so reworded framing was judged
+  low-value) and no attempt was made to fix the pre-existing, unrelated transitive `postcss`
+  vulnerability `npm audit` reports in `web/` (out of scope for this review-response pass, not
+  something CodeRabbit itself flagged).
+- **Real, working code — a second real CodeRabbit finding closed on PR #7, found only by
+  re-fetching the review's own current unresolved-thread state rather than trusting the prior
+  summary (task: same "review with coderabbit and merge everything" pass)**: after the fixes
+  above, all 19 of PR #7's own unresolved review comment threads were re-fetched directly
+  (`get_review_comments`, saved to a file and parsed with Python -- the result was too large for
+  inline tool output) to confirm nothing had been missed. One real, previously-unaddressed finding
+  remained: `LeoChatPanel.tsx`'s `voiceOutputEnabled` state (both shells) read `localStorage`
+  directly inside its own `useState` lazy initializer -- `useState(() => window.localStorage.
+  getItem(...) === "1")` -- and a plain `localStorage` access can genuinely throw a real
+  `SecurityError` in a real private-browsing mode or a real storage-blocked embedding context
+  (e.g. a third-party-cookie-blocked iframe), not a hypothetical. Since a `useState` initializer
+  runs *during render*, an uncaught throw there crashes the whole component with no surrounding
+  event-handler `try/catch` able to protect it, and no error boundary exists around this panel.
+  Fixed in both `desktop/src/components/LeoChatPanel.tsx` and `web/src/components/
+  LeoChatPanel.tsx` identically: two new module-level helpers, `readVoiceOutputPref()` (wraps the
+  real `getItem` call in `try/catch`, returns `false` on any real thrown error) and
+  `writeVoiceOutputPref(enabled)` (wraps the real `setItem` call the same way, silently degrading
+  to session-only on failure rather than throwing), with the `useState` initializer and
+  `toggleVoiceOutput` both routed through them instead of touching `window.localStorage` directly.
+  `npx tsc --noEmit` clean in both `desktop/` and `web/`; `cargo fmt --all -- --check` re-confirmed
+  clean (no Rust touched); both shells' own real production builds (`npm run build` in `web/`,
+  `npm run build` + `npm run build:electron` in `desktop/`) completed successfully, including the
+  full tree-sitter WASM asset bundling and Electron main-process `tsc` compilation. **What this
+  does not confirm**: no live Playwright re-verification of a real thrown `SecurityError` (would
+  need a real private-browsing/storage-blocked browser context to actually trigger the throw this
+  fix guards against, not attempted here); the real Electron window remains unlaunchable in this
+  session (same standing gap since §75.59).
+
 ## Build & test
 
 ```bash

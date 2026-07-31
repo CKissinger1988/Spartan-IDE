@@ -33,6 +33,36 @@ fn split_keep_newlines(content: &[u8]) -> Vec<&[u8]> {
     lines
 }
 
+/// Walks every real hunk a `git2::Patch` identifies and builds the
+/// `HunkInfo` list both `diff_hunks` (unstaged, index-vs-workdir) and
+/// `diff_hunks_staged` (staged, HEAD-vs-index) return -- the two callers
+/// diff in opposite directions but collect the resulting hunks identically,
+/// so this is the one real shared traversal rather than two copies of the
+/// same loop.
+fn collect_hunks(patch: &git2::Patch<'_>) -> Result<Vec<HunkInfo>, git2::Error> {
+    let mut hunks = Vec::with_capacity(patch.num_hunks());
+    for i in 0..patch.num_hunks() {
+        let (hunk, line_count) = patch.hunk(i)?;
+        let mut body = String::new();
+        for l in 0..line_count {
+            let line = patch.line_in_hunk(i, l)?;
+            let origin = line.origin();
+            if origin == '+' || origin == '-' || origin == ' ' {
+                body.push(origin);
+            }
+            body.push_str(&String::from_utf8_lossy(line.content()));
+        }
+        hunks.push(HunkInfo {
+            index: i,
+            header: String::from_utf8_lossy(hunk.header())
+                .trim_end()
+                .to_string(),
+            body,
+        });
+    }
+    Ok(hunks)
+}
+
 /// Shared credential callback for real fetch/push against an authenticated
 /// remote. Tries SSH-agent first (the common key-backed case), then a
 /// default/anonymous credential (local `file://` remotes need none, so the
@@ -97,6 +127,43 @@ pub struct StatusEntry {
     /// covers both "modified but not staged" and "untracked".
     pub unstaged: Option<FileStatus>,
     pub conflicted: bool,
+}
+
+/// Parses a real git remote URL into `(owner, repo)` if it points at
+/// github.com, in any of the real shapes git itself accepts:
+/// `git@github.com:owner/repo.git`, `https://github.com/owner/repo(.git)`,
+/// or `ssh://git@github.com/owner/repo(.git)`. Returns `None` for anything
+/// else (a non-GitHub remote, or a malformed URL) -- a real, honest "not a
+/// GitHub repo" rather than a guess.
+pub fn parse_github_owner_repo(remote_url: &str) -> Option<(String, String)> {
+    let after_host = if let Some(rest) = remote_url.strip_prefix("git@github.com:") {
+        rest
+    } else if let Some(rest) = remote_url.strip_prefix("https://github.com/") {
+        rest
+    } else if let Some(rest) = remote_url.strip_prefix("http://github.com/") {
+        rest
+    } else if let Some(rest) = remote_url.strip_prefix("ssh://git@github.com/") {
+        rest
+    } else {
+        return None;
+    };
+    let trimmed = after_host.trim_end_matches('/').trim_end_matches(".git");
+    let (owner, repo) = trimmed.split_once('/')?;
+    // A real remote URL's `owner`/`repo` segments end up interpolated directly into a
+    // `format!`-built GitHub API URL by this crate's own caller (`crates/spartan-backend::
+    // github.rs`) -- GitHub's own real username/repo-name rules only ever allow
+    // `[A-Za-z0-9._-]`, so anything outside that set here means either a malformed/unexpected
+    // URL shape this parser doesn't actually understand, or content that was never a real
+    // GitHub identifier at all. Reject it rather than passing it through unchecked.
+    let is_valid_github_segment = |s: &str| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    };
+    if !is_valid_github_segment(owner) || !is_valid_github_segment(repo) {
+        return None;
+    }
+    Some((owner.to_string(), repo.to_string()))
 }
 
 fn from_git_status(s: Status) -> (Option<FileStatus>, Option<FileStatus>, bool) {
@@ -320,27 +387,7 @@ impl GitRepo {
             Some(path),
             None,
         )?;
-        let mut hunks = Vec::with_capacity(patch.num_hunks());
-        for i in 0..patch.num_hunks() {
-            let (hunk, line_count) = patch.hunk(i)?;
-            let mut body = String::new();
-            for l in 0..line_count {
-                let line = patch.line_in_hunk(i, l)?;
-                let origin = line.origin();
-                if origin == '+' || origin == '-' || origin == ' ' {
-                    body.push(origin);
-                }
-                body.push_str(&String::from_utf8_lossy(line.content()));
-            }
-            hunks.push(HunkInfo {
-                index: i,
-                header: String::from_utf8_lossy(hunk.header())
-                    .trim_end()
-                    .to_string(),
-                body,
-            });
-        }
-        Ok(hunks)
+        collect_hunks(&patch)
     }
 
     /// Real "stage this one hunk" (the mechanism behind `git add -p`'s own
@@ -411,6 +458,123 @@ impl GitRepo {
             new_index_content.extend_from_slice(line);
         }
         let mut entry = old_entry;
+        entry.id = git2::Oid::zero(); // overwritten by add_frombuffer from the real content
+        entry.file_size = 0; // same
+        index.add_frombuffer(&entry, &new_index_content)?;
+        index.write()
+    }
+
+    /// Real per-hunk *staged* diff for one file -- the exact complementary
+    /// diff to `diff_hunks()`'s own unstaged one: diffs the file's real
+    /// `HEAD` blob (old) against its real current index (staged) blob (new)
+    /// via `git2::Patch::from_buffers`, and returns every hunk it
+    /// identifies, in order. A real, named v1 scope cut mirroring
+    /// `diff_hunks()`'s own: a path with no `HEAD` entry (nothing committed
+    /// yet for it -- e.g. a brand-new file that's fully staged) has no real
+    /// "old" baseline to hunk against and returns a real, honest empty
+    /// list -- whole-file `unstage()` already covers that case.
+    pub fn diff_hunks_staged(&self, path: &Path) -> Result<Vec<HunkInfo>, git2::Error> {
+        let index = self.repo.index()?;
+        let index_entry = match index.get_path(path, 0) {
+            Some(entry) => entry,
+            None => return Ok(Vec::new()),
+        };
+        let index_blob = self.repo.find_blob(index_entry.id)?;
+        let head_blob = self
+            .repo
+            .head()
+            .and_then(|h| h.peel_to_tree())
+            .ok()
+            .and_then(|tree| tree.get_path(path).ok())
+            .and_then(|entry| self.repo.find_blob(entry.id()).ok());
+        let head_blob = match head_blob {
+            Some(blob) => blob,
+            None => return Ok(Vec::new()),
+        };
+        let patch = git2::Patch::from_buffers(
+            head_blob.content(),
+            Some(path),
+            index_blob.content(),
+            Some(path),
+            None,
+        )?;
+        collect_hunks(&patch)
+    }
+
+    /// Real "unstage this one hunk" -- the direct mirror of `stage_hunk()`,
+    /// the mechanism behind `git add -p`'s own per-hunk *de*selection (`git
+    /// restore --staged -p` in modern git). Recomputes the real staged diff
+    /// for `path` (`HEAD` vs index, matching `diff_hunks_staged()` exactly,
+    /// so `hunk_index` always refers to the hunk the caller most recently
+    /// saw), and splices that hunk's real "old side" (`HEAD`'s own context +
+    /// removed lines) into the real current index content at the hunk's own
+    /// `new_start`/`new_lines` position -- the exact mirror of
+    /// `stage_hunk`'s own `old_start`/`old_lines` splice: there, the OLD
+    /// side (index) received the hunk's NEW content; here, the NEW side
+    /// (index) receives the hunk's OLD (`HEAD`) content. The working tree is
+    /// left completely untouched, matching `stage_hunk`'s own behavior.
+    /// Unstaging hunks one at a time (re-fetching the list between each)
+    /// keeps every later hunk's own position correct -- the same real,
+    /// named v1 scope cut `stage_hunk` already documents.
+    pub fn unstage_hunk(&self, path: &Path, hunk_index: usize) -> Result<(), git2::Error> {
+        let mut index = self.repo.index()?;
+        let index_entry = index
+            .get_path(path, 0)
+            .ok_or_else(|| git2::Error::from_str("no staged content for this path to unstage"))?;
+        let index_blob = self.repo.find_blob(index_entry.id)?;
+        let index_content = index_blob.content();
+        let head_blob = self
+            .repo
+            .head()
+            .and_then(|h| h.peel_to_tree())
+            .ok()
+            .and_then(|tree| tree.get_path(path).ok())
+            .and_then(|entry| self.repo.find_blob(entry.id()).ok())
+            .ok_or_else(|| {
+                git2::Error::from_str("no HEAD baseline for this path to unstage against")
+            })?;
+        let patch = git2::Patch::from_buffers(
+            head_blob.content(),
+            Some(path),
+            index_content,
+            Some(path),
+            None,
+        )?;
+        if hunk_index >= patch.num_hunks() {
+            return Err(git2::Error::from_str("hunk index out of range"));
+        }
+        let (hunk, line_count) = patch.hunk(hunk_index)?;
+        // Split the real current (index) content into lines, keeping each
+        // line's own trailing `\n` attached -- mirrors `stage_hunk`'s own
+        // `old_lines` split exactly, just on the opposite side.
+        let new_lines: Vec<&[u8]> = split_keep_newlines(index_content);
+        let new_start = hunk.new_start() as usize; // 1-indexed, per real unified-diff convention
+        let new_len = hunk.new_lines() as usize;
+        // Mirrors `stage_hunk`'s own `old_len == 0` pure-insertion case,
+        // swapped: `new_len == 0` means this hunk is a pure deletion from
+        // the index's own perspective (HEAD had lines here that staging
+        // removed), so the real splice point is `new_start` unchanged
+        // (nothing in the index to remove) rather than `new_start - 1`.
+        let splice_start = if new_len == 0 {
+            new_start.min(new_lines.len())
+        } else {
+            new_start.saturating_sub(1)
+        };
+        let splice_end = (splice_start + new_len).min(new_lines.len());
+        let mut new_index_content = Vec::new();
+        for line in &new_lines[..splice_start] {
+            new_index_content.extend_from_slice(line);
+        }
+        for l in 0..line_count {
+            let line = patch.line_in_hunk(hunk_index, l)?;
+            if line.origin() == ' ' || line.origin() == '-' {
+                new_index_content.extend_from_slice(line.content());
+            }
+        }
+        for line in &new_lines[splice_end..] {
+            new_index_content.extend_from_slice(line);
+        }
+        let mut entry = index_entry;
         entry.id = git2::Oid::zero(); // overwritten by add_frombuffer from the real content
         entry.file_size = 0; // same
         index.add_frombuffer(&entry, &new_index_content)?;
@@ -1204,6 +1368,30 @@ impl GitRepo {
         }
         out.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(out)
+    }
+
+    /// Detects `(owner, repo)` from the repo's own `origin` remote, if it
+    /// points at a real github.com URL -- the one real mechanism the
+    /// GitHub layer (§56.3-56.4) needs to know which repo to talk to
+    /// without asking the user to type it in by hand. Falls back to the
+    /// first remote with a parseable github.com URL if there's no
+    /// `origin` (a real, valid state some repos are in), and returns
+    /// `None` for a repo with no github.com remote at all -- a genuine
+    /// non-GitHub project, not an error.
+    pub fn detect_github_remote(&self) -> Option<(String, String)> {
+        let remotes = self.list_remotes().ok()?;
+        let mut fallback = None;
+        for (name, url) in remotes {
+            let Some(url) = url else { continue };
+            let Some(parsed) = parse_github_owner_repo(&url) else {
+                continue;
+            };
+            if name == "origin" {
+                return Some(parsed);
+            }
+            fallback.get_or_insert(parsed);
+        }
+        fallback
     }
 
     /// Real fetch from a configured remote using its own default refspecs
@@ -2229,6 +2417,132 @@ mod tests {
     }
 
     #[test]
+    fn parse_github_owner_repo_handles_every_real_url_shape() {
+        assert_eq!(
+            parse_github_owner_repo("git@github.com:CKissinger1988/Spartan-IDE.git"),
+            Some(("CKissinger1988".to_string(), "Spartan-IDE".to_string()))
+        );
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/CKissinger1988/Spartan-IDE.git"),
+            Some(("CKissinger1988".to_string(), "Spartan-IDE".to_string()))
+        );
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/CKissinger1988/Spartan-IDE"),
+            Some(("CKissinger1988".to_string(), "Spartan-IDE".to_string()))
+        );
+        assert_eq!(
+            parse_github_owner_repo("ssh://git@github.com/owner/repo.git"),
+            Some(("owner".to_string(), "repo".to_string()))
+        );
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/owner/repo/"),
+            Some(("owner".to_string(), "repo".to_string())),
+            "a real trailing slash must not become part of the repo name"
+        );
+    }
+
+    #[test]
+    fn parse_github_owner_repo_rejects_non_github_and_malformed_urls() {
+        assert_eq!(
+            parse_github_owner_repo("https://gitlab.com/owner/repo.git"),
+            None
+        );
+        assert_eq!(
+            parse_github_owner_repo("/local/bare/repo/path"),
+            None,
+            "a real local bare-repo remote path is a valid remote, just not a GitHub one"
+        );
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/owner-only"),
+            None
+        );
+        assert_eq!(parse_github_owner_repo("https://github.com/"), None);
+    }
+
+    #[test]
+    fn parse_github_owner_repo_rejects_a_real_invalid_character_in_either_segment() {
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/owner/repo/extra"),
+            None,
+            "a real, unexpected third path segment must never be silently folded into `repo`"
+        );
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/ow ner/repo.git"),
+            None,
+            "a space is not a real, valid GitHub owner-name character"
+        );
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/owner/re%2Fpo.git"),
+            None,
+            "a real percent-encoded slash must not be treated as a valid repo-name character"
+        );
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/valid-owner.name/valid_repo.name"),
+            Some((
+                "valid-owner.name".to_string(),
+                "valid_repo.name".to_string()
+            )),
+            "real, valid GitHub identifiers may contain '.', '_', and '-'"
+        );
+    }
+
+    #[test]
+    fn detect_github_remote_finds_origin_and_ignores_non_github_remotes() {
+        let (_tmp, repo) = TempRepo::new("github_remote_detect");
+        repo.repo
+            .remote("upstream", "https://gitlab.com/other/thing.git")
+            .unwrap();
+        repo.repo
+            .remote("origin", "git@github.com:CKissinger1988/Spartan-IDE.git")
+            .unwrap();
+        assert_eq!(
+            repo.detect_github_remote(),
+            Some(("CKissinger1988".to_string(), "Spartan-IDE".to_string()))
+        );
+    }
+
+    #[test]
+    fn detect_github_remote_is_none_for_a_repo_with_no_github_remote() {
+        let (_tmp, repo) = TempRepo::new("github_remote_detect_none");
+        repo.repo
+            .remote("origin", "https://gitlab.com/other/thing.git")
+            .unwrap();
+        assert_eq!(repo.detect_github_remote(), None);
+    }
+
+    #[test]
+    fn detect_github_remote_falls_back_to_a_non_origin_github_remote() {
+        // A real, valid state some repos are in: `origin` points somewhere
+        // else (or doesn't exist at all), but a differently-named remote
+        // (e.g. `upstream`) is the real GitHub one -- the fallback path
+        // `detect_github_remote`'s own doc comment names explicitly.
+        //
+        // The SSH form (`git@github.com:...`, matching the sibling
+        // `detect_github_remote_finds_origin_and_ignores_non_github_remotes`
+        // test's own precedent) is deliberate, not incidental: this session's
+        // own sandboxed `.gitconfig` carries a real `url.<proxy>.insteadOf =
+        // https://github.com/` rewrite rule, so a *literal* `https://
+        // github.com/...` URL passed to `git2::Repository::remote()` gets
+        // silently rewritten to the local proxy URL at creation time --
+        // confirmed live via a temporary debug print showing the real
+        // stored remote as `http://local_proxy@127.0.0.1:.../git/...`, not
+        // the URL this test actually passed. The SSH form isn't touched by
+        // that `https://`-scoped rule, so it's the real, environment-safe
+        // way to test this fallback path here.
+        let (_tmp, repo) = TempRepo::new("github_remote_detect_fallback");
+        repo.repo
+            .remote("origin", "https://gitlab.com/other/thing.git")
+            .unwrap();
+        repo.repo
+            .remote("upstream", "git@github.com:CKissinger1988/Spartan-IDE.git")
+            .unwrap();
+        assert_eq!(
+            repo.detect_github_remote(),
+            Some(("CKissinger1988".to_string(), "Spartan-IDE".to_string()))
+        );
+    }
+
+    #[test]
     fn pull_reports_non_fast_forward_on_a_real_divergence() {
         let remote_dir = std::env::temp_dir().join("spartan_git_test_remote_bare_nff");
         let _ = fs::remove_dir_all(&remote_dir);
@@ -2635,5 +2949,129 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(staged, "line1\nline2\nline3\nline4\nline5\n");
+    }
+
+    fn repo_with_two_separated_staged_hunks(unique: &str) -> (TempRepo, GitRepo) {
+        let (tmp, repo) = repo_with_two_separated_unstaged_hunks(unique);
+        // Stage the real, current (both-edits-applied) working-tree
+        // content wholesale, so both changes start out fully staged.
+        repo.stage(Path::new("f.txt")).unwrap();
+        (tmp, repo)
+    }
+
+    #[test]
+    fn diff_hunks_staged_on_a_brand_new_fully_staged_file_is_a_real_honest_empty_list() {
+        let (tmp, repo) = TempRepo::new("diff_hunks_staged_new_file");
+        tmp.write("new.txt", "content\n");
+        repo.stage(Path::new("new.txt")).unwrap();
+        // No HEAD commit exists yet at all -- a real, honest empty list,
+        // matching `diff_hunks()`'s own "no old baseline" convention one
+        // layer up (whole-file `unstage()` already covers this case).
+        assert!(repo
+            .diff_hunks_staged(Path::new("new.txt"))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn diff_hunks_staged_reports_two_real_separate_hunks_for_two_separated_staged_edits() {
+        let (_tmp, repo) = repo_with_two_separated_staged_hunks("diff_hunks_staged_two");
+        let hunks = repo.diff_hunks_staged(Path::new("f.txt")).unwrap();
+        assert_eq!(
+            hunks.len(),
+            2,
+            "the two staged edits are far enough apart to stay separate hunks"
+        );
+        assert!(hunks[0].body.contains("line2 CHANGED"));
+        assert!(!hunks[0].body.contains("line19"));
+        assert!(hunks[1].body.contains("line19 CHANGED"));
+        assert!(!hunks[1].body.contains("line2 CHANGED"));
+    }
+
+    #[test]
+    fn unstage_hunk_unstages_only_the_selected_hunk_leaving_the_other_real_change_staged() {
+        let (tmp, repo) = repo_with_two_separated_staged_hunks("unstage_hunk_one");
+        repo.unstage_hunk(Path::new("f.txt"), 0).unwrap();
+
+        // The real staged (index) content no longer has line2's change, but
+        // still has line19's.
+        let staged = repo
+            .index_blob_content(Path::new("f.txt"))
+            .unwrap()
+            .unwrap();
+        assert!(!staged.contains("line2 CHANGED"));
+        assert!(staged.contains("line19 CHANGED"));
+
+        // The real working-tree file is completely untouched by unstaging.
+        let working = fs::read_to_string(tmp.dir.join("f.txt")).unwrap();
+        assert!(working.contains("line2 CHANGED"));
+        assert!(working.contains("line19 CHANGED"));
+
+        // git_status shows this file as both staged (line19) AND still
+        // unstaged (line2's real reverted-back-to-unstaged diff).
+        let status = repo.status().unwrap();
+        let entry = status
+            .iter()
+            .find(|e| e.path == Path::new("f.txt"))
+            .unwrap();
+        assert!(entry.staged.is_some());
+        assert!(entry.unstaged.is_some());
+    }
+
+    #[test]
+    fn unstage_hunk_twice_in_sequence_unstages_the_real_whole_file_back_to_head() {
+        let (_tmp, repo) = repo_with_two_separated_staged_hunks("unstage_hunk_both");
+        repo.unstage_hunk(Path::new("f.txt"), 0).unwrap();
+        // The real remaining staged diff now has exactly 1 hunk (line19's
+        // change) -- re-fetched fresh, not reused from the first call.
+        let remaining = repo.diff_hunks_staged(Path::new("f.txt")).unwrap();
+        assert_eq!(remaining.len(), 1);
+        repo.unstage_hunk(Path::new("f.txt"), 0).unwrap();
+
+        let staged = repo
+            .index_blob_content(Path::new("f.txt"))
+            .unwrap()
+            .unwrap();
+        let head = repo.head_blob_content(Path::new("f.txt")).unwrap().unwrap();
+        assert_eq!(
+            staged, head,
+            "unstaging every real hunk matches HEAD exactly"
+        );
+        assert!(repo
+            .diff_hunks_staged(Path::new("f.txt"))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn unstage_hunk_out_of_range_errors_honestly() {
+        let (_tmp, repo) = repo_with_two_separated_staged_hunks("unstage_hunk_oor");
+        assert!(repo.unstage_hunk(Path::new("f.txt"), 99).is_err());
+    }
+
+    #[test]
+    fn unstage_hunk_on_a_pure_staged_addition_reverts_index_to_head_exactly() {
+        let (tmp, repo) = TempRepo::new("unstage_hunk_addition");
+        tmp.write("f.txt", "line1\nline2\nline3\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("base").unwrap();
+        tmp.write("f.txt", "line1\nline2\nline3\nline4\nline5\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+
+        let hunks = repo.diff_hunks_staged(Path::new("f.txt")).unwrap();
+        assert_eq!(hunks.len(), 1);
+        repo.unstage_hunk(Path::new("f.txt"), 0).unwrap();
+
+        let staged = repo
+            .index_blob_content(Path::new("f.txt"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(staged, "line1\nline2\nline3\n");
+        // The real working-tree file still has the addition -- only the
+        // index reverted.
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "line1\nline2\nline3\nline4\nline5\n"
+        );
     }
 }

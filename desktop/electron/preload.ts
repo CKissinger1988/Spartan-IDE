@@ -78,6 +78,7 @@ const ALLOWED_METHODS = new Set([
   "git_commit_files",
   "git_commit_diff",
   "git_blame",
+  "github_list_pull_requests",
   "git_remotes",
   "git_fetch",
   "git_push",
@@ -132,7 +133,19 @@ contextBridge.exposeInMainWorld("spartan", {
   // notifications, relayed by `main.ts`) -- returns a real unsubscribe
   // function, the same convention `BackendClient.onEvent` itself uses.
   onEvent: (listener: (event: string, data: unknown) => void): (() => void) => {
-    const handler = (_e: unknown, eventName: string, data: unknown) => listener(eventName, data);
+    // Real, deliberate isolation: Electron's own IPC emitter (like Node's
+    // plain EventEmitter) doesn't catch per-listener exceptions, so one
+    // registered listener throwing on a malformed/unexpected payload could
+    // otherwise stop delivery to every other real listener for this same
+    // event -- the same class of risk `BackendClient`'s own dispatch loop
+    // guards against in `web/`.
+    const handler = (_e: unknown, eventName: string, data: unknown) => {
+      try {
+        listener(eventName, data);
+      } catch (err) {
+        console.error("spartan.onEvent listener threw:", err);
+      }
+    };
     ipcRenderer.on("spartan:event", handler);
     return () => ipcRenderer.removeListener("spartan:event", handler);
   },
@@ -143,6 +156,8 @@ contextBridge.exposeInMainWorld("spartan", {
   openCrashReportsFolder: (): Promise<unknown> =>
     ipcRenderer.invoke("spartan:open_crash_reports_folder"),
   openRepositoryPage: (): Promise<unknown> => ipcRenderer.invoke("spartan:open_repository_page"),
+  openPullRequestUrl: (url: string): Promise<unknown> =>
+    ipcRenderer.invoke("spartan:open_pull_request_url", { url }),
   openProject: (root: string): Promise<unknown> =>
     ipcRenderer.invoke("spartan:open_project", { root }),
   pickFolder: (): Promise<unknown> => ipcRenderer.invoke("spartan:pick_folder"),

@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { highlightSource, languageForPath } from "../syntax";
+import { ensureGrammar, grammarReady } from "../treeSitter";
 import {
   adjustSnippetStops,
   expandSnippet,
   findSnippet,
   type SnippetSession,
 } from "../snippets";
+import { computeBracketPairMarks } from "../bracketPairs";
+import { shiftBreakpointsForEdit } from "../breakpointShift";
 import type { BackendClient } from "../backendClient";
 
 export interface BackendOpenFile {
@@ -1003,6 +1006,11 @@ interface BackendEditorProps {
   /** Real edit of a breakpoint's condition/log message (right-click a
    * gutter line). Empty strings for both clears them back to plain. */
   onEditBreakpoint?: (line: number, condition: string, logMessage: string) => void;
+  /** Real rope-anchored breakpoint shifting, ported verbatim from
+   * `desktop/src/components/Editor.tsx`'s own identical prop -- see
+   * that file's own doc comment and `breakpointShift.ts` for the full
+   * real reasoning. */
+  onBreakpointsShift?: (next: BreakpointSpec[]) => void;
   /** Real, 1-indexed line the active DAP session is currently stopped
    * at for this file, or `null`/`undefined` when nothing is stopped. */
   stoppedLine?: number | null;
@@ -1075,6 +1083,7 @@ export default function BackendEditor({
   breakpoints = [],
   onToggleBreakpoint,
   onEditBreakpoint,
+  onBreakpointsShift,
   stoppedLine = null,
   onJumpToDefinition,
   pendingJump = null,
@@ -1088,6 +1097,25 @@ export default function BackendEditor({
   const symbolHighlightRef = useRef<HTMLDivElement>(null);
   const [lineCount, setLineCount] = useState(1);
   const prevContentRef = useRef(file.content);
+
+  /** Shared choke point for the rope-anchored-breakpoint shift (P1 backlog,
+   * §75.8-named gap). Every real content mutation -- typed and programmatic
+   * alike -- must call this with the pre-edit and post-edit content before
+   * `prevContentRef.current` is overwritten, so a breakpoint's line number
+   * survives an edit above/below it rather than silently pointing at the
+   * wrong line. Mirrors `desktop/src/components/Editor.tsx`'s own identical
+   * helper. */
+  const shiftBreakpointsBeforeReplace = useCallback(
+    (oldContent: string, newContent: string) => {
+      if (breakpoints.length > 0 && onBreakpointsShift) {
+        const shifted = shiftBreakpointsForEdit(breakpoints, oldContent, newContent);
+        if (shifted !== breakpoints) {
+          onBreakpointsShift(shifted);
+        }
+      }
+    },
+    [breakpoints, onBreakpointsShift]
+  );
 
   /** Real inline git blame (P1 backlog) -- per-line commit attribution
    * from the real backend `git_blame` (spartan-git), reached over
@@ -1137,10 +1165,39 @@ export default function BackendEditor({
     setLineCount(file.content.split("\n").length);
   }, [file.content]);
 
+  // Real tree-sitter grammars load asynchronously (a real WASM fetch), so
+  // the first paint of a file uses `highlight.js` and this counter forces
+  // exactly one re-highlight once the grammar is genuinely ready. Bumping a
+  // counter rather than storing the grammar keeps `highlightSource`
+  // synchronous -- the render path is unchanged.
+  const [grammarGeneration, setGrammarGeneration] = useState(0);
+  useEffect(() => {
+    const language = languageForPath(file.path);
+    if (!language || grammarReady(language)) return;
+    let cancelled = false;
+    void ensureGrammar(language).then((entry) => {
+      if (!cancelled && entry) setGrammarGeneration((n) => n + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [file.path]);
+
   const highlightedHtml = useMemo(
     () => highlightSource(file.content, file.path),
-    [file.content, file.path]
+    // `grammarGeneration` is deliberately a dependency with no direct use in
+    // the body: it is the signal that a real grammar just became available,
+    // so the memo must recompute even though content/path are unchanged.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [file.content, file.path, grammarGeneration]
   );
+
+  /** Real bracket-pair colorization marks, recomputed whenever the real
+   * document content changes -- a plain, pure `useMemo` over `file.content`
+   * (not `prevContentRef`), matching `highlightedHtml`'s own dependency
+   * exactly, since this is equally a pure function of the current content
+   * with no cursor/selection state involved. */
+  const bracketPairMarks = useMemo(() => computeBracketPairMarks(file.content), [file.content]);
 
   const diagnosticsByLine = useMemo(() => {
     const map = new Map<number, LspDiagnostic[]>();
@@ -1347,6 +1404,7 @@ export default function BackendEditor({
         prevContentRef.current.slice(0, insertAt) +
         item.insertText +
         prevContentRef.current.slice(replaceEnd);
+      shiftBreakpointsBeforeReplace(prevContentRef.current, newContent);
       prevContentRef.current = newContent;
       setLineCount(newContent.split("\n").length);
       onContentChange(file.path, newContent);
@@ -1365,7 +1423,7 @@ export default function BackendEditor({
         requestAnimationFrame(() => el.setSelectionRange(newPos, newPos));
       }
     },
-    [client, completionState, file.docId, file.path, onContentChange]
+    [client, completionState, file.docId, file.path, onContentChange, shiftBreakpointsBeforeReplace]
   );
 
   /** Real jump-landing logic, ported verbatim from `desktop/`'s own
@@ -1759,6 +1817,7 @@ export default function BackendEditor({
         } else {
           const oldLength = [...prevContentRef.current].length;
           const caret = textareaRef.current?.selectionStart ?? 0;
+          shiftBreakpointsBeforeReplace(prevContentRef.current, d.formatted);
           prevContentRef.current = d.formatted;
           setLineCount(d.formatted.split("\n").length);
           onContentChange(file.path, d.formatted);
@@ -1792,7 +1851,7 @@ export default function BackendEditor({
       }
     });
     return unsubscribe;
-  }, [client, file.docId, file.path, onContentChange]);
+  }, [client, file.docId, file.path, onContentChange, shiftBreakpointsBeforeReplace]);
 
   const triggerFormatDocument = useCallback((): Promise<void> => {
     return new Promise((resolve) => {
@@ -1816,6 +1875,7 @@ export default function BackendEditor({
           if (trimmed !== prevContentRef.current) {
             const oldLength = [...prevContentRef.current].length;
             const caret = el.selectionStart;
+            shiftBreakpointsBeforeReplace(prevContentRef.current, trimmed);
             prevContentRef.current = trimmed;
             setLineCount(trimmed.split("\n").length);
             onContentChange(file.path, trimmed);
@@ -1849,7 +1909,7 @@ export default function BackendEditor({
         }
       }, 10000);
     });
-  }, [client, file.docId, file.path, onContentChange]);
+  }, [client, file.docId, file.path, onContentChange, shiftBreakpointsBeforeReplace]);
 
   /** Real "Find & Replace" (Ctrl+F / Ctrl+H), ported verbatim from
    * `desktop/`'s own identical wiring -- see that file's own doc comment
@@ -2059,6 +2119,9 @@ export default function BackendEditor({
       if (snippetSessionRef.current) {
         adjustSnippetStops(snippetSessionRef.current, prevContentRef.current, newContent);
       }
+      // Real rope-anchored breakpoint shifting -- must run before
+      // `prevContentRef.current` is overwritten below.
+      shiftBreakpointsBeforeReplace(prevContentRef.current, newContent);
       prevContentRef.current = newContent;
       setLineCount(newContent.split("\n").length);
       onContentChange(file.path, newContent);
@@ -2086,7 +2149,7 @@ export default function BackendEditor({
         setSignatureHelpState(null);
       }
     },
-    [client, charWidth, lineHeightPx, file.docId, file.path, onContentChange]
+    [client, charWidth, lineHeightPx, file.docId, file.path, onContentChange, shiftBreakpointsBeforeReplace]
   );
 
   const handleChange = useCallback(
@@ -2493,6 +2556,7 @@ export default function BackendEditor({
           .then((result) => {
             const r = result as { changed: boolean; content: string };
             if (r.changed) {
+              shiftBreakpointsBeforeReplace(prevContentRef.current, r.content);
               prevContentRef.current = r.content;
               onContentChange(file.path, r.content);
             }
@@ -2522,6 +2586,7 @@ export default function BackendEditor({
       file.docId,
       file.path,
       onContentChange,
+      shiftBreakpointsBeforeReplace,
     ]
   );
 
@@ -2628,6 +2693,18 @@ export default function BackendEditor({
           aria-hidden="true"
           style={textStyle}
         >
+          {bracketPairMarks.map((m, i) => (
+            <div
+              key={`bp:${m.line}:${m.character}:${i}`}
+              className={`editor-bracket-pair-mark${m.colorIndex === -1 ? " editor-bracket-pair-mark-unmatched" : ` editor-bracket-pair-mark-${m.colorIndex}`}`}
+              style={{
+                top: m.line * lineHeightPx,
+                left: m.character * charWidth,
+                width: charWidth,
+                height: lineHeightPx,
+              }}
+            />
+          ))}
           {documentHighlights.map((h, i) => (
             <div
               key={`${h.startLine}:${h.startCharacter}:${h.endCharacter}:${i}`}

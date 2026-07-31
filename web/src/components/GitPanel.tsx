@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { BackendClient } from "../backendClient";
 
 interface StatusEntry {
@@ -50,6 +50,28 @@ interface CommitInfo {
 interface ChangedFile {
   path: string;
   status: string;
+}
+
+/** Real GitHub layer, first increment (task #284). Matches
+ * `spartan_backend::github::PullRequestSummary` exactly. */
+interface PullRequestSummary {
+  number: number;
+  title: string;
+  author: string;
+  html_url: string;
+  state: string;
+  draft: boolean;
+}
+
+/** Matches `desktop/electron/main.ts`'s own `openPullRequestUrl` origin
+ * guard -- `pr.html_url` is renderer-visible data sourced from a live
+ * GitHub API response, not something the user typed, so it gets the same
+ * real check both shells already apply before treating a PR link as safe
+ * to open, rather than trusting it implicitly here just because this
+ * shell renders it as a plain anchor instead of going through an IPC
+ * call. */
+function isGithubUrl(url: string): boolean {
+  return url.startsWith("https://github.com/");
 }
 
 interface ConflictEntry {
@@ -335,16 +357,18 @@ function DiffView({ diff }: { diff: string }): React.ReactElement {
  * "Take theirs" one-click resolution plus a manual-edit textarea, and
  * "Complete Merge"/"Abort" finish or discard the merge.
  *
- * Real per-hunk staging (task #271), ported verbatim from `desktop/`'s own
- * copy: expanding an unstaged row's diff also fetches its real hunk list
- * (`spartan_git::diff_hunks`, built on `git2::Patch::from_blob_and_buffer`)
- * and renders a "Stage this hunk" button per hunk; staging recomputes the
- * real diff fresh every call, so hunks always target the real current
- * index.
+ * Real per-hunk staging AND unstaging (task #271), ported verbatim from
+ * `desktop/`'s own copy: expanding an unstaged row's diff also fetches its
+ * real hunk list (`spartan_git::diff_hunks`, built on
+ * `git2::Patch::from_blob_and_buffer`) and renders a "Stage this hunk"
+ * button per hunk; expanding a staged row's diff fetches the mirror hunk
+ * list (`spartan_git::diff_hunks_staged`, HEAD-vs-index) and renders an
+ * "Unstage this hunk" button per hunk. Both recompute the real diff fresh
+ * every call, so hunks always target the real current index.
  *
  * Same real, named v1 scope cut as the ported original: no per-line
- * (sub-hunk) selection, no unstage-a-hunk, no stash-during-merge
- * interplay, no branch delete/rename.
+ * (sub-hunk) selection, no stash-during-merge interplay, no branch
+ * delete/rename.
  */
 export default function GitPanel({ client, root }: GitPanelProps): React.ReactElement {
   const [status, setStatus] = useState<GitStatus | null>(null);
@@ -398,6 +422,14 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
   const [stashMessage, setStashMessage] = useState("");
   // Real git tags.
   const [tags, setTags] = useState<{ name: string; target: string; annotated: boolean }[]>([]);
+  // Real GitHub layer, first increment (task #284): lists a repo's real,
+  // live open pull requests via `spartan_git::GitRepo::detect_github_remote`
+  // + a real `ureq` GET against `api.github.com`. Fetched fresh on every
+  // open, never cached, matching this panel's own established "state can
+  // change between opens" convention for branches/tags/history.
+  const [showGithub, setShowGithub] = useState(false);
+  const [pullRequests, setPullRequests] = useState<PullRequestSummary[] | null>(null);
+  const [githubError, setGithubError] = useState<string | null>(null);
   // Real merge-conflict resolution (task #270), mirroring desktop/'s own.
   const [mergeStatus, setMergeStatus] = useState<{
     inProgress: boolean;
@@ -728,14 +760,34 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
   );
 
   // Real per-hunk fetch (task #271), mirroring desktop/'s own -- reused
-  // both when opening an unstaged row's expansion and after a hunk is
-  // staged, always refetched fresh, never patched client-side.
+  // when opening either a staged or unstaged row's expansion, and after a
+  // hunk is staged/unstaged, always refetched fresh, never patched
+  // client-side. `staged` selects the real mirror-image diff direction
+  // (index-vs-workdir for unstaged, HEAD-vs-index for staged).
+  // Real, deliberate stale-response guard: two overlapping `git_diff_hunks`
+  // fetches (rapidly switching which row is expanded, or `stageHunk`/
+  // `unstageHunk` re-triggering this same fetch while a slower earlier
+  // one is still in flight) can resolve out of order. Without tracking
+  // which expansion is actually current, a slow response for a *previous*
+  // file could land after a newer one and silently overwrite `hunks` with
+  // the wrong file's data -- which `stageHunk`/`unstageHunk` would then
+  // mis-target against `entry.path`, writing to the wrong index entry.
+  const expandedDiffKeyRef = useRef<string | null>(null);
+
   const refreshHunks = useCallback(
-    (path: string) => {
+    (path: string, staged: boolean) => {
+      const key = `${path} ${staged}`;
+      expandedDiffKeyRef.current = key;
       client
-        .call("git_diff_hunks", { project_root: root, path })
-        .then((result) => setHunks((result as { hunks: HunkInfo[] }).hunks))
-        .catch((err: Error) => setHunksError(err.message));
+        .call("git_diff_hunks", { project_root: root, path, staged })
+        .then((result) => {
+          if (expandedDiffKeyRef.current !== key) return;
+          setHunks((result as { hunks: HunkInfo[] }).hunks);
+        })
+        .catch((err: Error) => {
+          if (expandedDiffKeyRef.current !== key) return;
+          setHunksError(err.message);
+        });
     },
     [client, root]
   );
@@ -744,6 +796,7 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
     (path: string, staged: boolean, e: React.MouseEvent) => {
       e.stopPropagation();
       if (expandedDiff && expandedDiff.path === path && expandedDiff.staged === staged) {
+        expandedDiffKeyRef.current = null;
         setExpandedDiff(null);
         setDiffContent(null);
         setDiffError(null);
@@ -762,7 +815,7 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
         .then((result) => setDiffContent((result as { diff: string }).diff))
         .catch((err: Error) => setDiffError(err.message))
         .finally(() => setDiffLoading(false));
-      if (!staged) refreshHunks(path);
+      refreshHunks(path, staged);
     },
     [client, root, expandedDiff, refreshHunks]
   );
@@ -776,7 +829,26 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
         .call("git_stage_hunk", { project_root: root, path, hunk_index: hunkIndex })
         .then(() => {
           refresh();
-          refreshHunks(path);
+          refreshHunks(path, false);
+        })
+        .catch((err: Error) => setHunksError(err.message))
+        .finally(() => setHunkBusy(false));
+    },
+    [client, root, refresh, refreshHunks]
+  );
+
+  // Real "unstage this one hunk" -- the direct mirror of `stageHunk`,
+  // refreshing the real *staged* hunk list afterward (the one it just
+  // came from), not the unstaged one.
+  const unstageHunk = useCallback(
+    (path: string, hunkIndex: number) => {
+      setHunkBusy(true);
+      setHunksError(null);
+      client
+        .call("git_unstage_hunk", { project_root: root, path, hunk_index: hunkIndex })
+        .then(() => {
+          refresh();
+          refreshHunks(path, true);
         })
         .catch((err: Error) => setHunksError(err.message))
         .finally(() => setHunkBusy(false));
@@ -928,6 +1000,40 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
       .then((result) => setCommits((result as { commits: CommitInfo[] }).commits))
       .catch((e: Error) => setHistoryError(e.message));
   }, [client, root, showHistory]);
+
+  // `github_list_pull_requests` answers asynchronously (a real, live GitHub
+  // API call, bounded but still potentially several seconds) -- the resolved
+  // promise below is only ever the real `{"status": "checking"}` ack; the
+  // actual PR list (or a real, honest network failure) arrives as a
+  // separate `github_pull_requests_result`/`github_pull_requests_failed`
+  // event, the same "ack now, event later" shape this whole app's own
+  // `LeoChatPanel.tsx`/DAP event handling already established.
+  useEffect(() => {
+    const unsubscribe = client.onEvent(({ event, data }) => {
+      if (event === "github_pull_requests_result") {
+        setPullRequests((data as { pull_requests: PullRequestSummary[] }).pull_requests);
+      } else if (event === "github_pull_requests_failed") {
+        setGithubError((data as { error: string }).error);
+      }
+    });
+    return unsubscribe;
+  }, [client]);
+
+  const toggleGithub = useCallback(() => {
+    if (showGithub) {
+      setShowGithub(false);
+      setGithubError(null);
+      return;
+    }
+    // Fetched fresh on every open -- a PR can open/close/merge between
+    // opens, matching every other section's own no-caching convention.
+    setShowGithub(true);
+    setGithubError(null);
+    setPullRequests(null);
+    client
+      .call("github_list_pull_requests", { project_root: root })
+      .catch((e: Error) => setGithubError(e.message));
+  }, [client, root, showGithub]);
 
   const toggleCommit = useCallback(
     (oid: string) => {
@@ -1404,6 +1510,24 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
                 {diffLoading && <div className="git-panel-empty mono">Loading diff…</div>}
                 {diffError && <div className="git-panel-empty mono">{diffError}</div>}
                 {diffContent !== null && <DiffView diff={diffContent} />}
+                {hunksError && <div className="git-panel-empty mono">{hunksError}</div>}
+                {hunks?.map((h) => (
+                  <div key={h.index} className="git-hunk-block">
+                    <div className="git-hunk-header mono">
+                      <span>{h.header}</span>
+                      <button
+                        type="button"
+                        className="editor-find-btn"
+                        disabled={hunkBusy}
+                        onClick={() => unstageHunk(entry.path, h.index)}
+                        title="Unstage only this hunk"
+                      >
+                        Unstage this hunk
+                      </button>
+                    </div>
+                    <DiffView diff={h.body} />
+                  </div>
+                ))}
               </div>
             )}
           </React.Fragment>
@@ -1563,6 +1687,84 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
               )}
             </React.Fragment>
           ))}
+        </div>
+      )}
+
+      <div
+        className="git-section-label mono"
+        onClick={toggleGithub}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggleGithub();
+          }
+        }}
+        style={{ cursor: "pointer" }}
+        title="Real, live open pull requests on this repository's GitHub remote"
+        aria-expanded={showGithub}
+      >
+        GitHub {showGithub ? "▾" : "▸"}
+      </div>
+      {showGithub && (
+        <div className="git-section">
+          {githubError && <div className="git-panel-empty mono">{githubError}</div>}
+          {pullRequests === null && !githubError && (
+            <div className="git-panel-empty mono">Loading pull requests…</div>
+          )}
+          {pullRequests?.length === 0 && (
+            <div className="git-panel-empty mono">No open pull requests.</div>
+          )}
+          {pullRequests?.map((pr) => {
+            const rowChildren = (
+              <>
+                <span
+                  className="mono"
+                  style={{ color: "var(--accent)", fontSize: 11, flexShrink: 0 }}
+                >
+                  #{pr.number}
+                </span>
+                <span className="mono git-row-path">
+                  {pr.draft ? "[draft] " : ""}
+                  {pr.title}
+                </span>
+                <span
+                  className="mono"
+                  style={{ opacity: 0.6, whiteSpace: "nowrap", fontSize: 11 }}
+                >
+                  {pr.author}
+                </span>
+              </>
+            );
+            // Matches desktop/'s own origin guard in main.ts (the real,
+            // renderer-supplied `html_url` comes from a live GitHub API
+            // response, not the user directly, so both shells need the
+            // same real check before ever treating it as a safe link) --
+            // a PR whose URL somehow doesn't start with the expected real
+            // origin renders as a plain, unclickable row instead.
+            return isGithubUrl(pr.html_url) ? (
+              <a
+                key={pr.number}
+                className="git-row"
+                href={pr.html_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`${pr.state}${pr.draft ? " (draft)" : ""} — opened by ${pr.author}`}
+                style={{ textDecoration: "none", color: "inherit" }}
+              >
+                {rowChildren}
+              </a>
+            ) : (
+              <div
+                key={pr.number}
+                className="git-row"
+                title={`${pr.state}${pr.draft ? " (draft)" : ""} — opened by ${pr.author} (unrecognized URL, not opened)`}
+              >
+                {rowChildren}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

@@ -17,6 +17,7 @@ import DebugPanel, {
   type WatchEntry,
 } from "./components/DebugPanel";
 import LogcatPanel from "./components/LogcatPanel";
+import LeoChatPanel from "./components/LeoChatPanel";
 import { ensureBufferWasmInit, Document as WasmDocument } from "./buffer";
 import { isFileSystemAccessSupported, pickProjectDirectory, readFileText } from "./fsAccess";
 import { applyTheme, THEME_LABELS, type ThemeName } from "./applyTheme";
@@ -668,6 +669,18 @@ export default function App(): React.ReactElement {
     [activeBackendDocId]
   );
 
+  // Real rope-anchored breakpoint shifting, ported verbatim from
+  // `desktop/`'s own identical wiring -- see `breakpointShift.ts` for
+  // the full real reasoning.
+  const handleBreakpointsShift = useCallback(
+    (next: BreakpointSpec[]) => {
+      if (activeBackendDocId === null) return;
+      const docId = activeBackendDocId;
+      setBreakpointsByDoc((prev) => ({ ...prev, [docId]: next }));
+    },
+    [activeBackendDocId]
+  );
+
   // Real launch (task #133) -- always starts a fresh session for the
   // active file's own current breakpoint set, matching `desktop/`'s own
   // F5-style "a finished session is treated as gone" convention.
@@ -977,7 +990,7 @@ export default function App(): React.ReactElement {
         </button>
         <span className="toolbar-note">
           {backendReady
-            ? "Connected to a local devserver -- git and backend-mode editing (with live LSP diagnostics and DAP debugging) are live, no Leo yet"
+            ? "Connected to a local devserver -- git, Leo, and backend-mode editing (with live LSP diagnostics and DAP debugging) are all live"
             : "Client-side only in this increment -- no LSP/DAP/Leo/git yet, see README.md"}
         </span>
         <select
@@ -1148,6 +1161,7 @@ export default function App(): React.ReactElement {
                 breakpoints={breakpointsByDoc[activeContent.file.docId] ?? []}
                 onToggleBreakpoint={toggleBreakpoint}
                 onEditBreakpoint={editBreakpoint}
+                onBreakpointsShift={handleBreakpointsShift}
                 stoppedLine={
                   dapSessionByDoc[activeContent.file.docId]?.status === "stopped"
                     ? (dapSessionByDoc[activeContent.file.docId]?.stopped?.frame?.line ?? null)
@@ -1170,6 +1184,7 @@ export default function App(): React.ReactElement {
             )}
           </div>
         </div>
+        {backendReady && backendClient && <LeoChatPanel client={backendClient} />}
       </div>
       <div className="status-bar mono">
         {activeContent ? (

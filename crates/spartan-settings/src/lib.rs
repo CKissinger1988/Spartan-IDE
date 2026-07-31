@@ -316,6 +316,14 @@ pub struct Settings {
     /// than silently passing. `#[serde(default)]` on the container already
     /// covers a real pre-existing settings file that predates this field.
     pub leo_verify_command: Option<String>,
+    /// Real GitHub personal access token (task #284's first increment of
+    /// §56.3-56.4's own already-named "GitHub layer" gap) -- optional:
+    /// `None` still lets `spartan-backend`'s GitHub calls run
+    /// unauthenticated (fine for a real public repo's PR listing, just at
+    /// GitHub's lower unauthenticated rate limit), `Some(token)` sends it
+    /// as a real `Authorization` header. Never logged or echoed back in
+    /// any error message this crate produces.
+    pub github_token: Option<String>,
 }
 
 /// `~/.spartan/settings.json` (`$HOME`, falling back to `$USERPROFILE` for
@@ -354,7 +362,18 @@ fn save_to(path: &Path, settings: &Settings) -> std::io::Result<()> {
     }
     let json = serde_json::to_string_pretty(settings)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(path, json)
+    std::fs::write(path, json)?;
+    // Real secret at rest since `github_token` was added: the process
+    // umask alone isn't a reliable guarantee (a real, common `0022` umask
+    // still leaves this file world-readable), so this file is explicitly
+    // locked to owner-only on Unix, matching `spartan-backend::main.rs`'s
+    // own identical `ws-token` precedent.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -443,10 +462,43 @@ mod tests {
             },
             onboarding_completed: true,
             leo_verify_command: Some("cargo test".to_string()),
+            github_token: Some("ghp_realroundtriptesttoken".to_string()),
         };
         save_to(&path, &settings).unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded, settings);
+    }
+
+    #[test]
+    fn default_github_token_is_none_so_unauthenticated_github_calls_stay_the_default() {
+        // A real, deliberate default, matching `leo_verify_command`'s own
+        // precedent: an unconfigured token must never turn an existing
+        // unauthenticated GitHub call into a surprise error -- it just
+        // means spartan-backend's GitHub calls run at GitHub's lower
+        // unauthenticated rate limit, exactly like before this field
+        // existed.
+        assert_eq!(Settings::default().github_token, None);
+    }
+
+    #[test]
+    fn a_real_pre_existing_file_missing_github_token_falls_back_to_none() {
+        // Same real schema-evolution check `leo_verify_command`'s own
+        // sibling test already established: a settings file written
+        // before this field existed must still parse, with the new field
+        // defaulting to None rather than the whole file failing to load.
+        let path = temp_path("old-format-no-github-token");
+        std::fs::write(
+            &path,
+            r#"{
+                "gpu_offload": { "enabled": true, "layers": null },
+                "leo_provider": { "kind": "Ollama", "model": "llama3.1:8b" },
+                "onboarding_completed": true
+            }"#,
+        )
+        .unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded.github_token, None);
+        assert!(loaded.onboarding_completed);
     }
 
     #[test]
