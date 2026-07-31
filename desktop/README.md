@@ -27,11 +27,15 @@ deleted).
   Monaco/CodeMirror -- text-editing surface; see `Editor.tsx`'s own doc
   comment for exactly what "custom" means here) make up the real Editor
   screen. `WorkflowsScreen.tsx` is a real, working node-graph canvas built
-  on `@xyflow/react` (MIT). `Placeholder.tsx` + `nav.ts`'s `SCREEN_NOTES`
-  give every other real nav item (Console, Sessions, Review, Analytics,
-  Usage, Agents, Skills, Commands, Hooks, MCP, Routing, Models, Plugins,
-  Marketplace, Settings) an honest, specific "what exists elsewhere in
-  this project and what's missing here" message instead of fake content.
+  on `@xyflow/react` (MIT); `ConsoleScreen.tsx`, `SessionsScreen.tsx`,
+  `SettingsScreen.tsx`, `DevContainersScreen.tsx`, and `ModelsScreen.tsx`
+  are five more real, dedicated screens (`App.tsx` routes each `screen`
+  value to its own component, not through `Placeholder`). `Placeholder.tsx`
+  + `nav.ts`'s `SCREEN_NOTES` cover only what's genuinely still a
+  placeholder (Review, Analytics, Usage, Agents, Skills, Commands, Hooks,
+  MCP, Routing, Plugins, Marketplace), each with an honest, specific "what
+  exists elsewhere in this project and what's missing here" message
+  instead of fake content.
   `LeoChatPanel.tsx` is a real, persistent, always-visible chat panel
   (fixed sibling of `.main-column`, not a nav screen) wired to Leo's real
   `plan`/`approve`/`reject` loop -- see §75.61.
@@ -101,11 +105,12 @@ over a genuine WebSocket connection to the real backend, standing in
 only for Electron's own `contextBridge` preload hop, never for any
 actual application logic or IPC data — since the real Electron binary
 itself remains unlaunchable in every session so far, see "A real,
-environment-specific gap" below). Every value on screen — file tree
-entries, diffs, commit history, syntax highlighting — is a real response
-from the real backend, not fixture/mock data. All seven screens below
-are the actual, real React components — nothing here is a static
-mockup.
+environment-specific gap" below). Every value on screen sourced from the
+backend — file tree entries, diffs, commit history — is a real response,
+not fixture/mock data; syntax highlighting itself is computed client-side
+in the renderer (real tree-sitter WASM, `src/treeSitter.ts`) from that
+same real file content. All six screens below are the actual, real React
+components — nothing here is a static mockup.
 
 | | |
 |---|---|

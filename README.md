@@ -44,8 +44,10 @@ standing, reported-not-routed-around network policy block — see `desktop/READM
 own "environment-specific gap" section); the shim only stands in for Electron's
 `contextBridge` preload hop, every IPC call and response is real. The web shots run
 directly against `web/`'s own genuine `BackendClient.connect()` — no shim needed at
-all — in the backend-connected mode added since the GUI Builder removal (real
-tree-sitter syntax highlighting, Git panel, Leo chat panel, LSP diagnostics).
+all — in the backend-connected mode added since the GUI Builder removal, which also
+gave `web/` real tree-sitter syntax highlighting, a Git panel, a Leo chat panel, and
+LSP diagnostics (see `web/README.md`'s own screenshot captions for exactly what each
+of the four captures below shows).
 
 | | |
 |---|---|

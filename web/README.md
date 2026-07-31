@@ -100,7 +100,7 @@ forked/vendored either) — see the root `CLAUDE.md`.
   instead, it passed cleanly. Documented here so a future session doesn't
   re-discover the same thing from scratch.
 
-## What's not built yet (named honestly, not silently missing)
+## Feature history, and what's not built yet (named honestly, not silently missing)
 
 - **Git, LSP (diagnostics/hover/completion/rename/references/call
   hierarchy), DAP, Android tooling, and Leo's own chat panel are all real
