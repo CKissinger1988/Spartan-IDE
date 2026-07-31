@@ -27,11 +27,15 @@ deleted).
   Monaco/CodeMirror -- text-editing surface; see `Editor.tsx`'s own doc
   comment for exactly what "custom" means here) make up the real Editor
   screen. `WorkflowsScreen.tsx` is a real, working node-graph canvas built
-  on `@xyflow/react` (MIT). `Placeholder.tsx` + `nav.ts`'s `SCREEN_NOTES`
-  give every other real nav item (Console, Sessions, Review, Analytics,
-  Usage, Agents, Skills, Commands, Hooks, MCP, Routing, Models, Plugins,
-  Marketplace, Settings) an honest, specific "what exists elsewhere in
-  this project and what's missing here" message instead of fake content.
+  on `@xyflow/react` (MIT); `ConsoleScreen.tsx`, `SessionsScreen.tsx`,
+  `SettingsScreen.tsx`, `DevContainersScreen.tsx`, and `ModelsScreen.tsx`
+  are five more real, dedicated screens (`App.tsx` routes each `screen`
+  value to its own component, not through `Placeholder`). `Placeholder.tsx`
+  + `nav.ts`'s `SCREEN_NOTES` cover only what's genuinely still a
+  placeholder (Review, Analytics, Usage, Agents, Skills, Commands, Hooks,
+  MCP, Routing, Plugins, Marketplace), each with an honest, specific "what
+  exists elsewhere in this project and what's missing here" message
+  instead of fake content.
   `LeoChatPanel.tsx` is a real, persistent, always-visible chat panel
   (fixed sibling of `.main-column`, not a nav screen) wired to Leo's real
   `plan`/`approve`/`reject` loop -- see §75.61.
@@ -45,15 +49,29 @@ deleted).
 
 A real audit (§75.62) originally found several real, working wgpu-shell
 features not yet ported here. Since closed: syntax highlighting (§75.63,
-via `highlight.js` client-side rather than tree-sitter -- see
-`src/syntax.ts`'s own doc comment for the named fidelity tradeoff), a real
-terminal (Console) and multi-CLI Sessions (§75.64, streaming PTY output
-over Leo's own async `Event` mechanism), and a real Git panel + Settings
-screen (§75.65). **Still real, open gaps**: LSP and DAP (this shell has
-no language-server or debugger wiring at all -- `spartan-editor-core`
-remains the only place either is real), and the unsaved-changes
-confirmation modal on close/switch (closing a dirty tab here currently
-discards changes silently). Each screen without real content still has a
+originally via `highlight.js`, since replaced by a real three-tier chain
+-- in-process tree-sitter (`web-tree-sitter`) for languages with a bundled
+grammar, `highlight.js` while a grammar loads or for languages with none,
+plain text as the final fallback -- see `src/syntax.ts`/`src/treeSitter.ts`),
+a real terminal (Console) and multi-CLI Sessions (§75.64, streaming PTY
+output over Leo's own async `Event` mechanism), and a real Git panel +
+Settings screen (§75.65). **LSP and DAP are both real and wired here too**
+(`crates/spartan-lsp`/`crates/spartan-dap`, real second promotions of the
+wgpu shell's own `lsp.rs`/`dap.rs` for a background-thread IPC consumer):
+diagnostics, hover, completion, go-to-definition/type-definition, signature
+help, find-references, rename, document symbols/highlights, call hierarchy
+on the LSP side; breakpoints (plain and conditional/logpoint), step/
+continue, watch expressions, set-variable, and real captured stdout/
+stderr/logpoint output on the DAP side -- this section used to say neither
+existed at all in this shell, which is no longer true and hasn't been for
+a long time. **Still real, open gaps**: the unsaved-changes confirmation
+modal on close/switch (closing a dirty tab here currently discards
+changes silently), and code actions/workspace-symbol search/semantic
+tokens/inlay hints (investigated and found genuinely unverifiable in this
+project's own sandboxed dev environment -- `pyright-langserver`, the only
+real LSP server installed here, declares or exercises none of them
+usefully -- so none were built rather than shipped unverified; see
+`docs/FUTURE_FEATURES.md`). Each screen without real content still has a
 specific, honest note in `nav.ts`'s `SCREEN_NOTES` rather than a generic
 "coming soon."
 
@@ -78,24 +96,32 @@ an actual successful model response.
 
 ## Screenshots
 
-Real, unedited Playwright + Chromium captures against a real Vite dev
-server, using this project's own established "mocked `window.spartan`"
-verification technique (the renderer's real, unmodified code driven against
-a real in-browser stand-in for the `contextBridge` IPC surface, since the
-real Electron binary itself remains unlaunchable in every session so far —
-see "A real, environment-specific gap" below). All seven screens below are
-the actual, real React components — nothing here is a static mockup.
+Real, unedited Playwright + Chromium captures of the actual compiled
+production build (`npm run build`), served statically by a real
+`spartan-devserver` process against a real git project fixture — using
+this project's own established real-WebSocket-shim verification
+technique (a thin `window.spartan` that forwards every `call`/`onEvent`
+over a genuine WebSocket connection to the real backend, standing in
+only for Electron's own `contextBridge` preload hop, never for any
+actual application logic or IPC data — since the real Electron binary
+itself remains unlaunchable in every session so far, see "A real,
+environment-specific gap" below). Every value on screen sourced from the
+backend — file tree entries, diffs, commit history — is a real response,
+not fixture/mock data; syntax highlighting itself is computed client-side
+in the renderer (real tree-sitter WASM, `src/treeSitter.ts`) from that
+same real file content. All six screens below are the actual, real React
+components — nothing here is a static mockup.
 
 | | |
 |---|---|
 | ![Editor main screen](../docs/screenshots/desktop/01-editor-main-screen.png) | ![Git panel](../docs/screenshots/desktop/02-git-panel.png) |
-| Editor screen: 3-tier nav, file tree, tabs, syntax highlighting, status bar, Leo panel | Source Control panel: real staged/unstaged split, commit box |
+| Editor screen: 3-tier nav, file tree, tabs, real tree-sitter syntax highlighting + bracket-pair colors, status bar, Leo panel | Source Control panel: real staged/unstaged split, commit history, stash |
 | ![Settings screen](../docs/screenshots/desktop/03-settings-screen.png) | ![Workflows screen](../docs/screenshots/desktop/04-workflows-screen.png) |
 | Settings: editor, appearance, GPU offload, Leo approval mode & provider | Workflows: a real `@xyflow/react` node graph (Claude/Codex/Gemini) |
 | ![Dev Containers screen](../docs/screenshots/desktop/06-devcontainers-screen.png) | |
 | Dev Containers: a real detected `devcontainer.json` config, ready to start | |
 | ![Editor with Leo panel](../docs/screenshots/desktop/07-editor-with-leo-panel.png) | |
-| Leo's persistent chat panel, idle and ready for a task | |
+| Editor with the file tree open and a real task typed into Leo's persistent chat panel | |
 
 ## Build & run
 

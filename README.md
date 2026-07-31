@@ -35,25 +35,31 @@ chrome, backed by the real Rust buffer over IPC, not a vendored component.
 
 ## Screenshots
 
-Real, unedited Playwright + Chromium captures of the actual running React components —
-not mockups. The desktop shots use this project's own established "mocked
-`window.spartan`" verification technique (see `desktop/README.md`), since the real
-Electron binary itself remains unlaunchable in every session so far (a standing,
-reported-not-routed-around network policy block — see `desktop/README.md`'s own
-"environment-specific gap" section). The web shots run against a real `vite dev`
-server with no mocking beyond substituting the native folder-picker dialog, which can't
-be driven headlessly.
+Real, unedited Playwright + Chromium captures of the actual running React components
+against a real running `spartan-backend`/`spartan-devserver` process and a real git
+project fixture — not mockups, not fabricated data. The desktop shots use this
+project's own established real-WebSocket-shim technique (see `desktop/README.md`),
+since the real Electron binary itself remains unlaunchable in every session so far (a
+standing, reported-not-routed-around network policy block — see `desktop/README.md`'s
+own "environment-specific gap" section); the shim only stands in for Electron's
+`contextBridge` preload hop, every IPC call and response is real. The web shots run
+directly against `web/`'s own genuine `BackendClient.connect()` — no shim needed at
+all — in the backend-connected mode added since the GUI Builder removal, which also
+gave `web/` real tree-sitter syntax highlighting, a Git panel, a Leo chat panel, and
+LSP diagnostics (see `web/README.md`'s own screenshot captions for exactly what each
+of the four captures below shows).
 
 | | |
 |---|---|
 | ![Editor screen](docs/screenshots/desktop/01-editor-main-screen.png) | ![Git panel](docs/screenshots/desktop/02-git-panel.png) |
-| Desktop: Editor screen — 3-tier nav, file tree, tabs, real syntax highlighting, Leo panel | Desktop: real Source Control panel |
+| Desktop: Editor screen — 3-tier nav, file tree, tabs, real tree-sitter syntax highlighting + bracket-pair colors, Leo panel | Desktop: real Source Control panel — staged/unstaged split, commit history |
 | ![Web app editor](docs/screenshots/web/03-editor-with-syntax-highlighting.png) | ![Workflows screen](docs/screenshots/desktop/04-workflows-screen.png) |
-| Web: the browser-based editor (`web/`), File System Access API + WASM buffer | Desktop: Workflows — a real `@xyflow/react` multi-CLI node graph |
+| Web: the browser-based editor (`web/`) connected to a local devserver, real syntax highlighting | Desktop: Workflows — a real `@xyflow/react` multi-CLI node graph |
 
-More screens (Settings, Dev Containers, the web app's file tree and
-live-editing states) are in `docs/screenshots/desktop/` and `docs/screenshots/web/`, and
-embedded with full captions in `desktop/README.md` and `web/README.md`.
+More screens (Settings, Dev Containers, editing with Leo panel, the web app's file
+tree and live-editing states) are in `docs/screenshots/desktop/` and
+`docs/screenshots/web/`, and embedded with full captions in `desktop/README.md` and
+`web/README.md`.
 
 ## Beta downloads & live documentation
 
