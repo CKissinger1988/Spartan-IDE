@@ -1693,8 +1693,17 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
       <div
         className="git-section-label mono"
         onClick={toggleGithub}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggleGithub();
+          }
+        }}
         style={{ cursor: "pointer" }}
         title="Real, live open pull requests on this repository's GitHub remote"
+        aria-expanded={showGithub}
       >
         GitHub {showGithub ? "▾" : "▸"}
       </div>

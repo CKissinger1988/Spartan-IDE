@@ -385,7 +385,7 @@ export function highlightWithTreeSitter(
   // emitted HTML in a browser, since the same code path in Node (where
   // nothing had freed the tree) looked perfectly correct.
   let spans: { name: string; start: number; end: number }[];
-  let newTree: Parser.Tree;
+  let newTree: Parser.Tree | undefined;
   try {
     const cached = documentTrees.get(path);
     if (cached && cached.language === language) {
@@ -405,6 +405,13 @@ export function highlightWithTreeSitter(
       // every incremental step would leak the previous tree's WASM memory.
       cached.tree.delete();
     } else {
+      // A real, previously-unfixed leak: a *language mismatch* (the cache
+      // holds a stale tree for a different language than the one now being
+      // highlighted for this same path) took this branch, parsed fresh, and
+      // then had `touch()` overwrite the map entry for `path` below --
+      // dropping the only reference to `cached.tree` without ever calling
+      // `.delete()` on it. Free it explicitly here before it's forgotten.
+      cached?.tree.delete();
       newTree = entry.parser.parse(code);
     }
     spans = entry.query.captures(newTree.rootNode).map((c) => ({
@@ -414,6 +421,13 @@ export function highlightWithTreeSitter(
     }));
     touch(path, { tree: newTree, text: code, language });
   } catch (err) {
+    // A real, previously-unfixed leak: if `captures()` (or anything else in
+    // the block above) throws, `newTree` was already allocated but never
+    // reaches `touch()`, so it would otherwise be neither cached nor freed --
+    // a real WASM-heap leak on every parse error. Free it here before
+    // returning, since this catch is the only place left that still holds a
+    // reference to it.
+    newTree?.delete();
     console.warn(`tree-sitter: parse failed for ${language}`, err);
     return null;
   }

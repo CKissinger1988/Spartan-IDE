@@ -4442,9 +4442,29 @@ fn git_create_branch(project_root: &str, branch: &str) -> Result<serde_json::Val
 /// second source of truth beyond the real file on disk would only risk
 /// drifting from it, the same reasoning `settings_panel.rs` in the
 /// original wgpu shell already established (it re-reads fresh, too).
+/// Real settings values are safe to return to the renderer over IPC except
+/// one: `github_token` is a genuine credential, and neither shell's
+/// Settings screen has ever needed to read it back (there's no GitHub
+/// token entry UI in either yet -- confirmed by grep, not assumed) --
+/// so it's masked here rather than round-tripped in cleartext through a
+/// response a compromised or malicious renderer could otherwise read.
+/// The real value is untouched on disk and in `settings_set`'s own
+/// `patch.github_token.unwrap_or(current.github_token)` merge logic --
+/// only the *returned* JSON is redacted.
+fn redact_github_token(mut value: serde_json::Value) -> serde_json::Value {
+    if let Some(token) = value.get_mut("github_token") {
+        if !token.is_null() {
+            *token = serde_json::Value::String("[REDACTED]".to_string());
+        }
+    }
+    value
+}
+
 fn settings_get() -> Result<serde_json::Value, String> {
     let settings = spartan_settings::load();
-    serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
+    serde_json::to_value(settings)
+        .map(redact_github_token)
+        .map_err(|e| format!("serialize settings: {e}"))
 }
 
 /// The real, shared `~/.spartan/crashes` directory both this crate's own
@@ -4572,7 +4592,9 @@ fn settings_set(patch: SettingsPatch) -> Result<serde_json::Value, String> {
         github_token: patch.github_token.unwrap_or(current.github_token),
     };
     spartan_settings::save(&settings).map_err(|e| format!("save settings: {e}"))?;
-    serde_json::to_value(settings).map_err(|e| format!("serialize settings: {e}"))
+    serde_json::to_value(settings)
+        .map(redact_github_token)
+        .map_err(|e| format!("serialize settings: {e}"))
 }
 
 /// Real §75.72 wiring of `spartan-updater` (already real and tested since
@@ -8432,6 +8454,84 @@ time.sleep(10)
             clear_resp.result.unwrap()["leo_verify_command"],
             serde_json::Value::Null
         );
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn settings_set_real_dispatch_parses_sets_preserves_and_clears_github_token() {
+        // Real, dispatch-level coverage of `settings_set`'s own nested-
+        // `Option` `github_token` parse arm, mirroring the identical
+        // `leo_verify_command` test above -- a real regression here (e.g.
+        // a stray `github_token: None` overwrite on an unrelated save)
+        // would silently drop a stored token with no test catching it.
+        // Also confirms `redact_github_token` masks the real value in
+        // every returned response while the real value still round-trips
+        // through the actual saved file on disk.
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-settings-github-token-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        let state = new_state();
+        let set_resp = call(
+            &state,
+            1,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": true,
+                "github_token": "  ghp_realtoken123  ",
+            }),
+        );
+        // Masked in the response...
+        assert_eq!(set_resp.result.unwrap()["github_token"], "[REDACTED]");
+        // ...but the real, trimmed value is genuinely persisted on disk.
+        assert_eq!(
+            spartan_settings::load().github_token.as_deref(),
+            Some("ghp_realtoken123")
+        );
+
+        // A later, unrelated GPU-only save (the key omitted entirely) must
+        // preserve the real, already-set token -- outer `None`, not a
+        // silent clear.
+        let preserve_resp = call(
+            &state,
+            2,
+            "settings_set",
+            serde_json::json!({ "gpu_enabled": false }),
+        );
+        assert_eq!(preserve_resp.result.unwrap()["github_token"], "[REDACTED]");
+        assert_eq!(
+            spartan_settings::load().github_token.as_deref(),
+            Some("ghp_realtoken123")
+        );
+
+        // An explicit empty string really clears it back to `null`, and
+        // the redacted response correctly reflects `null`, not a
+        // fabricated "[REDACTED]" for a token that's genuinely gone.
+        let clear_resp = call(
+            &state,
+            3,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": false,
+                "github_token": "",
+            }),
+        );
+        assert_eq!(
+            clear_resp.result.unwrap()["github_token"],
+            serde_json::Value::Null
+        );
+        assert_eq!(spartan_settings::load().github_token, None);
 
         match prior_home {
             Some(h) => std::env::set_var("HOME", h),

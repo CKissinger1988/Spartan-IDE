@@ -42,12 +42,17 @@ decision, not an open question.
   path-jailing, approval gating before destructive actions, secrets redaction. Don't simplify
   these away for convenience.
 - **Follow the existing per-feature workflow**: implement in `desktop/` first, port to `web/`
-  second (both are real, maintained shells — most editor/LSP/DAP/git features live in all three
-  editing surfaces: `desktop/src/components/Editor.tsx`, `web/src/components/BackendEditor.tsx`,
-  `web/src/components/Editor.tsx`), verify, document the pass in both `CLAUDE.md` (in the same
-  detailed historical-narrative style every existing entry uses) and `docs/FUTURE_FEATURES.md`
-  (mark the row done, or add one), then commit. This project's history is full of real bugs found
-  only by actually running things — match that bar, don't shortcut it.
+  second (both are real, maintained shells). `web/` actually has two separate editing surfaces —
+  `web/src/components/BackendEditor.tsx` (backend-connected, via `spartan-devserver`'s WebSocket
+  transport) genuinely shares editor/LSP/DAP/git/Leo features with `desktop/src/components/
+  Editor.tsx`; `web/src/components/Editor.tsx` is the **pure client-side** editor (File System
+  Access API + WASM-compiled `spartan-buffer`, no backend process at all) and has none of
+  those — only real, local editing/syntax-highlighting features apply there. Target whichever
+  surface a feature actually reaches, don't claim parity it doesn't have. Verify, document the
+  pass in both `CLAUDE.md` (in the same detailed historical-narrative style every existing entry
+  uses) and `docs/FUTURE_FEATURES.md` (mark the row done, or add one), then commit. This
+  project's history is full of real bugs found only by actually running things — match that bar,
+  don't shortcut it.
 - **This environment cannot launch a real Electron window** (a standing, documented network-policy
   constraint, not a code problem). The established workaround for `desktop/`-only features is a
   Playwright script serving the compiled `desktop/dist` via `crates/spartan-devserver` with a thin
@@ -71,17 +76,21 @@ cargo test --workspace --release
 
 # desktop/ (Electron + React) — build spartan-backend first, it's the IPC service desktop/ drives
 cargo build --release -p spartan-backend
-cd desktop && npm install && npm run typecheck && npm run build && npm run build:electron
+(cd desktop && npm install && npm run typecheck && npm run build && npm run build:electron)
 
 # web/ (browser IDE) — separate Vite+React project, not part of the Cargo workspace
-cd web && npm install && npm run build:wasm && npm run typecheck && npm run build
+(cd web && npm install && npm run build:wasm && npm run typecheck && npm run build)
 
 # mobile/ (Expo/React Native companion) — see mobile/CLAUDE.md and mobile/AGENTS.md
-cd mobile && npx tsc --noEmit && npx expo export --platform android
+(cd mobile && npx tsc --noEmit && npx expo export --platform android)
 
 # cloud/ (Spartan Cloud, Track B) — its own separate Cargo workspace, not part of the root one
-cd cloud && cargo fmt --all -- --check && cargo clippy --workspace --all-targets && cargo test --workspace
+(cd cloud && cargo fmt --all -- --check && cargo clippy --workspace --all-targets && cargo test --workspace)
 ```
+
+Each command block above is wrapped in a subshell (`(cd X && ...)`) so it never changes your
+actual working directory — safe to copy/paste any subset without needing to `cd` back to the
+repo root in between.
 
 ## Current repo state
 

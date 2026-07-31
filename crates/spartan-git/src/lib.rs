@@ -149,7 +149,18 @@ pub fn parse_github_owner_repo(remote_url: &str) -> Option<(String, String)> {
     };
     let trimmed = after_host.trim_end_matches('/').trim_end_matches(".git");
     let (owner, repo) = trimmed.split_once('/')?;
-    if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+    // A real remote URL's `owner`/`repo` segments end up interpolated directly into a
+    // `format!`-built GitHub API URL by this crate's own caller (`crates/spartan-backend::
+    // github.rs`) -- GitHub's own real username/repo-name rules only ever allow
+    // `[A-Za-z0-9._-]`, so anything outside that set here means either a malformed/unexpected
+    // URL shape this parser doesn't actually understand, or content that was never a real
+    // GitHub identifier at all. Reject it rather than passing it through unchecked.
+    let is_valid_github_segment = |s: &str| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    };
+    if !is_valid_github_segment(owner) || !is_valid_github_segment(repo) {
         return None;
     }
     Some((owner.to_string(), repo.to_string()))
@@ -2446,6 +2457,33 @@ mod tests {
             None
         );
         assert_eq!(parse_github_owner_repo("https://github.com/"), None);
+    }
+
+    #[test]
+    fn parse_github_owner_repo_rejects_a_real_invalid_character_in_either_segment() {
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/owner/repo/extra"),
+            None,
+            "a real, unexpected third path segment must never be silently folded into `repo`"
+        );
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/ow ner/repo.git"),
+            None,
+            "a space is not a real, valid GitHub owner-name character"
+        );
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/owner/re%2Fpo.git"),
+            None,
+            "a real percent-encoded slash must not be treated as a valid repo-name character"
+        );
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/valid-owner.name/valid_repo.name"),
+            Some((
+                "valid-owner.name".to_string(),
+                "valid_repo.name".to_string()
+            )),
+            "real, valid GitHub identifiers may contain '.', '_', and '-'"
+        );
     }
 
     #[test]

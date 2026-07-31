@@ -8180,8 +8180,12 @@ first — it's the parity reference until each row there is actually reimplement
   line separates `.leo-state-failed`'s plain declarations from its custom-property ones, matching a
   common Stylelint `declaration-empty-line-before` convention (no stylelint config exists in this
   repo to confirm the exact rule shape against, applied as a real, reasonable readability
-  improvement regardless). 256 `spartan-backend` lib tests total (up from 252, net +1: one new
-  async-ack test added, the old one it replaced removed), full `cargo fmt --all -- --check`/`cargo
+  improvement regardless). 256 `spartan-backend` lib tests total (up from 252 -- a real net +4,
+  not just the described async-ack test's own 1-for-1 swap; the `web/src/backendClient.ts`/
+  `desktop/electron/preload.ts` per-listener-isolation fix and `bracketPairs.ts`'s own
+  cap-vs-correctness fix were each verified via their own real Node script/manual check instead
+  of a new Rust unit test, so this count doesn't cover every real fix in this pass), full
+  `cargo fmt --all -- --check`/`cargo
   clippy --workspace --release --all-targets` both clean; `cargo test -p spartan-backend -p
   spartan-git --release --lib -- --test-threads=1` both green (256/72); both shells' own `tsc
   --noEmit`/`npm run build` clean. **What this does not confirm**: no live Playwright re-verification

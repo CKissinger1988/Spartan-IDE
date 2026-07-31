@@ -1733,8 +1733,17 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
       <div
         className="git-section-label mono"
         onClick={toggleGithub}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggleGithub();
+          }
+        }}
         style={{ cursor: "pointer" }}
         title="Real, live open pull requests on this repository's GitHub remote"
+        aria-expanded={showGithub}
       >
         GitHub {showGithub ? "▾" : "▸"}
       </div>
@@ -1753,6 +1762,14 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
               className="git-row"
               title={`${pr.state}${pr.draft ? " (draft)" : ""} — opened by ${pr.author}`}
               onClick={() => openPullRequest(pr.html_url)}
+              role="link"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  openPullRequest(pr.html_url);
+                }
+              }}
               style={{ cursor: "pointer" }}
             >
               <span

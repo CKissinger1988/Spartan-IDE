@@ -175,6 +175,24 @@ interface LeoHistoryEntry {
   unix_timestamp: number;
 }
 
+/** A malformed `leo_session_history` response (a real, unvalidated
+ * possibility over any IPC boundary) would otherwise crash the whole
+ * component the first time `entry.outcome.toLowerCase()`/
+ * `entry.unix_timestamp` is read against an `undefined`/wrong-typed field.
+ * Every field is checked to its real expected shape before an entry is
+ * ever rendered; a malformed entry is dropped, not half-rendered. */
+function isValidLeoHistoryEntry(value: unknown): value is LeoHistoryEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const e = value as Record<string, unknown>;
+  return (
+    typeof e.task === "string" &&
+    typeof e.outcome === "string" &&
+    (e.summary === null || typeof e.summary === "string") &&
+    (e.error === null || typeof e.error === "string") &&
+    typeof e.unix_timestamp === "number"
+  );
+}
+
 /** Matches `GitPanel.tsx`'s own `formatAge` verbatim -- this project's
  * established per-component-copy discipline, not a shared package. */
 function formatAge(unixSeconds: number): string {
@@ -595,8 +613,9 @@ export default function LeoChatPanel({ client }: LeoChatPanelProps): React.React
     client
       .call("leo_session_history")
       .then((result) => {
-        const r = result as { entries?: LeoHistoryEntry[] } | undefined;
-        setHistory(r?.entries ?? []);
+        const r = result as { entries?: unknown } | undefined;
+        const raw = Array.isArray(r?.entries) ? r.entries : [];
+        setHistory(raw.filter(isValidLeoHistoryEntry));
       })
       .catch((e: Error) => setHistoryError(e.message));
   }, [client, historyOpen]);

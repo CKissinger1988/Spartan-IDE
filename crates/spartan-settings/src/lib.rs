@@ -362,7 +362,18 @@ fn save_to(path: &Path, settings: &Settings) -> std::io::Result<()> {
     }
     let json = serde_json::to_string_pretty(settings)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(path, json)
+    std::fs::write(path, json)?;
+    // Real secret at rest since `github_token` was added: the process
+    // umask alone isn't a reliable guarantee (a real, common `0022` umask
+    // still leaves this file world-readable), so this file is explicitly
+    // locked to owner-only on Unix, matching `spartan-backend::main.rs`'s
+    // own identical `ws-token` precedent.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

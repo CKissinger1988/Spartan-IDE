@@ -41,7 +41,7 @@ Priority key:
 6. ~~**Snippets / tab-completion expansion** (P1)~~ — ✅ **Shipped** (curated per-language
    snippets, prefix+Tab expansion, tab-stop navigation, in all three editing surfaces). See
    CLAUDE.md's own status entry.
-7. ~~**tree-sitter syntax highlighting in the Electron shells** (P2)~~ — ✅ **Shipped in both
+7. ~~**tree-sitter syntax highlighting in the desktop and web shells** (P2)~~ — ✅ **Shipped in both
    `desktop/` and `web/`** (`src/treeSitter.ts` in each): real `web-tree-sitter` in-process
    parsing for all 8 languages with a bundled grammar (Rust/Python/JS/TS/Go/Java/Kotlin/C#), with
    `highlight.js` kept as a genuine fallback for json/css/xml/markdown/bash and for the window

@@ -250,6 +250,12 @@ jobs:
   desktop:
     name: desktop/ (Electron + React shell)
     runs-on: ubuntu-latest
+    # Same least-privilege reasoning as the rust job above: this job only
+    # checks out, builds, and typechecks -- it never pushes or touches the
+    # GitHub API, so the default token's write scope is dropped.
+    permissions:
+      contents: read
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -281,6 +287,9 @@ jobs:
   mobile:
     name: mobile/ (Expo/React Native IDE)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -304,6 +313,9 @@ jobs:
   web:
     name: web/ (vscode.dev-inspired browser IDE, §75.89)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -341,6 +353,9 @@ jobs:
   tree-sitter-wasm-spike:
     name: spikes/tree-sitter-wasm-spike (web app prep, §75.86)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -364,6 +379,9 @@ jobs:
   git-browser-spike:
     name: spikes/git-browser-spike (web app prep, §75.87)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -387,6 +405,9 @@ jobs:
   cloud:
     name: cloud/ (Spartan Cloud domain crates)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:

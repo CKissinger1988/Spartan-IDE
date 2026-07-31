@@ -1184,6 +1184,7 @@ export default function App(): React.ReactElement {
             )}
           </div>
         </div>
+        {backendReady && backendClient && <LeoChatPanel client={backendClient} />}
       </div>
       <div className="status-bar mono">
         {activeContent ? (
@@ -1304,7 +1305,6 @@ export default function App(): React.ReactElement {
           </button>
         )}
       </div>
-      {backendReady && backendClient && <LeoChatPanel client={backendClient} />}
     </div>
   );
 }
