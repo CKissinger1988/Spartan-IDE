@@ -19,10 +19,17 @@
 //! stdin/stdout invocation, the same "adapt the new caller instead of
 //! risking the shared registry" precedent `dap_integration::
 //! resolve_dap_command` already set for Python's `debugpy` invocation.
-//! Two of the six real configured formatters -- `ktlint` (Kotlin) and
-//! `dotnet format` (C#, a project-wide command with no real stdin/stdout
-//! filter mode at all) -- don't fit this model and are a real, honest,
-//! named gap: `resolve_formatter_command` returns `None` for them, and
+//! `ktlint` (Kotlin, real `--stdin --format` support, confirmed live
+//! against a real installed `ktlint` 1.8.0 before writing this) is real
+//! and wired; `google-java-format` (Java, real `-` stdin/stdout support,
+//! confirmed live against a real installed `google-java-format` 1.24.0
+//! before writing this) closes the real, previously-total "Java has no
+//! formatter configured at all" gap by giving `languages.toml`'s Java
+//! entry a real `[language.formatter]` for the first time. `dotnet
+//! format` (C#) genuinely doesn't fit this model -- it's a real,
+//! project-wide command with no stdin/stdout filter mode at all, not a
+//! flag this crate merely hasn't found yet -- and stays a real, honest,
+//! named gap: `resolve_formatter_command` returns `None` for it, and
 //! callers report that plainly rather than guessing at an invocation.
 
 use std::io::Write;
@@ -49,6 +56,28 @@ pub(crate) fn resolve_formatter_command(
                 path.to_string_lossy().into_owned(),
             ],
         )),
+        // Real, confirmed live against ktlint 1.8.0: `--stdin` reads the
+        // buffer, `--format`/`-F` autocorrects, `--stdin-path` gives it
+        // the real file path (matching prettier's own `--stdin-filepath`
+        // reasoning -- ktlint's `.editorconfig` resolution is path-keyed),
+        // and `--log-level=none` keeps its own JVM/ktlint diagnostic
+        // banner off stdout (confirmed via a real run that it always
+        // lands on stderr regardless of this flag, but silencing it here
+        // avoids depending on that never changing).
+        "ktlint" => Some((
+            "ktlint".to_string(),
+            vec![
+                "--stdin".to_string(),
+                format!("--stdin-path={}", path.to_string_lossy()),
+                "--format".to_string(),
+                "--log-level=none".to_string(),
+            ],
+        )),
+        // Real, confirmed live against google-java-format 1.24.0: a bare
+        // `-` argument reads stdin and writes the formatted result to
+        // stdout. Closes languages.toml's own real "Java has no formatter
+        // configured at all" gap (see this module's own doc comment).
+        "google-java-format" => Some(("google-java-format".to_string(), vec!["-".to_string()])),
         _ => None,
     }
 }
@@ -104,25 +133,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_formatter_command_knows_the_four_real_stdin_stdout_capable_formatters() {
-        for program in ["rustfmt", "black", "gofmt", "prettier"] {
+    fn resolve_formatter_command_knows_the_six_real_stdin_stdout_capable_formatters() {
+        for program in [
+            "rustfmt",
+            "black",
+            "gofmt",
+            "prettier",
+            "ktlint",
+            "google-java-format",
+        ] {
             let spec = CommandSpec {
                 program: program.to_string(),
                 args: Vec::new(),
             };
-            assert!(resolve_formatter_command(&spec, Path::new("x.txt")).is_some());
+            assert!(
+                resolve_formatter_command(&spec, Path::new("x.txt")).is_some(),
+                "expected {program} to resolve"
+            );
         }
     }
 
     #[test]
-    fn resolve_formatter_command_honestly_returns_none_for_ktlint_and_dotnet() {
-        for program in ["ktlint", "dotnet"] {
-            let spec = CommandSpec {
-                program: program.to_string(),
-                args: Vec::new(),
-            };
-            assert!(resolve_formatter_command(&spec, Path::new("x.txt")).is_none());
-        }
+    fn resolve_formatter_command_honestly_returns_none_for_dotnet_format() {
+        let spec = CommandSpec {
+            program: "dotnet".to_string(),
+            args: vec!["format".to_string()],
+        };
+        assert!(resolve_formatter_command(&spec, Path::new("x.txt")).is_none());
+    }
+
+    #[test]
+    fn ktlint_invocation_carries_the_real_stdin_path_it_wants() {
+        let spec = CommandSpec {
+            program: "ktlint".to_string(),
+            args: Vec::new(),
+        };
+        let (program, args) = resolve_formatter_command(&spec, Path::new("/tmp/thing.kt")).unwrap();
+        assert_eq!(program, "ktlint");
+        assert_eq!(
+            args,
+            vec![
+                "--stdin",
+                "--stdin-path=/tmp/thing.kt",
+                "--format",
+                "--log-level=none"
+            ]
+        );
     }
 
     #[test]
@@ -172,5 +228,52 @@ mod tests {
         let err =
             run_formatter("black", &["-q".to_string(), "-".to_string()], "def(:").unwrap_err();
         assert!(err.contains("exited with"), "got: {err}");
+    }
+
+    #[test]
+    fn run_formatter_reformats_via_a_real_installed_ktlint_if_present() {
+        if std::process::Command::new("ktlint")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("SKIP: ktlint not installed");
+            return;
+        }
+        let spec = CommandSpec {
+            program: "ktlint".to_string(),
+            args: Vec::new(),
+        };
+        // Real, live-caught finding: ktlint's own `standard:filename` rule
+        // requires a PascalCase file name -- `/tmp/x.kt` genuinely fails
+        // real ktlint, not a bug in this code's own invocation. `Main.kt`
+        // is a real, conventional Kotlin entry-point file name.
+        let (program, args) = resolve_formatter_command(&spec, Path::new("/tmp/Main.kt")).unwrap();
+        let formatted = run_formatter(&program, &args, "fun main(){println(\"hi\")}").unwrap();
+        assert!(formatted.contains("fun main() {"), "got: {formatted}");
+    }
+
+    #[test]
+    fn run_formatter_reformats_via_a_real_installed_google_java_format_if_present() {
+        if std::process::Command::new("google-java-format")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("SKIP: google-java-format not installed");
+            return;
+        }
+        let spec = CommandSpec {
+            program: "google-java-format".to_string(),
+            args: Vec::new(),
+        };
+        let (program, args) = resolve_formatter_command(&spec, Path::new("/tmp/X.java")).unwrap();
+        let formatted = run_formatter(
+            &program,
+            &args,
+            "public class X{public static void main(String[] a){System.out.println(\"hi\");}}",
+        )
+        .unwrap();
+        assert!(formatted.contains("public class X {"), "got: {formatted}");
     }
 }

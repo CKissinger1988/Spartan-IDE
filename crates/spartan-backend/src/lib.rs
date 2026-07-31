@@ -10100,17 +10100,21 @@ time.sleep(10)
     }
 
     #[test]
-    fn format_document_on_a_real_language_with_no_configured_formatter_errors_honestly() {
-        // Java is the one real Tier 1 language with no `formatter` entry
-        // in the curated registry at all.
+    fn format_document_on_csharp_reports_the_real_no_filter_mode_gap_honestly() {
+        // C# is now the one real Tier 1(+) language with a `formatter`
+        // entry (`dotnet format`) that genuinely has no stdin/stdout
+        // filter mode -- `resolve_formatter_command` returns `None` for
+        // it, a distinct real error from "no formatter configured at
+        // all" (which no curated language can reach any more now that
+        // Java has a real `google-java-format` entry too).
         let dir = std::env::temp_dir().join(format!(
-            "spartan-backend-format-document-no-formatter-{}-{:?}",
+            "spartan-backend-format-document-no-filter-mode-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("Main.java");
+        let file = dir.join("Main.cs");
         std::fs::write(&file, "class Main {}").unwrap();
 
         let state = new_state();
@@ -10128,7 +10132,10 @@ time.sleep(10)
             "format_document",
             serde_json::json!({ "doc_id": doc_id }),
         );
-        assert!(resp.error.unwrap().contains("no formatter is configured"));
+        assert!(resp
+            .error
+            .unwrap()
+            .contains("no supported stdin/stdout formatting mode"));
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -10181,6 +10188,67 @@ time.sleep(10)
         assert_eq!(event["data"]["doc_id"], doc_id);
         let formatted = event["data"]["formatted"].as_str().unwrap();
         assert!(formatted.contains("fn main() {"), "got: {formatted}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn format_document_reformats_a_real_java_file_via_a_real_installed_google_java_format_if_present(
+    ) {
+        // Self-skipping like every other real-external-tool test in this
+        // suite -- google-java-format isn't a common default install, so
+        // this only asserts something when it's genuinely present.
+        if std::process::Command::new("google-java-format")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("SKIP: google-java-format not installed");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-format-document-real-gjf-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Main.java");
+        std::fs::write(
+            &file,
+            "public class Main{public static void main(String[] a){System.out.println(\"hi\");}}",
+        )
+        .unwrap();
+
+        let state = new_state();
+        let open_resp = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        );
+        let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let resp = handle_request(
+            &state,
+            req(
+                2,
+                "format_document",
+                serde_json::json!({ "doc_id": doc_id }),
+            ),
+            tx,
+        );
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+
+        let line = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        let event: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(event["event"], "format_document_result");
+        let formatted = event["data"]["formatted"].as_str().unwrap();
+        assert!(
+            formatted.contains("public class Main {"),
+            "got: {formatted}"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -77,6 +77,14 @@ build_systems = ["maven", "gradle"]
   [language.lsp_command]
   program = "jdtls"
 
+  # Real §format-coverage addition -- google-java-format's own real `-`
+  # stdin/stdout filter mode, confirmed live before this entry was added
+  # (see crates/spartan-backend/src/format_integration.rs's own doc
+  # comment). Closes a real, previously-total gap: Java had no formatter
+  # configured at all.
+  [language.formatter]
+  program = "google-java-format"
+
 [[language]]
 id = "go"
 file_globs = ["*.go"]

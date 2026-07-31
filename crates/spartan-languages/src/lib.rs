@@ -220,6 +220,22 @@ mod tests {
     }
 
     #[test]
+    fn java_profile_has_a_real_formatter_configured() {
+        // Real gap closed: Java had no [language.formatter] entry at all
+        // until google-java-format's real `-` stdin/stdout mode was
+        // confirmed live (see crates/spartan-backend's own
+        // format_integration.rs doc comment).
+        let registry = LanguageRegistry::curated_default();
+        let java = registry
+            .profile_by_id("java")
+            .expect("java profile must exist");
+        assert_eq!(
+            java.formatter.as_ref().unwrap().program,
+            "google-java-format"
+        );
+    }
+
+    #[test]
     fn rust_profile_has_the_real_tools_named_in_the_spec() {
         let registry = LanguageRegistry::curated_default();
         let rust = registry
