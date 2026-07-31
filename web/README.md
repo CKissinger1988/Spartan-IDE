@@ -5,13 +5,13 @@ decision the user made explicitly (§75.85, §75.86): editing/buffer logic
 works standalone client-side in the browser (File System Access + WASM, no
 backend needed), with a second, independent backend-mode editing path
 activating whenever a local `spartan-devserver` instance is reachable over
-its real WebSocket transport (§75.88). **When a devserver is connected: Git,
-real LSP diagnostics/hover/autocomplete, real DAP breakpoint/step debugging,
-and real Android device/build/logcat tooling are all real and wired here —
-the one capability still missing versus the desktop shell is a Leo chat UI
-in this app specifically** (Leo's own backend methods are reachable, this
-app just has no chat panel calling them yet). See "What's not built yet"
-below for the honest, current account.
+its real WebSocket transport (§75.88). **When a devserver is connected: Git
+(including PR listing, per-hunk staging, branches, stash, tags, merge/
+cherry-pick), real LSP diagnostics/hover/autocomplete/rename/references,
+real DAP breakpoint/step/watch debugging, real Android device/build/logcat
+tooling, and a real, persistent Leo chat panel (task #285 — a direct port of
+`desktop/`'s own) are all real and wired here.** See "What's not built yet"
+below for the honest, current account of what's genuinely still missing.
 
 Inspired by vscode.dev's *concepts* only — a browser-based editor working
 directly against real local files via a native browser API, no server round
@@ -21,20 +21,24 @@ repository already applies to the desktop shells (no Monaco/CodeMirror
 
 ## Screenshots
 
-Real, unedited Playwright + Chromium captures of this exact app running
-against a real `vite dev` server. The native `showDirectoryPicker()` dialog
-can't be driven headlessly, so these use the same real, documented technique
-described above under "Real, executed verification" — an Origin Private File
-System directory substituted in for `window.showDirectoryPicker()`, real
-files written into it, then the app's own unmodified code opens and edits
-them normally.
+Real, unedited Playwright + Chromium captures of the actual compiled
+production build (`npm run build`) served by a real running
+`spartan-devserver` process against a real git project fixture, using the
+app's own genuine `BackendClient.connect()` — no mock, no shim of any kind.
+These show the backend-connected mode (Git, real tree-sitter syntax
+highlighting, Leo panel), the richer of `web/`'s two real editing paths and
+the one most of this project's recent feature work has landed in; the
+File System Access + WASM pure-client-side path (`components/Editor.tsx`,
+`components/FileTree.tsx`) is exercised instead by the headless
+File-System-Access-substitution technique described above under "Real,
+executed verification".
 
 | | |
 |---|---|
-| ![Initial empty state](../docs/screenshots/web/01-initial-empty-state.png) | ![Project opened, file tree](../docs/screenshots/web/02-project-opened-file-tree.png) |
-| Initial empty state — Chromium detected as supported, no fallback shown | A real project opened via the File System Access API, file tree populated |
+| ![Initial connected state](../docs/screenshots/web/01-initial-empty-state.png) | ![Project opened, file tree](../docs/screenshots/web/02-project-opened-file-tree.png) |
+| Connected to a local devserver — toolbar status, Leo panel, Backend file tree, no file open yet | The real Backend file tree expanded, showing a real project's directory structure |
 | ![Editor with syntax highlighting](../docs/screenshots/web/03-editor-with-syntax-highlighting.png) | ![Live editing with dirty marker](../docs/screenshots/web/04-editing-live-highlight-dirty-marker.png) |
-| Real client-side syntax highlighting via `highlight.js` | Live typing re-highlights immediately; status bar shows the real unsaved marker |
+| Real tree-sitter syntax highlighting, opened through the Backend file tree | Live typing re-highlights immediately; the tab and status bar show the real unsaved marker |
 forked/vendored either) — see the root `CLAUDE.md`.
 
 ## What's real here
@@ -50,16 +54,19 @@ forked/vendored either) — see the root `CLAUDE.md`.
   `src/buffer.ts` and that crate's own README/doc comments.
 - **Real save-to-disk** via the File System Access API's writable-stream
   interface (Ctrl+S).
-- **Real (single-step) undo** via the real `Document`'s own branching undo
-  tree, exposed through the WASM binding (Ctrl+Z). **No redo yet** — a real,
-  deliberate, named scope cut carried over verbatim from
-  `spartan-buffer-wasm`'s own doc comment; every other real Spartan UI
-  surface builds redo as a layer *above* `Document`, not inside it, and that
-  layer hasn't been built here yet.
-- **Real client-side syntax highlighting** via `highlight.js`, the same
-  approach and the same named fidelity tradeoff (lexical, not
-  tree-sitter/semantic) already used and documented in `desktop/src/syntax.ts`
-  — this file is a direct, unmodified copy of that one.
+- **Real undo and redo** via the real `Document`'s own branching undo tree,
+  exposed through the WASM binding (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y). Redo is
+  a thin layer above `Document` (a `redo_stack`), the same pattern every
+  other real Spartan UI surface already uses — closed in `spartan-buffer-
+  wasm` itself, matching this crate's own doc comment.
+- **Real client-side syntax highlighting** via a three-tier chain — real
+  tree-sitter (`web-tree-sitter`, in-process WASM parsing) for the 8
+  languages with a bundled grammar, `highlight.js` while a grammar is still
+  loading and for languages with none, plain escaped text as the final
+  fallback — the same chain, same capture-name-to-CSS mapping, and the same
+  incremental (per-document, not whole-file-per-keystroke) re-parse
+  `desktop/src/syntax.ts`/`treeSitter.ts` already use; this file is a direct
+  copy of those two.
 - **Real file tree** with lazy, on-demand directory listing through the same
   API, mirroring `desktop/src/components/FileTree.tsx`'s own lazy-expansion
   design.
@@ -95,13 +102,13 @@ forked/vendored either) — see the root `CLAUDE.md`.
 
 ## What's not built yet (named honestly, not silently missing)
 
-- **Git, LSP (diagnostics/hover/completion), DAP, and Android tooling are all
-  real and wired here now; Leo's own chat UI is the one real gap left in
-  this app specifically** (desktop/ has had a real, persistent Leo chat
-  panel since §75.61 — this section used to say the opposite, before those
-  later increments landed; kept the original account below since it's still
-  the real story of *how* the backend-mode path came to exist, just
-  corrected where it went stale). A later increment (Track A,
+- **Git, LSP (diagnostics/hover/completion/rename/references/call
+  hierarchy), DAP, Android tooling, and Leo's own chat panel are all real
+  and wired here now** (this section used to say Leo's chat UI was the one
+  real gap left in this app specifically — task #285 closed that; the
+  original account below is kept since it's still the real story of *how*
+  the backend-mode path came to exist, just corrected where it went stale).
+  A later increment (Track A,
   `crates/spartan-devserver`) answered the
   token-delivery design question this section used to name as unresolved:
   the devserver serves this app's own static files, so a same-origin
@@ -178,32 +185,31 @@ forked/vendored either) — see the root `CLAUDE.md`.
   generic `spartan-backend` dispatch method). Real, live, end-to-end
   verified against a real Android/Gradle fixture and this environment's
   own real (if device-less) `adb`/`gradle` installs.
-- **Leo's own chat UI is the one real capability gap left in this app.**
-  Every `leo_*` method Leo's execute/verify loop needs is already a real,
-  generic `spartan-backend` dispatch method reachable through
-  `BackendClient` with zero protocol changes required — the same shape
-  every other backend-mode feature above was closed with. No component
-  calls them from this app yet; that remains real, deliberately deferred,
-  unstarted follow-up work, not a design limitation.
+- **Leo's own chat panel is real and wired in (task #285).** `LeoChatPanel.tsx`
+  is a direct port of `desktop/`'s own — same real state machine, same
+  `leo_start_task`/`leo_approve_plan`/`leo_next_step`/`leo_approve_call`/
+  `leo_retry`/`leo_cancel`/`leo_session_history` dispatch methods, same
+  random-thoughts/voice-I/O features — reached over `BackendClient` with
+  zero protocol changes (every method was already a generic
+  `spartan-backend` dispatch method). Docked as a persistent sidebar
+  whenever a devserver connection is live, matching `desktop/`'s own
+  always-visible placement.
 - **The two editing paths are independent, not unified.** A real, named
   consequence, not an oversight: the folder opened via "Open Folder…"
   (File System Access) and the devserver's own project root
   (`--project-root:`) can be different directories — nothing in this app
-  verifies they match, and `activeContent` only ever holds one open file
-  at a time regardless of which path opened it last. In the common case
-  (the devserver is launched from the same project the user opens), the
-  two happen to agree, but this app makes no attempt to enforce or check
-  that.
-- **Single file open at a time, across both paths combined.** No tabs, no
-  multi-file model — a real, narrow first-increment scope, the same kind
-  of deliberate v1 cut this project's own history already applies
-  elsewhere.
+  verifies they match. In the common case (the devserver is launched from
+  the same project the user opens), the two happen to agree, but this app
+  makes no attempt to enforce or check that.
+- **Multi-file tabs are real (task #257)**, covering both editing paths
+  combined — `openTabs`/`activeIndex` in `App.tsx` hold every open file (of
+  either kind) as one derived-state tab model, reusing an already-open tab
+  of the same kind+path rather than duplicating it, matching `desktop/`'s
+  own tab-bar convention.
 - **Chromium-only.** The File System Access API is not implemented in
   Firefox or Safari. This is a real, permanent platform limit, not a bug —
   the app detects this and shows an honest message instead of failing
   silently or crashing.
-- **No tree-sitter.** Same lexical-only tradeoff `desktop/`'s own editor
-  already carries and documents.
 
 ## Layout
 
