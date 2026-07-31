@@ -58,7 +58,14 @@ jobs:
     # exactly which group's memory was already critical beforehand, closing
     # the remaining gap between "confirmed resource exhaustion" and "known
     # exactly where."
-    timeout-minutes: 120
+    # Real, deliberately generous relative to the step-level timeouts below
+    # (45+15+15+20+20+25+15 = 155 minutes, before even counting checkout,
+    # disk cleanup, apt-get install, toolchain install, cache restore,
+    # cargo fmt/clippy, or the periodic `free -h` diagnostics) -- a
+    # job-level ceiling lower than that sum would kill the whole job before
+    # a wedged step's own diagnostic timeout ever got the chance to fire
+    # first, defeating the entire point of splitting the timeouts out.
+    timeout-minutes: 190
     env:
       # A conservative, explicit cap rather than trusting cargo's own
       # nproc-based default, which can pick a build parallelism higher than

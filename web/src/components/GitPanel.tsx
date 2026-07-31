@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { BackendClient } from "../backendClient";
 
 interface StatusEntry {
@@ -61,6 +61,17 @@ interface PullRequestSummary {
   html_url: string;
   state: string;
   draft: boolean;
+}
+
+/** Matches `desktop/electron/main.ts`'s own `openPullRequestUrl` origin
+ * guard -- `pr.html_url` is renderer-visible data sourced from a live
+ * GitHub API response, not something the user typed, so it gets the same
+ * real check both shells already apply before treating a PR link as safe
+ * to open, rather than trusting it implicitly here just because this
+ * shell renders it as a plain anchor instead of going through an IPC
+ * call. */
+function isGithubUrl(url: string): boolean {
+  return url.startsWith("https://github.com/");
 }
 
 interface ConflictEntry {
@@ -753,12 +764,30 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
   // hunk is staged/unstaged, always refetched fresh, never patched
   // client-side. `staged` selects the real mirror-image diff direction
   // (index-vs-workdir for unstaged, HEAD-vs-index for staged).
+  // Real, deliberate stale-response guard: two overlapping `git_diff_hunks`
+  // fetches (rapidly switching which row is expanded, or `stageHunk`/
+  // `unstageHunk` re-triggering this same fetch while a slower earlier
+  // one is still in flight) can resolve out of order. Without tracking
+  // which expansion is actually current, a slow response for a *previous*
+  // file could land after a newer one and silently overwrite `hunks` with
+  // the wrong file's data -- which `stageHunk`/`unstageHunk` would then
+  // mis-target against `entry.path`, writing to the wrong index entry.
+  const expandedDiffKeyRef = useRef<string | null>(null);
+
   const refreshHunks = useCallback(
     (path: string, staged: boolean) => {
+      const key = `${path} ${staged}`;
+      expandedDiffKeyRef.current = key;
       client
         .call("git_diff_hunks", { project_root: root, path, staged })
-        .then((result) => setHunks((result as { hunks: HunkInfo[] }).hunks))
-        .catch((err: Error) => setHunksError(err.message));
+        .then((result) => {
+          if (expandedDiffKeyRef.current !== key) return;
+          setHunks((result as { hunks: HunkInfo[] }).hunks);
+        })
+        .catch((err: Error) => {
+          if (expandedDiffKeyRef.current !== key) return;
+          setHunksError(err.message);
+        });
     },
     [client, root]
   );
@@ -767,6 +796,7 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
     (path: string, staged: boolean, e: React.MouseEvent) => {
       e.stopPropagation();
       if (expandedDiff && expandedDiff.path === path && expandedDiff.staged === staged) {
+        expandedDiffKeyRef.current = null;
         setExpandedDiff(null);
         setDiffContent(null);
         setDiffError(null);
@@ -1677,31 +1707,55 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
           {pullRequests?.length === 0 && (
             <div className="git-panel-empty mono">No open pull requests.</div>
           )}
-          {pullRequests?.map((pr) => (
-            <a
-              key={pr.number}
-              className="git-row"
-              href={pr.html_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={`${pr.state}${pr.draft ? " (draft)" : ""} — opened by ${pr.author}`}
-              style={{ textDecoration: "none", color: "inherit" }}
-            >
-              <span
-                className="mono"
-                style={{ color: "var(--accent)", fontSize: 11, flexShrink: 0 }}
+          {pullRequests?.map((pr) => {
+            const rowChildren = (
+              <>
+                <span
+                  className="mono"
+                  style={{ color: "var(--accent)", fontSize: 11, flexShrink: 0 }}
+                >
+                  #{pr.number}
+                </span>
+                <span className="mono git-row-path">
+                  {pr.draft ? "[draft] " : ""}
+                  {pr.title}
+                </span>
+                <span
+                  className="mono"
+                  style={{ opacity: 0.6, whiteSpace: "nowrap", fontSize: 11 }}
+                >
+                  {pr.author}
+                </span>
+              </>
+            );
+            // Matches desktop/'s own origin guard in main.ts (the real,
+            // renderer-supplied `html_url` comes from a live GitHub API
+            // response, not the user directly, so both shells need the
+            // same real check before ever treating it as a safe link) --
+            // a PR whose URL somehow doesn't start with the expected real
+            // origin renders as a plain, unclickable row instead.
+            return isGithubUrl(pr.html_url) ? (
+              <a
+                key={pr.number}
+                className="git-row"
+                href={pr.html_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`${pr.state}${pr.draft ? " (draft)" : ""} — opened by ${pr.author}`}
+                style={{ textDecoration: "none", color: "inherit" }}
               >
-                #{pr.number}
-              </span>
-              <span className="mono git-row-path">
-                {pr.draft ? "[draft] " : ""}
-                {pr.title}
-              </span>
-              <span className="mono" style={{ opacity: 0.6, whiteSpace: "nowrap", fontSize: 11 }}>
-                {pr.author}
-              </span>
-            </a>
-          ))}
+                {rowChildren}
+              </a>
+            ) : (
+              <div
+                key={pr.number}
+                className="git-row"
+                title={`${pr.state}${pr.draft ? " (draft)" : ""} — opened by ${pr.author} (unrecognized URL, not opened)`}
+              >
+                {rowChildren}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

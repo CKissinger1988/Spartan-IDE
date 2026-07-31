@@ -48,36 +48,52 @@ struct Utf8Reassembler {
 impl Utf8Reassembler {
     fn push(&mut self, new_bytes: &[u8]) -> String {
         self.pending.extend_from_slice(new_bytes);
-        match std::str::from_utf8(&self.pending) {
-            Ok(s) => {
-                let result = s.to_string();
-                self.pending.clear();
-                result
-            }
-            Err(e) => {
-                let valid_up_to = e.valid_up_to();
-                let valid_part = std::str::from_utf8(&self.pending[..valid_up_to])
-                    .unwrap()
-                    .to_string();
-                match e.error_len() {
-                    Some(_) => {
-                        // Genuinely invalid bytes, not a boundary artifact
-                        // -- lossy-decode them too rather than buffering
-                        // bad data forever, then continue.
-                        let lossy_tail =
-                            String::from_utf8_lossy(&self.pending[valid_up_to..]).into_owned();
-                        self.pending.clear();
-                        valid_part + &lossy_tail
-                    }
-                    None => {
-                        // Ran out of bytes mid-sequence -- keep only the
-                        // real dangling tail, waiting for the rest.
-                        self.pending = self.pending[valid_up_to..].to_vec();
-                        valid_part
+        // A real, loop-based decode rather than a single match: a genuinely
+        // invalid run of bytes can be immediately followed by a real,
+        // valid-but-incomplete sequence still waiting on a later read (e.g.
+        // a stray `0xFF` right before a real, split-mid-character `é`) --
+        // a single-pass version that lossy-decoded *everything* after the
+        // first invalid byte would sweep that trailing incomplete sequence
+        // into the same lossy decode and permanently lose it, since nothing
+        // downstream remembers "there was a real dangling tail here."
+        // Looping decodes exactly the bytes `error_len()` identifies as
+        // invalid each time, drops only those, and lets the remaining
+        // suffix go through the normal Ok/incomplete-tail handling again.
+        let mut result = String::new();
+        loop {
+            match std::str::from_utf8(&self.pending) {
+                Ok(s) => {
+                    result.push_str(s);
+                    self.pending.clear();
+                    break;
+                }
+                Err(e) => {
+                    let valid_up_to = e.valid_up_to();
+                    result.push_str(std::str::from_utf8(&self.pending[..valid_up_to]).unwrap());
+                    match e.error_len() {
+                        Some(bad_len) => {
+                            // Genuinely invalid bytes, not a boundary
+                            // artifact -- lossy-decode exactly those bytes
+                            // (never more), drop them, and loop again so a
+                            // real incomplete sequence right after them
+                            // gets its own honest "wait for more" handling.
+                            let bad_end = valid_up_to + bad_len;
+                            result.push_str(&String::from_utf8_lossy(
+                                &self.pending[valid_up_to..bad_end],
+                            ));
+                            self.pending.drain(..bad_end);
+                        }
+                        None => {
+                            // Ran out of bytes mid-sequence -- keep only
+                            // the real dangling tail, waiting for the rest.
+                            self.pending.drain(..valid_up_to);
+                            break;
+                        }
                     }
                 }
             }
         }
+        result
     }
 
     /// Real, deliberate termination-path flush: if the real reader loop
@@ -206,6 +222,14 @@ pub fn spawn_pty(
                         }
                     }
                 }
+                // A real, retryable condition (a signal interrupting the
+                // read syscall) is not a real termination -- retrying is
+                // Rust's own documented convention for this exact error
+                // kind. Treating it as a hard break would send a real
+                // `pty_exit` for a process that's still genuinely alive,
+                // and would flush `reassembler`'s own pending bytes
+                // (possibly a real, still-incomplete sequence) prematurely.
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(_) => break,
             }
         }
@@ -293,6 +317,31 @@ mod utf8_reassembler_tests {
         assert!(
             r.pending.is_empty(),
             "an invalid byte must not be held onto forever"
+        );
+    }
+
+    #[test]
+    fn an_incomplete_sequence_right_after_an_invalid_byte_still_completes_on_the_next_read() {
+        // 0xFF is invalid on its own; 0xC3 that follows it in the SAME read
+        // is a real, valid UTF-8 lead byte for a 2-byte sequence -- it must
+        // not be swept into the same lossy decode as the invalid 0xFF, or
+        // the real completing byte on the next read (0xA9, completing "é")
+        // can never reassemble with it.
+        let mut r = Utf8Reassembler::default();
+        let first = r.push(&[0xFF, 0xC3]);
+        assert_eq!(
+            first, "\u{FFFD}",
+            "only the genuinely invalid byte is lossy-decoded now"
+        );
+        assert_eq!(
+            r.pending,
+            vec![0xC3],
+            "the real, valid-but-incomplete lead byte must survive to the next read"
+        );
+        let second = r.push(&[0xA9]);
+        assert_eq!(
+            second, "é",
+            "the surviving lead byte must still complete into 'é'"
         );
     }
 

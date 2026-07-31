@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 interface StatusEntry {
   path: string;
@@ -783,12 +783,30 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   // staged row's expansion and after a hunk is staged/unstaged (whose own
   // action changes the real remaining hunk list, so it's always refetched
   // fresh, never patched client-side).
+  // Real, deliberate stale-response guard: two overlapping `git_diff_hunks`
+  // fetches (rapidly switching which row is expanded, or `stageHunk`/
+  // `unstageHunk` re-triggering this same fetch while a slower earlier
+  // one is still in flight) can resolve out of order. Without tracking
+  // which expansion is actually current, a slow response for a *previous*
+  // file could land after a newer one and silently overwrite `hunks` with
+  // the wrong file's data -- which `stageHunk`/`unstageHunk` would then
+  // mis-target against `entry.path`, writing to the wrong index entry.
+  const expandedDiffKeyRef = useRef<string | null>(null);
+
   const refreshHunks = useCallback(
     (path: string, staged: boolean) => {
+      const key = `${path} ${staged}`;
+      expandedDiffKeyRef.current = key;
       window.spartan
         .call("git_diff_hunks", { project_root: root, path, staged })
-        .then((result) => setHunks((result as { hunks: HunkInfo[] }).hunks))
-        .catch((err: Error) => setHunksError(err.message));
+        .then((result) => {
+          if (expandedDiffKeyRef.current !== key) return;
+          setHunks((result as { hunks: HunkInfo[] }).hunks);
+        })
+        .catch((err: Error) => {
+          if (expandedDiffKeyRef.current !== key) return;
+          setHunksError(err.message);
+        });
     },
     [root]
   );
@@ -797,6 +815,7 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
     (path: string, staged: boolean, e: React.MouseEvent) => {
       e.stopPropagation();
       if (expandedDiff && expandedDiff.path === path && expandedDiff.staged === staged) {
+        expandedDiffKeyRef.current = null;
         setExpandedDiff(null);
         setDiffContent(null);
         setDiffError(null);

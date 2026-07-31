@@ -368,7 +368,17 @@ export default function LeoChatPanel({ client }: LeoChatPanelProps): React.React
       const d = (data ?? {}) as Record<string, unknown>;
       if (event === "leo_plan_ready") {
         const goal = typeof d.goal === "string" ? d.goal : "";
-        setPlan(d as unknown as LeoPlan);
+        // Real validation, not a bare cast: `plan.files.map(...)` renders
+        // unconditionally once a plan is set, and that render happens on a
+        // *later* pass, outside this handler's own try/catch -- a
+        // malformed/missing `files` field would throw there, not here,
+        // and take the whole panel down with no error message at all.
+        setPlan({
+          goal,
+          approach: typeof d.approach === "string" ? d.approach : "",
+          files: Array.isArray(d.files) ? (d.files as string[]) : [],
+          risk_notes: typeof d.risk_notes === "string" ? d.risk_notes : "",
+        });
         setAgentState("AwaitingApproval");
         setError(null);
         speak(`Leo has a plan: ${goal}`);

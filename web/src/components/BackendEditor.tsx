@@ -1098,6 +1098,25 @@ export default function BackendEditor({
   const [lineCount, setLineCount] = useState(1);
   const prevContentRef = useRef(file.content);
 
+  /** Shared choke point for the rope-anchored-breakpoint shift (P1 backlog,
+   * §75.8-named gap). Every real content mutation -- typed and programmatic
+   * alike -- must call this with the pre-edit and post-edit content before
+   * `prevContentRef.current` is overwritten, so a breakpoint's line number
+   * survives an edit above/below it rather than silently pointing at the
+   * wrong line. Mirrors `desktop/src/components/Editor.tsx`'s own identical
+   * helper. */
+  const shiftBreakpointsBeforeReplace = useCallback(
+    (oldContent: string, newContent: string) => {
+      if (breakpoints.length > 0 && onBreakpointsShift) {
+        const shifted = shiftBreakpointsForEdit(breakpoints, oldContent, newContent);
+        if (shifted !== breakpoints) {
+          onBreakpointsShift(shifted);
+        }
+      }
+    },
+    [breakpoints, onBreakpointsShift]
+  );
+
   /** Real inline git blame (P1 backlog) -- per-line commit attribution
    * from the real backend `git_blame` (spartan-git), reached over
    * `client.call` instead of `window.spartan.call`. Alt+B toggles it.
@@ -1385,6 +1404,7 @@ export default function BackendEditor({
         prevContentRef.current.slice(0, insertAt) +
         item.insertText +
         prevContentRef.current.slice(replaceEnd);
+      shiftBreakpointsBeforeReplace(prevContentRef.current, newContent);
       prevContentRef.current = newContent;
       setLineCount(newContent.split("\n").length);
       onContentChange(file.path, newContent);
@@ -1403,7 +1423,7 @@ export default function BackendEditor({
         requestAnimationFrame(() => el.setSelectionRange(newPos, newPos));
       }
     },
-    [client, completionState, file.docId, file.path, onContentChange]
+    [client, completionState, file.docId, file.path, onContentChange, shiftBreakpointsBeforeReplace]
   );
 
   /** Real jump-landing logic, ported verbatim from `desktop/`'s own
@@ -1797,6 +1817,7 @@ export default function BackendEditor({
         } else {
           const oldLength = [...prevContentRef.current].length;
           const caret = textareaRef.current?.selectionStart ?? 0;
+          shiftBreakpointsBeforeReplace(prevContentRef.current, d.formatted);
           prevContentRef.current = d.formatted;
           setLineCount(d.formatted.split("\n").length);
           onContentChange(file.path, d.formatted);
@@ -1830,7 +1851,7 @@ export default function BackendEditor({
       }
     });
     return unsubscribe;
-  }, [client, file.docId, file.path, onContentChange]);
+  }, [client, file.docId, file.path, onContentChange, shiftBreakpointsBeforeReplace]);
 
   const triggerFormatDocument = useCallback((): Promise<void> => {
     return new Promise((resolve) => {
@@ -1854,6 +1875,7 @@ export default function BackendEditor({
           if (trimmed !== prevContentRef.current) {
             const oldLength = [...prevContentRef.current].length;
             const caret = el.selectionStart;
+            shiftBreakpointsBeforeReplace(prevContentRef.current, trimmed);
             prevContentRef.current = trimmed;
             setLineCount(trimmed.split("\n").length);
             onContentChange(file.path, trimmed);
@@ -1887,7 +1909,7 @@ export default function BackendEditor({
         }
       }, 10000);
     });
-  }, [client, file.docId, file.path, onContentChange]);
+  }, [client, file.docId, file.path, onContentChange, shiftBreakpointsBeforeReplace]);
 
   /** Real "Find & Replace" (Ctrl+F / Ctrl+H), ported verbatim from
    * `desktop/`'s own identical wiring -- see that file's own doc comment
@@ -2097,15 +2119,9 @@ export default function BackendEditor({
       if (snippetSessionRef.current) {
         adjustSnippetStops(snippetSessionRef.current, prevContentRef.current, newContent);
       }
-      // Real rope-anchored breakpoint shifting, ported verbatim from
-      // `desktop/`'s own identical wiring -- must run before
+      // Real rope-anchored breakpoint shifting -- must run before
       // `prevContentRef.current` is overwritten below.
-      if (breakpoints.length > 0 && onBreakpointsShift) {
-        const shifted = shiftBreakpointsForEdit(breakpoints, prevContentRef.current, newContent);
-        if (shifted !== breakpoints) {
-          onBreakpointsShift(shifted);
-        }
-      }
+      shiftBreakpointsBeforeReplace(prevContentRef.current, newContent);
       prevContentRef.current = newContent;
       setLineCount(newContent.split("\n").length);
       onContentChange(file.path, newContent);
@@ -2133,16 +2149,7 @@ export default function BackendEditor({
         setSignatureHelpState(null);
       }
     },
-    [
-      client,
-      charWidth,
-      lineHeightPx,
-      file.docId,
-      file.path,
-      onContentChange,
-      breakpoints,
-      onBreakpointsShift,
-    ]
+    [client, charWidth, lineHeightPx, file.docId, file.path, onContentChange, shiftBreakpointsBeforeReplace]
   );
 
   const handleChange = useCallback(
@@ -2549,6 +2556,7 @@ export default function BackendEditor({
           .then((result) => {
             const r = result as { changed: boolean; content: string };
             if (r.changed) {
+              shiftBreakpointsBeforeReplace(prevContentRef.current, r.content);
               prevContentRef.current = r.content;
               onContentChange(file.path, r.content);
             }
@@ -2578,6 +2586,7 @@ export default function BackendEditor({
       file.docId,
       file.path,
       onContentChange,
+      shiftBreakpointsBeforeReplace,
     ]
   );
 

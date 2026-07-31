@@ -7931,8 +7931,12 @@ first — it's the parity reference until each row there is actually reimplement
   §75.59). No `codeAction`/formatter-coverage-for-Kotlin-C#-Java features were built this pass,
   since neither is honestly verifiable in this specific environment (the tools aren't installed) --
   both remain real, named, open backlog rows rather than shipped-but-unverified code.
-- **Real, working code — rope-anchored breakpoints in all three real editing surfaces
-  (`desktop/Editor.tsx`, `web/BackendEditor.tsx`), closing the exact §75.8-named "line-number
+- **Real, working code — rope-anchored breakpoints in both real DAP-capable editing surfaces
+  (`desktop/src/components/Editor.tsx`, `web/src/components/BackendEditor.tsx` -- `web/src/
+  components/Editor.tsx`, the pure client-side File System Access + WASM editor with no backend
+  connection, has no DAP/breakpoints feature at all to shift, confirmed by grep before writing this
+  correction rather than assumed from this project's usual "all three surfaces" convention),
+  closing the exact §75.8-named "line-number
   breakpoints instead of rope-anchored persistence" gap, verified against a real live `debugpy`
   session, not just UI state (task #291)**: continues the same "continue with the roadmap" push.
   New `breakpointShift.ts` (mirrored verbatim in `desktop/src/` and `web/src/`, matching this
@@ -7960,7 +7964,9 @@ first — it's the parity reference until each row there is actually reimplement
   reference, `condition`/`logMessage` fields surviving a shift intact, and an empty breakpoints
   array staying a cheap no-op) -- all 11 passed on the real algorithm before any TypeScript was
   written. Wired into `Editor.tsx`'s/`BackendEditor.tsx`'s single `applyProgrammaticEdit` choke
-  point -- the one place every real edit (typed and programmatic) already flows through -- via a
+  point -- the shared path every typed and programmatic edit routes through except Format-on-Save,
+  which applies via its own separate success-event handler (named explicitly below, not silently
+  glossed over) -- via a
   new `onBreakpointsShift?: (next: BreakpointSpec[]) => void` prop, computed against
   `prevContentRef.current` (the real pre-edit text) vs. `newContent` *before* that ref gets
   overwritten a few lines later (the same ordering discipline the pre-existing snippet-tab-stop
@@ -8095,9 +8101,9 @@ first — it's the parity reference until each row there is actually reimplement
   exercised); the real Electron window remains unlaunchable in this session (same standing gap
   since §75.59). This closes the last named row in the Terminal & sessions backlog table.
 - **Real, working code — a CodeRabbit review-response pass on PR #7 (rope-anchored breakpoints
-  through PTY resize), one real production bug found and fixed, one real environment-specific test
+  through PTY resize), two real production bugs found and fixed, one real environment-specific test
   fixture limitation found and worked around correctly (task: "Review with coderabbit and merge
-  everything")**: closes out CodeRabbit's own actionable findings before merging. **The one real
+  everything")**: closes out CodeRabbit's own actionable findings before merging. **The first real
   production bug**: `github_list_pull_requests` (task #284) made its real, live GitHub API call
   *synchronously* on `handle_request`'s single dispatch thread -- since both the stdio transport
   `desktop/` drives and a single WebSocket connection `web/` drives process one request at a time,

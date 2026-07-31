@@ -83,10 +83,14 @@ cd mobile && npx tsc --noEmit && npx expo export --platform android
 cd cloud && cargo fmt --all -- --check && cargo clippy --workspace --all-targets && cargo test --workspace
 ```
 
-## Current repo state (as of this handoff)
+## Current repo state
 
-- Branch `claude/testing-continuation-esj63q`, tracking a draft PR (`#7`) against `main`. Working
-  tree is clean; CI is green on the latest commit.
+Branch, PR status, working-tree cleanliness, and CI results are all real but change constantly
+across sessions — a hardcoded snapshot here would go stale the moment the next commit lands or PR
+merges. Check `git status`, `git branch --show-current`, and the current PR/CI state directly
+before relying on any of it; don't assume a prior agent's note about "CI is green" or "branch X"
+still holds. Durable facts about the repo's own real, current architecture:
+
 - The GUI Builder (a previously-shipped Design screen + `gui-builder/` npm project) was **removed
   from the product entirely** at the user's explicit request — it is not deferred, not
   placeholdered. Don't reintroduce it without discussing it first; see `CLAUDE.md`'s own removal
