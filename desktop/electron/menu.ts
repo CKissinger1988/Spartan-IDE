@@ -33,32 +33,33 @@
 // destructive; the fix here is not compounding that with an easy-to-hit
 // keybinding, not pretending the underlying gap is closed.
 //
-// A real, honest, right-sized response to a CodeRabbit review finding on
-// this exact point: the reviewer's suggested fix -- a full dirty-state
-// query across the preload/main IPC boundary, gating these actions on
-// whether the renderer actually has unsaved tabs -- is real, valid, and
-// explicitly labeled by the reviewer itself as a "heavy lift." It's also
-// scope creep: that dirty-state contract would need to cover every other
-// real state-discarding path this app already has (closing a tab,
-// switching files), which is exactly the pre-existing, separately-tracked
-// unsaved-changes-on-close/switch gap named above, not something specific
-// to these three menu items. Building it properly here, for only these
-// three actions, would be a narrower, worse version of that real future
-// work. The right-sized fix landed instead: a plain confirmation dialog
-// (`confirmDestructiveReplace`) before any of the three run, unconditional
-// on dirty state (this app has no cheap way to query it from the main
-// process yet) -- a user must now deliberately confirm before losing
-// state, rather than one click silently doing it, without taking on the
-// larger IPC contract as a side effect of adding a menu.
+// All three of the above are also gated behind one shared confirmation
+// dialog (`confirmDestructiveReplace`) that always warns before proceeding
+// -- unconditional, not dirty-state-aware, since there's no cheap way to
+// query the renderer's real dirty state from the main process yet. A full
+// dirty-state IPC contract would need to cover every other real
+// state-discarding path this app has (closing a tab, switching files),
+// which is the same pre-existing unsaved-changes-on-close/switch gap named
+// above -- real, separate, larger scope than this one menu file.
+//
+// Every async dialog/external-link action (`showOpenDialog`,
+// `showMessageBox`, `shell.openExternal`) is wrapped so a real rejection
+// (an interrupted native dialog, a failed launch) surfaces as a visible
+// error dialog instead of an unhandled promise rejection.
 //
 // macOS gets its own conventional app-name menu (About/Quit) per Electron's
 // documented pattern, since Quit lives there by OS convention, not under
-// File -- written for correctness but **not independently verified live**;
-// this project has never had access to real Apple hardware (see
-// `README.md`'s own standing "no macOS/iOS builds in project history" note).
-// Everything else here was verified live on Linux via a real launched
-// window, matching the exact real accelerators inventoried from every
-// `onKeyDown`/`addEventListener("keydown", ...)` call site in `src/`.
+// File. Its About command reuses the exact same `showAboutDialog` the
+// non-mac Help menu uses (rather than the native `role: "about"`, which
+// can't show this app's own version/Electron/Chromium/Node detail) --
+// and the Help menu's own "About Spartan IDE" item is only added on
+// non-mac platforms, so there is never more than one About command on
+// any platform. Written for correctness but **not independently verified
+// live**; this project has never had access to real Apple hardware (see
+// `README.md`'s own standing "no macOS/iOS builds in project history"
+// note). Everything else here was verified live on Linux via a real
+// launched window, matching the exact real accelerators inventoried from
+// every `onKeyDown`/`addEventListener("keydown", ...)` call site in `src/`.
 
 import { app, BrowserWindow, Menu, dialog, shell } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
@@ -67,6 +68,16 @@ export const REPO_URL = "https://github.com/CKissinger1988/Spartan-IDE";
 
 function focusedOrMainWindow(mainWindow: BrowserWindow | null): BrowserWindow | null {
   return BrowserWindow.getFocusedWindow() ?? mainWindow;
+}
+
+/**
+ * Surfaces a real, unexpected menu-action failure (a rejected native dialog,
+ * a failed external-link launch) as a visible error dialog instead of a
+ * silent unhandled promise rejection.
+ */
+function reportMenuActionFailure(title: string, err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err);
+  dialog.showErrorBox(title, message);
 }
 
 /**
@@ -91,6 +102,30 @@ async function confirmDestructiveReplace(
     detail: "Any unsaved changes in open tabs will be lost.",
   });
   return result.response === 0;
+}
+
+/**
+ * The one real About dialog, shared by both the macOS app-name menu and the
+ * non-mac Help menu -- see this file's own header comment on why it's never
+ * rendered from both places on the same platform at once.
+ */
+function showAboutDialog(getMainWindow: () => BrowserWindow | null): void {
+  const win = focusedOrMainWindow(getMainWindow());
+  const detail = [
+    `Version ${app.getVersion()}`,
+    `Electron ${process.versions.electron}`,
+    `Chromium ${process.versions.chrome}`,
+    `Node ${process.versions.node}`,
+  ].join("\n");
+  const options: Electron.MessageBoxOptions = {
+    type: "info",
+    title: "About Spartan IDE",
+    message: "Spartan IDE",
+    detail,
+    buttons: ["OK"],
+  };
+  const promise = win ? dialog.showMessageBox(win, options) : dialog.showMessageBox(options);
+  promise.catch((err) => reportMenuActionFailure("Could not show the About dialog", err));
 }
 
 /**
@@ -120,16 +155,20 @@ export function buildApplicationMenu(
         click: async () => {
           const win = focusedOrMainWindow(getMainWindow());
           if (!win) return;
-          const result = await dialog.showOpenDialog(win, {
-            properties: ["openDirectory", "createDirectory"],
-          });
-          if (result.canceled || !result.filePaths[0]) return;
-          const confirmed = await confirmDestructiveReplace(
-            win,
-            "Open a different folder?"
-          );
-          if (!confirmed) return;
-          loadRootIntoWindow(win, result.filePaths[0]);
+          try {
+            const result = await dialog.showOpenDialog(win, {
+              properties: ["openDirectory", "createDirectory"],
+            });
+            if (result.canceled || !result.filePaths[0]) return;
+            const confirmed = await confirmDestructiveReplace(
+              win,
+              "Open a different folder?"
+            );
+            if (!confirmed) return;
+            loadRootIntoWindow(win, result.filePaths[0]);
+          } catch (err) {
+            reportMenuActionFailure("Could not open a different folder", err);
+          }
         },
       },
       { type: "separator" },
@@ -147,9 +186,13 @@ export function buildApplicationMenu(
         click: async () => {
           const win = focusedOrMainWindow(getMainWindow());
           if (!win) return;
-          const confirmed = await confirmDestructiveReplace(win, "Reload the app?");
-          if (!confirmed) return;
-          win.webContents.reload();
+          try {
+            const confirmed = await confirmDestructiveReplace(win, "Reload the app?");
+            if (!confirmed) return;
+            win.webContents.reload();
+          } catch (err) {
+            reportMenuActionFailure("Could not reload", err);
+          }
         },
       },
       {
@@ -157,12 +200,16 @@ export function buildApplicationMenu(
         click: async () => {
           const win = focusedOrMainWindow(getMainWindow());
           if (!win) return;
-          const confirmed = await confirmDestructiveReplace(
-            win,
-            "Force reload, ignoring the cache?"
-          );
-          if (!confirmed) return;
-          win.webContents.reloadIgnoringCache();
+          try {
+            const confirmed = await confirmDestructiveReplace(
+              win,
+              "Force reload, ignoring the cache?"
+            );
+            if (!confirmed) return;
+            win.webContents.reloadIgnoringCache();
+          } catch (err) {
+            reportMenuActionFailure("Could not force reload", err);
+          }
         },
       },
       { type: "separator" },
@@ -186,37 +233,31 @@ export function buildApplicationMenu(
     submenu: [
       {
         label: "Documentation",
-        click: () => shell.openExternal(REPO_URL),
+        click: () => {
+          shell
+            .openExternal(REPO_URL)
+            .catch((err) => reportMenuActionFailure("Could not open the documentation link", err));
+        },
       },
       {
         label: "Report an Issue",
-        click: () => shell.openExternal(`${REPO_URL}/issues/new`),
-      },
-      { type: "separator" },
-      {
-        label: "About Spartan IDE",
         click: () => {
-          const win = focusedOrMainWindow(getMainWindow());
-          const detail = [
-            `Version ${app.getVersion()}`,
-            `Electron ${process.versions.electron}`,
-            `Chromium ${process.versions.chrome}`,
-            `Node ${process.versions.node}`,
-          ].join("\n");
-          const options: Electron.MessageBoxOptions = {
-            type: "info",
-            title: "About Spartan IDE",
-            message: "Spartan IDE",
-            detail,
-            buttons: ["OK"],
-          };
-          if (win) {
-            void dialog.showMessageBox(win, options);
-          } else {
-            void dialog.showMessageBox(options);
-          }
+          shell
+            .openExternal(`${REPO_URL}/issues/new`)
+            .catch((err) => reportMenuActionFailure("Could not open the issue tracker", err));
         },
       },
+      // On macOS, "About Spartan IDE" already lives in the app-name menu
+      // below -- adding it here too would give macOS two About commands.
+      ...(isMac
+        ? []
+        : ([
+            { type: "separator" },
+            {
+              label: "About Spartan IDE",
+              click: () => showAboutDialog(getMainWindow),
+            },
+          ] as MenuItemConstructorOptions[])),
     ],
   };
 
@@ -225,7 +266,10 @@ export function buildApplicationMenu(
         {
           label: app.name,
           submenu: [
-            { role: "about" },
+            // The real custom About dialog (with actual version/Electron/
+            // Chromium/Node detail), not `role: "about"` -- that role's
+            // native dialog can't show this app's own detail text.
+            { label: "About Spartan IDE", click: () => showAboutDialog(getMainWindow) },
             { type: "separator" },
             { role: "services" },
             { type: "separator" },

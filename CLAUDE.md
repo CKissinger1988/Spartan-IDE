@@ -8416,9 +8416,10 @@ first — it's the parity reference until each row there is actually reimplement
   more), not something to bolt onto a menu PR. The right-sized fix landed instead: a new
   `confirmDestructiveReplace(win, message)` helper (`dialog.showMessageBox`, `type: "warning"`,
   `buttons: ["Continue", "Cancel"]`, `defaultId: 1`/`cancelId: 1` so Enter's default is the safe
-  Cancel) gates all three actions unconditionally on dirty state (this app has no cheap way to query
-  it from the main process yet) -- a user must now deliberately confirm before losing state, rather
-  than one click silently doing it, without taking on the larger IPC contract as a side effect.
+  Cancel) shows the same warning dialog for all three actions; it does not query dirty state yet
+  (this app has no cheap way to do that from the main process) -- a user must now deliberately
+  confirm before losing state, rather than one click silently doing it, without taking on the
+  larger IPC contract as a side effect.
   `menu.ts`'s own header comment records the finding and this reasoning directly, not just the fix.
   `npm run typecheck`/`npm run build` both re-confirmed clean. **Real, live, end-to-end verification
   through the same genuine Electron process** (Xvfb+fluxbox+xdotool, zero shim, a fresh scratch git
@@ -8435,6 +8436,44 @@ first — it's the parity reference until each row there is actually reimplement
   Windows verification (same standing Linux-only scope); the real Electron window and its Xvfb/
   fluxbox/vite-dev-server processes were torn down and the scratch fixture removed at the end of
   this pass.
+- **Real, working code — a real macOS duplicate-About fix, real error handling for every async
+  menu action, and a documentation-accuracy fix, closing CodeRabbit's second review round on the
+  native-menu PR (task #295, second follow-up)**: CodeRabbit's full re-review of the confirmation-
+  gate commit found three more real, valid issues, none of them re-litigating the already-resolved
+  finding. **(1) A real macOS-only bug**: the mac app-name menu's `{ role: "about" }` and the Help
+  menu's own custom "About Spartan IDE" item would both render on macOS, giving two About commands
+  -- confirmed by reading the template's own unconditional `helpMenu` inclusion, not assumed. Fixed
+  by extracting the existing About-dialog logic into a shared `showAboutDialog(getMainWindow)`
+  function, used by *both* the mac app-name menu (replacing `role: "about"`, whose native dialog
+  can't show this app's own version/Electron/Chromium/Node detail anyway) and the non-mac Help
+  menu -- with the Help menu's own About item now spread in only `...(isMac ? [] : [...])`, so
+  there is exactly one About command on every platform. **(2) A real robustness gap, Major
+  severity**: every async `click` handler calling `dialog.showOpenDialog`/`showMessageBox` or
+  `shell.openExternal` had no shared rejection path -- a real native-dialog interruption or a
+  failed external-link launch (no default browser, an invalid URL) would become a silent unhandled
+  promise rejection instead of a visible error. Fixed with a new `reportMenuActionFailure(title,
+  err)` helper (`dialog.showErrorBox`) and `try`/`catch` (or `.catch()`) around every one of these
+  calls -- Open Folder, Reload, Force Reload, Documentation, Report an Issue, and the About dialog
+  itself. **(3) A real documentation-accuracy fix**: this file's own immediately preceding bullet
+  said the confirmation gate "gates all three actions unconditionally on dirty state," which reads
+  as if dirty-state detection exists -- corrected to state plainly that it shows the same warning
+  dialog for all three actions and does not query dirty state at all yet (fixed above, in place, in
+  that bullet). A fourth, real but purely stylistic nitpick (trim the file's own header comment,
+  which read like a review transcript rather than durable rationale) was also addressed by
+  rewriting it to state the "why" concisely without narrating the review conversation itself.
+  `npm run typecheck`/`npm run build` both re-confirmed clean. **Real, live re-verification through
+  the same genuine Electron process** (Xvfb+fluxbox+xdotool, a fresh second scratch fixture): the
+  refactored `showAboutDialog` was confirmed still working correctly on the non-mac path -- clicking
+  Help -> About Spartan IDE produced the identical real, screenshotted dialog with genuine version/
+  Electron/Chromium/Node strings as before the refactor, confirming the extraction into a shared
+  function didn't regress the already-verified non-mac behavior. **What this does not confirm**: no
+  live verification of the macOS-specific dedup itself (can't be live-verified in this Linux-only
+  environment by construction, matching this file's own standing "no Apple hardware" scope) or the
+  new error-dialog paths (triggering a genuine `dialog`/`shell.openExternal` rejection live would
+  need contriving a real native-level failure, e.g. no default browser configured, not attempted
+  here) -- both verified by code review, the TypeScript compiler, and the production build, the same
+  bar this project applies to its other main-process-only fixes (e.g. §240's single-instance lock).
+  No further CodeRabbit findings remained after this round.
 
 ## Build & test
 
