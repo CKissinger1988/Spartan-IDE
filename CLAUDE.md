@@ -8334,6 +8334,77 @@ first — it's the parity reference until each row there is actually reimplement
   fluxbox/vite-dev-server processes were all torn down and the scratch fixture removed at the end
   of this pass -- a fresh session needs to independently relaunch, not assume a still-running
   instance.
+- **Real, working code — a real native application menu (File/View/Window/Help), closing the
+  "Native application menu" backlog gap by using the real Electron launch capability from the
+  immediately preceding pass, task #295**: continues "continue work here and use local system as
+  needed." §240's own account had deferred this exact feature over a real, unresolved question --
+  whether a menu's role-based Edit accelerators (Undo/Redo/Cut/Copy/Paste) would shadow the
+  editor's own JS-level Ctrl+Z/Y/X/C/V handlers -- and explicitly said it needed a live Electron
+  launch to investigate safely, which wasn't possible in any prior session. With the real Electron
+  binary from the immediately preceding pass still present in this session, that investigation
+  finally happened, and the real answer was more consequential than the original framing assumed:
+  **the risk wasn't merely hypothetical, it was already live**, silently, in every prior session
+  that could launch Electron at all. `main.ts` had never once called `Menu.setApplicationMenu()`,
+  so Electron auto-creates its own implicit default menu -- confirmed live, screenshotted, by
+  clicking "Edit" in the real running app and finding Undo (Ctrl+Z), Redo (Ctrl+Shift+Z), Cut
+  (Ctrl+X), Copy (Ctrl+C), Paste (Ctrl+V), and Select All (Ctrl+A), the *exact* same accelerators
+  `Editor.tsx`'s own keydown handler already claims, sitting there unaddressed the entire time this
+  project has had a real Electron-capable editor. New `desktop/electron/menu.ts`
+  (`buildApplicationMenu`) builds a real File/View/Window/Help menu -- **deliberately no Edit menu
+  at all**, since calling `Menu.setApplicationMenu` with any real template replaces the implicit
+  default entirely, and every real editing operation this app supports is already fully keyboard-
+  accessible through the editor's own real keybindings; a redundant native Edit menu would only
+  reintroduce the exact conflict this file exists to remove, for zero real discoverability gain.
+  A second, real, deliberate safety choice: "Open Folder..." (reuses the exact same real
+  `loadRootIntoWindow` function `spartan:open_project`'s IPC handler and the New Project wizard
+  already depend on -- one real implementation, not a second one to keep in sync) and the standard
+  Electron "Reload"/"Force Reload" role actions are all given **no accelerator, click-only** --
+  each can silently discard every open tab/unsaved edit with zero warning, and this project's own
+  unsaved-changes-on-close/switch gap is real and still open (see `docs/FUTURE_FEATURES.md`), so
+  the fix here is not compounding an already-named gap with an easy-to-hit keybinding, not
+  pretending the underlying gap is closed. "Toggle Developer Tools" (`Ctrl+Shift+I`, cross-checked
+  against every real keybinding this session inventoried via a full grep of every `onKeyDown`/
+  `addEventListener("keydown", ...)` call site across `desktop/src/`, not assumed unclaimed) and
+  "Toggle Full Screen" (`F11`, real, plain, unclaimed -- the app only ever uses `Shift+F12` for
+  find-references, never bare `F12`) round out View; Window gets `role: "minimize"`/`role: "close"`
+  (`Ctrl+W`, also real and unclaimed); Help gets Documentation/Report an Issue (both real
+  `shell.openExternal` calls reusing a new shared `REPO_URL` constant, replacing a duplicate
+  hardcoded string that used to live only in the pre-existing `open_repository_page` IPC handler)
+  and a real "About Spartan IDE" item showing a genuine `dialog.showMessageBox` with
+  `app.getVersion()`/`process.versions.electron`/`.chrome`/`.node`. A real, honestly-scoped, macOS-
+  specific addition: the template branches to Electron's own documented app-name-menu convention
+  (About/Services/Hide/Quit under the app name, not under File) on `process.platform === "darwin"`
+  -- written for correctness but **not independently verified live**, since this project has never
+  had access to real Apple hardware (matches the standing "no macOS/iOS builds in project history"
+  note this file and `README.md` both already carry). `npm run typecheck`/`npm run build` both
+  clean after the change. **Real, live, end-to-end verification through the same genuine Electron
+  process the immediately preceding pass established** (Xvfb+fluxbox+xdotool, zero shim): the new
+  menu bar rendered exactly `File | View | Window | Help`, no Edit; typing a real 7-character marker
+  then pressing Ctrl+Z exactly 7 times removed exactly one character per press, landing back at the
+  exact original content -- confirming the app's own documented one-checkpoint-per-keystroke real
+  backend undo behavior is now unambiguous, with no more silent double-registration risk from a
+  competing native accelerator; 7 more Ctrl+Shift+Z presses fully restored the marker, a real,
+  exact round trip; the real About dialog was independently screenshotted (window `8389216`,
+  confirmed focused, at position `1,45` -- Fluxbox placed it behind the main window rather than
+  centered, a real, minor WM quirk, not a bug in the dialog itself) showing the genuine version/
+  Electron/Chromium/Node strings; File's "Open Folder..." (no accelerator) and "Quit" (`Ctrl+Q`,
+  unclaimed) were confirmed rendered; View's real Toggle Developer Tools genuinely opened a real,
+  docked DevTools panel showing the real live DOM (`data-theme="dark"`) and closed cleanly on a
+  second press; Window's Minimize (`Ctrl+M`)/Close (`Ctrl+W`) were confirmed rendered with no
+  conflicting accelerators. A real, incidental finding surfaced by having DevTools open for the
+  above check, explicitly **not** chased down as part of this pass since it's unrelated to the menu
+  feature and predates it: the console showed a real `MaxListenersExceededWarning` for
+  `spartan:event` listeners and two real `lsp_hover`/`lsp_document_highlight` "no live LSP session"
+  errors -- the former is consistent with this session's own repeated dev-server HMR reloads during
+  a long live-testing sequence (a known Vite/Electron dev-mode characteristic, not necessarily a
+  production leak), the latter are honest, expected failures since this specific test run never
+  spawned a real `pyright-langserver`; named here for the record, not investigated further. **What
+  this does not confirm**: no independent live verification on macOS/Windows (Linux only, same
+  standing platform scope as every other `desktop/` pass); the incidental EventEmitter-listener
+  finding above was observed, not diagnosed or fixed, and may or may not indicate a real leak
+  outside this session's own heavy repeated-reload test pattern; the real Electron window and its
+  Xvfb/fluxbox/vite-dev-server processes were all torn down and the scratch fixture removed at the
+  end of this pass, matching the immediately preceding pass's own cleanup discipline.
 
 ## Build & test
 
