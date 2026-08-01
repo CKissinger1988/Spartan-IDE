@@ -8405,6 +8405,36 @@ first — it's the parity reference until each row there is actually reimplement
   outside this session's own heavy repeated-reload test pattern; the real Electron window and its
   Xvfb/fluxbox/vite-dev-server processes were all torn down and the scratch fixture removed at the
   end of this pass, matching the immediately preceding pass's own cleanup discipline.
+- **Real, working code — a real confirmation gate on the three state-discarding menu actions,
+  closing a real CodeRabbit review finding on the native-menu PR (task #295 follow-up)**: CodeRabbit
+  flagged, correctly, that "Open Folder...", "Reload", and "Force Reload" replace/reload the
+  renderer with zero approval gate, silently discarding unsaved tabs -- and suggested a full
+  dirty-state query across the preload/main IPC boundary to gate them, explicitly labeling its own
+  suggestion a "heavy lift." That labeled scope was real: building a proper dirty-state contract for
+  only these three menu items would be a narrower, worse version of this project's own separately-
+  tracked, much broader unsaved-changes-on-close/switch gap (closing a tab, switching files, and
+  more), not something to bolt onto a menu PR. The right-sized fix landed instead: a new
+  `confirmDestructiveReplace(win, message)` helper (`dialog.showMessageBox`, `type: "warning"`,
+  `buttons: ["Continue", "Cancel"]`, `defaultId: 1`/`cancelId: 1` so Enter's default is the safe
+  Cancel) gates all three actions unconditionally on dirty state (this app has no cheap way to query
+  it from the main process yet) -- a user must now deliberately confirm before losing state, rather
+  than one click silently doing it, without taking on the larger IPC contract as a side effect.
+  `menu.ts`'s own header comment records the finding and this reasoning directly, not just the fix.
+  `npm run typecheck`/`npm run build` both re-confirmed clean. **Real, live, end-to-end verification
+  through the same genuine Electron process** (Xvfb+fluxbox+xdotool, zero shim, a fresh scratch git
+  fixture): typed a real marker into `main.rs`, confirmed the dirty tab marker; opening View ->
+  Reload produced a real, screenshotted native dialog reading "Reload the app?" / "Any unsaved
+  changes in open tabs will be lost." with Continue/Cancel buttons; clicking **Cancel** was confirmed
+  to leave the dirty tab and its unsaved content completely untouched (no reload fired); reopening
+  View -> Reload and clicking **Continue** was confirmed to genuinely fire the real reload -- the
+  renderer reset to a fresh, no-tabs-open state, proving the gate is a real precondition on the
+  actual destructive action, not cosmetic. **What this does not confirm**: "Open Folder..."'s own
+  identical gate was verified by code inspection and the shared helper function, not independently
+  re-clicked through a real folder-picker dialog in this pass (Reload/Force Reload's live path was
+  prioritized since they're the two CodeRabbit named as still-unaddressed); no independent macOS/
+  Windows verification (same standing Linux-only scope); the real Electron window and its Xvfb/
+  fluxbox/vite-dev-server processes were torn down and the scratch fixture removed at the end of
+  this pass.
 
 ## Build & test
 
