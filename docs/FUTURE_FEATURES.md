@@ -151,7 +151,7 @@ Priority key:
 |---|---|---|
 | Code signing (Windows/macOS/Linux) | P1 | Named unresolved on every packaging pass. Gates trustworthy installers + auto-update apply. |
 | Auto-update download + install + restart | P2 | Checker exists (§75.49); apply path deferred behind signing. |
-| Native application menu (File/Edit/View/Help + About) | P2 | Deliberately deferred (§240) over Edit-accelerator conflict risk; needs a live Electron launch to validate safely. |
+| Native application menu (File/Edit/View/Help + About) | P2 | Deliberately deferred (§240) over Edit-accelerator conflict risk; needs a live Electron launch to validate safely — now demonstrated achievable in one real session (task #294), though not guaranteed in every environment; still unbuilt. |
 | Renderer bundle code-splitting | P3 | Desktop renderer is a single >500 KB chunk. |
 | macOS / iOS builds | P3 | No Apple-platform build in project history. |
 

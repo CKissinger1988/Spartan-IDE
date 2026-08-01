@@ -39,10 +39,13 @@ Real, unedited Playwright + Chromium captures of the actual running React compon
 against a real running `spartan-backend`/`spartan-devserver` process and a real git
 project fixture — not mockups, not fabricated data. The desktop shots use this
 project's own established real-WebSocket-shim technique (see `desktop/README.md`),
-since the real Electron binary itself remains unlaunchable in every session so far (a
-standing, reported-not-routed-around network policy block — see `desktop/README.md`'s
-own "environment-specific gap" section); the shim only stands in for Electron's
-`contextBridge` preload hop, every IPC call and response is real. The web shots run
+a technique that remains useful since a real Electron launch depends on a real,
+environment-specific network condition not guaranteed in every session (a genuine
+native window *has* been launched, screenshotted, and verified end-to-end in one
+session — see `desktop/README.md`'s own "environment-specific network condition"
+section, which also documents a real preload-script bug that launch uncovered and
+fixed); the shim only stands in for Electron's `contextBridge` preload hop, every
+IPC call and response is real. The web shots run
 directly against `web/`'s own genuine `BackendClient.connect()` — no shim needed at
 all — in the backend-connected mode added since the GUI Builder removal, which also
 gave `web/` real tree-sitter syntax highlighting, a Git panel, a Leo chat panel, and

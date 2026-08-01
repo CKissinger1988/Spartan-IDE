@@ -8269,6 +8269,71 @@ first — it's the parity reference until each row there is actually reimplement
   underlying error-message-matching logic was unchanged, and Format Document's own end-to-end UI
   behavior was already live-verified for other languages in §186/§220-222); the real Electron
   window remains unlaunchable in this session (same standing gap since §75.59).
+- **Real, working code — a real, native Electron window launched and verified end-to-end for the
+  first time in this project's history, a real previously-undiscovered preload bug found and
+  fixed as a direct result, task #294**: user-requested ("Continue work here and use local system
+  as needed"). Every prior session since §75.59 reported a real `403` from `github.com/electron/
+  electron/releases/...` and worked around it with `ELECTRON_SKIP_BINARY_DOWNLOAD=1`. This
+  session's own real, direct `curl` check against that exact host returned a genuine `302` ->
+  `200` (a real signed Azure blob redirect, not a proxy artifact) -- **a real, environment-specific
+  condition that differs session to session, not a permanent fix**, confirmed by then running a
+  real `npm rebuild electron` (forcing the postinstall script to actually run, since a stale
+  `node_modules/electron` from an earlier `ELECTRON_SKIP_BINARY_DOWNLOAD` install had silently
+  short-circuited a plain `npm install`) and finding a real, complete 186MB `electron` binary plus
+  `chrome-sandbox`/`chrome_crashpad_handler` genuinely present in `node_modules/electron/dist/` for
+  the first time. **A real, previously-undiscoverable bug was found immediately upon actually
+  launching it, invisible to every prior WebSocket-shim-based verification pass because that
+  technique never touches the real preload script at all**: the compiled `dist-electron/preload.js`
+  -- `electron/tsconfig.json`'s own `"module": "NodeNext"` setting, correctly ESM to match
+  `package.json`'s `"type": "module"` for `main.ts`/`backend-client.ts` -- uses real `import`
+  syntax, but Electron's sandboxed-preload script loader (confirmed via the real console error,
+  `source: node:electron/js2c/sandbox_bundle`, `"SyntaxError: Cannot use import statement outside a
+  module"`) evaluates a preload script as a plain, non-module script regardless of `webPreferences.
+  sandbox` or the app-level `--no-sandbox` CLI flag -- the two are genuinely different sandboxing
+  concepts, confirmed by testing: `--no-sandbox` alone did not fix it. A real live experiment
+  ruled out the most obvious candidate fix before committing to a different one: renaming the
+  compiled output to `preload.mjs` (Electron's own documented ESM-sandboxed-preload mechanism,
+  landed in Electron 28+) produced the **identical** real error on this exact Electron 33.4.11 --
+  a real, negative result, reported plainly rather than assumed to work from documentation alone,
+  not pursued further once disproven experimentally. The real, working fix: `preload.ts` was
+  split out of the main `electron/tsconfig.json` (`"exclude": ["preload.ts"]`) into a new, dedicated
+  `electron/tsconfig.preload.json` compiling it alone as real CommonJS (`"module": "CommonJS"`) --
+  the one universally-supported format for Electron's sandboxed preload context regardless of
+  version, confirmed by inspecting the real compiled output (`"use strict"`, `require("electron")`,
+  `Object.defineProperty(exports, ...)`) and by it genuinely working live afterward.
+  `package.json`'s `build:electron`/`typecheck` scripts were updated to run both `tsc` invocations
+  (`tsc -p electron/tsconfig.json && tsc -p electron/tsconfig.preload.json`); `main.ts`'s own
+  `preload.ts` doc comment and the `webPreferences.preload` path were left unchanged (`preload.js`)
+  since the fix only changes *how* that file compiles, not its name or the contract it exposes.
+  This bug would have affected **every real end user's own Electron launch too**, not just this
+  sandboxed session's own verification path -- a real, previously-shipping defect in the actual
+  product, not a test-harness artifact, found only because this specific session's own network
+  condition happened to finally allow the real binary to download. **Real, live, end-to-end
+  verification through the genuine Electron process, screenshotted at every step, no shim of any
+  kind**: `Xvfb`+`fluxbox` (this project's own already-established recipe from §75.13) plus a real
+  `xdotool`-driven click-through, `SPARTAN_ROOT` pointed at a real scratch git-fixture project --
+  the real onboarding screen rendered correctly (blue accent, real feature-card copy, a real
+  `Skip -- start editing /tmp/electron-fixture` link reflecting the actual `SPARTAN_ROOT` path);
+  clicking Skip landed on the real Editor screen with a genuine `list_dir` IPC response populating
+  the file tree (`.git`, `src`); expanding `src` and clicking `main.rs` triggered a real `open_file`
+  IPC call, rendering the real file content with real tree-sitter syntax highlighting and real
+  bracket-pair colors (§287-289, both confirmed rendering correctly for the first time through a
+  genuine Electron renderer, not a browser tab); typing a real edit and pressing Ctrl+S triggered a
+  real `edit`+`save_file` IPC round trip -- independently confirmed by reading the actual file back
+  off disk afterward and finding the typed text genuinely persisted, with the tab's own dirty-dot
+  indicator correctly clearing in the same screenshot. `npm run typecheck` and `npm run build`
+  (both `tsc` projects plus the new preload one, plus the Vite renderer build) all re-confirmed
+  clean after the fix. **What this does not confirm**: this session's own real network reachability
+  to the Electron release host is an environment condition, not a code fix -- it may or may not
+  hold in a future session, and `ELECTRON_SKIP_BINARY_DOWNLOAD=1` remains the documented fallback
+  if it doesn't; the packaged (`electron-builder`) launch path (`app.isPackaged` -> `loadFile`
+  instead of `loadURL`) was not independently re-launched this pass -- only the dev-mode path
+  (`loadURL` against a real `vite` dev server) was exercised live, though both paths share the
+  exact same now-fixed preload/IPC code; no macOS/Windows verification (Linux only, matching this
+  project's own standing platform-verification scope); the real Electron window and its Xvfb/
+  fluxbox/vite-dev-server processes were all torn down and the scratch fixture removed at the end
+  of this pass -- a fresh session needs to independently relaunch, not assume a still-running
+  instance.
 
 ## Build & test
 

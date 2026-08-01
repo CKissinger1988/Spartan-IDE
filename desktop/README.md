@@ -103,9 +103,12 @@ this project's own established real-WebSocket-shim verification
 technique (a thin `window.spartan` that forwards every `call`/`onEvent`
 over a genuine WebSocket connection to the real backend, standing in
 only for Electron's own `contextBridge` preload hop, never for any
-actual application logic or IPC data — since the real Electron binary
-itself remains unlaunchable in every session so far, see "A real,
-environment-specific gap" below). Every value on screen sourced from the
+actual application logic or IPC data — a technique still useful since a
+real Electron launch depends on a real, environment-specific network
+condition that isn't guaranteed in every session; see "A real,
+environment-specific network condition" below for the one session where
+a genuine native window was launched, screenshotted, and verified
+end-to-end instead). Every value on screen sourced from the
 backend — file tree entries, diffs, commit history — is a real response,
 not fixture/mock data; syntax highlighting itself is computed client-side
 in the renderer (real tree-sitter WASM, `src/treeSitter.ts`) from that
@@ -157,22 +160,40 @@ The result lands in `desktop/dist-package/` (gitignored). `package.json`'s
 build, not a publicly distributed release). Windows/macOS targets aren't
 configured; this environment has no way to build or verify them.
 
-## A real, environment-specific gap in the session that built this
+## A real, environment-specific network condition — and a real bug it uncovered
 
-`npm install` in the session that wrote this code could not complete a
-normal install: `electron`'s postinstall script downloads the actual
-Electron runtime binary from `github.com/electron/electron/releases/...`,
-and that host is blocked (403) by that session's own egress policy — a
-real, reported, not-routed-around limitation (no mirror substitution was
-attempted), not a bug in this code. `ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm
-install` was used instead to get every other real dependency installed and
-both `tsc` projects (`tsconfig.json`, `electron/tsconfig.json`) type-checking
-clean, and the real React renderer was verified live via a Vite dev server
-plus the environment's own pre-installed Playwright Chromium (with a
-test-only `window.spartan` stub standing in for Electron's real preload
-bridge, never shipped) — see §75.59 for the full, honest account of what
-that did and didn't confirm. **The actual Electron window/native chrome and
-the real IPC wiring through a genuine Electron process have not been
-launched or screenshotted in that session** — that needs a real `npm
-install` (no `ELECTRON_SKIP_BINARY_DOWNLOAD`) run somewhere with access to
-GitHub releases, then `npm run start`.
+Every session before the one that launched a real Electron window for the
+first time reported a real `403` from `github.com/electron/electron/
+releases/...` (the postinstall script's download host) and worked around it
+with `ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm install`, verifying the renderer
+only via a Vite dev server + a test-only `window.spartan` stub standing in
+for the real preload bridge. **A later session's own network reachability
+to that host genuinely differed — a real `302` → `200`, not a proxy
+artifact — and a real `npm rebuild electron` (needed because a stale
+`node_modules/electron` from an earlier skip-download install silently
+short-circuited a plain `npm install`) produced a real, complete Electron
+binary.** This is an environment condition, not a permanent fix — it may or
+may not hold in your own session; try a normal `npm install` first and fall
+back to `ELECTRON_SKIP_BINARY_DOWNLOAD=1` if the download genuinely fails.
+
+**Launching the real window immediately surfaced a real, previously-
+undiscoverable bug**, invisible to every prior shim-based verification pass
+since that technique never exercises the real preload script at all: the
+compiled `preload.js` used ES `import` syntax (correctly matching
+`electron/tsconfig.json`'s `module: "NodeNext"`, which the rest of the
+main process needs), but Electron's sandboxed-preload script loader rejects
+`import` outside `webPreferences.sandbox: false` — confirmed via the real
+console error (`SyntaxError: Cannot use import statement outside a module`,
+`source: node:electron/js2c/sandbox_bundle`) and confirmed to reproduce even
+with `--no-sandbox` (a different, app-level sandboxing concept). Renaming
+the output to `preload.mjs` (Electron's own documented ESM sandboxed-preload
+mechanism) was tried and empirically did **not** fix it on Electron 33.4.11
+— a real negative result. **Fixed for real**: `preload.ts` now compiles via
+its own dedicated `electron/tsconfig.preload.json` (`module: "CommonJS"`,
+excluded from the main `electron/tsconfig.json`), the one universally-
+supported format for Electron's sandboxed preload context. This was a real
+bug in the shipping product, not a test artifact — it would have broken
+every real end user's own launch too. See `CLAUDE.md`'s own "real Electron
+launch" entry for the complete, screenshotted, end-to-end account (real file
+tree, real tree-sitter syntax highlighting, a real live edit + Ctrl+S save
+independently confirmed by reading the file back off disk).

@@ -53,12 +53,22 @@ decision, not an open question.
   uses) and `docs/FUTURE_FEATURES.md` (mark the row done, or add one), then commit. This
   project's history is full of real bugs found only by actually running things — match that bar,
   don't shortcut it.
-- **This environment cannot launch a real Electron window** (a standing, documented network-policy
-  constraint, not a code problem). The established workaround for `desktop/`-only features is a
-  Playwright script serving the compiled `desktop/dist` via `crates/spartan-devserver` with a thin
-  `window.spartan` shim that forwards calls over the real WebSocket transport — see any recent
-  `CLAUDE.md` entry tagged "desktop/" for a working example script. Don't assume this constraint
-  no longer applies without checking for yourself.
+- **A real, native Electron window has now been launched and verified in this project's history**
+  (see `CLAUDE.md`'s "real Electron launch" entry) — a standing network-policy block on
+  `github.com/electron/electron/releases/...` that every prior session hit turned out to be
+  session-specific, not permanent, and a real, previously-undiscovered preload-script bug (ESM
+  `import` syntax in a sandboxed preload context, which Electron's loader rejects) was found and
+  fixed as a direct result of finally being able to launch the real app. **Don't assume either
+  fact still holds without checking for yourself**: the network reachability is an environment
+  condition that can differ session to session (every session before this one reported a 403; this
+  one didn't) — try `cd desktop && npm install && npm run start` for real before falling back to
+  the WebSocket-shim workaround. The preload fix itself is a permanent code fix and should already
+  be in place; if you see the exact symptom described below, you're looking at a regression, not
+  a known limitation. The established fallback for when a real launch genuinely isn't possible is
+  a Playwright script serving the compiled `desktop/dist` via `crates/spartan-devserver` with a
+  thin `window.spartan` shim that forwards calls over the real WebSocket transport — see any
+  `CLAUDE.md` entry tagged "desktop/" from before the real-launch pass for a working example
+  script.
 
 ## Build & test — quick reference
 
