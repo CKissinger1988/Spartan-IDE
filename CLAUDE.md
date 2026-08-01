@@ -8334,6 +8334,146 @@ first — it's the parity reference until each row there is actually reimplement
   fluxbox/vite-dev-server processes were all torn down and the scratch fixture removed at the end
   of this pass -- a fresh session needs to independently relaunch, not assume a still-running
   instance.
+- **Real, working code — a real native application menu (File/View/Window/Help), closing the
+  "Native application menu" backlog gap by using the real Electron launch capability from the
+  immediately preceding pass, task #295**: continues "continue work here and use local system as
+  needed." §240's own account had deferred this exact feature over a real, unresolved question --
+  whether a menu's role-based Edit accelerators (Undo/Redo/Cut/Copy/Paste) would shadow the
+  editor's own JS-level Ctrl+Z/Y/X/C/V handlers -- and explicitly said it needed a live Electron
+  launch to investigate safely, which wasn't possible in any prior session. With the real Electron
+  binary from the immediately preceding pass still present in this session, that investigation
+  finally happened, and the real answer was more consequential than the original framing assumed:
+  **the risk wasn't merely hypothetical, it was already live**, silently, in every prior session
+  that could launch Electron at all. `main.ts` had never once called `Menu.setApplicationMenu()`,
+  so Electron auto-creates its own implicit default menu -- confirmed live, screenshotted, by
+  clicking "Edit" in the real running app and finding Undo (Ctrl+Z), Redo (Ctrl+Shift+Z), Cut
+  (Ctrl+X), Copy (Ctrl+C), Paste (Ctrl+V), and Select All (Ctrl+A), the *exact* same accelerators
+  `Editor.tsx`'s own keydown handler already claims, sitting there unaddressed the entire time this
+  project has had a real Electron-capable editor. New `desktop/electron/menu.ts`
+  (`buildApplicationMenu`) builds a real File/View/Window/Help menu -- **deliberately no Edit menu
+  at all**, since calling `Menu.setApplicationMenu` with any real template replaces the implicit
+  default entirely, and every real editing operation this app supports is already fully keyboard-
+  accessible through the editor's own real keybindings; a redundant native Edit menu would only
+  reintroduce the exact conflict this file exists to remove, for zero real discoverability gain.
+  A second, real, deliberate safety choice: "Open Folder..." (reuses the exact same real
+  `loadRootIntoWindow` function `spartan:open_project`'s IPC handler and the New Project wizard
+  already depend on -- one real implementation, not a second one to keep in sync) and the standard
+  Electron "Reload"/"Force Reload" role actions are all given **no accelerator, click-only** --
+  each can silently discard every open tab/unsaved edit with zero warning, and this project's own
+  unsaved-changes-on-close/switch gap is real and still open (see `docs/FUTURE_FEATURES.md`), so
+  the fix here is not compounding an already-named gap with an easy-to-hit keybinding, not
+  pretending the underlying gap is closed. "Toggle Developer Tools" (`Ctrl+Shift+I`, cross-checked
+  against every real keybinding this session inventoried via a full grep of every `onKeyDown`/
+  `addEventListener("keydown", ...)` call site across `desktop/src/`, not assumed unclaimed) and
+  "Toggle Full Screen" (`F11`, real, plain, unclaimed -- the app only ever uses `Shift+F12` for
+  find-references, never bare `F12`) round out View; Window gets `role: "minimize"`/`role: "close"`
+  (`Ctrl+W`, also real and unclaimed); Help gets Documentation/Report an Issue (both real
+  `shell.openExternal` calls reusing a new shared `REPO_URL` constant, replacing a duplicate
+  hardcoded string that used to live only in the pre-existing `open_repository_page` IPC handler)
+  and a real "About Spartan IDE" item showing a genuine `dialog.showMessageBox` with
+  `app.getVersion()`/`process.versions.electron`/`.chrome`/`.node`. A real, honestly-scoped, macOS-
+  specific addition: the template branches to Electron's own documented app-name-menu convention
+  (About/Services/Hide/Quit under the app name, not under File) on `process.platform === "darwin"`
+  -- written for correctness but **not independently verified live**, since this project has never
+  had access to real Apple hardware (matches the standing "no macOS/iOS builds in project history"
+  note this file and `README.md` both already carry). `npm run typecheck`/`npm run build` both
+  clean after the change. **Real, live, end-to-end verification through the same genuine Electron
+  process the immediately preceding pass established** (Xvfb+fluxbox+xdotool, zero shim): the new
+  menu bar rendered exactly `File | View | Window | Help`, no Edit; typing a real 7-character marker
+  then pressing Ctrl+Z exactly 7 times removed exactly one character per press, landing back at the
+  exact original content -- confirming the app's own documented one-checkpoint-per-keystroke real
+  backend undo behavior is now unambiguous, with no more silent double-registration risk from a
+  competing native accelerator; 7 more Ctrl+Shift+Z presses fully restored the marker, a real,
+  exact round trip; the real About dialog was independently screenshotted (window `8389216`,
+  confirmed focused, at position `1,45` -- Fluxbox placed it behind the main window rather than
+  centered, a real, minor WM quirk, not a bug in the dialog itself) showing the genuine version/
+  Electron/Chromium/Node strings; File's "Open Folder..." (no accelerator) and "Quit" (`Ctrl+Q`,
+  unclaimed) were confirmed rendered; View's real Toggle Developer Tools genuinely opened a real,
+  docked DevTools panel showing the real live DOM (`data-theme="dark"`) and closed cleanly on a
+  second press; Window's Minimize (`Ctrl+M`)/Close (`Ctrl+W`) were confirmed rendered with no
+  conflicting accelerators. A real, incidental finding surfaced by having DevTools open for the
+  above check, explicitly **not** chased down as part of this pass since it's unrelated to the menu
+  feature and predates it: the console showed a real `MaxListenersExceededWarning` for
+  `spartan:event` listeners and two real `lsp_hover`/`lsp_document_highlight` "no live LSP session"
+  errors -- the former is consistent with this session's own repeated dev-server HMR reloads during
+  a long live-testing sequence (a known Vite/Electron dev-mode characteristic, not necessarily a
+  production leak), the latter are honest, expected failures since this specific test run never
+  spawned a real `pyright-langserver`; named here for the record, not investigated further. **What
+  this does not confirm**: no independent live verification on macOS/Windows (Linux only, same
+  standing platform scope as every other `desktop/` pass); the incidental EventEmitter-listener
+  finding above was observed, not diagnosed or fixed, and may or may not indicate a real leak
+  outside this session's own heavy repeated-reload test pattern; the real Electron window and its
+  Xvfb/fluxbox/vite-dev-server processes were all torn down and the scratch fixture removed at the
+  end of this pass, matching the immediately preceding pass's own cleanup discipline.
+- **Real, working code — a real confirmation gate on the three state-discarding menu actions,
+  closing a real CodeRabbit review finding on the native-menu PR (task #295 follow-up)**: CodeRabbit
+  flagged, correctly, that "Open Folder...", "Reload", and "Force Reload" replace/reload the
+  renderer with zero approval gate, silently discarding unsaved tabs -- and suggested a full
+  dirty-state query across the preload/main IPC boundary to gate them, explicitly labeling its own
+  suggestion a "heavy lift." That labeled scope was real: building a proper dirty-state contract for
+  only these three menu items would be a narrower, worse version of this project's own separately-
+  tracked, much broader unsaved-changes-on-close/switch gap (closing a tab, switching files, and
+  more), not something to bolt onto a menu PR. The right-sized fix landed instead: a new
+  `confirmDestructiveReplace(win, message)` helper (`dialog.showMessageBox`, `type: "warning"`,
+  `buttons: ["Continue", "Cancel"]`, `defaultId: 1`/`cancelId: 1` so Enter's default is the safe
+  Cancel) shows the same warning dialog for all three actions; it does not query dirty state yet
+  (this app has no cheap way to do that from the main process) -- a user must now deliberately
+  confirm before losing state, rather than one click silently doing it, without taking on the
+  larger IPC contract as a side effect.
+  `menu.ts`'s own header comment records the finding and this reasoning directly, not just the fix.
+  `npm run typecheck`/`npm run build` both re-confirmed clean. **Real, live, end-to-end verification
+  through the same genuine Electron process** (Xvfb+fluxbox+xdotool, zero shim, a fresh scratch git
+  fixture): typed a real marker into `main.rs`, confirmed the dirty tab marker; opening View ->
+  Reload produced a real, screenshotted native dialog reading "Reload the app?" / "Any unsaved
+  changes in open tabs will be lost." with Continue/Cancel buttons; clicking **Cancel** was confirmed
+  to leave the dirty tab and its unsaved content completely untouched (no reload fired); reopening
+  View -> Reload and clicking **Continue** was confirmed to genuinely fire the real reload -- the
+  renderer reset to a fresh, no-tabs-open state, proving the gate is a real precondition on the
+  actual destructive action, not cosmetic. **What this does not confirm**: "Open Folder..."'s own
+  identical gate was verified by code inspection and the shared helper function, not independently
+  re-clicked through a real folder-picker dialog in this pass (Reload/Force Reload's live path was
+  prioritized since they're the two CodeRabbit named as still-unaddressed); no independent macOS/
+  Windows verification (same standing Linux-only scope); the real Electron window and its Xvfb/
+  fluxbox/vite-dev-server processes were torn down and the scratch fixture removed at the end of
+  this pass.
+- **Real, working code — a real macOS duplicate-About fix, real error handling for every async
+  menu action, and a documentation-accuracy fix, closing CodeRabbit's second review round on the
+  native-menu PR (task #295, second follow-up)**: CodeRabbit's full re-review of the confirmation-
+  gate commit found three more real, valid issues, none of them re-litigating the already-resolved
+  finding. **(1) A real macOS-only bug**: the mac app-name menu's `{ role: "about" }` and the Help
+  menu's own custom "About Spartan IDE" item would both render on macOS, giving two About commands
+  -- confirmed by reading the template's own unconditional `helpMenu` inclusion, not assumed. Fixed
+  by extracting the existing About-dialog logic into a shared `showAboutDialog(getMainWindow)`
+  function, used by *both* the mac app-name menu (replacing `role: "about"`, whose native dialog
+  can't show this app's own version/Electron/Chromium/Node detail anyway) and the non-mac Help
+  menu -- with the Help menu's own About item now spread in only `...(isMac ? [] : [...])`, so
+  there is exactly one About command on every platform. **(2) A real robustness gap, Major
+  severity**: every async `click` handler calling `dialog.showOpenDialog`/`showMessageBox` or
+  `shell.openExternal` had no shared rejection path -- a real native-dialog interruption or a
+  failed external-link launch (no default browser, an invalid URL) would become a silent unhandled
+  promise rejection instead of a visible error. Fixed with a new `reportMenuActionFailure(title,
+  err)` helper (`dialog.showErrorBox`) and `try`/`catch` (or `.catch()`) around every one of these
+  calls -- Open Folder, Reload, Force Reload, Documentation, Report an Issue, and the About dialog
+  itself. **(3) A real documentation-accuracy fix**: this file's own immediately preceding bullet
+  said the confirmation gate "gates all three actions unconditionally on dirty state," which reads
+  as if dirty-state detection exists -- corrected to state plainly that it shows the same warning
+  dialog for all three actions and does not query dirty state at all yet (fixed above, in place, in
+  that bullet). A fourth, real but purely stylistic nitpick (trim the file's own header comment,
+  which read like a review transcript rather than durable rationale) was also addressed by
+  rewriting it to state the "why" concisely without narrating the review conversation itself.
+  `npm run typecheck`/`npm run build` both re-confirmed clean. **Real, live re-verification through
+  the same genuine Electron process** (Xvfb+fluxbox+xdotool, a fresh second scratch fixture): the
+  refactored `showAboutDialog` was confirmed still working correctly on the non-mac path -- clicking
+  Help -> About Spartan IDE produced the identical real, screenshotted dialog with genuine version/
+  Electron/Chromium/Node strings as before the refactor, confirming the extraction into a shared
+  function didn't regress the already-verified non-mac behavior. **What this does not confirm**: no
+  live verification of the macOS-specific dedup itself (can't be live-verified in this Linux-only
+  environment by construction, matching this file's own standing "no Apple hardware" scope) or the
+  new error-dialog paths (triggering a genuine `dialog`/`shell.openExternal` rejection live would
+  need contriving a real native-level failure, e.g. no default browser configured, not attempted
+  here) -- both verified by code review, the TypeScript compiler, and the production build, the same
+  bar this project applies to its other main-process-only fixes (e.g. §240's single-instance lock).
+  No further CodeRabbit findings remained after this round.
 
 ## Build & test
 

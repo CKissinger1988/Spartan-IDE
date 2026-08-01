@@ -7,11 +7,12 @@
 // this workspace's own §9 "least privilege" posture even though this is
 // a new UI stack.
 
-import { app, BrowserWindow, ipcMain, shell, dialog } from "electron";
+import { app, BrowserWindow, ipcMain, shell, dialog, Menu } from "electron";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { BackendClient } from "./backend-client.js";
+import { buildApplicationMenu, REPO_URL } from "./menu.js";
 
 const isDev = !app.isPackaged;
 
@@ -323,7 +324,7 @@ app.whenReady().then(() => {
     return { ok: true, path: dir };
   });
   ipcMain.handle("spartan:open_repository_page", async () => {
-    await shell.openExternal("https://github.com/CKissinger1988/Spartan-IDE");
+    await shell.openExternal(REPO_URL);
     return { ok: true };
   });
   // Real GitHub layer, first increment (task #284): opens a real pull
@@ -397,6 +398,16 @@ app.whenReady().then(() => {
       win.webContents.send("spartan:event", eventName, data);
     }
   });
+
+  // Real application menu, replacing Electron's own implicit default menu
+  // (which -- confirmed live, not assumed -- silently registered the exact
+  // same Ctrl+Z/Ctrl+Shift+Z/Ctrl+X/Ctrl+C/Ctrl+V accelerators `Editor.tsx`'s
+  // own JS keydown handler already claims). See `menu.ts`'s own header
+  // comment for the full account and why this menu deliberately has no
+  // Edit submenu at all.
+  Menu.setApplicationMenu(
+    buildApplicationMenu(() => mainWindow, loadRootIntoWindow)
+  );
 
   createWindow();
 
