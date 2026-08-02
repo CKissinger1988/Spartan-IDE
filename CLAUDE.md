@@ -8519,13 +8519,19 @@ first — it's the parity reference until each row there is actually reimplement
   real `beforeunload` native dialog observed on reload with a dirty tab and its absence with a
   clean one (`/tmp/opencode/web-unsaved-modal.png`). `npm run typecheck`/`npm run build` clean in
   both `desktop/` and `web/`; `cargo build --release -p spartan-backend` and `-p spartan-devserver`
-  both clean. **What this does not confirm**: the macOS app menu's own Quit (role-based, fires the
-  same `close` event on macOS window close but this project has no Apple hardware to verify
-  platform-specific quit semantics) and Windows platform behavior (same standing Linux-only scope
-  as every other `desktop/` pass); the pure-client `web/Editor.tsx` surface's modal wasn't clicked
-  live through a real folder picker (no File System Access secure-context flag in the headless
-  Chromium used), though it shares the identical gating/modal code as the live-verified backend
-  surface.
+  both clean. **What this does not confirm**: the pure-client `web/Editor.tsx` surface wasn't
+  clicked live through a real folder picker — a real attempt was made (headed Chromium under Xvfb
+  with a real `showDirectoryPicker`): Chromium's native File System Access permission prompt
+  ("Select where this site can save changes") genuinely appeared but its Allow button could not be
+  activated programmatically (keyboard navigation through `xdotool` didn't reach it, and the CDP
+  permission set `fileSystemAccess` is not a valid descriptor name), and the GTK directory chooser
+  never surfaced afterward — an environment limitation, not a feature failure; the surface shares
+  the identical `requestCloseTab`/`handleDiscardPendingClose`/`UnsavedChangesModal` code as the
+  live-verified backend surface, and its local-tab dirty flag is produced by the same shared
+  `handleContentChange` path. The macOS app menu's own Quit (role-based, fires the same `close`
+  event on macOS window close but this project has no Apple hardware to verify platform-specific
+  quit semantics) and Windows platform behavior are likewise unverified (same standing Linux-only
+  scope as every other `desktop/` pass).
 
 ## Build & test
 
