@@ -64,6 +64,13 @@ let backend: BackendClient | null = null;
 // second full instance (a second `spartan-backend` subprocess + a second
 // window) -- a real resource/correctness bug for any shipped desktop app.
 let mainWindow: BrowserWindow | null = null;
+// Real unsaved-changes-on-quit gate: windows whose renderer has confirmed a
+// close are allowed to actually close; every other `close` is prevented and
+// turned into a `spartan:close-requested` renderer prompt instead. A per-window
+// `WeakSet` (not a boolean) so a future multi-window app stays correct, and so
+// a window closed and recreated (macOS re-activate) doesn't inherit a stale
+// "already confirmed" grant.
+const closeAllowed = new WeakSet<BrowserWindow>();
 
 // Real §75.76 "open a different project" support -- the render process
 // itself has no way to change its own root query param after load, so
@@ -97,6 +104,25 @@ function createWindow(): void {
   mainWindow = win;
   win.on("closed", () => {
     if (mainWindow === win) mainWindow = null;
+  });
+
+  // Real unsaved-changes-on-close gate (the same pre-existing gap the
+  // native app menu's own header comment and `docs/FUTURE_FEATURES.md`
+  // both name as still-open): a window close -- from the OS window button,
+  // File > Quit, Cmd/Ctrl+Q, or the Window menu's Close role -- is
+  // prevented and deferred to the renderer, which alone knows its real
+  // per-tab dirty state. The renderer either confirms immediately (nothing
+  // dirty) or prompts, then calls `spartan:close-confirmed`; only that
+  // re-arms this window for a real close. Deliberately *not* routed through
+  // `beforeunload`: that fires for the menu's Reload/Force Reload/Open
+  // Folder actions too (which are already gated unconditionally in
+  // `menu.ts`), and can't distinguish a close from a reload -- a window
+  // `close` event can. Data-safe default: if the renderer never responds,
+  // the close is simply cancelled rather than risking silent loss.
+  win.on("close", (event) => {
+    if (closeAllowed.has(win)) return;
+    event.preventDefault();
+    win.webContents.send("spartan:close-requested");
   });
 
   // Real initial file-tree root. In dev, the repo checkout itself
@@ -351,6 +377,18 @@ app.whenReady().then(() => {
     if (!win) throw new Error("no window to reload");
     loadRootIntoWindow(win, params.root);
     return { ok: true };
+  });
+  // Real second half of the unsaved-changes-on-close handshake (the
+  // `win.on("close", ...)` gate above): the renderer has decided the close
+  // may proceed (nothing was dirty, or the user confirmed discarding
+  // unsaved changes), so re-arm this window for a real close and retry it.
+  // `send`, not `invoke` -- no reply is expected, and the renderer doesn't
+  // wait on anything.
+  ipcMain.on("spartan:close-confirmed", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return;
+    closeAllowed.add(win);
+    win.close();
   });
   // Real native "choose a folder" dialog -- backs both onboarding's
   // "Open Existing Project" and the New Project wizard's "Create in"

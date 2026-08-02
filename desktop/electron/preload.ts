@@ -163,4 +163,22 @@ contextBridge.exposeInMainWorld("spartan", {
   pickFolder: (): Promise<unknown> => ipcRenderer.invoke("spartan:pick_folder"),
   pickFile: (filters?: { name: string; extensions: string[] }[]): Promise<unknown> =>
     ipcRenderer.invoke("spartan:pick_file", { filters }),
+  // Real two-way unsaved-changes-on-close handshake with main.ts (whose
+  // window `close` event is prevented until the renderer confirms) --
+  // deliberately separate from `call`/`ALLOWED_METHODS`: this isn't a
+  // `spartan-backend` protocol method at all, it's renderer-local dirty
+  // state that only `App.tsx` knows. `onCloseRequested` follows the exact
+  // same subscribe/return-unsubscribe convention `onEvent` itself uses.
+  onCloseRequested: (listener: () => void): (() => void) => {
+    const handler = () => {
+      try {
+        listener();
+      } catch (err) {
+        console.error("spartan.onCloseRequested listener threw:", err);
+      }
+    };
+    ipcRenderer.on("spartan:close-requested", handler);
+    return () => ipcRenderer.removeListener("spartan:close-requested", handler);
+  },
+  confirmClose: (): void => ipcRenderer.send("spartan:close-confirmed"),
 });

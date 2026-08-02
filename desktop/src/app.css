@@ -2339,6 +2339,27 @@
   margin-top: 16px;
 }
 
+/* Real unsaved-changes confirmation modal (the gap the native app menu's
+   own header comment and `docs/FUTURE_FEATURES.md` both name as still
+   open): a dim overlay naming the affected file(s) before a dirty tab or
+   the whole app is closed. Reuses the New Project wizard's `.np-overlay`/
+   `.np-panel`/`.np-title`/`.np-actions` chrome; only the body text and the
+   file list are new. */
+.uc-body p {
+  margin: 0 0 8px;
+  color: var(--text);
+}
+
+.uc-file-list {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
 /* Real §75.76 first-run onboarding. */
 .onboarding-screen {
   position: fixed;
