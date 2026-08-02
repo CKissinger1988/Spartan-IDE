@@ -1847,3 +1847,58 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Real unsaved-changes confirmation modal -- a byte-identical port of the
+   desktop shell's `.np-*`/`.uc-*` overlay (the desktop New Project wizard's
+   own `.np-overlay` chrome, which `web/` has no equivalent of, since the
+   wizard is desktop-only). Dim overlay naming the affected file(s) before a
+   dirty tab is closed; the wgpu reference shell's own already-verified
+   §75.23 behavior. */
+.np-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.np-panel {
+  width: 420px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-bright);
+  box-shadow: var(--glow-accent-lg);
+  padding: 20px 22px 18px;
+}
+
+.np-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  text-shadow: var(--glow-accent);
+  margin-bottom: 14px;
+}
+
+.np-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.uc-body p {
+  margin: 0 0 8px;
+  color: var(--text);
+}
+
+.uc-file-list {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}

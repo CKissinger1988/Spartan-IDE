@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import Sidebar from "./components/Sidebar";
 import FileTree from "./components/FileTree";
 import GitPanel from "./components/GitPanel";
@@ -33,6 +33,7 @@ import DevContainersScreen from "./components/DevContainersScreen";
 import ModelsScreen from "./components/ModelsScreen";
 import LeoChatPanel from "./components/LeoChatPanel";
 import NewProjectWizard from "./components/NewProjectWizard";
+import UnsavedChangesModal from "./components/UnsavedChangesModal";
 import OnboardingScreen from "./components/OnboardingScreen";
 import { applyReduceMotion } from "./reduceMotion";
 import { applyTheme, type ThemeName } from "./applyTheme";
@@ -96,6 +97,20 @@ function replaceAllMatches(content: string, matches: FindMatch[], replacement: s
 export default function App(): React.ReactElement {
   const [files, setFiles] = useState<OpenFile[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  // Real unsaved-changes-on-close gate: the renderer's single source of
+  // truth for "a close is waiting on a real user decision." `tab` is a
+  // dirty file's × (TabBar); `app` is main.ts's `spartan:close-requested`
+  // (window close / File > Quit / Cmd+Q). Only `onDiscard`/`onCancel`
+  // resolve it -- never a silent close.
+  const [pendingClose, setPendingClose] = useState<
+    null | { kind: "tab"; index: number } | { kind: "app" }
+  >(null);
+  // Live `files` mirror for the `onCloseRequested` effect below, which is
+  // registered once on mount and therefore can't close over fresh `files`;
+  // this ref stays current so the handler always answers with the *real*
+  // current dirty state, never a stale mount-time snapshot.
+  const filesRef = useRef(files);
+  filesRef.current = files;
   const [screen, setScreen] = useState<ScreenId>("editor");
   // Real Ctrl+G sidebar toggle (§75.30's own convention in the original
   // wgpu shell -- one left-rail region, not a second pane, shared between
@@ -591,6 +606,51 @@ export default function App(): React.ReactElement {
 
   const activeFile = files[activeIndex] ?? null;
 
+  /** Real unsaved-changes-on-close gate for a single tab: a dirty file's
+   * × raises the confirmation modal instead of silently discarding; a
+   * clean file closes immediately, exactly as before. `closeFile` itself
+   * stays the unconditional real-close implementation, reused unchanged by
+   * both the modal's Discard path and this gate's clean-file fast path. */
+  const requestCloseFile = useCallback(
+    (index: number) => {
+      const file = files[index];
+      if (file?.dirty) {
+        setPendingClose({ kind: "tab", index });
+      } else {
+        closeFile(index);
+      }
+    },
+    [files, closeFile]
+  );
+
+  /** Real resolution of the pending close: Discard closes the dirty tab
+   * (or confirms the whole-app close to main.ts), then clears the pending
+   * state; Cancel just clears it, leaving the tab/app untouched.
+   * Deliberately reads `pendingClose` from the closure (not a functional
+   * `setPendingClose` updater), so the side-effecting `closeFile` runs in
+   * the event handler itself, never inside a state updater -- which React
+   * StrictMode dev can invoke twice. */
+  const handleDiscardPendingClose = useCallback(() => {
+    if (pendingClose?.kind === "tab") closeFile(pendingClose.index);
+    else if (pendingClose?.kind === "app") window.spartan.confirmClose();
+    setPendingClose(null);
+  }, [pendingClose, closeFile]);
+
+  // Real whole-app close gate (main.ts's `win.on("close", ...)` prevents
+  // every window close and asks us, the only place that knows the real
+  // per-tab dirty state): answer immediately when nothing is dirty, prompt
+  // when something is. Registered once on mount -- `filesRef` is what keeps
+  // the handler's dirty check real and current.
+  useEffect(() => {
+    return window.spartan.onCloseRequested(() => {
+      if (filesRef.current.some((f) => f.dirty)) {
+        setPendingClose({ kind: "app" });
+      } else {
+        window.spartan.confirmClose();
+      }
+    });
+  }, []);
+
   const toggleBreakpoint = useCallback(
     (line: number) => {
       if (!activeFile) return;
@@ -812,7 +872,7 @@ export default function App(): React.ReactElement {
                 files={files}
                 activeIndex={activeIndex}
                 onSelect={setActiveIndex}
-                onClose={closeFile}
+                onClose={requestCloseFile}
               />
             </div>
             <div className="editor-body">
@@ -951,6 +1011,19 @@ export default function App(): React.ReactElement {
           defaultParentDir={ROOT}
           onClose={() => setShowNewProjectWizard(false)}
           onCreated={(root) => window.spartan.openProject(root).then(() => {})}
+        />
+      )}
+      {pendingClose && (
+        <UnsavedChangesModal
+          fileNames={
+            pendingClose.kind === "tab"
+              ? files[pendingClose.index]
+                ? [files[pendingClose.index].path]
+                : []
+              : files.filter((f) => f.dirty).map((f) => f.path)
+          }
+          onDiscard={handleDiscardPendingClose}
+          onCancel={() => setPendingClose(null)}
         />
       )}
     </div>

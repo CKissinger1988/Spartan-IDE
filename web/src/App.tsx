@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import FileTree from "./components/FileTree";
 import GitPanel from "./components/GitPanel";
 import SearchPanel from "./components/SearchPanel";
 import ModelsPanel from "./components/ModelsPanel";
 import BackendFileTree from "./components/BackendFileTree";
+import UnsavedChangesModal from "./components/UnsavedChangesModal";
 import Editor, { type OpenFile } from "./components/Editor";
 import BackendEditor, {
   type BackendOpenFile,
@@ -174,6 +175,18 @@ export default function App(): React.ReactElement {
   // existing handler that read the single active file keeps working
   // unchanged.
   const [openTabs, setOpenTabs] = useState<NonNullable<ActiveContent>[]>([]);
+  // Real unsaved-changes-on-close gate: a dirty tab's × raises the
+  // confirmation modal instead of silently discarding. Only the browser
+  // close/reload path is excluded -- a page going away can't reliably
+  // render a React modal, so that path uses the native `beforeunload`
+  // prompt below instead.
+  const [pendingClose, setPendingClose] = useState<null | { kind: "tab"; index: number }>(null);
+  // Live `openTabs` mirror for the `beforeunload` handler below, which is
+  // registered once on mount and therefore can't close over fresh
+  // `openTabs`; this ref stays current so the handler always answers with
+  // the *real* current dirty state, never a stale mount-time snapshot.
+  const openTabsRef = useRef(openTabs);
+  openTabsRef.current = openTabs;
   const [activeIndex, setActiveIndex] = useState(-1);
   const activeContent: ActiveContent =
     activeIndex >= 0 && activeIndex < openTabs.length ? openTabs[activeIndex] : null;
@@ -207,6 +220,47 @@ export default function App(): React.ReactElement {
       });
       return next;
     });
+  }, []);
+
+  /** Real unsaved-changes-on-close gate for a single tab: a dirty tab's ×
+   * raises the confirmation modal instead of silently discarding; a clean
+   * tab closes immediately, exactly as before. `closeTab` itself stays the
+   * unconditional real-close implementation, reused unchanged by both the
+   * modal's Discard path and this gate's clean-file fast path. */
+  const requestCloseTab = useCallback(
+    (index: number) => {
+      const tab = openTabs[index];
+      if (tab?.file.dirty) {
+        setPendingClose({ kind: "tab", index });
+      } else {
+        closeTab(index);
+      }
+    },
+    [openTabs, closeTab]
+  );
+
+  /** Real resolution of the pending close: Discard closes the dirty tab
+   * then clears the pending state; Cancel just clears it, leaving the tab
+   * untouched. */
+  const handleDiscardPendingClose = useCallback(() => {
+    if (pendingClose?.kind === "tab") closeTab(pendingClose.index);
+    setPendingClose(null);
+  }, [pendingClose, closeTab]);
+
+  // Real whole-app close/reload gate: when any tab is dirty, closing or
+  // reloading the browser tab raises the native browser prompt (a page
+  // going away can't reliably render a React modal -- this is the standard
+  // web pattern). Registered once on mount -- `openTabsRef` is what keeps
+  // the handler's dirty check real and current.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (openTabsRef.current.some((t) => t.file.dirty)) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, []);
   const [error, setError] = useState<string | null>(null);
   const [wasmReady, setWasmReady] = useState(false);
@@ -1137,7 +1191,7 @@ export default function App(): React.ReactElement {
                       className="editor-tab-close"
                       onClick={(e) => {
                         e.stopPropagation();
-                        closeTab(i);
+                        requestCloseTab(i);
                       }}
                       title="Close"
                     >
@@ -1305,6 +1359,17 @@ export default function App(): React.ReactElement {
           </button>
         )}
       </div>
+      {pendingClose && (
+        <UnsavedChangesModal
+          fileNames={
+            openTabs[pendingClose.index]
+              ? [openTabs[pendingClose.index].file.path]
+              : []
+          }
+          onDiscard={handleDiscardPendingClose}
+          onCancel={() => setPendingClose(null)}
+        />
+      )}
     </div>
   );
 }

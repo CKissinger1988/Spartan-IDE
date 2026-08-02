@@ -107,6 +107,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Real user-customizable theme and font options across every real Spartan surface (wgpu shell, desktop/, web/, mobile/) | §75.93 |
 | Production-readiness pass — a real light-theme bug in the Workflows canvas found and fixed by actually looking | §75.94 |
 | Blue/gold rebrand across every real Spartan surface, a real sarcastic Leo persona, Gemini-CLI-style random thoughts in the Leo chat panel, web/desktop visual parity | §75.95 |
+| Unsaved-changes confirmation — a real discard/Cancel modal on dirty-tab close + app quit gate in the Electron shell, browser `beforeunload` in web, closing the last real CodeRabbit-named gap | §75.96 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -8472,8 +8473,59 @@ first — it's the parity reference until each row there is actually reimplement
   new error-dialog paths (triggering a genuine `dialog`/`shell.openExternal` rejection live would
   need contriving a real native-level failure, e.g. no default browser configured, not attempted
   here) -- both verified by code review, the TypeScript compiler, and the production build, the same
-  bar this project applies to its other main-process-only fixes (e.g. §240's single-instance lock).
-  No further CodeRabbit findings remained after this round.
+   bar this project applies to its other main-process-only fixes (e.g. §240's single-instance lock).
+   No further CodeRabbit findings remained after this round.
+- **Real, working code — unsaved-changes confirmation, closing the last real CodeRabbit-named gap
+  (§75.96)**: closes this project's own long-tracked unsaved-changes-on-close/switch gap with a
+  real Discard/Cancel confirmation modal on closing a dirty tab and a real app-quit gate in the
+  Electron shell (native browser `beforeunload` in the web shell). New
+  `desktop/src/components/UnsavedChangesModal.tsx` (origin) and `web/src/components/
+  UnsavedChangesModal.tsx` (code-identical port -- only the header doc comment, which
+  references the origin, differs) render a modal naming each dirty file with only
+  **Discard** and **Cancel** (no Save button — user saving stays Ctrl/Cmd+S in the editors
+  themselves, deliberately avoiding reimplementing two shells' separate save paths); Cancel is
+  autofocused, Escape cancels. The desktop gate is **inside the app, not `beforeunload`**, because
+  the main process's `close` event is what genuinely distinguishes a user-initiated window close
+  from the File menu's already-gated Reload/Open Folder actions (which replace the renderer without
+  ever firing `close`): `desktop/electron/main.ts` gained `closeAllowed = new WeakSet<BrowserWindow>()`;
+  every `win.on("close")` now prevents the close, sends a new `spartan:close-requested` IPC message,
+  and re-arms the allowance if it was already granted; the renderer gates on dirty tabs and answers
+  with a new `spartan:close-confirmed` IPC call that re-arms and calls `win.close()`.
+  `desktop/electron/preload.ts` exposes `onCloseRequested(listener)` (subscribe/return-unsubscribe,
+  the same convention `onEvent` already uses) and `confirmClose()`; both are typed on
+  `Window.spartan` in `desktop/src/spartan-api.d.ts`. The renderer (`desktop/src/App.tsx`) owns
+  `pendingClose` state (`{kind:"tab",index}` | `{kind:"app"}` | null), a `filesRef` mirror of the
+  current `files` for stable dirty checks, `requestCloseFile`/`handleDiscardPendingClose`, and a
+  once-registered `onCloseRequested` effect; the TabBar's close button now routes through
+  `requestCloseFile`, and the modal renders for both tab-close and app-quit flows (the app-quit flow
+  lists every currently-dirty file). The web shell mirrors the same state machine and additionally
+  registers a real `beforeunload` handler (native browser prompt) for browser-tab close/reload, and
+  both `desktop/src/app.css` and `web/src/app.css` carry the new `.uc-body`/`.uc-file-list` styles
+  reusing the existing `.np-*` overlay/panel/actions chrome. **Real, live, end-to-end verification
+  in BOTH shells, zero shim**: desktop was driven through the same genuine Electron process
+  (Xvfb+fluxbox+xdotool) the previous passes established — A: closing a clean tab closes
+  immediately with no modal; B: closing a dirty tab (real typed edit, real dirty-dot) opens the
+  real modal naming `demo.py`, Cancel keeps the dirty tab and its content, Discard closes it; C: a
+  real window close (`app.evaluate` → `BrowserWindow.close()`, which Playwright's own
+  `page.close()` can't trigger — that destroys the page without firing `close`) opens the modal,
+  Cancel keeps the app alive with the editor intact, Discard genuinely quits (confirmed via
+  `app.waitForEvent("close")`); D: a clean window close quits immediately with no modal.
+  Screenshotted at the real modal (`/tmp/opencode/desktop-unsaved-modal.png`). Web was driven live
+  against a real `spartan-devserver` session on the real Chromium binary (`cargo build --release -p
+  spartan-devserver`, `--web-root:web/dist --project-root:<scratch>`, real same-origin
+  `/__spartan/session` token handoff + WebSocket): the same A–D battery passed against the
+  BackendFileTree/BackendEditor surface (the pure-client File System Access `Editor.tsx` surface is
+  reachable but needs a real folder picker; the shared modal code path is identical), including a
+  real `beforeunload` native dialog observed on reload with a dirty tab and its absence with a
+  clean one (`/tmp/opencode/web-unsaved-modal.png`). `npm run typecheck`/`npm run build` clean in
+  both `desktop/` and `web/`; `cargo build --release -p spartan-backend` and `-p spartan-devserver`
+  both clean. **What this does not confirm**: the macOS app menu's own Quit (role-based, fires the
+  same `close` event on macOS window close but this project has no Apple hardware to verify
+  platform-specific quit semantics) and Windows platform behavior (same standing Linux-only scope
+  as every other `desktop/` pass); the pure-client `web/Editor.tsx` surface's modal wasn't clicked
+  live through a real folder picker (no File System Access secure-context flag in the headless
+  Chromium used), though it shares the identical gating/modal code as the live-verified backend
+  surface.
 
 ## Build & test
 
