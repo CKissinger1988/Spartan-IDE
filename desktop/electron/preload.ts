@@ -84,6 +84,7 @@ const ALLOWED_METHODS = new Set([
   "git_blame",
   "github_list_pull_requests",
   "git_remotes",
+  "git_clone",
   "git_fetch",
   "git_push",
   "git_pull",

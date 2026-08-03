@@ -477,6 +477,22 @@ impl GitRepo {
         Some(Self { repo })
     }
 
+    /// Real clone of a remote repository into `dest` (which must not yet
+    /// exist, or exist empty -- `libgit2` itself refuses to clone over a
+    /// real, non-empty directory). Uses the same `make_remote_callbacks`
+    /// credentials the fetch/push paths use: SSH-agent first, then a
+    /// default/anonymous credential (a local-path or `file://` remote needs
+    /// none). An interactive HTTPS-token prompt is the same named, open
+    /// follow-up as for the other remote ops, not attempted here.
+    pub fn clone(url: &str, dest: &Path) -> Result<Self, git2::Error> {
+        let mut fo = git2::FetchOptions::new();
+        fo.remote_callbacks(make_remote_callbacks());
+        let mut builder = git2::build::RepoBuilder::new();
+        builder.fetch_options(fo);
+        let repo = builder.clone(url, dest)?;
+        Ok(Self { repo })
+    }
+
     pub fn workdir(&self) -> Option<&Path> {
         self.repo.workdir()
     }
@@ -2759,6 +2775,55 @@ mod tests {
             fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
             "original\n"
         );
+    }
+
+    #[test]
+    fn clone_builds_a_real_working_repo_from_a_local_bare_remote() {
+        // A real bare repo acting as the "remote" -- no network, no
+        // credentials; `GitRepo::clone` must produce a real, openable
+        // working repo with the pushed content checked out and `origin`
+        // already configured (libgit2's real clone behavior, asserted
+        // against the real objects, not a stubbed return).
+        let remote_dir = std::env::temp_dir().join("spartan_git_test_clone_bare");
+        let _ = fs::remove_dir_all(&remote_dir);
+        Repository::init_bare(&remote_dir).unwrap();
+        let remote_url = remote_dir.to_str().unwrap();
+
+        let (tmp_a, repo_a) = TempRepo::new("clone_source");
+        tmp_a.write("f.txt", "hello from the source\n");
+        repo_a.stage(Path::new("f.txt")).unwrap();
+        repo_a.commit("initial").unwrap();
+        repo_a.repo.remote("origin", remote_url).unwrap();
+        let branch = repo_a.current_branch().unwrap();
+        repo_a.push("origin", &branch).unwrap();
+
+        let clone_dir = std::env::temp_dir().join("spartan_git_test_clone_dest");
+        let _ = fs::remove_dir_all(&clone_dir);
+        let cloned = GitRepo::clone(remote_url, &clone_dir).unwrap();
+        assert_eq!(
+            fs::read_to_string(clone_dir.join("f.txt")).unwrap(),
+            "hello from the source\n",
+            "clone must check out the pushed content into the working tree"
+        );
+        assert_eq!(
+            cloned.current_branch().unwrap(),
+            branch,
+            "the clone's checked-out branch matches the source's"
+        );
+        let remotes = cloned.list_remotes().unwrap();
+        assert_eq!(remotes.len(), 1);
+        assert_eq!(remotes[0].0, "origin");
+        assert_eq!(remotes[0].1.as_deref(), Some(remote_url));
+
+        // A second clone must refuse to land over a real, non-empty
+        // directory (libgit2's own guard, surfaced as a real error).
+        match GitRepo::clone(remote_url, &clone_dir) {
+            Ok(_) => panic!("second clone over an existing non-empty dir must fail"),
+            Err(e) => assert!(e.message().contains("exists"), "unexpected: {e}"),
+        }
+
+        let _ = fs::remove_dir_all(&remote_dir);
+        let _ = fs::remove_dir_all(&clone_dir);
     }
 
     #[test]

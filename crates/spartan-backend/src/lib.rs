@@ -4375,6 +4375,45 @@ fn git_remotes(project_root: &str) -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "remotes": remotes }))
 }
 
+/// Real clone of a remote repository into `parent_dir/<safe_name>` -- a
+/// real network remote is reached when the URL is real; a local bare-repo
+/// path clones with no network at all (that's the honest, offline
+/// verification path). The destination directory must not already exist
+/// non-empty; `libgit2` itself refuses to overwrite one, and we pre-check
+/// to report the same refusal in friendly words. The sanitized name is
+/// what gets returned (the same `sanitize_project_name` the New Project
+/// wizard uses), so a `https://github.com/owner/repo.git` URL clones into
+/// `<parent>/repo`.
+fn git_clone(parent_dir: &str, url: &str, name: &str) -> Result<serde_json::Value, String> {
+    if url.trim().is_empty() {
+        return Err("git clone: a repository URL is required".to_string());
+    }
+    if name.trim().is_empty() {
+        return Err("git clone: a non-empty repository name is required".to_string());
+    }
+    let safe_name = sanitize_project_name(name);
+    if safe_name.is_empty() {
+        return Err("git clone: a non-empty repository name is required".to_string());
+    }
+    let dest = std::path::Path::new(parent_dir).join(&safe_name);
+    if dest.exists() {
+        let non_empty = std::fs::read_dir(&dest)
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false);
+        if non_empty {
+            return Err(format!(
+                "git clone: {} already exists and is not empty -- refusing to overwrite it",
+                dest.display()
+            ));
+        }
+    }
+    spartan_git::GitRepo::clone(url, &dest).map_err(|e| format!("git clone: {e}"))?;
+    Ok(serde_json::json!({
+        "project_root": dest.to_string_lossy(),
+        "name": safe_name,
+    }))
+}
+
 /// Real fetch from a configured remote (updates remote-tracking refs; the
 /// working tree is untouched). Synchronous like the rest of this crate's
 /// git dispatch -- a real network remote can make this slow; wiring it to
@@ -5373,6 +5412,12 @@ pub fn handle_request(
         "git_remotes" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
             git_remotes(&root)
+        })(),
+        "git_clone" => (|| {
+            let parent_dir = get_str_param(&req.params, "parent_dir")?;
+            let url = get_str_param(&req.params, "url")?;
+            let name = get_str_param(&req.params, "name")?;
+            git_clone(&parent_dir, &url, &name)
         })(),
         "git_fetch" => (|| {
             let root = get_str_param(&req.params, "project_root")?;
@@ -7130,6 +7175,104 @@ time.sleep(10)
         );
 
         let _ = std::fs::remove_dir_all(&remote_dir);
+    }
+
+    #[test]
+    fn git_clone_round_trip_through_the_dispatch_path() {
+        // A real bare repo as the "remote" -- no network, no credentials.
+        let remote_dir = std::env::temp_dir().join(format!(
+            "spartan-backend-git-clone-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&remote_dir);
+        git2::Repository::init_bare(&remote_dir).unwrap();
+        let remote_url = remote_dir.to_str().unwrap().to_string();
+
+        // Seed the bare remote with a real commit via a scratch local repo.
+        let seed = TempRepo::new("clone_seed");
+        std::fs::write(seed.dir.join("f.txt"), "cloned content\n").unwrap();
+        let state = new_state();
+        let seed_root = seed.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": seed_root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": seed_root, "message": "seed" }),
+        );
+        git2::Repository::open(&seed.dir)
+            .unwrap()
+            .remote("origin", &remote_url)
+            .unwrap();
+        let branch = spartan_git::GitRepo::discover(&seed.dir)
+            .unwrap()
+            .current_branch()
+            .unwrap();
+        call(
+            &state,
+            3,
+            "git_push",
+            serde_json::json!({ "project_root": seed_root, "remote": "origin", "branch": branch }),
+        );
+
+        let parent_dir = std::env::temp_dir().join(format!(
+            "spartan-backend-git-clone-parent-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&parent_dir);
+        std::fs::create_dir_all(&parent_dir).unwrap();
+
+        // Clone through the real dispatch path, then verify the result is a
+        // real, working repo with the seeded content checked out.
+        let resp = call(
+            &state,
+            4,
+            "git_clone",
+            serde_json::json!({ "parent_dir": parent_dir.to_string_lossy(), "url": remote_url, "name": "cloned-repo" }),
+        );
+        let result = resp.result.clone().unwrap();
+        let project_root = result["project_root"].as_str().unwrap().to_string();
+        assert_eq!(result["name"], "cloned-repo");
+        assert_eq!(
+            std::fs::read_to_string(std::path::Path::new(&project_root).join("f.txt")).unwrap(),
+            "cloned content\n"
+        );
+        let opened = spartan_git::GitRepo::discover(std::path::Path::new(&project_root));
+        assert!(
+            opened.is_some(),
+            "the cloned directory must be a real, openable repo"
+        );
+
+        // Cloning over the now-existing, non-empty directory must be refused
+        // with a friendly error, not an overwrite.
+        let resp = call(
+            &state,
+            5,
+            "git_clone",
+            serde_json::json!({ "parent_dir": parent_dir.to_string_lossy(), "url": remote_url, "name": "cloned-repo" }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("already exists"));
+
+        // An empty name is rejected before any network attempt.
+        let resp = call(
+            &state,
+            6,
+            "git_clone",
+            serde_json::json!({ "parent_dir": parent_dir.to_string_lossy(), "url": remote_url, "name": "" }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("name"));
+
+        let _ = std::fs::remove_dir_all(&remote_dir);
+        let _ = std::fs::remove_dir_all(&parent_dir);
     }
 
     #[test]

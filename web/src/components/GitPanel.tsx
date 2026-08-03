@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { BackendClient } from "../backendClient";
+import CloneRepositoryDialog from "./CloneRepositoryDialog";
 
 interface StatusEntry {
   path: string;
@@ -461,6 +462,13 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
   const [diffContent, setDiffContent] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
+  // Real "Clone repository" dialog (the FUTURE_FEATURES.md follow-up the
+  // remote push/pull/fetch pass named). Deliberately reachable from both
+  // the normal panel (a compact header action) and the panel's error state
+  // (the root isn't a git repo -- arguably the most likely moment a user
+  // wants to clone), since the error state is the one that currently has no
+  // actionable surface.
+  const [showClone, setShowClone] = useState(false);
   // Real per-hunk staging (task #271), mirroring desktop/'s own.
   const [hunks, setHunks] = useState<HunkInfo[] | null>(null);
   const [hunksError, setHunksError] = useState<string | null>(null);
@@ -1266,7 +1274,27 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
   );
 
   if (error) {
-    return <div className="git-panel git-panel-empty mono">{error}</div>;
+    return (
+      <>
+        <div className="git-panel git-panel-empty mono">{error}</div>
+        <div style={{ display: "flex", gap: 4, padding: "0 8px 8px" }}>
+          <button
+            type="button"
+            className="editor-find-btn"
+            onClick={() => setShowClone(true)}
+          >
+            Clone repository…
+          </button>
+        </div>
+        {showClone && (
+          <CloneRepositoryDialog
+            defaultParentDir={root}
+            call={(method, params) => client.call(method, params)}
+            onClose={() => setShowClone(false)}
+          />
+        )}
+      </>
+    );
   }
   if (!status) {
     return <div className="git-panel git-panel-empty mono">Loading git status…</div>;
@@ -1285,6 +1313,23 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
       >
         {status.branch ? `⎇ ${status.branch}` : "(detached HEAD)"} {showBranches ? "▾" : "▸"}
       </div>
+      <div style={{ display: "flex", gap: 4, padding: "0 8px 6px" }}>
+        <button
+          type="button"
+          className="editor-find-btn"
+          onClick={() => setShowClone(true)}
+          title="Clone a remote repository into this folder"
+        >
+          Clone…
+        </button>
+      </div>
+      {showClone && (
+        <CloneRepositoryDialog
+          defaultParentDir={root}
+          call={(method, params) => client.call(method, params)}
+          onClose={() => setShowClone(false)}
+        />
+      )}
       {showBranches && (
         <div className="git-section">
           {branchError && <div className="git-panel-empty mono">{branchError}</div>}

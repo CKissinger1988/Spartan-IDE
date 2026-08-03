@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import CloneRepositoryDialog from "./CloneRepositoryDialog";
 
 interface StatusEntry {
   path: string;
@@ -458,6 +459,13 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   const [diffContent, setDiffContent] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
+  // Real "Clone repository" dialog (the FUTURE_FEATURES.md follow-up the
+  // remote push/pull/fetch pass named). Deliberately reachable from both
+  // the normal panel (a compact header action) and the panel's error state
+  // (the root isn't a git repo -- arguably the most likely moment a user
+  // wants to clone), since the error state is the one that currently has no
+  // actionable surface.
+  const [showClone, setShowClone] = useState(false);
   // Real per-hunk staging (task #271) -- only fetched for an unstaged
   // row's own expansion (a staged diff has nothing left to hunk-stage).
   const [hunks, setHunks] = useState<HunkInfo[] | null>(null);
@@ -1302,7 +1310,31 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
   );
 
   if (error) {
-    return <div className="git-panel git-panel-empty mono">{error}</div>;
+    return (
+      <>
+        <div className="git-panel git-panel-empty mono">{error}</div>
+        <div style={{ display: "flex", gap: 4, padding: "0 8px 8px" }}>
+          <button
+            type="button"
+            className="editor-find-btn"
+            onClick={() => setShowClone(true)}
+          >
+            Clone repository…
+          </button>
+        </div>
+        {showClone && (
+          <CloneRepositoryDialog
+            defaultParentDir={root}
+            call={(method, params) => window.spartan.call(method, params)}
+            pickFolder={() =>
+              window.spartan.pickFolder().then((r) => r as { canceled: boolean; path: string | null })
+            }
+            onCreated={(projectRoot) => window.spartan.openProject(projectRoot).then(() => {})}
+            onClose={() => setShowClone(false)}
+          />
+        )}
+      </>
+    );
   }
   if (!status) {
     return <div className="git-panel git-panel-empty mono">Loading git status…</div>;
@@ -1321,6 +1353,27 @@ export default function GitPanel({ root }: GitPanelProps): React.ReactElement {
       >
         {status.branch ? `⎇ ${status.branch}` : "(detached HEAD)"} {showBranches ? "▾" : "▸"}
       </div>
+      <div style={{ display: "flex", gap: 4, padding: "0 8px 6px" }}>
+        <button
+          type="button"
+          className="editor-find-btn"
+          onClick={() => setShowClone(true)}
+          title="Clone a remote repository into this folder"
+        >
+          Clone…
+        </button>
+      </div>
+      {showClone && (
+        <CloneRepositoryDialog
+          defaultParentDir={root}
+          call={(method, params) => window.spartan.call(method, params)}
+          pickFolder={() =>
+            window.spartan.pickFolder().then((r) => r as { canceled: boolean; path: string | null })
+          }
+          onCreated={(projectRoot) => window.spartan.openProject(projectRoot).then(() => {})}
+          onClose={() => setShowClone(false)}
+        />
+      )}
       {showBranches && (
         <div className="git-section">
           {branchError && <div className="git-panel-empty mono">{branchError}</div>}

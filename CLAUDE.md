@@ -8599,8 +8599,51 @@ first — it's the parity reference until each row there is actually reimplement
   per-line selection works one hunk at a time (re-fetching between each), the same real, named v1
   scope cut `stage_hunk`/`unstage_hunk` already document; no stash-during-merge interplay, no
   branch delete/rename. This closes the last named follow-up in the per-hunk-staging backlog row
-  and the "no per-line (sub-hunk) selection" caveat every prior staging pass's "What this does not
-  confirm" section carried.
+   and the "no per-line (sub-hunk) selection" caveat every prior staging pass's "What this does not
+   confirm" section carried.
+
+   **Next real pass: Git clone UI** (the FUTURE_FEATURES.md follow-up the remote push/pull/fetch
+   pass named). `spartan_git::GitRepo::clone(url, dest)` is a real `libgit2` `RepoBuilder` clone
+   using the same `make_remote_callbacks` credentials the fetch/push paths already use (SSH-agent
+   first, then default/anonymous — a local-path or `file://` remote needs none; an interactive
+   HTTPS-token prompt is still the same named, open follow-up, not attempted here). `spartan-
+   backend` gained the `git_clone` dispatch method (`parent_dir`/`url`/`name`): requires a non-empty
+   URL and name, sanitizes the name with the same `sanitize_project_name` the New Project wizard
+   uses, refuses a destination that already exists and is non-empty with a friendly error (never an
+   overwrite), and returns `{ project_root, name }`. Both Git panels (`desktop/`, `web/`) render the
+   same `CloneRepositoryDialog` component (byte-identical except transport): URL field, optional
+   directory name (derived from the URL's last path segment — `.git` stripped, https/ssh/scp-style
+   shapes — when blank), and a parent directory (`desktop/` gets the real native folder picker via
+   `pickFolder()`; `web/` is a plain text field since it has no native picker). The dialog is
+   reachable from *both* the normal panel ("Clone…" header action) and the panel's error state
+   ("Clone repository…" — the root isn't a git repo, arguably the most likely moment a user wants
+   to clone, and previously a dead-end surface with no actionable button). On success `desktop/`
+   hands the new project root to `window.spartan.openProject` (the same single-window reload the
+   New Project wizard uses, so the panel switches to the freshly-cloned repo); `web/` has no
+   root-switch mechanism (its devserver project root is fixed at startup) so it reports the path
+   and notes that honestly. **Real verification, no estimation**: `cargo fmt --all -- --check`
+   clean; 1 new `spartan-git` test (`clone_builds_a_real_working_repo_from_a_local_bare_remote` —
+   clones a real bare repo, asserts the pushed content is checked out, the branch matches, `origin`
+   is configured, and a second clone over the non-empty dir is refused) — 90 `spartan-git` tests
+   total, all green; 1 new `spartan-backend` dispatch-level test (`git_clone_round_trip_through_the_
+   dispatch_path` — seeds a real bare remote, clones through `handle_request`, verifies the checked-
+   out content and that a non-empty destination / empty name are refused) — 283 lib tests total, all
+   green; `cargo clippy --release --all-targets -p spartan-git -p spartan-backend` clean (same
+   pre-existing line-313 warning); `npm run typecheck` clean in both shells and both vite builds
+   succeed. **Live end-to-end, real binary**: the built `spartan-backend` release binary was driven
+   over its real stdio protocol with a real `git_clone` request against a real seeded bare repo —
+   the clone landed on disk with the exact pushed content, `main` tracking `origin/main`, and the
+   non-empty-destination and empty-name refusals surfaced as real error responses. **Live end-to-
+   end, real browser**: a headed Playwright session drove the `web/` Git panel (via a live
+   `spartan-devserver` pointed at a non-git scratch root) — the error-state "Clone repository…"
+   button opened the dialog, the three fields were filled, and cloning a real local bare repo
+   through the real WebSocket transport landed the repo on disk with the exact pushed content, zero
+   page errors. **What this does not confirm**: the `desktop/` shell's own native `pickFolder`/
+   `openProject` path was not exercised in a real Electron window this session (the browser-level
+   verification covered the shared dialog + backend end-to-end, and the desktop-only wiring is the
+   same `window.spartan.*` call pattern every prior desktop feature uses); interactive HTTPS-token
+   auth for private remotes remains the named, open follow-up; no submodule/shallow/`--depth`
+   options — a plain full clone only.
 
 ## Build & test
 
