@@ -138,18 +138,23 @@ fn splice_hunk_region(
     ))
 }
 
-/// Builds the per-line selection's real region content, in the coordinate
-/// order that keeps every line at its own real position: libgit2 reports a
-/// hunk's lines deletion-group-then-addition-group (real git's own unified
-/// display for adjacent edits), so emitting in raw hunk order would scramble
-/// a selection that spans two adjacent changes (an unselected deletion of
-/// the later change could land before a selected addition of the earlier
-/// one). Instead each emitted line carries its own real coordinate (a
-/// deletion's `old_lineno`, an addition's `new_lineno`, a context line's
-/// shared line number) and is sorted by `(coordinate, rank)` with rank
-/// deletion < context < addition -- so at a replaced coordinate the old
-/// line stays before the new line, and everywhere else real file order is
-/// preserved. `staged` picks the direction: `false` stages (a `'+'` line is
+/// Emits one change group (a maximal run of `'-'`/`'+'` hunk lines) as a
+/// single sorted block: every kept deletion and selected addition is given
+/// a real slot against the side of the destination file the group replaces
+/// (old-side slots when staging, new-side slots when unstaging) and the
+/// block is emitted in `(slot, deletion-first)` order. This is what keeps a
+/// selection spanning two adjacent changes in one hunk correct: libgit2
+/// reports those lines deletion-group-then-addition-group (real git's own
+/// unified display), so raw hunk order would land an unselected deletion of
+/// the later change before a selected addition of the earlier one -- but
+/// slotting both against the same anchor (each deletion occupying the slot
+/// of the old line it removes, each addition the slot of the old/new line it
+/// replaces or inserts before) gives every emitted line its one real
+/// position in the result. The single slot a replacement pair shares is
+/// broken deletion-first (the kept old line before the added new line);
+/// pure-insertion groups slot their additions sequentially after the
+/// group's anchor, so they stay before the following context line they
+/// precede. `staged` picks the direction: `false` stages (a `'+'` line is
 /// emitted iff selected, a `'-'` line iff *not* selected), `true` unstages
 /// (the exact complement -- a `'-'` line is emitted iff selected, a `'+'`
 /// line iff *not* selected). End-of-file-newline marker lines are never
@@ -160,40 +165,70 @@ fn selection_region(
     selected: &[bool],
     staged: bool,
 ) -> Result<Vec<u8>, git2::Error> {
-    let (_, line_count) = patch.hunk(hunk_index)?;
-    let mut emitted: Vec<(usize, u8, &[u8])> = Vec::new();
+    let (hunk, line_count) = patch.hunk(hunk_index)?;
     debug_assert_eq!(selected.len(), line_count);
-    for (l, &is_selected) in selected.iter().enumerate() {
+    let mut out = Vec::new();
+    // The count of old/new lines already consumed: the anchor a change
+    // group's slots are numbered from. Initialized one before the hunk's
+    // own first line (`old_start`/`new_start` are 1-indexed per real
+    // unified-diff convention).
+    let mut old_anchor: usize = hunk.old_start().saturating_sub(1) as usize;
+    let mut new_anchor: usize = hunk.new_start().saturating_sub(1) as usize;
+    let mut group: Vec<(usize, usize, bool)> = Vec::new(); // (line index, slot, is deletion)
+    for l in 0..line_count {
         let line = patch.line_in_hunk(hunk_index, l)?;
-        let origin = line.origin();
-        let emit: Option<(usize, u8)> = match origin {
-            ' ' => Some((line.new_lineno().unwrap_or(0) as usize, 1)),
+        match line.origin() {
+            ' ' => {
+                flush_selection_group(&mut group, &mut out, patch, hunk_index, selected, staged)?;
+                out.extend_from_slice(line.content());
+                old_anchor += 1;
+                new_anchor += 1;
+            }
             '-' => {
-                if is_selected ^ staged {
-                    None
-                } else {
-                    Some((line.old_lineno().unwrap_or(0) as usize, 0))
-                }
+                old_anchor += 1;
+                group.push((l, old_anchor, true));
             }
             '+' => {
-                if is_selected ^ staged {
-                    Some((line.new_lineno().unwrap_or(0) as usize, 2))
-                } else {
-                    None
-                }
+                new_anchor += 1;
+                group.push((l, new_anchor, false));
             }
-            _ => None,
-        };
-        if let Some((coord, rank)) = emit {
-            emitted.push((coord, rank, line.content()));
+            _ => {}
         }
     }
-    emitted.sort_by_key(|&(coord, rank, _)| (coord, rank));
-    let mut out = Vec::new();
-    for (_, _, content) in emitted {
-        out.extend_from_slice(content);
-    }
+    flush_selection_group(&mut group, &mut out, patch, hunk_index, selected, staged)?;
     Ok(out)
+}
+
+/// Sorts and emits one collected change group. `slot` values are already in
+/// the destination side's coordinate space (old-side when `staged` is false,
+/// new-side when true, since `selection_region` increments `old_anchor` for
+/// `'-'` lines and `new_anchor` for `'+'` lines), so a pure `(slot,
+/// deletion-first)` sort orders every line at its one real position. Only
+/// the lines the direction's own predicate accepts are emitted; the rest are
+/// dropped from the region (and thus from the spliced index).
+fn flush_selection_group(
+    group: &mut Vec<(usize, usize, bool)>,
+    out: &mut Vec<u8>,
+    patch: &git2::Patch<'_>,
+    hunk_index: usize,
+    selected: &[bool],
+    staged: bool,
+) -> Result<(), git2::Error> {
+    group.sort_by_key(|&(_, slot, is_del)| (slot, !is_del));
+    for &(l, _, is_del) in group.iter() {
+        let line = patch.line_in_hunk(hunk_index, l)?;
+        let is_selected = selected[l];
+        let emit = if is_del {
+            is_selected == staged
+        } else {
+            is_selected != staged
+        };
+        if emit {
+            out.extend_from_slice(line.content());
+        }
+    }
+    group.clear();
+    Ok(())
 }
 
 /// Shared credential callback for real fetch/push against an authenticated
@@ -3622,6 +3657,58 @@ mod tests {
         let remaining = repo.diff_hunks(Path::new("f.txt")).unwrap();
         assert!(remaining[0].body.contains("-line3\n"));
         assert!(!remaining[0].body.contains("-line2\n"));
+    }
+
+    #[test]
+    fn stage_lines_with_a_pure_insertion_then_a_later_deletion_orders_by_real_position() {
+        let (tmp, repo) = TempRepo::new("stage_lines_insertion_then_deletion");
+        tmp.write("f.txt", "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("base").unwrap();
+        // Insert one line right after `alpha`, and delete `zeta` several
+        // lines later -- two changes in one real hunk whose old and new line
+        // coordinates genuinely differ (the addition's `new_lineno` and the
+        // deletion's `old_lineno` land on the same number even though they
+        // occupy different positions), the mixed-coordinate shape that the
+        // slot-ordering exists for.
+        tmp.write("f.txt", "alpha\nINSERTED\nbeta\ngamma\ndelta\nepsilon\n");
+
+        let hunks = repo.diff_hunks(Path::new("f.txt")).unwrap();
+        assert_eq!(hunks.len(), 1, "both changes stay one real hunk");
+        let lines = repo.hunk_lines(Path::new("f.txt"), 0).unwrap();
+        assert_eq!(
+            lines
+                .iter()
+                .map(|l| (l.origin, l.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (' ', "alpha\n"),
+                ('+', "INSERTED\n"),
+                (' ', "beta\n"),
+                (' ', "gamma\n"),
+                (' ', "delta\n"),
+                (' ', "epsilon\n"),
+                ('-', "zeta\n"),
+            ]
+        );
+
+        // Stage only the insertion, leaving the later deletion unstaged: the
+        // index becomes the old content plus the inserted line at its real
+        // position (before beta), with `zeta` still present. (The insertion
+        // is in-hunk index 1, per the per-line layout asserted above.)
+        repo.stage_lines(Path::new("f.txt"), 0, &[1]).unwrap();
+        assert_eq!(
+            repo.index_blob_content(Path::new("f.txt"))
+                .unwrap()
+                .unwrap(),
+            "alpha\nINSERTED\nbeta\ngamma\ndelta\nepsilon\nzeta\n",
+            "the inserted line lands before beta at its real position; zeta stays"
+        );
+        // The real remaining unstaged diff is exactly the deletion.
+        let remaining = repo.diff_hunks(Path::new("f.txt")).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining[0].body.contains("-zeta\n"));
+        assert!(!remaining[0].body.contains("+INSERTED\n"));
     }
 
     #[test]

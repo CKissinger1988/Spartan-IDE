@@ -8550,12 +8550,19 @@ first — it's the parity reference until each row there is actually reimplement
   re-added to the index, a selected `'+'` addition is removed). Both reuse the same region-splice
   `stage_hunk`/`unstage_hunk` already use (refactored into shared `splice_region_content`/
   `splice_hunk_region` helpers — `stage_hunk`/`unstage_hunk` now reduce to calling them with the
-  whole-hunk predicate, so there is one splice implementation, not three); the per-line case builds
-  its emitted region in coordinate order (`selection_region`, sorting by real
-  `old_lineno`/`new_lineno` with rank deletion < context < addition) so a selection spanning two
-  adjacent changes in one hunk keeps every line at its real position instead of libgit2's
-  deletion-group-then-addition-group raw order. Selecting every change line reduces to exactly the
-  whole-hunk button; selecting none is an exact no-op; out-of-range line indices error honestly;
+   whole-hunk predicate, so there is one splice implementation, not three); the per-line case builds
+   its emitted region via `selection_region`, which maps deletions, context lines, and additions
+   into one common coordinate space before sorting: it walks the hunk's lines in document order
+   (not libgit2's deletion-group-then-addition-group raw order), tracking the real
+   `old_anchor`/`new_anchor` each time a context line lands, and flushes each run of change lines
+   ordered by `(slot, !is_del)` so a replaced deletion/addition pair applies with the deletion
+   first at its real position. This ordering is only as good as the hunk shapes the tests cover —
+   the fixtures exercise a pure deletion, a pure insertion, an adjacent deletion+addition
+   replacement, and one hunk containing a pure insertion followed by a deletion several lines
+   later (mixed old/new coordinates, with an exact index-content assertion), plus a differential
+   check against real `git apply` for the selection shapes git can express. Selecting every change
+   line reduces to exactly the whole-hunk button; selecting none is an exact no-op; out-of-range
+   line indices error honestly;
   the working tree is never touched; end-of-file-newline marker lines (`'='`/`'>'`/`'<'`) render
   but are never selectable, matching the whole-hunk methods' own treatment. `spartan-backend`
   gained the `git_hunk_lines`/`git_stage_lines`/`git_unstage_lines` dispatch methods (with a

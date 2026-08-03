@@ -4105,6 +4105,27 @@ fn git_unstage_lines(
     Ok(serde_json::json!({ "ok": true }))
 }
 
+/// Strictly parses the `git_stage_lines`/`git_unstage_lines` `lines` array:
+/// every element must be a real u64, so a malformed or type-mismatched
+/// entry is an honest error rather than a silently-dropped partial
+/// selection (which would apply a different subset than the caller asked
+/// for). An empty array is valid and remains an exact no-op.
+fn parse_lines_param(params: &serde_json::Value, key: &str) -> Result<Vec<u64>, String> {
+    let arr = params
+        .get(key)
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| format!("missing/invalid array param `{key}`"))?;
+    let mut lines = Vec::with_capacity(arr.len());
+    for (i, v) in arr.iter().enumerate() {
+        lines.push(
+            v.as_u64().ok_or_else(|| {
+                format!("invalid element {i} of array param `{key}`: expected u64")
+            })?,
+        );
+    }
+    Ok(lines)
+}
+
 /// Real local branch list -- every real local branch name plus which one
 /// is current (none flagged for a real detached `HEAD`).
 fn git_branches(project_root: &str) -> Result<serde_json::Value, String> {
@@ -5272,12 +5293,7 @@ pub fn handle_request(
                 .get("hunk_index")
                 .and_then(|v| v.as_u64())
                 .ok_or("missing/invalid u64 param `hunk_index`")?;
-            let lines = req
-                .params
-                .get("lines")
-                .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|v| v.as_u64()).collect::<Vec<u64>>())
-                .ok_or("missing/invalid array param `lines`")?;
+            let lines = parse_lines_param(&req.params, "lines")?;
             git_stage_lines(&root, &path, hunk_index, &lines)
         })(),
         "git_unstage_lines" => (|| {
@@ -5288,12 +5304,7 @@ pub fn handle_request(
                 .get("hunk_index")
                 .and_then(|v| v.as_u64())
                 .ok_or("missing/invalid u64 param `hunk_index`")?;
-            let lines = req
-                .params
-                .get("lines")
-                .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|v| v.as_u64()).collect::<Vec<u64>>())
-                .ok_or("missing/invalid array param `lines`")?;
+            let lines = parse_lines_param(&req.params, "lines")?;
             git_unstage_lines(&root, &path, hunk_index, &lines)
         })(),
         "git_branches" => get_str_param(&req.params, "project_root").and_then(|r| git_branches(&r)),
@@ -7980,6 +7991,37 @@ time.sleep(10)
         );
         assert!(resp.result.is_none());
         assert!(resp.error.unwrap().contains("git stage lines"));
+    }
+
+    #[test]
+    fn git_stage_lines_rejects_a_type_mismatched_line_element_honestly() {
+        let tmp = TempRepo::new("stage_lines_bad_element_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "alpha\nbeta\ngamma\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "base" }),
+        );
+        std::fs::write(tmp.dir.join("f.txt"), "alpha\nBETA\ngamma\n").unwrap();
+        // A non-u64 element must be an honest error, not a silently-dropped
+        // partial selection.
+        let resp = call(
+            &state,
+            3,
+            "git_stage_lines",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "hunk_index": 0, "lines": [1, "not-a-number"] }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("expected u64"));
     }
 
     #[test]

@@ -884,7 +884,12 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
           const hunks = (result as { hunks: HunkInfo[] }).hunks;
           setHunks(hunks);
           setHunkLines(null);
-          Promise.all(
+          // Per-hunk detail is fetched independently and settled
+          // independently: one failing hunk must not remove per-line
+          // selection from every other hunk, so `allSettled` keeps every
+          // fulfilled result and only the genuinely rejected hunks are
+          // reported (as a single combined `linesError`).
+          Promise.allSettled(
             hunks.map((h) =>
               client
                 .call("git_hunk_lines", {
@@ -895,17 +900,21 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
                 })
                 .then((r) => [h.index, (r as { lines: HunkLine[] }).lines] as const)
             )
-          )
-            .then((pairs) => {
-              if (expandedDiffKeyRef.current !== key) return;
-              const byIndex: Record<number, HunkLine[]> = {};
-              for (const [hi, ls] of pairs) byIndex[hi] = ls;
-              setHunkLines(byIndex);
-            })
-            .catch((err: Error) => {
-              if (expandedDiffKeyRef.current !== key) return;
-              setLinesError(err.message);
-            });
+          ).then((results) => {
+            if (expandedDiffKeyRef.current !== key) return;
+            const byIndex: Record<number, HunkLine[]> = {};
+            const failures: string[] = [];
+            for (const r of results) {
+              if (r.status === "fulfilled") {
+                const [hi, ls] = r.value;
+                byIndex[hi] = ls;
+              } else {
+                failures.push(r.reason.message);
+              }
+            }
+            setHunkLines(byIndex);
+            if (failures.length > 0) setLinesError(failures.join("; "));
+          });
         })
         .catch((err: Error) => {
           if (expandedDiffKeyRef.current !== key) return;
