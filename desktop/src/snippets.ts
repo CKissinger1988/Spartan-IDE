@@ -15,6 +15,19 @@ export interface Snippet {
   description: string;
 }
 
+/** A user-defined snippet as persisted in `Settings.user_snippets`
+ * (`spartan_settings::UserSnippet`): the same three body fields a curated
+ * `Snippet` carries, plus the real language id (matching
+ * `languageForPath`/hljs ids) it applies to. Deliberately plain data --
+ * every validation rule lives in `spartan-backend`'s `settings_set`
+ * parse, so the store stays a dumb store. */
+export interface UserSnippet {
+  lang_id: string;
+  prefix: string;
+  body: string;
+  description: string;
+}
+
 /** One resolved tab stop in expanded text: absolute-within-the-expansion
  * `[start, end)` offsets. `end > start` means it carries selectable
  * default text; `end === start` is a bare cursor position. */
@@ -91,9 +104,21 @@ export const SNIPPETS: Record<string, Snippet[]> = {
   ],
 };
 
-/** Look up a snippet by language id + exact prefix, or `null`. */
-export function findSnippet(langId: string | null, prefix: string): Snippet | null {
+/** Look up a snippet by language id + exact prefix, or `null`. A
+ * user-defined snippet for the same `(lang_id, prefix)` pair always wins
+ * over the curated `SNIPPETS` entry -- the real, deliberate override
+ * semantics the user-snippets feature names. Passing no user snippets
+ * (the pure client-side `web/` editor, which has no backend to read
+ * `~/.spartan/settings.json` from) is a totally normal call that simply
+ * falls through to the curated table. */
+export function findSnippet(
+  langId: string | null,
+  prefix: string,
+  userSnippets: UserSnippet[] = []
+): Snippet | null {
   if (!langId) return null;
+  const user = userSnippets.find((s) => s.lang_id === langId && s.prefix === prefix);
+  if (user) return { prefix: user.prefix, body: user.body, description: user.description };
   return SNIPPETS[langId]?.find((s) => s.prefix === prefix) ?? null;
 }
 

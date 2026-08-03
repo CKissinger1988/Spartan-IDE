@@ -287,6 +287,47 @@ pub struct CrashReportingSettings {
 /// type's default instead, the correct real schema-evolution behavior
 /// this struct's own settings-file-is-forward-compatible design already
 /// assumed but didn't actually implement.
+/// Real user-defined snippet (task "user-defined snippets") -- the
+/// same exact three fields a curated `Snippet` in the shells' own
+/// `snippets.ts` has, plus the language id they apply to (matching the
+/// same `languageForPath`/hljs ids `SNIPPETS` is keyed by). Stored as
+/// part of `Settings.user_snippets` so both shells already persist and
+/// round-trip them through the exact same real `settings_get`/
+/// `settings_set` machinery every other preference uses, and so a web
+/// session connected to the same devserver machine sees the snippets its
+/// desktop app created. Deliberately plain data: every validation rule
+/// (non-empty `lang_id`, non-empty `prefix`, non-empty `body`) lives in
+/// `spartan-backend`'s `settings_set` patch parse, not here, so the store
+/// stays a dumb store and the enforcement stays at the one real boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserSnippet {
+    /// Language id from `languageForPath` (e.g. `"rust"`, `"python"`).
+    pub lang_id: String,
+    /// Exact word typed before Tab to trigger this snippet.
+    pub prefix: String,
+    /// Snippet body in the same template syntax `expandSnippet` parses.
+    pub body: String,
+    /// Human-readable summary shown next to the prefix in the picker.
+    pub description: String,
+}
+
+/// Real schema-evolution guard for `user_snippets`: the struct-level
+/// `#[serde(default)]` below already turns a missing field into an empty
+/// `Vec`, but this impl keeps the intent explicit and testable -- an
+/// empty list is the correct default so a real pre-existing settings
+/// file (written before this field existed) never suddenly enables or
+/// re-enables any snippets its owner never defined.
+impl Default for UserSnippet {
+    fn default() -> Self {
+        Self {
+            lang_id: String::new(),
+            prefix: String::new(),
+            body: String::new(),
+            description: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Settings {
@@ -324,6 +365,13 @@ pub struct Settings {
     /// as a real `Authorization` header. Never logged or echoed back in
     /// any error message this crate produces.
     pub github_token: Option<String>,
+    /// Real user-defined snippets (see `UserSnippet`) -- empty by default;
+    /// honored by `findSnippet` in both shells' `snippets.ts` on top of the
+    /// curated `SNIPPETS`, with a user snippet for the same `(lang_id,
+    /// prefix)` winning over the curated one. Empty `Vec` is the default so
+    /// a real pre-existing settings file that predates this field still
+    /// parses with zero user snippets defined.
+    pub user_snippets: Vec<UserSnippet>,
 }
 
 /// `~/.spartan/settings.json` (`$HOME`, falling back to `$USERPROFILE` for
@@ -463,6 +511,7 @@ mod tests {
             onboarding_completed: true,
             leo_verify_command: Some("cargo test".to_string()),
             github_token: Some("ghp_realroundtriptesttoken".to_string()),
+            user_snippets: Vec::new(),
         };
         save_to(&path, &settings).unwrap();
         let loaded = load_from(&path);
@@ -499,6 +548,69 @@ mod tests {
         let loaded = load_from(&path);
         assert_eq!(loaded.github_token, None);
         assert!(loaded.onboarding_completed);
+    }
+
+    #[test]
+    fn default_user_snippets_is_empty_so_no_unconfigured_snippets_exist() {
+        // A real, deliberate default matching `github_token`'s own
+        // precedent: the shells' `findSnippet` only ever consults user
+        // snippets when this list is non-empty, so a fresh install behaves
+        // exactly like it did before user-defined snippets existed.
+        assert_eq!(Settings::default().user_snippets, Vec::new());
+    }
+
+    #[test]
+    fn a_real_pre_existing_file_missing_user_snippets_parses_with_none() {
+        // Real schema-evolution check, same shape as the github_token
+        // sibling: a settings file written before user-defined snippets
+        // existed must still load, with `user_snippets` empty rather than
+        // the whole file failing.
+        let path = temp_path("old-format-no-user-snippets");
+        std::fs::write(
+            &path,
+            r#"{
+                "gpu_offload": { "enabled": true, "layers": null },
+                "onboarding_completed": true
+            }"#,
+        )
+        .unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded.user_snippets, Vec::new());
+        assert!(loaded.onboarding_completed);
+    }
+
+    #[test]
+    fn user_snippets_survive_a_save_then_load_round_trip() {
+        // Real round trip of the new field, mirroring the save_then_load
+        // sibling test's full-settings shape.
+        let path = temp_path("user-snippets-roundtrip");
+        let settings = Settings {
+            gpu_offload: GpuOffloadSettings::default(),
+            leo_approval_mode: LeoApprovalMode::AutoApproveSafe,
+            leo_provider: LeoProviderSettings::default(),
+            editor: EditorSettings::default(),
+            appearance: AppearanceSettings::default(),
+            crash_reporting: CrashReportingSettings::default(),
+            onboarding_completed: false,
+            leo_verify_command: None,
+            github_token: None,
+            user_snippets: vec![
+                UserSnippet {
+                    lang_id: "rust".to_string(),
+                    prefix: "myfn".to_string(),
+                    body: "fn ${1:name}() {\n    ${0}\n}".to_string(),
+                    description: "My function".to_string(),
+                },
+                UserSnippet {
+                    lang_id: "python".to_string(),
+                    prefix: "myfor".to_string(),
+                    body: "for ${1:item} in ${2:items}:\n    ${0:pass}".to_string(),
+                    description: "My loop".to_string(),
+                },
+            ],
+        };
+        save_to(&path, &settings).unwrap();
+        assert_eq!(load_from(&path), settings);
     }
 
     #[test]

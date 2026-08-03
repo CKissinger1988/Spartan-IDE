@@ -18,6 +18,7 @@ import Editor, {
   type WorkspaceTextEdit,
   type BreakpointSpec,
 } from "./components/Editor";
+import type { UserSnippet } from "./snippets";
 import DebugPanel, {
   type DapSessionState,
   type OutputEntry,
@@ -396,6 +397,7 @@ export default function App(): React.ReactElement {
             font_family?: string | null;
             format_on_save?: boolean;
           };
+          user_snippets?: UserSnippet[];
         };
         applyReduceMotion(Boolean(s.appearance?.reduce_motion));
         applyTheme(s.appearance?.theme ?? "SpartanDark");
@@ -407,11 +409,52 @@ export default function App(): React.ReactElement {
             tabSize: s.editor.tab_size ?? DEFAULT_EDITOR_PREFS.tabSize,
             wordWrap: s.editor.word_wrap ?? DEFAULT_EDITOR_PREFS.wordWrap,
             formatOnSave: s.editor.format_on_save ?? DEFAULT_EDITOR_PREFS.formatOnSave,
+            userSnippets: s.user_snippets ?? [],
           });
         }
       })
       .catch(() => setOnboardingState("done"));
   }, []);
+
+  // Real user-snippets freshness: the mount effect above runs once, so
+  // settings changed while the Settings screen was showing (a new or
+  // edited user snippet above all) would otherwise reach the editor only
+  // on a full app restart. Re-fetch the real settings every time the user
+  // navigates back to the editor screen (which unmounts and remounts the
+  // `Editor`, so the fresh `prefs` are picked up immediately). The
+  // initial mount is skipped -- the effect above already covered it.
+  const firstScreenRender = useRef(true);
+  useEffect(() => {
+    if (firstScreenRender.current) {
+      firstScreenRender.current = false;
+      return;
+    }
+    if (screen !== "editor") return;
+    window.spartan
+      .call("settings_get", {})
+      .then((result) => {
+        const s = result as {
+          editor?: {
+            font_size?: number;
+            tab_size?: number;
+            word_wrap?: boolean;
+            font_family?: string | null;
+            format_on_save?: boolean;
+          };
+          user_snippets?: UserSnippet[];
+        };
+        if (s.editor) {
+          setEditorPrefs({
+            fontSize: s.editor.font_size ?? DEFAULT_EDITOR_PREFS.fontSize,
+            tabSize: s.editor.tab_size ?? DEFAULT_EDITOR_PREFS.tabSize,
+            wordWrap: s.editor.word_wrap ?? DEFAULT_EDITOR_PREFS.wordWrap,
+            formatOnSave: s.editor.format_on_save ?? DEFAULT_EDITOR_PREFS.formatOnSave,
+            userSnippets: s.user_snippets ?? [],
+          });
+        }
+      })
+      .catch(() => {});
+  }, [screen]);
 
   const openFile = useCallback(
     async (path: string) => {

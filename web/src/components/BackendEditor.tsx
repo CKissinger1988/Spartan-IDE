@@ -6,6 +6,7 @@ import {
   expandSnippet,
   findSnippet,
   type SnippetSession,
+  type UserSnippet,
 } from "../snippets";
 import { computeBracketPairMarks } from "../bracketPairs";
 import { shiftBreakpointsForEdit } from "../breakpointShift";
@@ -1030,6 +1031,12 @@ interface BackendEditorProps {
    * preferences yet, so a single boolean prop is enough rather than a
    * whole prefs bag. */
   formatOnSave?: boolean;
+  /** Real user-defined snippets (`Settings.user_snippets`, as loaded by
+   * `App.tsx`'s `settings_get` when a devserver is connected) --
+   * consulted by this editor's Tab-expansion `findSnippet` on top of the
+   * curated `SNIPPETS` table, with a user snippet for the same
+   * `(lang_id, prefix)` pair winning. Absent/empty is a normal state. */
+  userSnippets?: UserSnippet[];
 }
 
 /**
@@ -1090,6 +1097,7 @@ export default function BackendEditor({
   onJumpApplied,
   onApplyRename,
   formatOnSave = false,
+  userSnippets = [],
 }: BackendEditorProps): React.ReactElement {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
@@ -2460,7 +2468,7 @@ export default function BackendEditor({
         // matching a snippet for this language).
         if (!e.shiftKey && start === end) {
           const m = /([A-Za-z_]\w*)$/.exec(value.slice(0, start));
-          const snip = m ? findSnippet(languageForPath(file.path), m[1]) : null;
+          const snip = m ? findSnippet(languageForPath(file.path), m[1], userSnippets) : null;
           if (snip && m) {
             const expanded = expandSnippet(snip.body);
             const prefixStart = start - m[1].length;

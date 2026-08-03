@@ -6,6 +6,7 @@ import {
   expandSnippet,
   findSnippet,
   type SnippetSession,
+  type UserSnippet,
 } from "../snippets";
 import { computeBracketPairMarks } from "../bracketPairs";
 import { shiftBreakpointsForEdit } from "../breakpointShift";
@@ -1169,6 +1170,14 @@ export interface EditorPrefs {
    * runs the same real `format_document` a manual Ctrl+Shift+F does
    * before writing to disk. */
   formatOnSave: boolean;
+  /** Real user-defined snippets (the follow-up the curated-snippets pass
+   * named): `Settings.user_snippets` as loaded by `App.tsx`'s one real
+   * settings fetch. Consulted by the Tab-expansion `findSnippet` call on
+   * top of the curated `SNIPPETS` table, with a user snippet for the same
+   * `(lang_id, prefix)` pair winning over the curated one. Empty (the
+   * default) means "no user snippets defined" and is a totally normal
+   * state. */
+  userSnippets: UserSnippet[];
 }
 
 export const DEFAULT_EDITOR_PREFS: EditorPrefs = {
@@ -1176,6 +1185,7 @@ export const DEFAULT_EDITOR_PREFS: EditorPrefs = {
   tabSize: 2,
   wordWrap: false,
   formatOnSave: false,
+  userSnippets: [],
 };
 
 interface EditorProps {
@@ -2945,7 +2955,7 @@ export default function Editor({
         // matching a snippet for this language).
         if (!e.shiftKey && start === end) {
           const m = /([A-Za-z_]\w*)$/.exec(value.slice(0, start));
-          const snip = m ? findSnippet(languageForPath(file.path), m[1]) : null;
+          const snip = m ? findSnippet(languageForPath(file.path), m[1], prefs.userSnippets) : null;
           if (snip && m) {
             const expanded = expandSnippet(snip.body);
             const prefixStart = start - m[1].length;

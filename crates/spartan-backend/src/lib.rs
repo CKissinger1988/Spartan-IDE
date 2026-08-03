@@ -4695,6 +4695,15 @@ struct SettingsPatch {
     /// the patch needs "not provided, keep current" / "provided empty,
     /// clear it" / "provided, set it" as three distinct real states.
     github_token: Option<Option<String>>,
+    /// Real user-defined snippets -- `Some(list)` replaces the entire
+    /// `Settings.user_snippets` list (the Settings screen sends the full
+    /// list every save, matching how every other field's patch works);
+    /// `None` leaves the current list untouched. A plain `Option<Vec<..>>`
+    /// is the right shape here because the value itself has no
+    /// absent/cleared third state -- "remove all snippets" is just an
+    /// empty `Some(vec![])`, the same way `editor`/`appearance` treat an
+    /// empty-looking but fully-specified struct.
+    user_snippets: Option<Vec<spartan_settings::UserSnippet>>,
 }
 
 fn settings_set(patch: SettingsPatch) -> Result<serde_json::Value, String> {
@@ -4716,6 +4725,7 @@ fn settings_set(patch: SettingsPatch) -> Result<serde_json::Value, String> {
             .leo_verify_command
             .unwrap_or(current.leo_verify_command),
         github_token: patch.github_token.unwrap_or(current.github_token),
+        user_snippets: patch.user_snippets.unwrap_or(current.user_snippets),
     };
     spartan_settings::save(&settings).map_err(|e| format!("save settings: {e}"))?;
     serde_json::to_value(settings)
@@ -5568,6 +5578,71 @@ pub fn handle_request(
                     })
                 }
             };
+            // Real user-defined snippets: an array of `UserSnippet`-shaped
+            // objects, validated field-by-field so a malformed entry fails
+            // the whole request loudly (the Settings screen round-trips
+            // only entries it itself built, so every rule below matches its
+            // own editor constraints) instead of silently persisting a
+            // snippet that can never trigger. `None` (absent param) keeps
+            // the current list; `Some([])` clears it entirely.
+            let user_snippets = match req.params.get("user_snippets") {
+                None => None,
+                Some(v) => {
+                    let arr = v
+                        .as_array()
+                        .ok_or("invalid user_snippets: must be an array")?;
+                    let mut parsed = Vec::with_capacity(arr.len());
+                    for (i, item) in arr.iter().enumerate() {
+                        let obj = item.as_object().ok_or_else(|| {
+                            format!("invalid user_snippets[{i}]: must be an object")
+                        })?;
+                        let lang_id = obj
+                            .get("lang_id")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .ok_or_else(|| {
+                                format!("invalid user_snippets[{i}]: lang_id must be a non-empty string")
+                            })?
+                            .to_string();
+                        let prefix = obj
+                            .get("prefix")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .ok_or_else(|| {
+                                format!(
+                                    "invalid user_snippets[{i}]: prefix must be a non-empty string"
+                                )
+                            })?
+                            .to_string();
+                        let body = obj
+                            .get("body")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .ok_or_else(|| {
+                                format!(
+                                    "invalid user_snippets[{i}]: body must be a non-empty string"
+                                )
+                            })?
+                            .to_string();
+                        let description = obj
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .unwrap_or("")
+                            .to_string();
+                        parsed.push(spartan_settings::UserSnippet {
+                            lang_id,
+                            prefix,
+                            body,
+                            description,
+                        });
+                    }
+                    Some(parsed)
+                }
+            };
             settings_set(SettingsPatch {
                 gpu_enabled,
                 gpu_layers,
@@ -5579,6 +5654,7 @@ pub fn handle_request(
                 onboarding_completed,
                 leo_verify_command,
                 github_token,
+                user_snippets,
             })
         })(),
         "check_for_updates" => check_for_updates(out_tx.clone()),
@@ -9005,6 +9081,116 @@ time.sleep(10)
             serde_json::Value::Null
         );
         assert_eq!(spartan_settings::load().github_token, None);
+
+        match prior_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&scratch).ok();
+    }
+
+    #[test]
+    fn settings_set_real_dispatch_parses_sets_preserves_and_clears_user_snippets() {
+        // Real, dispatch-level coverage of the `user_snippets` parse arm:
+        // setting the full list, an unrelated later save preserving it
+        // (outer `None`), clearing it with an explicit empty array, and a
+        // malformed entry failing the whole request loudly rather than
+        // persisting a snippet that can never trigger. Mirrors the
+        // github_token nested-`Option` test's shape.
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let scratch = std::env::temp_dir().join(format!(
+            "spartan-backend-settings-user-snippets-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let prior_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &scratch);
+
+        let state = new_state();
+        let set_resp = call(
+            &state,
+            1,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": true,
+                "user_snippets": [
+                    {
+                        "lang_id": "rust",
+                        "prefix": "myfn",
+                        "body": "fn ${1:name}() {\n    ${0}\n}",
+                        "description": "My fn",
+                    },
+                    {
+                        "lang_id": "python",
+                        "prefix": "myfor",
+                        "body": "for ${1:item} in ${2:items}:\n    ${0:pass}",
+                        "description": "",
+                    },
+                ],
+            }),
+        );
+        assert!(set_resp.error.is_none(), "set failed: {:?}", set_resp.error);
+        let snippets = spartan_settings::load().user_snippets;
+        assert_eq!(snippets.len(), 2);
+        assert_eq!(snippets[0].lang_id, "rust");
+        assert_eq!(snippets[0].prefix, "myfn");
+        assert_eq!(snippets[0].body, "fn ${1:name}() {\n    ${0}\n}");
+        assert_eq!(snippets[0].description, "My fn");
+        // Empty description is allowed and stored as empty.
+        assert_eq!(snippets[1].description, "");
+
+        // An unrelated GPU-only save must preserve the real, already-set
+        // list -- outer `None`, not a silent clear.
+        let preserve_resp = call(
+            &state,
+            2,
+            "settings_set",
+            serde_json::json!({ "gpu_enabled": false }),
+        );
+        assert!(
+            preserve_resp.error.is_none(),
+            "preserve failed: {:?}",
+            preserve_resp.error
+        );
+        assert_eq!(spartan_settings::load().user_snippets.len(), 2);
+
+        // An explicit empty array really clears the list.
+        let clear_resp = call(
+            &state,
+            3,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": false,
+                "user_snippets": [],
+            }),
+        );
+        assert!(
+            clear_resp.error.is_none(),
+            "clear failed: {:?}",
+            clear_resp.error
+        );
+        assert!(spartan_settings::load().user_snippets.is_empty());
+
+        // A malformed entry (empty prefix) fails the whole request with an
+        // honest error and leaves the (already-cleared) list untouched.
+        let bad_resp = call(
+            &state,
+            4,
+            "settings_set",
+            serde_json::json!({
+                "gpu_enabled": true,
+                "user_snippets": [
+                    { "lang_id": "rust", "prefix": "", "body": "fn {} {}", "description": "" }
+                ],
+            }),
+        );
+        let err = bad_resp.error.unwrap();
+        assert!(
+            err.contains("user_snippets[0]"),
+            "expected a field-indexed error, got: {err}"
+        );
+        assert!(spartan_settings::load().user_snippets.is_empty());
 
         match prior_home {
             Some(h) => std::env::set_var("HOME", h),

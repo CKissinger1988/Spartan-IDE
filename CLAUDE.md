@@ -8642,8 +8642,65 @@ first — it's the parity reference until each row there is actually reimplement
    `openProject` path was not exercised in a real Electron window this session (the browser-level
    verification covered the shared dialog + backend end-to-end, and the desktop-only wiring is the
    same `window.spartan.*` call pattern every prior desktop feature uses); interactive HTTPS-token
-   auth for private remotes remains the named, open follow-up; no submodule/shallow/`--depth`
-   options — a plain full clone only.
+    auth for private remotes remains the named, open follow-up; no submodule/shallow/`--depth`
+    options — a plain full clone only.
+- **Real, working code — real user-defined snippets end-to-end (backend persistence +
+  validation, user-over-curated `findSnippet` in both shells, a real settings UI in both shells,
+  editor Tab wiring), closing the exact follow-up the curated-snippets pass explicitly left
+  open**: `spartan_settings` gained a real `UserSnippet { lang_id, prefix, body, description }`
+  struct and `Settings.user_snippets: Vec<UserSnippet>` (default empty, schema-evolution guarded);
+  `settings_set` gained a `user_snippets` patch key parsed as a full-list replace — `Some(vec![])`
+  clears the list, an omitted key leaves it untouched, and every entry is validated with the same
+  trim-then-non-empty discipline the feature's other string fields already use (a blank
+  `lang_id`/`prefix`/`body` rejects the whole save with a per-field error; `description` stays
+  optional), so the store stays a dumb store and all rules live in the backend parse — covered by
+  the new `settings_set_real_dispatch_parses_sets_preserves_and_clears_user_snippets` dispatch
+  test. Both shells' mirrored `snippets.ts` files gained a `UserSnippet` interface and a real
+  `findSnippet(langId, prefix, userSnippets = [])` that checks the user list *first* and only then
+  falls through to curated `SNIPPETS`, giving the feature its stated semantics: a user snippet for
+  the same `(lang_id, prefix)` pair always overrides the built-in one. The editor Tab handlers
+  (`desktop/src/components/Editor.tsx` via `EditorPrefs.userSnippets`, `web/BackendEditor.tsx`
+  via a `userSnippets` prop that both default to `[]`) pass the loaded list into that call, so a
+  user snippet expands through the *existing* `expandSnippet` tab-stop engine — real `$N`/`$0`
+  navigation, no second code path. Settings UI: the `desktop/` Settings screen got a real "User
+  Snippets" section (add/remove/edit rows with honest client-side validation mirroring the
+  backend's exact rules, and a "Save snippets" action that sends the entire edited list through
+  the established `settings_set` path as a full-list patch); `web/` got a new `SnippetsPanel`
+  sidebar view (same edit model, `ModelsPanel`-style `settings_get`-first save carrying the
+  mandatory `gpu_enabled`/`gpu_layers` plus `user_snippets`). Freshness without restart:
+  `desktop/App.tsx` reads `user_snippets` in its one real mount `settings_get` into
+  `EditorPrefs` and additionally re-fetches on every navigation back to the Editor screen (skip
+  on initial render), so snippets saved in Settings genuinely reach the editor; `web/App.tsx`
+  gained a `refreshSettings` callback run on backend connect and on sidebar-view change. **Real
+  verification, no estimation**: `cargo fmt --all -- --check` clean; clippy clean for both crates
+  (only the same pre-existing `spartan-git` line-313 warning); `spartan-settings` 27 tests all
+  green (release and debug); `spartan-backend --release --lib` 267 tests all green including the
+  new user-snippets dispatch test; `npm run typecheck` and `npm run build` clean in both shells.
+  **Live end-to-end, real browser**: a headed Playwright session against a real `spartan-devserver`
+  (fresh `HOME`, real WebSocket transport, real `~/.spartan/settings.json`) ran 11 checks — the
+  Snippets toggle, adding two rows, the save response, the persisted file holding exactly those
+  two snippets with bodies round-tripped, `myfn`+Tab in a python buffer expanding the user body,
+  and a user `def` snippet overriding the curated python `def` — all passing, only pre-existing/
+  harmless console noise (a 404 resource and `lsp_*` "no live LSP session" for python). **Live
+  end-to-end, real Electron window** (genuine `electron` binary, real vite dev server, real
+  `spartan-backend` subprocess, Xvfb, Playwright `_electron` — no shim): 21 checks passed —
+  Settings → User Snippets → Add → fill → Save persisted the exact snippet to
+  `~/.spartan/settings.json` (values round-trip, `onboarding_completed` preserved); navigating
+  back to the Editor, opening `demo.py`, typing `hgr`+Tab expanded the user snippet to
+  `hello from user name` with the `${1:name}` tab-stop default text selected (`[16,20]`), a second
+  Tab navigated to the `$0` final stop (`[20,20]`) and cleared the session, and the curated python
+  `def` still expanded to `def name(args):\n    pass` alongside — proving the user snippet uses the
+  same real tab-stop engine and coexists with curated snippets. **What this does not confirm**: the
+  pure client-side `web/Editor.tsx` surface intentionally stays curated-only (it has no backend to
+  read `user_snippets` from, and its `findSnippet` call relies on the default empty list) —
+  unchanged and by design; the backend rejection-path error strings were exercised by the Rust
+  parse tests, not re-surfaced through a live UI save; no macOS/Windows verification (Linux only,
+  matching this project's own standing platform scope); the desktop run drove the dev-mode launch
+  path (`loadURL` against a real vite dev server), not the packaged `loadFile` path — both share
+  the same preload/IPC code; a harness note, not a product issue: Playwright's `_electron`
+  `app.close()` hung waiting on the backend subprocess, so the e2e script exits via `process.exit`
+  and the caller kills the electron process tree — the same launch recipe a future session should
+  reuse.
 
 ## Build & test
 

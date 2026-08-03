@@ -3,6 +3,7 @@ import FileTree from "./components/FileTree";
 import GitPanel from "./components/GitPanel";
 import SearchPanel from "./components/SearchPanel";
 import ModelsPanel from "./components/ModelsPanel";
+import SnippetsPanel from "./components/SnippetsPanel";
 import BackendFileTree from "./components/BackendFileTree";
 import UnsavedChangesModal from "./components/UnsavedChangesModal";
 import Editor, { type OpenFile } from "./components/Editor";
@@ -12,6 +13,7 @@ import BackendEditor, {
   type WorkspaceTextEdit,
   type BreakpointSpec,
 } from "./components/BackendEditor";
+import type { UserSnippet } from "./snippets";
 import DebugPanel, {
   type DapSessionState,
   type OutputEntry,
@@ -78,7 +80,7 @@ function replaceAllMatches(content: string, matches: FindMatch[], replacement: s
   return result;
 }
 
-type SidebarView = "files" | "git" | "search" | "backend" | "models";
+type SidebarView = "files" | "git" | "search" | "backend" | "models" | "snippets";
 
 type BackendStatus = "connecting" | "connected" | "client-only";
 
@@ -328,6 +330,12 @@ export default function App(): React.ReactElement {
   // connected, so it's fetched from `settings_get` instead, the same
   // real store `desktop/`'s own SettingsScreen reads and writes.
   const [formatOnSave, setFormatOnSave] = useState(false);
+  // Real user-defined snippets (`Settings.user_snippets`) -- like
+  // `formatOnSave` just above, only meaningful once a backend is
+  // connected, so fetched from the same `settings_get` and handed to
+  // `BackendEditor` (the pure client-side `Editor` has no backend to read
+  // `~/.spartan/settings.json` from, so it stays curated-only).
+  const [userSnippets, setUserSnippets] = useState<UserSnippet[]>([]);
 
   // Optional backend upgrade: when this page is served by a real
   // spartan-devserver (§75.88 + the /__spartan/session handoff), connect to
@@ -376,17 +384,45 @@ export default function App(): React.ReactElement {
 
   // Real, one-shot `settings_get` once a real backend connection exists --
   // fetches the real, persisted `format_on_save` value so the toolbar
-  // checkbox reflects it correctly rather than always starting unchecked.
-  useEffect(() => {
+  // checkbox reflects it correctly rather than always starting unchecked,
+  // plus the real `user_snippets` list the backend-connected editor's
+  // Tab-expansion consults. Extracted as a callback so the same fetch can
+  // run again below, when the user navigates back out of the Snippets
+  // panel after editing snippets (the panel's `settings_set` wouldn't
+  // otherwise reach this already-fetched state).
+  const refreshSettings = useCallback(() => {
     if (!backendClient) return;
     backendClient
       .call("settings_get", {})
       .then((result) => {
-        const s = result as { editor?: { format_on_save?: boolean } };
+        const s = result as {
+          editor?: { format_on_save?: boolean };
+          user_snippets?: UserSnippet[];
+        };
         setFormatOnSave(Boolean(s.editor?.format_on_save));
+        setUserSnippets(s.user_snippets ?? []);
       })
       .catch(() => {});
   }, [backendClient]);
+
+  useEffect(() => {
+    refreshSettings();
+  }, [refreshSettings]);
+
+  // Real user-snippets freshness: the effect above runs once, so a snippet
+  // just saved in the Snippets panel would otherwise reach the editor only
+  // on a full page reload. Re-fetch every time the sidebar view changes
+  // (navigating from "snippets" back to "backend"/"files" is exactly the
+  // "defined a snippet, now go use it" flow). The initial mount is skipped
+  // -- the effect above already covered it.
+  const firstSidebarRender = useRef(true);
+  useEffect(() => {
+    if (firstSidebarRender.current) {
+      firstSidebarRender.current = false;
+      return;
+    }
+    refreshSettings();
+  }, [sidebarView, refreshSettings]);
 
   const toggleFormatOnSave = useCallback(
     (checked: boolean) => {
@@ -582,7 +618,7 @@ export default function App(): React.ReactElement {
   const availableSidebarViews: SidebarView[] = [
     ...(root ? (["files"] as const) : []),
     ...(backendReady ? (["git", "search", "backend"] as const) : []),
-    ...(backendConnected ? (["models"] as const) : []),
+    ...(backendConnected ? (["models", "snippets"] as const) : []),
   ];
   const activeSidebarView: SidebarView = availableSidebarViews.includes(sidebarView)
     ? sidebarView
@@ -1124,6 +1160,14 @@ export default function App(): React.ReactElement {
                     Models
                   </button>
                 )}
+                {availableSidebarViews.includes("snippets") && (
+                  <button
+                    className={`sidebar-toggle-btn ${activeSidebarView === "snippets" ? "sidebar-toggle-active" : ""}`}
+                    onClick={() => setSidebarView("snippets")}
+                  >
+                    Snippets
+                  </button>
+                )}
               </div>
             )}
             {activeSidebarView === "files" && root ? (
@@ -1145,6 +1189,8 @@ export default function App(): React.ReactElement {
               />
             ) : activeSidebarView === "models" && backendConnected && backendClient ? (
               <ModelsPanel client={backendClient} />
+            ) : activeSidebarView === "snippets" && backendConnected && backendClient ? (
+              <SnippetsPanel client={backendClient} />
             ) : null}
           </div>
         )}
@@ -1211,6 +1257,7 @@ export default function App(): React.ReactElement {
                 file={activeContent.file}
                 onContentChange={handleContentChange}
                 formatOnSave={formatOnSave}
+                userSnippets={userSnippets}
                 diagnostics={diagnosticsByDoc[activeContent.file.docId]}
                 breakpoints={breakpointsByDoc[activeContent.file.docId] ?? []}
                 onToggleBreakpoint={toggleBreakpoint}

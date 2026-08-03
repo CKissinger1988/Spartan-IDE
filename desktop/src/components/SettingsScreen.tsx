@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { applyReduceMotion } from "../reduceMotion";
 import { applyTheme, THEME_LABELS, type ThemeName } from "../applyTheme";
 import { applyFontFamily } from "../applyFontFamily";
+import type { UserSnippet } from "../snippets";
 import pkg from "../../package.json";
 
 interface GpuOffloadSettings {
@@ -47,6 +48,11 @@ interface Settings {
    * before declaring a task `Done`. `null` (the default) keeps
    * `Verifying` a real, momentary, always-passing waypoint. */
   leo_verify_command: string | null;
+  /** Real user-defined snippets (the follow-up the curated-snippets pass
+   * named) -- persisted as `spartan_settings::UserSnippet` objects and
+   * honored by both shells' `findSnippet` on top of the curated
+   * `SNIPPETS` table. */
+  user_snippets: UserSnippet[];
 }
 
 interface CrashReportEntry {
@@ -179,6 +185,8 @@ export default function SettingsScreen(): React.ReactElement {
   const [crashReports, setCrashReports] = useState<CrashReportEntry[]>([]);
   const [crashReportsError, setCrashReportsError] = useState<string | null>(null);
   const [uploadStatus, setUploadStatus] = useState<Record<string, UploadStatus>>({});
+  const [snippetDraft, setSnippetDraft] = useState<UserSnippet[]>([]);
+  const [snippetError, setSnippetError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     window.spartan
@@ -207,6 +215,34 @@ export default function SettingsScreen(): React.ReactElement {
   useEffect(() => {
     refreshCrashReports();
   }, [refreshCrashReports]);
+
+  // Keep the snippet editor in sync with the real persisted list: it must
+  // reflect a fresh `settings_get` and (crucially) the response of every
+  // `settings_set`, so a snippet the user just saved is still there when
+  // the section re-renders. Editing fields never touches `settings`
+  // directly -- the working copy lives in `snippetDraft` and only reaches
+  // the backend when "Save snippets" is pressed.
+  useEffect(() => {
+    setSnippetDraft(settings?.user_snippets ?? []);
+  }, [settings?.user_snippets]);
+
+  const setSnippetField = useCallback(
+    (index: number, field: keyof UserSnippet, value: string) => {
+      setSnippetError(null);
+      setSnippetDraft((prev) => prev.map((s, i) => (i === index ? { ...s, [field]: value } : s)));
+    },
+    []
+  );
+
+  const removeSnippet = useCallback((index: number) => {
+    setSnippetError(null);
+    setSnippetDraft((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const addSnippet = useCallback(() => {
+    setSnippetError(null);
+    setSnippetDraft((prev) => [...prev, { lang_id: "", prefix: "", body: "", description: "" }]);
+  }, []);
 
   useEffect(() => {
     const unsubscribe = window.spartan.onEvent((event, data) => {
@@ -272,6 +308,13 @@ export default function SettingsScreen(): React.ReactElement {
           ...(overrides.leo_verify_command !== undefined
             ? { leo_verify_command: overrides.leo_verify_command ?? "" }
             : {}),
+          // Real full-list patch shape: `Some(list)` replaces the whole
+          // `Settings.user_snippets` list (the snippet editor sends the
+          // entire edited list every save); omitted entirely when no
+          // snippet row changed, leaving the current list untouched.
+          ...(overrides.user_snippets !== undefined
+            ? { user_snippets: overrides.user_snippets }
+            : {}),
         })
         .then((result) => setSettings(result as Settings))
         .catch((e: Error) => setError(e.message))
@@ -279,6 +322,31 @@ export default function SettingsScreen(): React.ReactElement {
     },
     [settings]
   );
+
+  const saveSnippets = useCallback(() => {
+    // Real, honest client-side validation mirroring `spartan-backend`'s
+    // own `settings_set` rules exactly (non-empty `lang_id`/`prefix`/`body`)
+    // -- catch it here in the UI instead of letting the backend fail the
+    // whole save with a less friendly error.
+    const trimmed = snippetDraft.map((s) => ({
+      lang_id: s.lang_id.trim(),
+      prefix: s.prefix.trim(),
+      body: s.body.trim(),
+      description: s.description.trim(),
+    }));
+    const bad = trimmed.findIndex((s) => !s.lang_id || !s.prefix || !s.body);
+    if (bad !== -1) {
+      const field = !trimmed[bad].lang_id
+        ? "language"
+        : !trimmed[bad].prefix
+          ? "prefix"
+          : "body";
+      setSnippetError(`Snippet ${bad + 1}: ${field} must not be empty`);
+      return;
+    }
+    setSnippetError(null);
+    save({ user_snippets: trimmed });
+  }, [snippetDraft, save]);
 
   const openCrashReportsFolder = useCallback(() => {
     window.spartan.openCrashReportsFolder?.().catch((e: Error) => setError(e.message));
@@ -632,6 +700,107 @@ export default function SettingsScreen(): React.ReactElement {
                 }`
               : `not configured: ${modelStatus.error}`}
         </span>
+      </div>
+
+      <div className="settings-section-label mono" style={{ marginTop: 28 }}>
+        User Snippets
+      </div>
+      <div className="settings-note mono" style={{ marginTop: 0 }}>
+        Type a prefix and press Tab in a file of the matching language to expand a snippet —
+        exactly like the built-in ones, and a user snippet for the same language + prefix pair
+        overrides the built-in one. Language is the editor's own id for that file type (e.g.
+        <span className="mono"> python</span>,<span className="mono"> rust</span>,<span className="mono"> typescript</span>,
+        <span className="mono"> go</span>,<span className="mono"> java</span>,<span className="mono"> kotlin</span>). Bodies use the same
+        template syntax as the built-in snippets: <span className="mono">{"${1:name}"}</span> for a numbered stop,
+        <span className="mono"> $0</span> for the final cursor position.
+      </div>
+      {snippetDraft.map((snip, i) => (
+        <div
+          key={i}
+          style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}
+        >
+          <div className="settings-row" style={{ marginBottom: 0 }}>
+            <label className="settings-label mono" style={{ width: 72 }}>
+              Language
+            </label>
+            <input
+              className="settings-select mono"
+              type="text"
+              value={snip.lang_id}
+              disabled={saving}
+              onChange={(e) => setSnippetField(i, "lang_id", e.target.value)}
+              style={{ width: 130 }}
+            />
+            <label className="settings-label mono" style={{ width: 44 }}>
+              Prefix
+            </label>
+            <input
+              className="settings-select mono"
+              type="text"
+              value={snip.prefix}
+              disabled={saving}
+              onChange={(e) => setSnippetField(i, "prefix", e.target.value)}
+              style={{ width: 120 }}
+            />
+            <button
+              className="settings-button mono"
+              disabled={saving}
+              onClick={() => removeSnippet(i)}
+              title="Remove this snippet"
+            >
+              Remove
+            </button>
+          </div>
+          <div className="settings-row" style={{ marginBottom: 0 }}>
+            <label className="settings-label mono" style={{ width: 72 }}>
+              Body
+            </label>
+            <textarea
+              className="settings-select mono"
+              value={snip.body}
+              disabled={saving}
+              onChange={(e) => setSnippetField(i, "body", e.target.value)}
+              rows={3}
+              spellCheck={false}
+              style={{ width: 330, fontFamily: "var(--font-mono)", resize: "vertical" }}
+            />
+          </div>
+          <div className="settings-row" style={{ marginBottom: 0 }}>
+            <label className="settings-label mono" style={{ width: 72 }}>
+              Description
+            </label>
+            <input
+              className="settings-select mono"
+              type="text"
+              value={snip.description}
+              disabled={saving}
+              onChange={(e) => setSnippetField(i, "description", e.target.value)}
+              style={{ width: 330 }}
+            />
+          </div>
+        </div>
+      ))}
+      {snippetDraft.length === 0 && (
+        <div className="settings-update-status mono" style={{ marginTop: 12 }}>
+          No user snippets defined. Add one to get started.
+        </div>
+      )}
+      {snippetError && (
+        <div className="leo-error mono" style={{ marginTop: 8 }}>
+          {snippetError}
+        </div>
+      )}
+      <div className="settings-row" style={{ marginBottom: 0, borderBottom: "none" }}>
+        <button className="settings-button mono" disabled={saving} onClick={addSnippet}>
+          Add snippet
+        </button>
+        <button
+          className="settings-button mono settings-button-primary"
+          disabled={saving}
+          onClick={saveSnippets}
+        >
+          Save snippets
+        </button>
       </div>
 
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>
