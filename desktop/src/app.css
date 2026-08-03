@@ -375,6 +375,44 @@
   background: var(--bg-alt, rgba(255, 255, 255, 0.03));
 }
 
+.git-hunk-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.git-hunk-lines {
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 11px;
+}
+
+.git-hunk-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+}
+
+.git-hunk-line-selectable {
+  cursor: pointer;
+}
+
+.git-hunk-line-selected {
+  box-shadow: inset 2px 0 0 var(--accent, #4ade80);
+}
+
+.git-hunk-line-prefix {
+  flex: 0 0 1em;
+  text-align: center;
+  user-select: none;
+}
+
+.git-hunk-line-content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .tree-row {
   display: flex;
   align-items: center;

@@ -63,6 +63,174 @@ fn collect_hunks(patch: &git2::Patch<'_>) -> Result<Vec<HunkInfo>, git2::Error> 
     Ok(hunks)
 }
 
+/// Collects one hunk's real per-line detail into `HunkLine`s -- the exact
+/// complementary traversal to `collect_hunks`'s body concat, used by both
+/// `hunk_lines` (unstaged) and `hunk_lines_staged` (staged) so the line
+/// selection UI and `stage_lines`/`unstage_lines` see one identical line
+/// list with identical indices.
+fn collect_lines(patch: &git2::Patch<'_>, hunk_index: usize) -> Result<Vec<HunkLine>, git2::Error> {
+    let (_, line_count) = patch.hunk(hunk_index)?;
+    let mut lines = Vec::with_capacity(line_count);
+    for l in 0..line_count {
+        let line = patch.line_in_hunk(hunk_index, l)?;
+        lines.push(HunkLine {
+            index: l,
+            origin: line.origin(),
+            content: String::from_utf8_lossy(line.content()).to_string(),
+        });
+    }
+    Ok(lines)
+}
+
+/// Replaces the real `base_lines[splice_start .. splice_start+base_len]`
+/// region with `region` bytes, keeping everything outside it byte-identical
+/// -- the plain splice `splice_hunk_region` (and the per-line selection
+/// splice) reduce to.
+fn splice_region_content(
+    base_lines: &[&[u8]],
+    splice_start: usize,
+    base_len: usize,
+    region: &[u8],
+) -> Vec<u8> {
+    let splice_end = (splice_start + base_len).min(base_lines.len());
+    let mut out = Vec::new();
+    for line in &base_lines[..splice_start] {
+        out.extend_from_slice(line);
+    }
+    out.extend_from_slice(region);
+    for line in &base_lines[splice_end..] {
+        out.extend_from_slice(line);
+    }
+    out
+}
+
+/// Shared real splice every hunk-level index write uses (`stage_hunk`,
+/// `unstage_hunk`): replaces the real `base_lines[splice_start .. splice_start+base_len]`
+/// region of the index with exactly the hunk lines `emit` accepts (each
+/// line's own real bytes preserved, trailing newline included), keeping
+/// everything outside the region byte-identical. `emit` gets each hunk
+/// line's own 0-based position *and* the real `DiffLine`. Used by the
+/// whole-hunk callers, whose emitted lines are already monotonic in the
+/// hunk's own real line order; the per-line selection splice needs
+/// coordinate-ordered emission (see `selection_region`) and calls
+/// `splice_region_content` directly instead.
+fn splice_hunk_region(
+    patch: &git2::Patch<'_>,
+    hunk_index: usize,
+    base_lines: &[&[u8]],
+    splice_start: usize,
+    base_len: usize,
+    mut emit: impl FnMut(usize, &git2::DiffLine<'_>) -> bool,
+) -> Result<Vec<u8>, git2::Error> {
+    let (_, line_count) = patch.hunk(hunk_index)?;
+    let mut region = Vec::new();
+    for l in 0..line_count {
+        let line = patch.line_in_hunk(hunk_index, l)?;
+        if emit(l, &line) {
+            region.extend_from_slice(line.content());
+        }
+    }
+    Ok(splice_region_content(
+        base_lines,
+        splice_start,
+        base_len,
+        &region,
+    ))
+}
+
+/// Emits one change group (a maximal run of `'-'`/`'+'` hunk lines) as a
+/// single sorted block: every kept deletion and selected addition is given
+/// a real slot against the side of the destination file the group replaces
+/// (old-side slots when staging, new-side slots when unstaging) and the
+/// block is emitted in `(slot, deletion-first)` order. This is what keeps a
+/// selection spanning two adjacent changes in one hunk correct: libgit2
+/// reports those lines deletion-group-then-addition-group (real git's own
+/// unified display), so raw hunk order would land an unselected deletion of
+/// the later change before a selected addition of the earlier one -- but
+/// slotting both against the same anchor (each deletion occupying the slot
+/// of the old line it removes, each addition the slot of the old/new line it
+/// replaces or inserts before) gives every emitted line its one real
+/// position in the result. The single slot a replacement pair shares is
+/// broken deletion-first (the kept old line before the added new line);
+/// pure-insertion groups slot their additions sequentially after the
+/// group's anchor, so they stay before the following context line they
+/// precede. `staged` picks the direction: `false` stages (a `'+'` line is
+/// emitted iff selected, a `'-'` line iff *not* selected), `true` unstages
+/// (the exact complement -- a `'-'` line is emitted iff selected, a `'+'`
+/// line iff *not* selected). End-of-file-newline marker lines are never
+/// emitted, matching `stage_hunk`/`unstage_hunk`'s own treatment.
+fn selection_region(
+    patch: &git2::Patch<'_>,
+    hunk_index: usize,
+    selected: &[bool],
+    staged: bool,
+) -> Result<Vec<u8>, git2::Error> {
+    let (hunk, line_count) = patch.hunk(hunk_index)?;
+    debug_assert_eq!(selected.len(), line_count);
+    let mut out = Vec::new();
+    // The count of old/new lines already consumed: the anchor a change
+    // group's slots are numbered from. Initialized one before the hunk's
+    // own first line (`old_start`/`new_start` are 1-indexed per real
+    // unified-diff convention).
+    let mut old_anchor: usize = hunk.old_start().saturating_sub(1) as usize;
+    let mut new_anchor: usize = hunk.new_start().saturating_sub(1) as usize;
+    let mut group: Vec<(usize, usize, bool)> = Vec::new(); // (line index, slot, is deletion)
+    for l in 0..line_count {
+        let line = patch.line_in_hunk(hunk_index, l)?;
+        match line.origin() {
+            ' ' => {
+                flush_selection_group(&mut group, &mut out, patch, hunk_index, selected, staged)?;
+                out.extend_from_slice(line.content());
+                old_anchor += 1;
+                new_anchor += 1;
+            }
+            '-' => {
+                old_anchor += 1;
+                group.push((l, old_anchor, true));
+            }
+            '+' => {
+                new_anchor += 1;
+                group.push((l, new_anchor, false));
+            }
+            _ => {}
+        }
+    }
+    flush_selection_group(&mut group, &mut out, patch, hunk_index, selected, staged)?;
+    Ok(out)
+}
+
+/// Sorts and emits one collected change group. `slot` values are already in
+/// the destination side's coordinate space (old-side when `staged` is false,
+/// new-side when true, since `selection_region` increments `old_anchor` for
+/// `'-'` lines and `new_anchor` for `'+'` lines), so a pure `(slot,
+/// deletion-first)` sort orders every line at its one real position. Only
+/// the lines the direction's own predicate accepts are emitted; the rest are
+/// dropped from the region (and thus from the spliced index).
+fn flush_selection_group(
+    group: &mut Vec<(usize, usize, bool)>,
+    out: &mut Vec<u8>,
+    patch: &git2::Patch<'_>,
+    hunk_index: usize,
+    selected: &[bool],
+    staged: bool,
+) -> Result<(), git2::Error> {
+    group.sort_by_key(|&(_, slot, is_del)| (slot, !is_del));
+    for &(l, _, is_del) in group.iter() {
+        let line = patch.line_in_hunk(hunk_index, l)?;
+        let is_selected = selected[l];
+        let emit = if is_del {
+            is_selected == staged
+        } else {
+            is_selected != staged
+        };
+        if emit {
+            out.extend_from_slice(line.content());
+        }
+    }
+    group.clear();
+    Ok(())
+}
+
 /// Shared credential callback for real fetch/push against an authenticated
 /// remote. Tries SSH-agent first (the common key-backed case), then a
 /// default/anonymous credential (local `file://` remotes need none, so the
@@ -264,6 +432,27 @@ pub struct HunkInfo {
     pub body: String,
 }
 
+/// One real line inside a hunk, as reported by `git2::Patch::line_in_hunk` --
+/// the per-line (sub-hunk) unit both the line-selection UI and
+/// `stage_lines`/`unstage_lines` key on. `index` is the line's 0-based
+/// position *within its own hunk* (matching the order `hunk_lines`/
+/// `hunk_lines_staged` return and what `stage_lines`/`unstage_lines` expect
+/// back as a selection).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HunkLine {
+    pub index: usize,
+    /// The real `git2` diff origin: `' '` context, `'+'` addition, `'-'`
+    /// deletion -- plus the end-of-file-newline markers libgit2 itself
+    /// reports as `'='`/`'>'`/`'<'` (which the UI shows but never makes
+    /// selectable, matching `stage_hunk`'s own treatment of those lines).
+    pub origin: char,
+    /// The line's real content, still carrying its own trailing newline
+    /// (a final line with none keeps none). Displayed by the UI, but the
+    /// splice itself never round-trips this string -- it re-reads the
+    /// patch's own raw bytes by `index`, so there is no lossy round trip.
+    pub content: String,
+}
+
 /// A real, open local git repository. Every method here is a thin,
 /// honest wrapper over a real `git2` call -- no simulated state.
 pub struct GitRepo {
@@ -426,7 +615,7 @@ impl GitRepo {
         if hunk_index >= patch.num_hunks() {
             return Err(git2::Error::from_str("hunk index out of range"));
         }
-        let (hunk, line_count) = patch.hunk(hunk_index)?;
+        let (hunk, _line_count) = patch.hunk(hunk_index)?;
         // Split the real old (index) content into lines, keeping each
         // line's own trailing `\n` attached, so re-joining is a plain
         // concatenation with no reconstruction guesswork.
@@ -443,20 +632,125 @@ impl GitRepo {
         } else {
             old_start.saturating_sub(1)
         };
-        let splice_end = (splice_start + old_len).min(old_lines.len());
-        let mut new_index_content = Vec::new();
-        for line in &old_lines[..splice_start] {
-            new_index_content.extend_from_slice(line);
-        }
-        for l in 0..line_count {
-            let line = patch.line_in_hunk(hunk_index, l)?;
-            if line.origin() == ' ' || line.origin() == '+' {
-                new_index_content.extend_from_slice(line.content());
+        // The whole-hunk predicate: every context line and every real
+        // addition, no deletions -- `stage_lines`'s own selection predicate
+        // reduces to exactly this when every change line is selected.
+        let new_index_content = splice_hunk_region(
+            &patch,
+            hunk_index,
+            &old_lines,
+            splice_start,
+            old_len,
+            |_, line| line.origin() == ' ' || line.origin() == '+',
+        )?;
+        let mut entry = old_entry;
+        entry.id = git2::Oid::zero(); // overwritten by add_frombuffer from the real content
+        entry.file_size = 0; // same
+        index.add_frombuffer(&entry, &new_index_content)?;
+        index.write()
+    }
+
+    /// Real per-line detail of one unstaged hunk (`index`-vs-`workdir`, the
+    /// exact same diff `diff_hunks()`/`stage_hunk()` use, so `hunk_index`
+    /// and every returned `HunkLine.index` line up with what the caller most
+    /// recently saw) -- the data the per-line (sub-hunk) selection UI
+    /// renders, and the selection namespace `stage_lines()` expects back.
+    /// Mirrors `diff_hunks()`'s own untracked-file scope cut: no index
+    /// entry means no old baseline, a real honest error rather than a
+    /// guessed one.
+    pub fn hunk_lines(&self, path: &Path, hunk_index: usize) -> Result<Vec<HunkLine>, git2::Error> {
+        let workdir = self
+            .repo
+            .workdir()
+            .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
+        let index = self.repo.index()?;
+        let old_blob = match index.get_path(path, 0) {
+            Some(entry) => self.repo.find_blob(entry.id)?,
+            None => {
+                return Err(git2::Error::from_str(
+                    "no staged base for this path to diff against",
+                ))
             }
+        };
+        let new_content = std::fs::read(workdir.join(path)).unwrap_or_default();
+        let patch = git2::Patch::from_blob_and_buffer(
+            &old_blob,
+            Some(path),
+            &new_content,
+            Some(path),
+            None,
+        )?;
+        if hunk_index >= patch.num_hunks() {
+            return Err(git2::Error::from_str("hunk index out of range"));
         }
-        for line in &old_lines[splice_end..] {
-            new_index_content.extend_from_slice(line);
+        collect_lines(&patch, hunk_index)
+    }
+
+    /// Real per-line staging (`git add -p`'s own line-level selection, the
+    /// sub-hunk counterpart to `stage_hunk()`). Recomputes the real unstaged
+    /// diff fresh (matching `diff_hunks()`/`hunk_lines()` exactly, so
+    /// `hunk_index` and the `lines` selection always refer to the hunk the
+    /// caller most recently saw), and splices that hunk's context + selected
+    /// real lines into the index at the hunk's own `old_start`/`old_lines`
+    /// position -- the exact same shared region splice `stage_hunk()` uses,
+    /// differing only in which lines are emitted: `lines` is the 0-based
+    /// selection of change lines within the hunk (indices from
+    /// `hunk_lines()`), context lines are never selectable, and each
+    /// selected `'+'` addition is emitted while each selected `'-'` deletion
+    /// is *omitted* (staging a deletion means removing that old line from
+    /// the index). Selecting every change line reduces to exactly
+    /// `stage_hunk()`; selecting none is an exact no-op. The working tree is
+    /// left completely untouched. Staging lines one hunk at a time
+    /// (re-fetching the list between each) keeps every later hunk's position
+    /// correct -- the same real, named v1 scope cut `stage_hunk()` already
+    /// documents.
+    pub fn stage_lines(
+        &self,
+        path: &Path,
+        hunk_index: usize,
+        lines: &[usize],
+    ) -> Result<(), git2::Error> {
+        let workdir = self
+            .repo
+            .workdir()
+            .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
+        let mut index = self.repo.index()?;
+        let old_entry = index
+            .get_path(path, 0)
+            .ok_or_else(|| git2::Error::from_str("no staged base for this path to hunk against"))?;
+        let old_blob = self.repo.find_blob(old_entry.id)?;
+        let old_content = old_blob.content();
+        let new_content = std::fs::read(workdir.join(path)).unwrap_or_default();
+        let patch = git2::Patch::from_blob_and_buffer(
+            &old_blob,
+            Some(path),
+            &new_content,
+            Some(path),
+            None,
+        )?;
+        if hunk_index >= patch.num_hunks() {
+            return Err(git2::Error::from_str("hunk index out of range"));
         }
+        let (hunk, line_count) = patch.hunk(hunk_index)?;
+        if let Some(&bad) = lines.iter().find(|&&l| l >= line_count) {
+            return Err(git2::Error::from_str(&format!(
+                "line index {bad} out of range for hunk with {line_count} lines"
+            )));
+        }
+        let selected: Vec<bool> = (0..line_count).map(|l| lines.contains(&l)).collect();
+        let old_lines: Vec<&[u8]> = split_keep_newlines(old_content);
+        let old_start = hunk.old_start() as usize; // 1-indexed, per real unified-diff convention
+        let old_len = hunk.old_lines() as usize;
+        // Same pure-insertion splice rule `stage_hunk()` documents.
+        let splice_start = if old_len == 0 {
+            old_start.min(old_lines.len())
+        } else {
+            old_start.saturating_sub(1)
+        };
+        // `staged: false` = this is a *staging* selection: emit `'+'` lines
+        // iff selected, `'-'` lines iff not selected.
+        let region = selection_region(&patch, hunk_index, &selected, false)?;
+        let new_index_content = splice_region_content(&old_lines, splice_start, old_len, &region);
         let mut entry = old_entry;
         entry.id = git2::Oid::zero(); // overwritten by add_frombuffer from the real content
         entry.file_size = 0; // same
@@ -543,7 +837,7 @@ impl GitRepo {
         if hunk_index >= patch.num_hunks() {
             return Err(git2::Error::from_str("hunk index out of range"));
         }
-        let (hunk, line_count) = patch.hunk(hunk_index)?;
+        let (hunk, _line_count) = patch.hunk(hunk_index)?;
         // Split the real current (index) content into lines, keeping each
         // line's own trailing `\n` attached -- mirrors `stage_hunk`'s own
         // `old_lines` split exactly, just on the opposite side.
@@ -560,20 +854,133 @@ impl GitRepo {
         } else {
             new_start.saturating_sub(1)
         };
-        let splice_end = (splice_start + new_len).min(new_lines.len());
-        let mut new_index_content = Vec::new();
-        for line in &new_lines[..splice_start] {
-            new_index_content.extend_from_slice(line);
+        // The whole-hunk predicate: every context line and every real
+        // deletion, no additions -- `unstage_lines`'s own selection
+        // predicate reduces to exactly this when every change line is
+        // selected.
+        let new_index_content = splice_hunk_region(
+            &patch,
+            hunk_index,
+            &new_lines,
+            splice_start,
+            new_len,
+            |_, line| line.origin() == ' ' || line.origin() == '-',
+        )?;
+        let mut entry = index_entry;
+        entry.id = git2::Oid::zero(); // overwritten by add_frombuffer from the real content
+        entry.file_size = 0; // same
+        index.add_frombuffer(&entry, &new_index_content)?;
+        index.write()
+    }
+
+    /// Real per-line detail of one *staged* hunk (`HEAD`-vs-`index`, the
+    /// exact same diff `diff_hunks_staged()`/`unstage_hunk()` use) -- the
+    /// mirror of `hunk_lines()` for the staged side, feeding the same
+    /// per-line selection UI and the `unstage_lines()` selection namespace.
+    /// Mirrors `diff_hunks_staged()`'s own scope cut: a path with no `HEAD`
+    /// entry has no old baseline, a real honest error rather than a guess.
+    pub fn hunk_lines_staged(
+        &self,
+        path: &Path,
+        hunk_index: usize,
+    ) -> Result<Vec<HunkLine>, git2::Error> {
+        let index = self.repo.index()?;
+        let index_entry = index
+            .get_path(path, 0)
+            .ok_or_else(|| git2::Error::from_str("no staged content for this path"))?;
+        let index_blob = self.repo.find_blob(index_entry.id)?;
+        let head_blob = self
+            .repo
+            .head()
+            .and_then(|h| h.peel_to_tree())
+            .ok()
+            .and_then(|tree| tree.get_path(path).ok())
+            .and_then(|entry| self.repo.find_blob(entry.id()).ok())
+            .ok_or_else(|| {
+                git2::Error::from_str("no HEAD baseline for this path to diff against")
+            })?;
+        let patch = git2::Patch::from_buffers(
+            head_blob.content(),
+            Some(path),
+            index_blob.content(),
+            Some(path),
+            None,
+        )?;
+        if hunk_index >= patch.num_hunks() {
+            return Err(git2::Error::from_str("hunk index out of range"));
         }
-        for l in 0..line_count {
-            let line = patch.line_in_hunk(hunk_index, l)?;
-            if line.origin() == ' ' || line.origin() == '-' {
-                new_index_content.extend_from_slice(line.content());
-            }
+        collect_lines(&patch, hunk_index)
+    }
+
+    /// Real per-line *unstaging* (`git restore --staged -p`'s own line-level
+    /// deselection, the direct mirror of `stage_lines()`). Recomputes the
+    /// real staged diff fresh (`HEAD` vs index, matching
+    /// `diff_hunks_staged()`/`hunk_lines_staged()` exactly), and splices
+    /// the hunk's context + selected real lines into the index at the
+    /// hunk's own `new_start`/`new_lines` position -- the same shared splice
+    /// `unstage_hunk()` uses, differing only in which lines are emitted:
+    /// each selected `'-'` deletion is re-added to the index (emitted), each
+    /// selected `'+'` addition is removed from it (omitted), context lines
+    /// are never selectable. Selecting every change line reduces to exactly
+    /// `unstage_hunk()`; selecting none is an exact no-op. The working tree
+    /// is left completely untouched. Unstaging lines one hunk at a time is
+    /// the same real, named v1 scope cut `unstage_hunk()` already documents.
+    pub fn unstage_lines(
+        &self,
+        path: &Path,
+        hunk_index: usize,
+        lines: &[usize],
+    ) -> Result<(), git2::Error> {
+        let mut index = self.repo.index()?;
+        let index_entry = index
+            .get_path(path, 0)
+            .ok_or_else(|| git2::Error::from_str("no staged content for this path to unstage"))?;
+        let index_blob = self.repo.find_blob(index_entry.id)?;
+        let index_content = index_blob.content();
+        let head_blob = self
+            .repo
+            .head()
+            .and_then(|h| h.peel_to_tree())
+            .ok()
+            .and_then(|tree| tree.get_path(path).ok())
+            .and_then(|entry| self.repo.find_blob(entry.id()).ok())
+            .ok_or_else(|| {
+                git2::Error::from_str("no HEAD baseline for this path to unstage against")
+            })?;
+        let patch = git2::Patch::from_buffers(
+            head_blob.content(),
+            Some(path),
+            index_content,
+            Some(path),
+            None,
+        )?;
+        if hunk_index >= patch.num_hunks() {
+            return Err(git2::Error::from_str("hunk index out of range"));
         }
-        for line in &new_lines[splice_end..] {
-            new_index_content.extend_from_slice(line);
+        let (hunk, line_count) = patch.hunk(hunk_index)?;
+        if let Some(&bad) = lines.iter().find(|&&l| l >= line_count) {
+            return Err(git2::Error::from_str(&format!(
+                "line index {bad} out of range for hunk with {line_count} lines"
+            )));
         }
+        let selected: Vec<bool> = (0..line_count).map(|l| lines.contains(&l)).collect();
+        // Split the real current (index) content into lines, keeping each
+        // line's own trailing `\n` attached -- mirrors `unstage_hunk`'s own
+        // `new_lines` split exactly.
+        let new_lines: Vec<&[u8]> = split_keep_newlines(index_content);
+        let new_start = hunk.new_start() as usize; // 1-indexed, per real unified-diff convention
+        let new_len = hunk.new_lines() as usize;
+        // Same pure-insertion splice rule `unstage_hunk()` documents.
+        let splice_start = if new_len == 0 {
+            new_start.min(new_lines.len())
+        } else {
+            new_start.saturating_sub(1)
+        };
+        // `staged: true` = this is an *un*staging selection: emit `'-'`
+        // lines iff selected (re-adding that old line to the index), `'+'`
+        // lines iff not selected (keeping it in the index).
+        let region = selection_region(&patch, hunk_index, &selected, true)?;
+        let new_index_content = splice_region_content(&new_lines, splice_start, new_len, &region);
         let mut entry = index_entry;
         entry.id = git2::Oid::zero(); // overwritten by add_frombuffer from the real content
         entry.file_size = 0; // same
@@ -3073,5 +3480,450 @@ mod tests {
             fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
             "line1\nline2\nline3\nline4\nline5\n"
         );
+    }
+
+    /// A real one-hunk replace (`beta` -> `BETA`) that is *unstaged* --
+    /// the shared fixture for the per-line staging tests, kept minimal so
+    /// each test asserts one real selection's exact index content.
+    fn repo_with_a_replace_change(unique: &str) -> (TempRepo, GitRepo) {
+        let (tmp, repo) = TempRepo::new(unique);
+        tmp.write("f.txt", "alpha\nbeta\ngamma\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("base").unwrap();
+        tmp.write("f.txt", "alpha\nBETA\ngamma\n");
+        (tmp, repo)
+    }
+
+    /// The exact same single replace change, fully staged -- the fixture
+    /// for the per-line *un*staging tests.
+    fn repo_with_a_staged_replace_change(unique: &str) -> (TempRepo, GitRepo) {
+        let (tmp, repo) = repo_with_a_replace_change(unique);
+        repo.stage(Path::new("f.txt")).unwrap();
+        (tmp, repo)
+    }
+
+    #[test]
+    fn hunk_lines_reports_the_real_per_line_origin_and_content() {
+        let (_tmp, repo) = repo_with_a_replace_change("hunk_lines_replace");
+        let lines = repo.hunk_lines(Path::new("f.txt"), 0).unwrap();
+        let rendered: Vec<(usize, char, &str)> = lines
+            .iter()
+            .map(|l| (l.index, l.origin, l.content.as_str()))
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                (0, ' ', "alpha\n"),
+                (1, '-', "beta\n"),
+                (2, '+', "BETA\n"),
+                (3, ' ', "gamma\n"),
+            ],
+            "the single replace hunk's real patch-order lines with 0-based indices"
+        );
+    }
+
+    #[test]
+    fn hunk_lines_out_of_range_errors_honestly() {
+        let (_tmp, repo) = repo_with_a_replace_change("hunk_lines_oor");
+        assert!(repo.hunk_lines(Path::new("f.txt"), 99).is_err());
+    }
+
+    #[test]
+    fn stage_lines_selecting_every_change_line_reduces_to_stage_hunk_exactly() {
+        let (_tmp, repo) = repo_with_a_replace_change("stage_lines_all");
+        repo.stage_lines(Path::new("f.txt"), 0, &[1, 2]).unwrap();
+        let by_lines = repo
+            .index_blob_content(Path::new("f.txt"))
+            .unwrap()
+            .unwrap();
+        let (_tmp2, repo2) = repo_with_a_replace_change("stage_lines_all_baseline");
+        repo2.stage_hunk(Path::new("f.txt"), 0).unwrap();
+        let by_hunk = repo2
+            .index_blob_content(Path::new("f.txt"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            by_lines, by_hunk,
+            "selecting every change line is exactly `stage_hunk`"
+        );
+        assert_eq!(by_lines, "alpha\nBETA\ngamma\n");
+    }
+
+    #[test]
+    fn stage_lines_selecting_only_the_addition_keeps_the_deleted_line_in_the_index() {
+        let (tmp, repo) = repo_with_a_replace_change("stage_lines_add_only");
+        repo.stage_lines(Path::new("f.txt"), 0, &[2]).unwrap();
+        assert_eq!(
+            repo.index_blob_content(Path::new("f.txt"))
+                .unwrap()
+                .unwrap(),
+            "alpha\nbeta\nBETA\ngamma\n",
+            "the new line is staged while the old line stays in the index"
+        );
+        // The real working tree is completely untouched.
+        assert_eq!(
+            fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "alpha\nBETA\ngamma\n"
+        );
+        // The real remaining unstaged diff is exactly the deletion.
+        let remaining = repo.diff_hunks(Path::new("f.txt")).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining[0].body.contains("-beta\n"));
+        assert!(!remaining[0].body.contains("+BETA\n"));
+    }
+
+    #[test]
+    fn stage_lines_selecting_only_the_deletion_removes_that_old_line_from_the_index() {
+        let (_tmp, repo) = repo_with_a_replace_change("stage_lines_del_only");
+        repo.stage_lines(Path::new("f.txt"), 0, &[1]).unwrap();
+        assert_eq!(
+            repo.index_blob_content(Path::new("f.txt"))
+                .unwrap()
+                .unwrap(),
+            "alpha\ngamma\n",
+            "the old line leaves the index while the new line is not staged"
+        );
+        // The real remaining unstaged diff is exactly the addition.
+        let remaining = repo.diff_hunks(Path::new("f.txt")).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining[0].body.contains("+BETA\n"));
+        assert!(!remaining[0].body.contains("-beta\n"));
+    }
+
+    #[test]
+    fn stage_lines_selecting_nothing_is_an_exact_no_op() {
+        let (_tmp, repo) = repo_with_a_replace_change("stage_lines_none");
+        repo.stage_lines(Path::new("f.txt"), 0, &[]).unwrap();
+        assert_eq!(
+            repo.index_blob_content(Path::new("f.txt"))
+                .unwrap()
+                .unwrap(),
+            "alpha\nbeta\ngamma\n",
+            "an empty selection stages nothing, leaving the index byte-identical"
+        );
+    }
+
+    #[test]
+    fn stage_lines_out_of_range_errors_honestly() {
+        let (_tmp, repo) = repo_with_a_replace_change("stage_lines_oor");
+        assert!(repo.stage_lines(Path::new("f.txt"), 0, &[999]).is_err());
+    }
+
+    #[test]
+    fn stage_lines_can_stage_one_change_of_two_in_the_same_real_hunk() {
+        let (tmp, repo) = TempRepo::new("stage_lines_two_in_one");
+        tmp.write("f.txt", "line1\nline2\nline3\nline4\nline5\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("base").unwrap();
+        tmp.write(
+            "f.txt",
+            "line1\nline2 CHANGED\nline3 CHANGED\nline4\nline5\n",
+        );
+
+        let hunks = repo.diff_hunks(Path::new("f.txt")).unwrap();
+        assert_eq!(hunks.len(), 1, "adjacent edits stay one real hunk");
+        // Real per-line layout, in libgit2's own hunk order (which groups
+        // the two adjacent changes as one deletion run then one addition
+        // run -- real git's canonical unified display for adjacent edits):
+        // ' ' line1, '-' line2, '-' line3, '+' line2 CHANGED,
+        // '+' line3 CHANGED, ' ' line4, ' ' line5.
+        let lines = repo.hunk_lines(Path::new("f.txt"), 0).unwrap();
+        assert_eq!(
+            lines
+                .iter()
+                .map(|l| (l.origin, l.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (' ', "line1\n"),
+                ('-', "line2\n"),
+                ('-', "line3\n"),
+                ('+', "line2 CHANGED\n"),
+                ('+', "line3 CHANGED\n"),
+                (' ', "line4\n"),
+                (' ', "line5\n"),
+            ]
+        );
+
+        // Stage only the first change (line2 -> line2 CHANGED): delete line
+        // index 1, add line index 3.
+        repo.stage_lines(Path::new("f.txt"), 0, &[1, 3]).unwrap();
+        assert_eq!(
+            repo.index_blob_content(Path::new("f.txt"))
+                .unwrap()
+                .unwrap(),
+            "line1\nline2 CHANGED\nline3\nline4\nline5\n",
+            "only the first change is staged at its real position; the second stays unstaged"
+        );
+        let remaining = repo.diff_hunks(Path::new("f.txt")).unwrap();
+        assert!(remaining[0].body.contains("-line3\n"));
+        assert!(!remaining[0].body.contains("-line2\n"));
+    }
+
+    #[test]
+    fn stage_lines_with_a_pure_insertion_then_a_later_deletion_orders_by_real_position() {
+        let (tmp, repo) = TempRepo::new("stage_lines_insertion_then_deletion");
+        tmp.write("f.txt", "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\n");
+        repo.stage(Path::new("f.txt")).unwrap();
+        repo.commit("base").unwrap();
+        // Insert one line right after `alpha`, and delete `zeta` several
+        // lines later -- two changes in one real hunk whose old and new line
+        // coordinates genuinely differ (the addition's `new_lineno` and the
+        // deletion's `old_lineno` land on the same number even though they
+        // occupy different positions), the mixed-coordinate shape that the
+        // slot-ordering exists for.
+        tmp.write("f.txt", "alpha\nINSERTED\nbeta\ngamma\ndelta\nepsilon\n");
+
+        let hunks = repo.diff_hunks(Path::new("f.txt")).unwrap();
+        assert_eq!(hunks.len(), 1, "both changes stay one real hunk");
+        let lines = repo.hunk_lines(Path::new("f.txt"), 0).unwrap();
+        assert_eq!(
+            lines
+                .iter()
+                .map(|l| (l.origin, l.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (' ', "alpha\n"),
+                ('+', "INSERTED\n"),
+                (' ', "beta\n"),
+                (' ', "gamma\n"),
+                (' ', "delta\n"),
+                (' ', "epsilon\n"),
+                ('-', "zeta\n"),
+            ]
+        );
+
+        // Stage only the insertion, leaving the later deletion unstaged: the
+        // index becomes the old content plus the inserted line at its real
+        // position (before beta), with `zeta` still present. (The insertion
+        // is in-hunk index 1, per the per-line layout asserted above.)
+        repo.stage_lines(Path::new("f.txt"), 0, &[1]).unwrap();
+        assert_eq!(
+            repo.index_blob_content(Path::new("f.txt"))
+                .unwrap()
+                .unwrap(),
+            "alpha\nINSERTED\nbeta\ngamma\ndelta\nepsilon\nzeta\n",
+            "the inserted line lands before beta at its real position; zeta stays"
+        );
+        // The real remaining unstaged diff is exactly the deletion.
+        let remaining = repo.diff_hunks(Path::new("f.txt")).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining[0].body.contains("-zeta\n"));
+        assert!(!remaining[0].body.contains("+INSERTED\n"));
+    }
+
+    #[test]
+    fn unstage_lines_selecting_every_change_line_reduces_to_unstage_hunk_exactly() {
+        let (_tmp, repo) = repo_with_a_staged_replace_change("unstage_lines_all");
+        repo.unstage_lines(Path::new("f.txt"), 0, &[1, 2]).unwrap();
+        let by_lines = repo
+            .index_blob_content(Path::new("f.txt"))
+            .unwrap()
+            .unwrap();
+        let (_tmp2, repo2) = repo_with_a_staged_replace_change("unstage_lines_all_baseline");
+        repo2.unstage_hunk(Path::new("f.txt"), 0).unwrap();
+        let by_hunk = repo2
+            .index_blob_content(Path::new("f.txt"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            by_lines, by_hunk,
+            "selecting every change line is exactly `unstage_hunk`"
+        );
+        assert_eq!(by_lines, "alpha\nbeta\ngamma\n");
+    }
+
+    #[test]
+    fn unstage_lines_selecting_only_the_addition_removes_just_that_new_line() {
+        let (_tmp, repo) = repo_with_a_staged_replace_change("unstage_lines_add_only");
+        repo.unstage_lines(Path::new("f.txt"), 0, &[2]).unwrap();
+        // The staged addition leaves the index; beta's deletion stays staged,
+        // so the index now has neither beta nor BETA at that spot.
+        assert_eq!(
+            repo.index_blob_content(Path::new("f.txt"))
+                .unwrap()
+                .unwrap(),
+            "alpha\ngamma\n"
+        );
+        // The real remaining staged diff is exactly the deletion.
+        let remaining = repo.diff_hunks_staged(Path::new("f.txt")).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining[0].body.contains("-beta\n"));
+        assert!(!remaining[0].body.contains("+BETA\n"));
+    }
+
+    #[test]
+    fn unstage_lines_selecting_only_a_deletion_readds_just_that_old_line() {
+        let (_tmp, repo) = repo_with_a_staged_replace_change("unstage_lines_del_only");
+        repo.unstage_lines(Path::new("f.txt"), 0, &[1]).unwrap();
+        assert_eq!(
+            repo.index_blob_content(Path::new("f.txt"))
+                .unwrap()
+                .unwrap(),
+            "alpha\nbeta\nBETA\ngamma\n",
+            "beta returns to the index while the BETA addition stays staged"
+        );
+        // The real remaining staged diff is exactly the addition.
+        let remaining = repo.diff_hunks_staged(Path::new("f.txt")).unwrap();
+        assert!(remaining[0].body.contains("+BETA\n"));
+        assert!(!remaining[0].body.contains("-beta\n"));
+    }
+
+    #[test]
+    fn unstage_lines_selecting_nothing_is_an_exact_no_op() {
+        let (_tmp, repo) = repo_with_a_staged_replace_change("unstage_lines_none");
+        repo.unstage_lines(Path::new("f.txt"), 0, &[]).unwrap();
+        assert_eq!(
+            repo.index_blob_content(Path::new("f.txt"))
+                .unwrap()
+                .unwrap(),
+            "alpha\nBETA\ngamma\n",
+            "an empty selection unstages nothing, leaving the index byte-identical"
+        );
+    }
+
+    #[test]
+    fn unstage_lines_out_of_range_errors_honestly() {
+        let (_tmp, repo) = repo_with_a_staged_replace_change("unstage_lines_oor");
+        assert!(repo.unstage_lines(Path::new("f.txt"), 0, &[99]).is_err());
+    }
+
+    /// Applies a real unified-diff patch to a temp repo's index via the real
+    /// `git apply --cached` binary -- the ground-truth per-line mechanism
+    /// this suite's own `stage_lines`/`unstage_lines` are compared against.
+    /// Self-skipping is the caller's job; this helper only runs when git is
+    /// actually present.
+    fn git_apply_cached(dir: &Path, patch: &str) -> Result<(), String> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let mut child = Command::new("git")
+            .args(["apply", "--cached", "-"])
+            .current_dir(dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("spawn git: {e}"))?;
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(patch.as_bytes())
+            .map_err(|e| format!("write patch: {e}"))?;
+        let status = child.wait().map_err(|e| format!("wait git: {e}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err("git apply --cached rejected the patch".to_string())
+        }
+    }
+
+    /// Reads a repo's real current index content through a *fresh* `GitRepo`
+    /// -- libgit2 caches the index per `Repository` object, so after the
+    /// real `git apply --cached` subprocess rewrites the index file on disk,
+    /// a pre-existing `GitRepo` would hand back its stale in-memory copy.
+    /// (Each backend RPC discovers its own fresh `GitRepo`, so this is a
+    /// test-harness-only concern, not a production one.)
+    fn fresh_index(dir: &Path) -> String {
+        GitRepo::discover(dir)
+            .unwrap()
+            .index_blob_content(Path::new("f.txt"))
+            .unwrap()
+            .unwrap()
+    }
+
+    /// Cross-checks the per-line splice against real `git apply --cached`
+    /// for exactly the selections real git's own plumbing can express (git's
+    /// `add -e`/`apply` cannot express "stage the addition while keeping the
+    /// old line" -- that selection is covered by the direct-content tests
+    /// instead, and is the one place this model intentionally goes beyond
+    /// git's own line-edit mode, matching VS Code/GitKraken).
+    #[test]
+    fn per_line_staging_matches_real_git_apply_for_the_selections_git_can_express() {
+        if std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("SKIP: no real `git` binary on PATH");
+            return;
+        }
+
+        // --- staging side: index starts at HEAD (alpha,beta,gamma), workdir
+        // has the beta -> BETA replace. ---
+        // stage only the deletion -> index alpha,gamma.
+        let (_tmp_a, repo_a) = repo_with_a_replace_change("stage_vs_git_del");
+        repo_a.stage_lines(Path::new("f.txt"), 0, &[1]).unwrap();
+        assert_eq!(
+            repo_a
+                .index_blob_content(Path::new("f.txt"))
+                .unwrap()
+                .unwrap(),
+            "alpha\ngamma\n"
+        );
+        let (tmp_b, _repo_b) = repo_with_a_replace_change("stage_vs_git_del_apply");
+        git_apply_cached(
+            &tmp_b.dir,
+            "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,2 @@\n alpha\n-beta\n gamma\n",
+        )
+        .unwrap();
+        assert_eq!(fresh_index(&tmp_b.dir), "alpha\ngamma\n");
+
+        // stage the whole hunk (both change lines) -> index alpha,BETA,gamma.
+        let (_tmp_c, repo_c) = repo_with_a_replace_change("stage_vs_git_all");
+        repo_c.stage_lines(Path::new("f.txt"), 0, &[1, 2]).unwrap();
+        assert_eq!(
+            repo_c
+                .index_blob_content(Path::new("f.txt"))
+                .unwrap()
+                .unwrap(),
+            "alpha\nBETA\ngamma\n"
+        );
+        let (tmp_d, _repo_d) = repo_with_a_replace_change("stage_vs_git_all_apply");
+        git_apply_cached(
+            &tmp_d.dir,
+            "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n alpha\n-beta\n+BETA\n gamma\n",
+        )
+        .unwrap();
+        assert_eq!(fresh_index(&tmp_d.dir), "alpha\nBETA\ngamma\n");
+
+        // --- unstaging side: index is the fully-staged replace
+        // (alpha,BETA,gamma). ---
+        // unstage only the deletion (re-add beta, keep BETA staged) -> index
+        // alpha,beta,BETA,gamma.
+        let (_tmp_e, repo_e) = repo_with_a_staged_replace_change("unstage_vs_git_del");
+        repo_e.unstage_lines(Path::new("f.txt"), 0, &[1]).unwrap();
+        assert_eq!(
+            repo_e
+                .index_blob_content(Path::new("f.txt"))
+                .unwrap()
+                .unwrap(),
+            "alpha\nbeta\nBETA\ngamma\n"
+        );
+        let (tmp_f, _repo_f) = repo_with_a_staged_replace_change("unstage_vs_git_del_apply");
+        git_apply_cached(
+            &tmp_f.dir,
+            "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,4 @@\n alpha\n+beta\n BETA\n gamma\n",
+        )
+        .unwrap();
+        assert_eq!(fresh_index(&tmp_f.dir), "alpha\nbeta\nBETA\ngamma\n");
+
+        // unstage only the addition (remove BETA, keep beta's deletion staged)
+        // -> index alpha,gamma.
+        let (_tmp_g, repo_g) = repo_with_a_staged_replace_change("unstage_vs_git_add");
+        repo_g.unstage_lines(Path::new("f.txt"), 0, &[2]).unwrap();
+        assert_eq!(
+            repo_g
+                .index_blob_content(Path::new("f.txt"))
+                .unwrap()
+                .unwrap(),
+            "alpha\ngamma\n"
+        );
+        let (tmp_h, _repo_h) = repo_with_a_staged_replace_change("unstage_vs_git_add_apply");
+        git_apply_cached(
+            &tmp_h.dir,
+            "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,2 @@\n alpha\n-BETA\n gamma\n",
+        )
+        .unwrap();
+        assert_eq!(fresh_index(&tmp_h.dir), "alpha\ngamma\n");
     }
 }

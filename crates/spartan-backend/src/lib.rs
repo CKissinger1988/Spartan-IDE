@@ -4039,6 +4039,93 @@ fn git_unstage_hunk(
     Ok(serde_json::json!({ "ok": true }))
 }
 
+/// Real per-line detail of one hunk, unstaged or staged -- the per-line
+/// (sub-hunk) data the selection UI renders, mirroring `git_diff_hunks`'s
+/// own `staged` split. Returns every real line `hunk_lines`/
+/// `hunk_lines_staged` reports with its 0-based in-hunk `index` (the exact
+/// namespace `git_stage_lines`/`git_unstage_lines` expect back), its real
+/// origin (`' '`/`'+'`/`'-'`, plus libgit2's `'='`/`'>'`/`'<'`
+/// end-of-file-newline markers the UI shows but never makes selectable) and
+/// its content.
+fn git_hunk_lines(
+    project_root: &str,
+    path: &str,
+    hunk_index: u64,
+    staged: bool,
+) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let lines = if staged {
+        repo.hunk_lines_staged(std::path::Path::new(path), hunk_index as usize)
+    } else {
+        repo.hunk_lines(std::path::Path::new(path), hunk_index as usize)
+    }
+    .map_err(|e| format!("git hunk lines: {e}"))?
+    .into_iter()
+    .map(|l| serde_json::json!({ "index": l.index, "origin": l.origin.to_string(), "content": l.content }))
+    .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "lines": lines }))
+}
+
+/// Real per-line (sub-hunk) staging -- the line-level refinement of
+/// `git_stage_hunk`. `lines` is the 0-based selection of change-line
+/// indices within the hunk as `git_hunk_lines` most recently reported for
+/// this file (staging lines one hunk at a time, re-fetching between each,
+/// is the same real v1 scope cut `git_stage_hunk` carries). Empty selection
+/// is an exact no-op; selecting every change line equals `git_stage_hunk`.
+fn git_stage_lines(
+    project_root: &str,
+    path: &str,
+    hunk_index: u64,
+    lines: &[u64],
+) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let lines: Vec<usize> = lines.iter().map(|&l| l as usize).collect();
+    repo.stage_lines(std::path::Path::new(path), hunk_index as usize, &lines)
+        .map_err(|e| format!("git stage lines: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// Real per-line (sub-hunk) *un*staging -- the direct mirror of
+/// `git_stage_lines`, `git restore --staged -p`'s own line-level
+/// deselection. Same selection contract: indices from the most recent
+/// `git_hunk_lines` call for this file with `staged: true`.
+fn git_unstage_lines(
+    project_root: &str,
+    path: &str,
+    hunk_index: u64,
+    lines: &[u64],
+) -> Result<serde_json::Value, String> {
+    let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
+        .ok_or("no git repository found at or above this path")?;
+    let lines: Vec<usize> = lines.iter().map(|&l| l as usize).collect();
+    repo.unstage_lines(std::path::Path::new(path), hunk_index as usize, &lines)
+        .map_err(|e| format!("git unstage lines: {e}"))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// Strictly parses the `git_stage_lines`/`git_unstage_lines` `lines` array:
+/// every element must be a real u64, so a malformed or type-mismatched
+/// entry is an honest error rather than a silently-dropped partial
+/// selection (which would apply a different subset than the caller asked
+/// for). An empty array is valid and remains an exact no-op.
+fn parse_lines_param(params: &serde_json::Value, key: &str) -> Result<Vec<u64>, String> {
+    let arr = params
+        .get(key)
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| format!("missing/invalid array param `{key}`"))?;
+    let mut lines = Vec::with_capacity(arr.len());
+    for (i, v) in arr.iter().enumerate() {
+        lines.push(
+            v.as_u64().ok_or_else(|| {
+                format!("invalid element {i} of array param `{key}`: expected u64")
+            })?,
+        );
+    }
+    Ok(lines)
+}
+
 /// Real local branch list -- every real local branch name plus which one
 /// is current (none flagged for a real detached `HEAD`).
 fn git_branches(project_root: &str) -> Result<serde_json::Value, String> {
@@ -5182,6 +5269,43 @@ pub fn handle_request(
                 .and_then(|v| v.as_u64())
                 .ok_or("missing/invalid u64 param `hunk_index`")?;
             git_unstage_hunk(&root, &path, hunk_index)
+        })(),
+        "git_hunk_lines" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let path = get_str_param(&req.params, "path")?;
+            let hunk_index = req
+                .params
+                .get("hunk_index")
+                .and_then(|v| v.as_u64())
+                .ok_or("missing/invalid u64 param `hunk_index`")?;
+            let staged = req
+                .params
+                .get("staged")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            git_hunk_lines(&root, &path, hunk_index, staged)
+        })(),
+        "git_stage_lines" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let path = get_str_param(&req.params, "path")?;
+            let hunk_index = req
+                .params
+                .get("hunk_index")
+                .and_then(|v| v.as_u64())
+                .ok_or("missing/invalid u64 param `hunk_index`")?;
+            let lines = parse_lines_param(&req.params, "lines")?;
+            git_stage_lines(&root, &path, hunk_index, &lines)
+        })(),
+        "git_unstage_lines" => (|| {
+            let root = get_str_param(&req.params, "project_root")?;
+            let path = get_str_param(&req.params, "path")?;
+            let hunk_index = req
+                .params
+                .get("hunk_index")
+                .and_then(|v| v.as_u64())
+                .ok_or("missing/invalid u64 param `hunk_index`")?;
+            let lines = parse_lines_param(&req.params, "lines")?;
+            git_unstage_lines(&root, &path, hunk_index, &lines)
         })(),
         "git_branches" => get_str_param(&req.params, "project_root").and_then(|r| git_branches(&r)),
         "git_checkout" => (|| {
@@ -7692,6 +7816,212 @@ time.sleep(10)
         );
         assert!(resp.result.is_none());
         assert!(resp.error.unwrap().contains("git unstage hunk"));
+    }
+
+    #[test]
+    fn git_hunk_lines_and_stage_lines_round_trip_through_the_dispatch_path() {
+        let tmp = TempRepo::new("stage_lines_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "alpha\nbeta\ngamma\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "base" }),
+        );
+        std::fs::write(tmp.dir.join("f.txt"), "alpha\nBETA\ngamma\n").unwrap();
+
+        let lines_resp = call(
+            &state,
+            3,
+            "git_hunk_lines",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "hunk_index": 0 }),
+        );
+        let lines = lines_resp.result.unwrap()["lines"]
+            .as_array()
+            .unwrap()
+            .clone();
+        // The single replace hunk's real per-line layout.
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0]["origin"], " ");
+        assert_eq!(lines[1]["origin"], "-");
+        assert_eq!(lines[2]["origin"], "+");
+        assert_eq!(lines[3]["origin"], " ");
+        assert_eq!(lines[1]["content"], "beta\n");
+        assert_eq!(lines[2]["content"], "BETA\n");
+        let add = lines.iter().find(|l| l["origin"] == "+").unwrap()["index"]
+            .as_u64()
+            .unwrap();
+
+        // Stage only the addition: the old line stays in the index and the
+        // deletion remains the sole unstaged change.
+        let stage_resp = call(
+            &state,
+            4,
+            "git_stage_lines",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "hunk_index": 0, "lines": [add] }),
+        );
+        assert_eq!(stage_resp.result.unwrap()["ok"], true);
+
+        // The real working tree is untouched.
+        assert_eq!(
+            std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "alpha\nBETA\ngamma\n"
+        );
+
+        let remaining_resp = call(
+            &state,
+            5,
+            "git_diff_hunks",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        let remaining = remaining_resp.result.unwrap()["hunks"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining[0]["body"].as_str().unwrap().contains("-beta\n"));
+        assert!(!remaining[0]["body"].as_str().unwrap().contains("+BETA\n"));
+    }
+
+    #[test]
+    fn git_hunk_lines_staged_and_unstage_lines_round_trip_through_the_dispatch_path() {
+        let tmp = TempRepo::new("unstage_lines_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "alpha\nbeta\ngamma\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "base" }),
+        );
+        std::fs::write(tmp.dir.join("f.txt"), "alpha\nBETA\ngamma\n").unwrap();
+        // Fully stage the replace so both sides start out staged.
+        call(
+            &state,
+            3,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+
+        let lines_resp = call(
+            &state,
+            4,
+            "git_hunk_lines",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "hunk_index": 0, "staged": true }),
+        );
+        let lines = lines_resp.result.unwrap()["lines"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(lines.len(), 4);
+        let add = lines.iter().find(|l| l["origin"] == "+").unwrap()["index"]
+            .as_u64()
+            .unwrap();
+
+        // Unstage only the addition: BETA leaves the index, beta's deletion
+        // stays staged -- so the sole remaining staged change is -beta.
+        let unstage_resp = call(
+            &state,
+            5,
+            "git_unstage_lines",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "hunk_index": 0, "lines": [add] }),
+        );
+        assert_eq!(unstage_resp.result.unwrap()["ok"], true);
+
+        // The real working tree is untouched.
+        assert_eq!(
+            std::fs::read_to_string(tmp.dir.join("f.txt")).unwrap(),
+            "alpha\nBETA\ngamma\n"
+        );
+
+        let remaining_resp = call(
+            &state,
+            6,
+            "git_diff_hunks",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "staged": true }),
+        );
+        let remaining = remaining_resp.result.unwrap()["hunks"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining[0]["body"].as_str().unwrap().contains("-beta\n"));
+        assert!(!remaining[0]["body"].as_str().unwrap().contains("+BETA\n"));
+    }
+
+    #[test]
+    fn git_stage_lines_out_of_range_errors_honestly_through_the_dispatch_path() {
+        let tmp = TempRepo::new("stage_lines_oor_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "alpha\nbeta\ngamma\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "base" }),
+        );
+        std::fs::write(tmp.dir.join("f.txt"), "alpha\nBETA\ngamma\n").unwrap();
+        let resp = call(
+            &state,
+            3,
+            "git_stage_lines",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "hunk_index": 0, "lines": [999] }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("git stage lines"));
+    }
+
+    #[test]
+    fn git_stage_lines_rejects_a_type_mismatched_line_element_honestly() {
+        let tmp = TempRepo::new("stage_lines_bad_element_dispatch");
+        std::fs::write(tmp.dir.join("f.txt"), "alpha\nbeta\ngamma\n").unwrap();
+        let state = new_state();
+        let root = tmp.dir.to_string_lossy().into_owned();
+        call(
+            &state,
+            1,
+            "git_stage",
+            serde_json::json!({ "project_root": root, "path": "f.txt" }),
+        );
+        call(
+            &state,
+            2,
+            "git_commit",
+            serde_json::json!({ "project_root": root, "message": "base" }),
+        );
+        std::fs::write(tmp.dir.join("f.txt"), "alpha\nBETA\ngamma\n").unwrap();
+        // A non-u64 element must be an honest error, not a silently-dropped
+        // partial selection.
+        let resp = call(
+            &state,
+            3,
+            "git_stage_lines",
+            serde_json::json!({ "project_root": root, "path": "f.txt", "hunk_index": 0, "lines": [1, "not-a-number"] }),
+        );
+        assert!(resp.result.is_none());
+        assert!(resp.error.unwrap().contains("expected u64"));
     }
 
     #[test]

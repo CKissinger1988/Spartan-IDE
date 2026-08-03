@@ -87,6 +87,19 @@ interface HunkInfo {
   body: string;
 }
 
+/** Real per-line detail of one hunk, matching `git_hunk_lines`'s response
+ * exactly (`spartan_git::HunkLine`). `index` is the line's 0-based
+ * position within its own hunk -- the exact value `git_stage_lines`/
+ * `git_unstage_lines` expect back as a selection. */
+interface HunkLine {
+  index: number;
+  /** Real `git2` diff origin: `" "` context, `"+"` addition, `"-"`
+   * deletion -- plus libgit2's `"="`/`">"`/`"<"` end-of-file-newline
+   * markers (shown but never selectable). */
+  origin: string;
+  content: string;
+}
+
 /** Real relative-age formatting for the history list -- coarse on
  * purpose (a source-control sidebar, not a timestamp report). */
 function formatAge(unixSeconds: number): string {
@@ -310,6 +323,64 @@ function DiffView({ diff }: { diff: string }): React.ReactElement {
   );
 }
 
+/** Real per-line (sub-hunk) selection for one hunk: renders every real
+ * line `git_hunk_lines` reported, with a checkbox on each change line
+ * (`+`/`-`) -- the exact selection namespace `git_stage_lines`/
+ * `git_unstage_lines` apply. Context lines and libgit2's own
+ * end-of-file-newline marker lines render but are never selectable,
+ * matching `stage_hunk`/`unstage_hunk`'s own treatment of those lines.
+ * Word-level highlighting is preserved by reconstructing the hunk's real
+ * unified-diff fragment from the per-line data itself (origin-prefixed
+ * content lines, marker lines unprefixed -- byte-identical to the `body`
+ * `git_diff_hunks` already reports, since both come from the same real
+ * `line_in_hunk` traversal), so highlighting is a pure function of this
+ * list and can never drift from the selection indices it renders. */
+function HunkLinesView({
+  lines,
+  selected,
+  onToggle,
+}: {
+  lines: HunkLine[];
+  selected: number[];
+  onToggle: (index: number) => void;
+}): React.ReactElement {
+  const diff = lines
+    .map(
+      (l) =>
+        (l.origin === " " || l.origin === "+" || l.origin === "-" ? l.origin : "") +
+        l.content
+    )
+    .join("");
+  const { lines: parsed, wordSegs } = parseDiff(diff);
+  return (
+    <div className="git-hunk-lines">
+      {lines.map((l) => {
+        const pl = parsed[l.index];
+        const kind = l.origin === "+" ? "add" : l.origin === "-" ? "del" : "ctx";
+        const selectable = l.origin === "+" || l.origin === "-";
+        const checked = selected.includes(l.index);
+        const segs = wordSegs.get(l.index);
+        return (
+          <label
+            key={l.index}
+            className={`leo-diff-line leo-diff-${kind} git-hunk-line${
+              selectable ? " git-hunk-line-selectable" : ""
+            }${checked ? " git-hunk-line-selected" : ""}`}
+          >
+            {selectable && <input type="checkbox" checked={checked} onChange={() => onToggle(l.index)} />}
+            <span className="git-hunk-line-prefix mono">
+              {l.origin === " " || l.origin === "+" || l.origin === "-" ? l.origin : ""}
+            </span>
+            <span className="git-hunk-line-content">
+              {pl ? renderDiffContent(pl, segs) : l.content}
+            </span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
 /**
  * Real Source Control panel for the web app, closing the "git" half of the
  * gap `App.tsx`'s own doc comment named since §75.89 ("no LSP, no DAP, no
@@ -366,9 +437,19 @@ function DiffView({ diff }: { diff: string }): React.ReactElement {
  * "Unstage this hunk" button per hunk. Both recompute the real diff fresh
  * every call, so hunks always target the real current index.
  *
- * Same real, named v1 scope cut as the ported original: no per-line
- * (sub-hunk) selection, no stash-during-merge interplay, no branch
- * delete/rename.
+ * Per-line (sub-hunk) selection is now real, not just the named follow-up
+ * it was at task #271 (mirroring desktop/'s own): every hunk block also
+ * fetches its real per-line detail (`git_hunk_lines`) and renders each
+ * change line with a checkbox. "Stage selected (n)" applies exactly those
+ * lines via `git_stage_lines`/`git_unstage_lines` -- the per-line
+ * refinement of the whole-hunk buttons, kept to the same one-hunk-at-a-
+ * time, re-fetch-between discipline the backend's own methods document
+ * (selecting every change line equals the whole-hunk button; selecting
+ * nothing is disabled).
+ *
+ * Same real, named v1 scope cut as the ported original, with the one
+ * follow-up it named now closed: no stash-during-merge interplay, no
+ * branch delete/rename.
  */
 export default function GitPanel({ client, root }: GitPanelProps): React.ReactElement {
   const [status, setStatus] = useState<GitStatus | null>(null);
@@ -384,6 +465,17 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
   const [hunks, setHunks] = useState<HunkInfo[] | null>(null);
   const [hunksError, setHunksError] = useState<string | null>(null);
   const [hunkBusy, setHunkBusy] = useState(false);
+  // Real per-line (sub-hunk) selection, the follow-up task #271 named:
+  // `hunkLines` is each open hunk's real per-line detail from
+  // `git_hunk_lines` (fetched alongside the hunk list itself), and
+  // `selectedLines` is the in-flight selection keyed by hunk index --
+  // indices into that same list, exactly what `git_stage_lines`/
+  // `git_unstage_lines` apply. Both are cleared whenever the hunk list is
+  // refetched: an actual stage/unstage changes the real remaining hunk
+  // layout, so a stale selection would target the wrong lines.
+  const [hunkLines, setHunkLines] = useState<Record<number, HunkLine[]> | null>(null);
+  const [linesError, setLinesError] = useState<string | null>(null);
+  const [selectedLines, setSelectedLines] = useState<Record<number, number[]>>({});
   const [showBranches, setShowBranches] = useState(false);
   const [branches, setBranches] = useState<BranchInfo[] | null>(null);
   // Real remote-tracking branches (`origin/feature`) as of the last fetch
@@ -772,17 +864,57 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
   // file could land after a newer one and silently overwrite `hunks` with
   // the wrong file's data -- which `stageHunk`/`unstageHunk` would then
   // mis-target against `entry.path`, writing to the wrong index entry.
+  // The same key guards the per-line detail fetches (`git_hunk_lines`,
+  // fired once the hunk list lands) so a stale hunk's lines can never
+  // overwrite a newer expansion's.
   const expandedDiffKeyRef = useRef<string | null>(null);
 
   const refreshHunks = useCallback(
     (path: string, staged: boolean) => {
       const key = `${path} ${staged}`;
       expandedDiffKeyRef.current = key;
+      // A real stage/unstage (whole hunk or selected lines) changes the
+      // real remaining hunk layout, so any in-flight selection is stale.
+      setSelectedLines({});
+      setLinesError(null);
       client
         .call("git_diff_hunks", { project_root: root, path, staged })
         .then((result) => {
           if (expandedDiffKeyRef.current !== key) return;
-          setHunks((result as { hunks: HunkInfo[] }).hunks);
+          const hunks = (result as { hunks: HunkInfo[] }).hunks;
+          setHunks(hunks);
+          setHunkLines(null);
+          // Per-hunk detail is fetched independently and settled
+          // independently: one failing hunk must not remove per-line
+          // selection from every other hunk, so `allSettled` keeps every
+          // fulfilled result and only the genuinely rejected hunks are
+          // reported (as a single combined `linesError`).
+          Promise.allSettled(
+            hunks.map((h) =>
+              client
+                .call("git_hunk_lines", {
+                  project_root: root,
+                  path,
+                  hunk_index: h.index,
+                  staged,
+                })
+                .then((r) => [h.index, (r as { lines: HunkLine[] }).lines] as const)
+            )
+          ).then((results) => {
+            if (expandedDiffKeyRef.current !== key) return;
+            const byIndex: Record<number, HunkLine[]> = {};
+            const failures: string[] = [];
+            for (const r of results) {
+              if (r.status === "fulfilled") {
+                const [hi, ls] = r.value;
+                byIndex[hi] = ls;
+              } else {
+                failures.push(r.reason.message);
+              }
+            }
+            setHunkLines(byIndex);
+            if (failures.length > 0) setLinesError(failures.join("; "));
+          });
         })
         .catch((err: Error) => {
           if (expandedDiffKeyRef.current !== key) return;
@@ -802,6 +934,9 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
         setDiffError(null);
         setHunks(null);
         setHunksError(null);
+        setHunkLines(null);
+        setLinesError(null);
+        setSelectedLines({});
         return;
       }
       setExpandedDiff({ path, staged });
@@ -809,6 +944,9 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
       setDiffError(null);
       setHunks(null);
       setHunksError(null);
+      setHunkLines(null);
+      setLinesError(null);
+      setSelectedLines({});
       setDiffLoading(true);
       client
         .call("git_diff", { project_root: root, path, staged })
@@ -854,6 +992,52 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
         .finally(() => setHunkBusy(false));
     },
     [client, root, refresh, refreshHunks]
+  );
+
+  // Real per-line selection: toggle one change line's index within a hunk
+  // on/off. Purely client-side state -- nothing is written to the index
+  // until `applySelectedLines` runs.
+  const toggleLine = useCallback((hunkIndex: number, lineIndex: number) => {
+    setSelectedLines((prev) => {
+      const cur = prev[hunkIndex] ?? [];
+      const next = cur.includes(lineIndex)
+        ? cur.filter((i) => i !== lineIndex)
+        : [...cur, lineIndex];
+      return { ...prev, [hunkIndex]: next };
+    });
+  }, []);
+
+  // Real "apply the selected change lines" -- the per-line refinement of
+  // `stageHunk`/`unstageHunk`. `staged` picks the direction: `false`
+  // stages the selected lines (of an unstaged row), `true` unstages them
+  // (of a staged row) -- exactly `git_stage_lines`/`git_unstage_lines`'s
+  // own split. The selection indices always come from the most recent
+  // `git_hunk_lines` response for this file, and are cleared (and the real
+  // remaining hunk list refetched) once applied, matching the backend's
+  // one-hunk-at-a-time discipline. Selecting every change line equals the
+  // whole-hunk button; selecting none is disabled.
+  const applySelectedLines = useCallback(
+    (path: string, hunkIndex: number, staged: boolean) => {
+      const sel = selectedLines[hunkIndex] ?? [];
+      if (sel.length === 0) return;
+      setHunkBusy(true);
+      setHunksError(null);
+      client
+        .call(staged ? "git_unstage_lines" : "git_stage_lines", {
+          project_root: root,
+          path,
+          hunk_index: hunkIndex,
+          lines: sel,
+        })
+        .then(() => {
+          setSelectedLines((prev) => ({ ...prev, [hunkIndex]: [] }));
+          refresh();
+          refreshHunks(path, staged);
+        })
+        .catch((err: Error) => setHunksError(err.message))
+        .finally(() => setHunkBusy(false));
+    },
+    [client, root, refresh, refreshHunks, selectedLines]
   );
 
   const toggleBranches = useCallback(() => {
@@ -1511,23 +1695,52 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
                 {diffError && <div className="git-panel-empty mono">{diffError}</div>}
                 {diffContent !== null && <DiffView diff={diffContent} />}
                 {hunksError && <div className="git-panel-empty mono">{hunksError}</div>}
-                {hunks?.map((h) => (
-                  <div key={h.index} className="git-hunk-block">
-                    <div className="git-hunk-header mono">
-                      <span>{h.header}</span>
-                      <button
-                        type="button"
-                        className="editor-find-btn"
-                        disabled={hunkBusy}
-                        onClick={() => unstageHunk(entry.path, h.index)}
-                        title="Unstage only this hunk"
-                      >
-                        Unstage this hunk
-                      </button>
+                {linesError && <div className="git-panel-empty mono">{linesError}</div>}
+                {hunks?.map((h) => {
+                  const hsel = selectedLines[h.index] ?? [];
+                  return (
+                    <div key={h.index} className="git-hunk-block">
+                      <div className="git-hunk-header mono">
+                        <span>{h.header}</span>
+                        <span className="git-hunk-actions">
+                          {hunkLines?.[h.index] !== undefined && (
+                            <button
+                              type="button"
+                              className="editor-find-btn"
+                              disabled={hunkBusy || hsel.length === 0}
+                              onClick={() => applySelectedLines(entry.path, h.index, true)}
+                              title={
+                                hsel.length === 0
+                                  ? "Select change lines above, then unstage only those"
+                                  : `Unstage only the ${hsel.length} selected change line${hsel.length === 1 ? "" : "s"}`
+                              }
+                            >
+                              Unstage selected ({hsel.length})
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="editor-find-btn"
+                            disabled={hunkBusy}
+                            onClick={() => unstageHunk(entry.path, h.index)}
+                            title="Unstage only this hunk"
+                          >
+                            Unstage this hunk
+                          </button>
+                        </span>
+                      </div>
+                      {hunkLines?.[h.index] !== undefined ? (
+                        <HunkLinesView
+                          lines={hunkLines[h.index]}
+                          selected={hsel}
+                          onToggle={(li) => toggleLine(h.index, li)}
+                        />
+                      ) : (
+                        <DiffView diff={h.body} />
+                      )}
                     </div>
-                    <DiffView diff={h.body} />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </React.Fragment>
@@ -1568,23 +1781,52 @@ export default function GitPanel({ client, root }: GitPanelProps): React.ReactEl
                 {diffError && <div className="git-panel-empty mono">{diffError}</div>}
                 {diffContent !== null && <DiffView diff={diffContent} />}
                 {hunksError && <div className="git-panel-empty mono">{hunksError}</div>}
-                {hunks?.map((h) => (
-                  <div key={h.index} className="git-hunk-block">
-                    <div className="git-hunk-header mono">
-                      <span>{h.header}</span>
-                      <button
-                        type="button"
-                        className="editor-find-btn"
-                        disabled={hunkBusy}
-                        onClick={() => stageHunk(entry.path, h.index)}
-                        title="Stage only this hunk"
-                      >
-                        Stage this hunk
-                      </button>
+                {linesError && <div className="git-panel-empty mono">{linesError}</div>}
+                {hunks?.map((h) => {
+                  const hsel = selectedLines[h.index] ?? [];
+                  return (
+                    <div key={h.index} className="git-hunk-block">
+                      <div className="git-hunk-header mono">
+                        <span>{h.header}</span>
+                        <span className="git-hunk-actions">
+                          {hunkLines?.[h.index] !== undefined && (
+                            <button
+                              type="button"
+                              className="editor-find-btn"
+                              disabled={hunkBusy || hsel.length === 0}
+                              onClick={() => applySelectedLines(entry.path, h.index, false)}
+                              title={
+                                hsel.length === 0
+                                  ? "Select change lines above, then stage only those"
+                                  : `Stage only the ${hsel.length} selected change line${hsel.length === 1 ? "" : "s"}`
+                              }
+                            >
+                              Stage selected ({hsel.length})
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="editor-find-btn"
+                            disabled={hunkBusy}
+                            onClick={() => stageHunk(entry.path, h.index)}
+                            title="Stage only this hunk"
+                          >
+                            Stage this hunk
+                          </button>
+                        </span>
+                      </div>
+                      {hunkLines?.[h.index] !== undefined ? (
+                        <HunkLinesView
+                          lines={hunkLines[h.index]}
+                          selected={hsel}
+                          onToggle={(li) => toggleLine(h.index, li)}
+                        />
+                      ) : (
+                        <DiffView diff={h.body} />
+                      )}
                     </div>
-                    <DiffView diff={h.body} />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </React.Fragment>

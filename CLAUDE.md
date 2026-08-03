@@ -8532,6 +8532,75 @@ first — it's the parity reference until each row there is actually reimplement
   event on macOS window close but this project has no Apple hardware to verify platform-specific
   quit semantics) and Windows platform behavior are likewise unverified (same standing Linux-only
   scope as every other `desktop/` pass).
+- **Real, working code — per-line (sub-hunk) staging/unstaging in both Git panels, closing the last
+  named follow-up in the per-hunk-staging backlog row (§75.96)**: the per-line refinement of the
+  whole-hunk "Stage this hunk"/"Unstage this hunk" buttons (task #271/#293) — exactly the
+  line-level selection `git add -p`/`git restore --staged -p` expose, implemented directly against
+  `libgit2` rather than shelling out to git. `spartan_git` gained a `HunkLine` struct (`index`,
+  real `git2` diff `origin` char, `content`) plus `hunk_lines(path, hunk_index)` and
+  `hunk_lines_staged(path, hunk_index)` — the exact complementary per-line traversals to
+  `collect_hunks`'s body concat, recomputing the same real diffs `diff_hunks`/`stage_hunk` and
+  `diff_hunks_staged`/`unstage_hunk` use (index-vs-workdir and HEAD-vs-index respectively), so the
+  returned 0-based in-hunk indices are the exact namespace the selection UI and the write paths
+  both key on. The write paths are `stage_lines(path, hunk_index, lines)` and
+  `unstage_lines(path, hunk_index, lines)`: `stage_lines` splices the hunk's context + selected
+  real lines into the index at `old_start`/`old_lines` (a selected `'+'` addition is emitted, a
+  selected `'-'` deletion is omitted — staging a deletion removes that old line from the index);
+  `unstage_lines` is its exact mirror at `new_start`/`new_lines` (a selected `'-'` deletion is
+  re-added to the index, a selected `'+'` addition is removed). Both reuse the same region-splice
+  `stage_hunk`/`unstage_hunk` already use (refactored into shared `splice_region_content`/
+  `splice_hunk_region` helpers — `stage_hunk`/`unstage_hunk` now reduce to calling them with the
+   whole-hunk predicate, so there is one splice implementation, not three); the per-line case builds
+   its emitted region via `selection_region`, which maps deletions, context lines, and additions
+   into one common coordinate space before sorting: it walks the hunk's lines in document order
+   (not libgit2's deletion-group-then-addition-group raw order), tracking the real
+   `old_anchor`/`new_anchor` each time a context line lands, and flushes each run of change lines
+   ordered by `(slot, !is_del)` so a replaced deletion/addition pair applies with the deletion
+   first at its real position. This ordering is only as good as the hunk shapes the tests cover —
+   the fixtures exercise a pure deletion, a pure insertion, an adjacent deletion+addition
+   replacement, and one hunk containing a pure insertion followed by a deletion several lines
+   later (mixed old/new coordinates, with an exact index-content assertion), plus a differential
+   check against real `git apply` for the selection shapes git can express. Selecting every change
+   line reduces to exactly the whole-hunk button; selecting none is an exact no-op; out-of-range
+   line indices error honestly;
+  the working tree is never touched; end-of-file-newline marker lines (`'='`/`'>'`/`'<'`) render
+  but are never selectable, matching the whole-hunk methods' own treatment. `spartan-backend`
+  gained the `git_hunk_lines`/`git_stage_lines`/`git_unstage_lines` dispatch methods (with a
+  `staged: bool` param selecting the direction), allowlisted in both `desktop/electron/main.ts`'s
+  IPC `handle` gate and `preload.ts`'s `ALLOWED_METHODS`. Both Git panels (`desktop/`, `web/`) —
+  the exact same `HunkLinesView` component, code-identical across the two shells except for their
+  own `client` vs `window.spartan` transport — render every real line of each open hunk with a
+  checkbox on each change line and a "Stage selected (n)"/"Unstage selected (n)" button in the
+  hunk header (disabled when nothing is selected); per-line detail is fetched alongside the hunk
+  list (`git_hunk_lines` per hunk, keyed by the same `expandedDiffKeyRef` guard the hunk-list
+  fetch already uses so a stale hunk's lines can never overwrite a newer expansion's), and both the
+  selection and the line detail are cleared whenever the hunk list is refetched, because a real
+  stage/unstage changes the real remaining hunk layout. Word-level highlighting in `HunkLinesView`
+  is a pure function of the same per-line list (the hunk's real unified fragment is reconstructed
+  from `origin`-prefixed content lines, byte-identical to the `body` `git_diff_hunks` reports since
+  both come from the same `line_in_hunk` traversal), so highlighting can never drift from the
+  selection indices it renders. **Real verification, no estimation**: `cargo fmt --all -- --check`
+  clean; 14 new `spartan-git` tests (real per-line origin/content rendering; selecting every
+  change line byte-equals `stage_hunk`/`unstage_hunk`; selecting only the addition keeps the old
+  line in the index / only the deletion removes it; empty selection no-op; out-of-range errors;
+  staging one of two adjacent changes in a single real hunk at its real position; and a
+  `git apply --cached` ground-truth cross-check for exactly the selections real git's plumbing can
+  express — the "stage the addition while keeping the old line" selection, which git's own
+  `add -e` cannot express, is covered by the direct-content tests instead, matching VS Code/
+  GitKraken) — 88 `spartan-git` tests total, all green; 3 new `spartan-backend` dispatch-level
+  tests (staging and unstaging round trips through `handle_request` against real temp repos, plus
+  an honest out-of-range error) — 264 lib tests total, all green; `cargo clippy --release
+  --all-targets -p spartan-git -p spartan-backend` clean (the one pre-existing lib warning is
+  unchanged from before this pass); `npm run typecheck` clean in both `desktop/` (all three
+  tsconfigs) and `web/`. **What this does not confirm**: no live end-to-end Playwright run of the
+  new per-line UI was executed in this session (the real Electron window launch and the
+  devserver+shim technique are both standing environment-dependent options, and the shared
+  `HunkLinesView`/`applySelectedLines`/`refreshHunks` code is identical across the two shells);
+  per-line selection works one hunk at a time (re-fetching between each), the same real, named v1
+  scope cut `stage_hunk`/`unstage_hunk` already document; no stash-during-merge interplay, no
+  branch delete/rename. This closes the last named follow-up in the per-hunk-staging backlog row
+  and the "no per-line (sub-hunk) selection" caveat every prior staging pass's "What this does not
+  confirm" section carried.
 
 ## Build & test
 
