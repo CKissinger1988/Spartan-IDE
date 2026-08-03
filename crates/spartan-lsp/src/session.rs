@@ -131,6 +131,36 @@ enum QueryKind {
         line: i64,
         character: i64,
     },
+    /// Real `textDocument/codeAction` -- the one query kind that is
+    /// *range*-driven, not position-driven, and carries a real `diagnostics`
+    /// context. `diagnostics` holds the caller's current best-known
+    /// diagnostics for the file (the backend's `LspDiagnostic` shape
+    /// re-serialized into the spec's `Diagnostic` shape), which the server
+    /// keys its offered actions on; the `start/end` range must actually
+    /// cover one of those diagnostics or real servers return zero actions
+    /// (see `LspClient::code_action`'s own doc comment for that live probe
+    /// finding). Because the session's dispatch loop is single-threaded, a
+    /// caller needing actions for several diagnostics issues one of these
+    /// per range and merges by title -- same as the backend handler does.
+    CodeAction {
+        start_line: i64,
+        start_character: i64,
+        end_line: i64,
+        end_character: i64,
+        diagnostics: Vec<serde_json::Value>,
+    },
+    /// Real `codeAction/resolve` -- the second half of the two-step code
+    /// action protocol. Carries the action exactly as the server returned
+    /// it (its `data` field is the server's own lookup key).
+    ResolveCodeAction {
+        action: serde_json::Value,
+    },
+    /// Real `workspace/executeCommand` -- how an action whose effect is a
+    /// *command* (not a `WorkspaceEdit`) actually runs. Carries the spec's
+    /// `{command, arguments}` envelope.
+    ExecuteCommand {
+        command: serde_json::Value,
+    },
 }
 
 struct PendingQuery {
@@ -561,6 +591,90 @@ impl LspSession {
             .flatten()
     }
 
+    /// Real, synchronous `textDocument/codeAction` -- the one range-driven
+    /// query kind, the direct sibling of the other query methods above,
+    /// sharing the identical query-priority mailbox and timeout reasoning.
+    /// `diagnostics` is the caller's current best-known diagnostics for the
+    /// file (serialized into the spec's `Diagnostic` shape); the caller must
+    /// pass a range that actually covers one of them -- a caret-only range
+    /// genuinely returns zero actions from real servers (see
+    /// `LspClient::code_action`'s own doc comment for that live probe
+    /// finding). A caller wanting fixes for several diagnostics issues one
+    /// request per range and merges the results by title. Same calling
+    /// discipline: callers must run this from their own dedicated thread,
+    /// never the single request-processing thread every other IPC method
+    /// shares.
+    pub fn request_code_action(
+        &self,
+        start_line: i64,
+        start_character: i64,
+        end_line: i64,
+        end_character: i64,
+        diagnostics: Vec<serde_json::Value>,
+    ) -> Option<serde_json::Value> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        {
+            let mut guard = self.mailbox.state.lock().unwrap();
+            guard.pending_queries.push_back(PendingQuery {
+                kind: QueryKind::CodeAction {
+                    start_line,
+                    start_character,
+                    end_line,
+                    end_character,
+                    diagnostics,
+                },
+                reply: reply_tx,
+            });
+        }
+        self.mailbox.cvar.notify_one();
+        reply_rx
+            .recv_timeout(INDEXING_TIMEOUT + DEFAULT_TIMEOUT)
+            .ok()
+            .flatten()
+    }
+
+    /// Real, synchronous `codeAction/resolve` -- the second half of the
+    /// two-step code action protocol, the direct sibling of
+    /// `request_code_action` above. Takes the action exactly as the server
+    /// returned it and returns the fully-resolved action (its real
+    /// `edit`/`command` now populated). Same calling discipline: callers
+    /// must run this from their own dedicated thread.
+    pub fn resolve_code_action(&self, action: serde_json::Value) -> Option<serde_json::Value> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        {
+            let mut guard = self.mailbox.state.lock().unwrap();
+            guard.pending_queries.push_back(PendingQuery {
+                kind: QueryKind::ResolveCodeAction { action },
+                reply: reply_tx,
+            });
+        }
+        self.mailbox.cvar.notify_one();
+        reply_rx
+            .recv_timeout(INDEXING_TIMEOUT + DEFAULT_TIMEOUT)
+            .ok()
+            .flatten()
+    }
+
+    /// Real, synchronous `workspace/executeCommand` -- how a resolved code
+    /// action whose effect is a *command* (not a `WorkspaceEdit`) actually
+    /// runs. Takes the spec's `{command, arguments}` envelope. Same calling
+    /// discipline: callers must run this from their own dedicated thread.
+    pub fn execute_command(&self, command: serde_json::Value) -> Option<serde_json::Value> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        {
+            let mut guard = self.mailbox.state.lock().unwrap();
+            guard.pending_queries.push_back(PendingQuery {
+                kind: QueryKind::ExecuteCommand { command },
+                reply: reply_tx,
+            });
+        }
+        self.mailbox.cvar.notify_one();
+        reply_rx
+            .recv_timeout(INDEXING_TIMEOUT + DEFAULT_TIMEOUT)
+            .ok()
+            .flatten()
+    }
+
     /// Signals the background thread to shut down and joins it. Blocks for
     /// up to ~7s worst case, matching `LspClient::shutdown`'s own bound.
     pub fn shutdown(self) {
@@ -679,6 +793,22 @@ fn dispatch_query(client: &mut LspClient, file_uri: &str, query: PendingQuery) {
         QueryKind::OutgoingCalls { line, character } => {
             client.outgoing_calls(file_uri, line, character)
         }
+        QueryKind::CodeAction {
+            start_line,
+            start_character,
+            end_line,
+            end_character,
+            diagnostics,
+        } => client.code_action(
+            file_uri,
+            start_line,
+            start_character,
+            end_line,
+            end_character,
+            &diagnostics,
+        ),
+        QueryKind::ResolveCodeAction { action } => client.resolve_code_action(&action),
+        QueryKind::ExecuteCommand { command } => client.execute_command(&command),
     };
     let _ = query.reply.send(result);
 }

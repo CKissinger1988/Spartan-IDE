@@ -767,6 +767,23 @@
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+/* Real quick-fix lightbulb (Alt+Enter), mirroring desktop/'s own treatment
+ * verbatim -- a clickable glyph in the gutter on lines with diagnostics,
+ * opening the same quick-fix popup Alt+Enter does, anchored at that line's
+ * first diagnostic. Positioned to the left of the line number without
+ * breaking the row's existing right-aligned number layout. */
+.editor-gutter-lightbulb {
+  cursor: pointer;
+  margin-right: 4px;
+  font-size: 11px;
+  color: var(--accent);
+  user-select: none;
+}
+
+.editor-gutter-lightbulb:hover {
+  color: var(--text);
+}
+
 /* Real DAP breakpoint gutter (task #133, mirroring desktop/'s own
  * treatment verbatim) -- one small dot per line, filled only for lines
  * with an active breakpoint; the whole row is clickable to toggle. */

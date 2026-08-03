@@ -764,6 +764,252 @@ fn lsp_rename(
     Ok(serde_json::json!({ "status": "requested" }))
 }
 
+/// Re-serializes one of this backend's own `LspDiagnostic`-shaped values
+/// (the shape `lsp_diagnostics` events carry, and what a UI sends back
+/// here) into the spec's `Diagnostic` shape `textDocument/codeAction`'s
+/// `context.diagnostics` requires. The one real mapping is `severity`, a
+/// lowercase label here but the spec's integer (1-4) there.
+fn lsp_diagnostic_to_spec(d: &serde_json::Value) -> serde_json::Value {
+    let severity = match d["severity"].as_str().unwrap_or("diagnostic") {
+        "error" => 1,
+        "warning" => 2,
+        "info" => 3,
+        "hint" => 4,
+        _ => 0,
+    };
+    serde_json::json!({
+        "range": {
+            "start": {
+                "line": d["line"].as_u64().unwrap_or(0),
+                "character": d["character"].as_u64().unwrap_or(0),
+            },
+            "end": {
+                "line": d["end_line"].as_u64().unwrap_or(0),
+                "character": d["end_character"].as_u64().unwrap_or(0),
+            },
+        },
+        "severity": severity,
+        "message": d["message"].as_str().unwrap_or(""),
+    })
+}
+
+/// Real, live `textDocument/codeAction` (quick fixes / code actions) --
+/// the direct sibling of `lsp_hover`/`lsp_completion`/`lsp_rename` above:
+/// identical never-blocks-the-caller shape. **A real, live probe finding
+/// that shapes this handler's per-diagnostic loop** (confirmed against
+/// rust-analyzer, the only Tier 1 server with real code actions in this
+/// environment): a server returns actions only when the requested range
+/// actually covers a real diagnostic's range -- a caret-only range returns
+/// zero actions. So this handler filters the caller-supplied `diagnostics`
+/// down to those whose range contains the caret, issues one real
+/// `textDocument/codeAction` request per such range (each with the full
+/// `context.diagnostics`), and merges the results by `title` -- the same
+/// action offered for two overlapping diagnostics is reported once (with one
+/// bounded retry when a matching diagnostic yielded nothing yet, since a
+/// server can answer empty while its analysis is still settling -- see the
+/// inline comment). Emits a
+/// single `lsp_code_action_result` event; each action is passed through
+/// unparsed exactly as the server sent it (some carry their `edit`/
+/// `command` already, others need the real `codeAction/resolve` round trip
+/// in `lsp_code_action_resolve` below).
+fn lsp_code_action(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+    line: i64,
+    character: i64,
+    diagnostics: Vec<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let session = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        doc.lsp_session
+            .clone()
+            .ok_or_else(|| "no live LSP session for this file".to_string())?
+    };
+    thread::spawn(move || {
+        let context_diags: Vec<serde_json::Value> =
+            diagnostics.iter().map(lsp_diagnostic_to_spec).collect();
+        // The real per-diagnostic ranges this handler will query, filtered
+        // exactly as the loop below used to -- computed up front so the
+        // retry pass below can re-query the same real ranges.
+        let matched: Vec<(i64, i64, i64, i64)> = diagnostics
+            .iter()
+            .filter_map(|diag| {
+                let start_line = diag["line"].as_i64().unwrap_or(line);
+                let start_character = diag["character"].as_i64().unwrap_or(character);
+                let end_line = diag["end_line"].as_i64().unwrap_or(start_line);
+                let end_character = diag["end_character"].as_i64().unwrap_or(start_character);
+                let caret_in_range = (line > start_line
+                    || (line == start_line && character >= start_character))
+                    && (line < end_line || (line == end_line && character <= end_character));
+                // `caret_in_range` alone would miss a real, common case found by
+                // live probing: rust-analyzer attaches the "unused import" family
+                // of fixes to a zero-width `hint` diagnostic sitting at the
+                // import-insertion point (line 0, char 0), so a caret placed
+                // *inside* the unused `use` statement (line 0, char > 0) is never
+                // inside that diagnostic's range. Including any diagnostic whose
+                // range sits on the caret's own line catches that case (a caret
+                // in the middle of the `use` line then sees the remove/qualify
+                // fixes) while staying narrow enough not to pull in fixes from
+                // other lines.
+                let on_carets_line = start_line == line || end_line == line;
+                if caret_in_range || on_carets_line {
+                    Some((start_line, start_character, end_line, end_character))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let mut merged: Vec<serde_json::Value> = Vec::new();
+        let request_all = |merged: &mut Vec<serde_json::Value>| {
+            for &(start_line, start_character, end_line, end_character) in &matched {
+                let raw = session.request_code_action(
+                    start_line,
+                    start_character,
+                    end_line,
+                    end_character,
+                    context_diags.clone(),
+                );
+                if let Some(result) = raw.and_then(|envelope| envelope.get("result").cloned()) {
+                    if let Some(arr) = result.as_array() {
+                        for action in arr {
+                            let title = action
+                                .get("title")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("");
+                            let already_have = merged.iter().any(|m| {
+                                m.get("title")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("")
+                                    == title
+                            });
+                            if !already_have {
+                                merged.push(action.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        request_all(&mut merged);
+        // **A real, live finding that shapes this retry** (reproduced live
+        // against rust-analyzer via this very handler): the server answers
+        // a `textDocument/codeAction` request for a genuine diagnostic
+        // range with an *empty* array while its analysis is still settling
+        // (name-resolution diagnostics publish within a second or two, but
+        // the same range's fixes only materialize several seconds later),
+        // so a quick-fix trigger right as the error squiggle appears would
+        // honestly report "no code actions" for a fix that exists moments
+        // later. One bounded retry after a short pause, only when a real
+        // diagnostic matched the caret yet nothing came back, turns that
+        // false empty into the real fixes; positions with no matching
+        // diagnostic never pay the wait, and a genuine "no fix" answer
+        // costs at most this one pause.
+        if merged.is_empty() && !matched.is_empty() {
+            std::thread::sleep(Duration::from_millis(3000));
+            request_all(&mut merged);
+        }
+        let event = Event {
+            event: "lsp_code_action_result".to_string(),
+            data: serde_json::json!({
+                "doc_id": doc_id,
+                "line": line,
+                "character": character,
+                "actions": merged,
+            }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+    Ok(serde_json::json!({ "status": "requested" }))
+}
+
+/// Real, live `codeAction/resolve` -- the second half of the two-step code
+/// action protocol, the direct sibling of `lsp_code_action` above:
+/// identical never-blocks-the-caller shape. Takes an action exactly as
+/// `lsp_code_action_result` delivered it (its `data` field is the server's
+/// own lookup key) and returns the fully-resolved action, its real
+/// `edit`/`command` now populated. Emits `lsp_code_action_resolve_result`
+/// carrying the resolved action itself -- a UI takes that and either applies
+/// its `edit` as a `WorkspaceEdit` (both real shapes, see `lsp_rename`'s
+/// own doc comment) or runs its `command` via `lsp_execute_command`.
+fn lsp_code_action_resolve(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+    action: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let session = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        doc.lsp_session
+            .clone()
+            .ok_or_else(|| "no live LSP session for this file".to_string())?
+    };
+    thread::spawn(move || {
+        let raw = session.resolve_code_action(action);
+        let result = raw.and_then(|envelope| envelope.get("result").cloned());
+        let event = Event {
+            event: "lsp_code_action_resolve_result".to_string(),
+            data: serde_json::json!({
+                "doc_id": doc_id,
+                "action": result,
+            }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+    Ok(serde_json::json!({ "status": "requested" }))
+}
+
+/// Real, live `workspace/executeCommand` -- how a resolved code action
+/// whose effect is a *command* (not a `WorkspaceEdit`) actually runs. Takes
+/// the spec's `{command, arguments}` envelope (the shape a resolved
+/// action's `command` field already carries). Emits
+/// `lsp_execute_command_result`; the free-form `result` (often `null`) is
+/// passed through unparsed.
+fn lsp_execute_command(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+    command: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let session = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        doc.lsp_session
+            .clone()
+            .ok_or_else(|| "no live LSP session for this file".to_string())?
+    };
+    thread::spawn(move || {
+        let raw = session.execute_command(command);
+        let result = raw.and_then(|envelope| envelope.get("result").cloned());
+        let event = Event {
+            event: "lsp_execute_command_result".to_string(),
+            data: serde_json::json!({
+                "doc_id": doc_id,
+                "result": result,
+            }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+    Ok(serde_json::json!({ "status": "requested" }))
+}
+
 /// Real, live `textDocument/documentSymbol` -- the seventh real query
 /// method, the direct sibling of `lsp_hover`/`lsp_completion`/
 /// `lsp_definition`/`lsp_signature_help`/`lsp_references`/`lsp_rename`
@@ -5054,6 +5300,36 @@ pub fn handle_request(
             let character = get_u64_param(&req.params, "character")? as i64;
             let new_name = get_str_param(&req.params, "new_name")?;
             lsp_rename(state, out_tx.clone(), doc_id, line, character, new_name)
+        })(),
+        "lsp_code_action" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            let line = get_u64_param(&req.params, "line")? as i64;
+            let character = get_u64_param(&req.params, "character")? as i64;
+            let diagnostics = req
+                .params
+                .get("diagnostics")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            lsp_code_action(state, out_tx.clone(), doc_id, line, character, diagnostics)
+        })(),
+        "lsp_code_action_resolve" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            let action = req
+                .params
+                .get("action")
+                .cloned()
+                .ok_or_else(|| "missing/invalid param `action`".to_string())?;
+            lsp_code_action_resolve(state, out_tx.clone(), doc_id, action)
+        })(),
+        "lsp_execute_command" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            let command = req
+                .params
+                .get("command")
+                .cloned()
+                .ok_or_else(|| "missing/invalid param `command`".to_string())?;
+            lsp_execute_command(state, out_tx.clone(), doc_id, command)
         })(),
         "lsp_document_symbol" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;
@@ -10609,6 +10885,126 @@ time.sleep(10)
             1,
             "lsp_rename",
             serde_json::json!({ "doc_id": 999, "line": 0, "character": 0 }),
+        );
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn lsp_diagnostic_to_spec_maps_the_label_severity_to_the_spec_integer() {
+        // The one real mapping `context.diagnostics` needs: this backend's
+        // own lowercase-label severity -> the spec's integer (1-4).
+        let diag = serde_json::json!({
+            "severity": "error",
+            "line": 1,
+            "character": 2,
+            "end_line": 3,
+            "end_character": 4,
+            "message": "oops",
+        });
+        let spec = lsp_diagnostic_to_spec(&diag);
+        assert_eq!(spec["range"]["start"]["line"], 1);
+        assert_eq!(spec["range"]["start"]["character"], 2);
+        assert_eq!(spec["range"]["end"]["line"], 3);
+        assert_eq!(spec["range"]["end"]["character"], 4);
+        assert_eq!(spec["severity"], 1);
+        assert_eq!(spec["message"], "oops");
+
+        let warning = serde_json::json!({ "severity": "warning" });
+        assert_eq!(lsp_diagnostic_to_spec(&warning)["severity"], 2);
+    }
+
+    #[test]
+    fn lsp_code_action_on_a_real_unopened_doc_id_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "lsp_code_action",
+            serde_json::json!({ "doc_id": 999, "line": 0, "character": 0 }),
+        );
+        assert!(resp.error.unwrap().contains("no open document"));
+    }
+
+    #[test]
+    fn lsp_code_action_on_a_real_open_synthetic_file_with_no_lsp_session_errors_honestly() {
+        // The direct sibling of `lsp_hover`'s/`lsp_completion`'s/
+        // `lsp_rename`'s own identical tests above -- same real, honest
+        // error path, same "unrecognized extension never gets a real LSP
+        // session" cause.
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-lsp-code-action-no-session-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("data.unknownext");
+        std::fs::write(&file, "hello").unwrap();
+
+        let state = new_state();
+        let open_resp = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        );
+        let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+        let resp = call(
+            &state,
+            2,
+            "lsp_code_action",
+            serde_json::json!({ "doc_id": doc_id, "line": 0, "character": 0 }),
+        );
+        assert!(resp.error.unwrap().contains("no live LSP session"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lsp_code_action_resolve_on_a_real_unopened_doc_id_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "lsp_code_action_resolve",
+            serde_json::json!({ "doc_id": 999, "action": { "title": "x" } }),
+        );
+        assert!(resp.error.unwrap().contains("no open document"));
+    }
+
+    #[test]
+    fn lsp_code_action_resolve_with_no_action_param_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "lsp_code_action_resolve",
+            serde_json::json!({ "doc_id": 999 }),
+        );
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn lsp_execute_command_on_a_real_unopened_doc_id_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "lsp_execute_command",
+            serde_json::json!({ "doc_id": 999, "command": { "command": "x" } }),
+        );
+        assert!(resp.error.unwrap().contains("no open document"));
+    }
+
+    #[test]
+    fn lsp_execute_command_with_no_command_param_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "lsp_execute_command",
+            serde_json::json!({ "doc_id": 999 }),
         );
         assert!(resp.error.is_some());
     }

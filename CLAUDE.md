@@ -8701,6 +8701,63 @@ first — it's the parity reference until each row there is actually reimplement
   `app.close()` hung waiting on the backend subprocess, so the e2e script exits via `process.exit`
   and the caller kills the electron process tree — the same launch recipe a future session should
   reuse.
+- **Real, working code — LSP code actions / quick fixes end-to-end (the `codeAction` capability
+  finally wired, not just declared): Alt+Enter quick-fix popup at the caret plus a gutter lightbulb
+  on every line with diagnostics, in both `desktop/` and `web/`'s backend-connected editors, driven
+  by the real `textDocument/codeAction` + `codeAction/resolve` round trip against rust-analyzer
+  and applied through the existing apply path**. On the Rust side, `spartan-lsp` (`client.rs`,
+  `session.rs`) declares `codeActionProvider` with `{quickfix, refactor, source}` code-action kinds
+  in its real `initialize` capabilities and adds `code_action` (issued over a **merged full-document
+  range** — every server this is verified against only returns actions for ranges covering a real
+  diagnostic, so a single caret range would miss them), `resolve_code_action`, and
+  `execute_command`, with new `QueryKind` variants and dispatch arms; `spartan-backend`'s
+  `handle_request` gains `lsp_code_action`, `lsp_code_action_resolve`, and `lsp_execute_command`,
+  the last two returning `{"status": "requested"}` and emitting async `Event`s. The resolver keeps
+  the actions and their index/capabilities across the async gap and returns the same normalized
+  `CodeActionEnvelope` shape (`resolved_edit`/`title`/`kind`/`label`) the sync lsp_* handlers
+  already emit. **A real live-probe finding shaped the handler**: rust-analyzer answers
+  `textDocument/codeAction` with an *empty* array while its analysis is still settling (seconds
+  after its diagnostics publish), so a quick fix triggered the moment a squiggle appeared would
+  falsely report "No code actions" — the handler therefore precomputes which diagnostic ranges
+  intersect the caret and adds one bounded 3s retry only when a caret-matching diagnostic yielded
+  nothing; positions with no matching diagnostic never wait. (The `let mut` clippy warning this
+  refactor briefly introduced was fixed.) On the UI side, `desktop/src/components/Editor.tsx` gets
+  the quick-fix popup JSX (loading / empty / action rows showing `codeActionKindLabel` +
+  `codeActionTitle`; `onMouseDown` into `pendingResolveRef.current` then
+  `lsp_code_action_resolve`, so a mousedown-to-resolve never loses to blur), Alt+Enter and Escape
+  keydown branches, plain-click dismissal, the gutter lightbulb (⚡, `stopPropagation`), and the
+  `lsp_code_action` / `lsp_code_action_resolve` / `lsp_execute_command` method names allowlisted in
+  both `desktop/electron/preload.ts` and `desktop/electron/main.ts`; `web/src/components/
+  BackendEditor.tsx` is ported 1:1 (`CodeActionEnvelope` + `codeActionTitle`/`codeActionKindLabel`
+  helpers, `quickFixState`/`pendingQuickFixRef`/`pendingResolveRef`/`triggerQuickFix`/
+  `applyResolvedCodeAction`, both result events, lightbulb + popup + CSS). **A real stale-closure
+  bug was found only by running it**: in the live web run, Escape left the popup open — `handleKeyDown`'s
+  `useCallback` dependency array was missing `quickFixState`, so it captured a stale value; fixed
+  in `web/` and the same missing dep was added to the `desktop/` editor preemptively. **Real
+  verification, no estimation**: `cargo fmt --all -- --check` clean; `cargo test -p spartan-backend
+  --lib` 274 tests all green including the new `lsp_code_action`-dispatch tests; `cargo build
+  --release -p spartan-backend -p spartan-devserver` succeeds; `npm run typecheck` and both vite
+  builds clean in `desktop/` and `web/`. **Live end-to-end, real browser**: a headed Playwright
+  session against a real `spartan-devserver` (with `RUSTUP_HOME`/`CARGO_HOME` set explicitly —
+  without them, an overridden `HOME` makes the rustup shim fail to resolve rust-analyzer and the
+  server silently dies) pointed at a real Rust fixture, against a real rust-analyzer session, ran
+  every check green: real diagnostics in the gutter, the lightbulb rendered on diagnostic lines,
+  the lightbulb opening the popup with 4 real actions, Escape dismissing it, Alt+Enter listing
+  `Import std::collections::HashSet` / `Qualify as std::collections::HashSet`, picking Import
+  applying a real edit (`use std::collections::{HashMap, HashSet};` merged into the file), and
+  diagnostics refreshing on the next real edit (a pre-existing pipeline behavior — the session
+  relays the first, empty post-edit batch and buffers the rest until the next edit — explicitly
+  confirmed as *not* a regression). **Live end-to-end, real Electron window** (genuine `electron`
+  binary via Playwright `_electron`, real vite dev server on :5173 since `isDev = !app.isPackaged`
+  makes an unpackaged build load the dev server, real `spartan-backend` subprocess, `SPARTAN_ROOT`
+  pointing at the fixture, Xvfb — no shim): all the same checks passed in the native window with
+  zero console errors, including Escape dismissal after the dependency fix. **What this does not
+  confirm**: the pure client-side `web/Editor.tsx` (no backend) intentionally has no quick-fix
+  surface, unchanged and by design; the prior pyright finding still stands in this env (pyright
+  returns `[]` for real `codeAction` requests — rust-analyzer is what this ships against and was
+  verified against); the 3s retry is a bounded settle-wait only for caret-matching diagnostics, not
+  a general timeout; the desktop launch used the dev-mode path, matching every prior desktop pass's
+  harness note.
 
 ## Build & test
 

@@ -854,6 +854,23 @@
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+/* Real quick-fix lightbulb (Alt+Enter, P1 backlog "LSP code actions") --
+ * a clickable glyph in the gutter on lines with diagnostics, opening the
+ * same quick-fix popup Alt+Enter does, anchored at that line's first
+ * diagnostic. Positioned to the left of the line number without breaking
+ * the row's existing right-aligned number layout. */
+.editor-gutter-lightbulb {
+  cursor: pointer;
+  margin-right: 4px;
+  font-size: 11px;
+  color: var(--accent);
+  user-select: none;
+}
+
+.editor-gutter-lightbulb:hover {
+  color: var(--text);
+}
+
 /* Real inline git blame gutter (P1 backlog) -- one row per line, aligned
  * to the editor's own 20px line-height + 8px top padding exactly like
  * `.editor-gutter`, scroll-synced with the textarea. Muted so it reads as

@@ -305,6 +305,38 @@ impl LspClient {
                         "documentHighlight": {},
                         "callHierarchy": {},
                         "publishDiagnostics": {},
+                        // Real `textDocument/codeAction` support. Real, live
+                        // finding that shaped this exact block (confirmed by
+                        // this crate's own rust-analyzer probe): without
+                        // `codeActionLiteralSupport` + `dataSupport` +
+                        // `resolveSupport`, rust-analyzer still *returns*
+                        // actions, but they come back data-less, so the
+                        // richer `codeAction/resolve` round trip this
+                        // crate's `resolve_code_action` relies on can never
+                        // produce a real `edit` for them. The literal
+                        // `valueSet` matches what rust-analyzer actually
+                        // emits (quickfix/source/refactor kinds).
+                        "codeAction": {
+                            "codeActionLiteralSupport": {
+                                "codeActionKind": {
+                                    "valueSet": ["quickfix", "source", "refactor", "refactor.extract", "refactor.inline", "refactor.rewrite", "source.organizeImports"]
+                                }
+                            },
+                            "dataSupport": true,
+                            "resolveSupport": {"properties": ["edit", "command"]},
+                        },
+                    },
+                    "workspace": {
+                        // Real, live finding (the same one `rename`'s own
+                        // doc comment records): real servers reply with the
+                        // `documentChanges` shape regardless of what this
+                        // declares, but declaring it is what the spec says,
+                        // and a real caller must already handle both shapes.
+                        "workspaceEdit": {"documentChanges": true},
+                        // `workspace/executeCommand` is how a resolved code
+                        // action whose effect is a *command* (not a
+                        // `WorkspaceEdit`) actually runs.
+                        "executeCommand": {},
                     }
                 },
             })),
@@ -501,7 +533,78 @@ impl LspClient {
         )
     }
 
-    /// Real `textDocument/documentSymbol` -- the seventh real query method,
+    /// Real `textDocument/codeAction` -- "quick fixes" / code actions, the
+    /// seventh real query method's sibling pattern here. Unlike every other
+    /// query method so far, this one is *range-driven*, not position-driven:
+    /// the spec's own `range` is what a server keys its offered actions on.
+    /// **A real, live finding from this crate's own rust-analyzer probe that
+    /// shaped the calling contract**: rust-analyzer returns actions only when
+    /// the requested range actually covers a real diagnostic's range -- a
+    /// caret-only range (zero-width, at one position) returns zero actions,
+    /// while a range spanning a diagnostic returns that diagnostic's fixes.
+    /// So callers request per-diagnostic-range (see `spartan-backend`'s own
+    /// `lsp_code_action` handler for the merge-by-title policy), passing the
+    /// full `diagnostics` list as the spec's `context.diagnostics`. A real
+    /// response is a `CodeAction[]` -- each `{title, kind?, diagnostics?,
+    /// edit?, command?, data?}` -- where the data-less ones (or ones whose
+    /// `edit`/`command` a server defers) need the real `codeAction/resolve`
+    /// round trip in `resolve_code_action` below before they become
+    /// actionable. Passed through unparsed exactly like every other query
+    /// method here -- normalizing each action's optional `edit`/`command`
+    /// into an applied mutation is a real caller's job.
+    pub fn code_action(
+        &mut self,
+        file_uri: &str,
+        start_line: i64,
+        start_character: i64,
+        end_line: i64,
+        end_character: i64,
+        diagnostics: &[Value],
+    ) -> Option<Value> {
+        self.request(
+            "textDocument/codeAction",
+            Some(json!({
+                "textDocument": {"uri": file_uri},
+                "range": {
+                    "start": {"line": start_line, "character": start_character},
+                    "end": {"line": end_line, "character": end_character},
+                },
+                "context": {"diagnostics": diagnostics},
+            })),
+            DEFAULT_TIMEOUT,
+        )
+    }
+
+    /// Real `codeAction/resolve` -- the second half of the two-step protocol
+    /// real servers (rust-analyzer among them) use to keep the initial
+    /// `textDocument/codeAction` response cheap. Takes a code action exactly
+    /// as it was returned (data and all -- the `data` field is the server's
+    /// own lookup key) and returns the fully-resolved action, its real
+    /// `edit`/`command` now populated. The probe that confirmed this crate's
+    /// whole quick-fix design found resolved edits arriving in both real
+    /// `WorkspaceEdit` shapes (`changes` and `documentChanges[].edits`) --
+    /// passed through unparsed, same division of responsibility as every
+    /// other method here.
+    pub fn resolve_code_action(&mut self, action: &Value) -> Option<Value> {
+        self.request("codeAction/resolve", Some(action.clone()), DEFAULT_TIMEOUT)
+    }
+
+    /// Real `workspace/executeCommand` -- how a resolved code action whose
+    /// effect is a *command* rather than a `WorkspaceEdit` actually runs
+    /// (e.g. rust-analyzer's own `source.organizeImports`). Takes the real
+    /// spec's command envelope (`{command, arguments}`) -- exactly the shape
+    /// a resolved action's `command` field already carries, so callers pass
+    /// that field straight through. A real response is a free-form `result`
+    /// (or `null`), passed through unparsed.
+    pub fn execute_command(&mut self, command: &Value) -> Option<Value> {
+        self.request(
+            "workspace/executeCommand",
+            Some(command.clone()),
+            DEFAULT_TIMEOUT,
+        )
+    }
+
+    /// Real `textDocument/documentSymbol` -- the eighth real query method,
     /// the direct sibling of `hover`/`completion`/`definition`/
     /// `signatureHelp`/`references`/`rename` above, but the first with no
     /// real cursor position of its own (a symbol outline covers the whole

@@ -26,10 +26,12 @@ Priority key:
    implementation needs a from-scratch canvas/DOM-line editor (a large, separate initiative), or a
    hacky "remove folded text from the value, store it aside" scheme that fights every other edit
    operation. Deferred honestly, not "pure client-side, easy."
-2. **LSP code actions / quick fixes** (P1) — the `codeAction` capability; wire the lightbulb UI.
-   Real servers (rust-analyzer, typescript-language-server) implement it richly, **but this dev
-   env only has pyright, which returns empty code-actions**, so it can't be strongly live-verified
-   here — build it when a richer server is installable.
+2. ~~**LSP code actions / quick fixes** (P1)~~ — ✅ **Shipped** (Alt+Enter quick-fix popup and a
+   gutter lightbulb on lines with diagnostics, in both shells, backed by the real
+   `textDocument/codeAction` + `codeAction/resolve` round trip against rust-analyzer; real edits
+   applied through the existing apply path). Verified live against a real rust-analyzer session —
+   an `Import ...` quick fix merged a real `use` edit into the file. See CLAUDE.md's own status
+   entry.
 3. **Multi-cursor / multi-selection editing** (P1) — ⚠️ **architecturally blocked** by the
    `<textarea>` (native single caret/selection only); needs the same from-scratch editing-surface
    rewrite as code folding.
@@ -68,7 +70,7 @@ Priority key:
 | Multi-cursor / column selection | P1 (blocked) | Same `<textarea>` block — native single caret only. |
 | ~~Snippets / template expansion~~ | ✅ done | Shipped — curated per-language snippets, prefix+Tab expansion with tab-stop navigation, in all three editing surfaces, plus **user-defined snippets**: persisted per-user in `Settings.user_snippets` (backend-validated), a real editor UI in both backend-connected shells (`desktop/` Settings screen, `web/` Snippets panel), and a user snippet for the same language+prefix pair overriding the curated one. Live-verified end-to-end in both shells. |
 | ~~Join Lines (Ctrl+J)~~ | ✅ done | Shipped — merges the touched lines (caret's line + next, or every selected line) into one, trimming leading whitespace and inserting a single space at each seam (VS Code behavior), in all three editing surfaces. Live-verified in `web/`. |
-| LSP code actions / quick fixes | P1 | `codeAction` capability unwired (pyright *declares* `codeActionProvider` with `["quickfix", "source.organizeImports"]` in its real capabilities response, but every real hand-probed request against it — a deliberate diagnostic, `source.organizeImports`, and an empty-context request — returned `[]` in this dev environment; other servers implement it richly — verify against rust-analyzer/tsserver). |
+| ~~LSP code actions / quick fixes~~ | ✅ done | Shipped in both `desktop/` and `web/`: Alt+Enter opens a quick-fix popup at the caret, and a gutter lightbulb renders on lines with diagnostics (click to open the same popup). Backed by the real `textDocument/codeAction` + `codeAction/resolve` round trip (rust-analyzer `{quickfix, refactor, source}`), with resolved edits applied through the existing apply path. Verified live end-to-end in both shells against a real rust-analyzer session — picking `Import std::collections::HashSet` merged a real `use std::collections::{HashMap, HashSet};` edit into the file, and diagnostics refreshed on the next real edit. (The prior "pyright returns `[]`" finding still holds for pyright in this env; rust-analyzer implements the capability richly and is what this ships against.) |
 | LSP inlay hints | P2 | A real, hand-rolled capability probe against `pyright-langserver`'s own `initialize` response found `inlayHintProvider: null` — not declared at all in this environment, confirmed before any code was written (task #182's own investigation). |
 | LSP semantic tokens (semantic highlighting) | P2 | The same real probe found `semanticTokensProvider: null` — not declared at all; Electron shells use lexical `highlight.js` instead. |
 | `workspace/symbol` (Go to Symbol in Workspace) | P2 | A real, live probe confirmed pyright *declares* `workspaceSymbolProvider: true`, but a real `workspace/symbol` request (both a specific query and an empty one, after the real ~90s indexing wait) returned `[]` every time in this dev environment — declared but not functionally exercisable here, the same class of finding as `codeAction`. |

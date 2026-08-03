@@ -303,6 +303,31 @@ function extractWorkspaceEditChanges(result: unknown): Record<string, WorkspaceT
   return Object.keys(out).length > 0 ? out : null;
 }
 
+/** A real, raw LSP `CodeAction` as `lsp_code_action_result` delivers it --
+ * deliberately typed minimally since the full object (data and all) must
+ * be forwarded verbatim to `codeAction/resolve`, never reconstructed. */
+export interface CodeActionEnvelope {
+  title?: string;
+  kind?: string;
+}
+
+/** The real display title of a raw code action. */
+function codeActionTitle(action: unknown): string {
+  return (action as CodeActionEnvelope)?.title ?? "Code action";
+}
+
+/** A short, human label for a code action's real LSP `kind` (which arrives
+ * as a dotted string like `"quickfix"` or `"source.organizeImports"`),
+ * shown next to its title in the quick-fix popup. */
+function codeActionKindLabel(action: unknown): string {
+  const kind = (action as CodeActionEnvelope)?.kind;
+  if (!kind) return "Quick Fix";
+  if (kind.startsWith("quickfix")) return "Quick Fix";
+  if (kind.startsWith("source")) return "Source";
+  if (kind.startsWith("refactor")) return "Refactor";
+  return kind;
+}
+
 /** A real, normalized, flattened LSP document symbol -- `depth` (0 for a
  * top-level symbol) is the only structural information kept from a real
  * hierarchical result's own `children` nesting, enough for the panel below
@@ -1800,6 +1825,7 @@ export default function Editor({
         setReferencesState(null);
         setSymbolsState(null);
         setCallHierarchyState(null);
+        setQuickFixState(null);
         return;
       }
       const el = textareaRef.current;
@@ -2036,6 +2062,102 @@ export default function Editor({
     const timer = window.setTimeout(() => setRenameState(null), 2000);
     return () => window.clearTimeout(timer);
   }, [renameState?.phase]);
+
+  /** Real quick fixes / code actions (Alt+Enter, the standard cross-editor
+   * convention) -- the ninth real LSP-backed editor feature, following
+   * find-references' own exact "panel near the cursor, `items: null` while
+   * in flight" shape. `actions` is the raw `CodeAction[]` the backend's
+   * `lsp_code_action` handler merged for this position (it already issues
+   * one `textDocument/codeAction` request per diagnostic covering the
+   * caret and merges by title -- see that handler's own doc comment);
+   * each action is kept verbatim because picking one must forward it
+   * (data and all) to the real `codeAction/resolve` round trip. */
+  const [quickFixState, setQuickFixState] = useState<{
+    x: number;
+    y: number;
+    actions: unknown[] | null;
+  } | null>(null);
+  const pendingQuickFixRef = useRef<{ line: number; character: number } | null>(null);
+  /** The raw action awaiting its `codeAction/resolve` reply -- set right
+   * before `lsp_code_action_resolve` is sent, cleared by the resolve
+   * handler. Only one resolve can be in flight per file at a time (the
+   * popup closes on selection), matching `pendingRenameRef`'s own
+   * single-slot convention. */
+  const pendingResolveRef = useRef<{ action: unknown } | null>(null);
+
+  const triggerQuickFix = useCallback(
+    (line?: number, character?: number) => {
+      const el = textareaRef.current;
+      if (!el) return;
+      const { line: l, character: c } =
+        line === undefined || character === undefined
+          ? offsetToLineChar(el.value, el.selectionStart)
+          : { line, character };
+      const x = el.getBoundingClientRect().left + c * charWidth - el.scrollLeft;
+      const y = el.getBoundingClientRect().top + l * lineHeightPx - el.scrollTop + lineHeightPx;
+      pendingQuickFixRef.current = { line: l, character: c };
+      setQuickFixState({ x, y, actions: null });
+      window.spartan
+        .call("lsp_code_action", { doc_id: file.docId, line: l, character: c, diagnostics })
+        .catch((err: Error) => console.error("lsp_code_action failed:", err));
+    },
+    [charWidth, lineHeightPx, file.docId, diagnostics]
+  );
+
+  /** Applies a resolved code action: its `edit` is a real `WorkspaceEdit`
+   * (both real shapes, normalized by `extractWorkspaceEditChanges` and
+   * applied multi-file through the same `onApplyRename` path F2 rename
+   * uses), otherwise its `command` is run through `lsp_execute_command`. */
+  const applyResolvedCodeAction = useCallback(
+    (resolved: unknown) => {
+      const action = resolved as { edit?: unknown; command?: unknown };
+      const changes = extractWorkspaceEditChanges(action.edit);
+      if (changes && onApplyRename) {
+        onApplyRename(changes).catch((err: Error) =>
+          console.error("code action apply failed:", err)
+        );
+        return;
+      }
+      const command = action.command as { command?: string; arguments?: unknown[] } | undefined;
+      if (command && typeof command === "object") {
+        window.spartan
+          .call("lsp_execute_command", { doc_id: file.docId, command })
+          .catch((err: Error) => console.error("lsp_execute_command failed:", err));
+        return;
+      }
+      console.warn("resolved code action had neither edit nor command:", action);
+    },
+    [file.docId, onApplyRename]
+  );
+
+  // Real quick-fix handling -- both halves of the protocol, mirroring the
+  // rename effect above: `lsp_code_action_result` fills the popup,
+  // `lsp_code_action_resolve_result` applies the picked action.
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event === "lsp_code_action_result") {
+        const d = data as {
+          doc_id: number;
+          line: number;
+          character: number;
+          actions: unknown[];
+        };
+        if (d.doc_id !== file.docId) return;
+        const pending = pendingQuickFixRef.current;
+        if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+        pendingQuickFixRef.current = null;
+        setQuickFixState((prev) => (prev ? { ...prev, actions: d.actions } : prev));
+      } else if (event === "lsp_code_action_resolve_result") {
+        const d = data as { doc_id: number; action: unknown };
+        if (d.doc_id !== file.docId) return;
+        if (!pendingResolveRef.current) return;
+        pendingResolveRef.current = null;
+        setQuickFixState(null);
+        applyResolvedCodeAction(d.action);
+      }
+    });
+    return unsubscribe;
+  }, [file.docId, applyResolvedCodeAction]);
 
   /** Real document-symbol outline (Ctrl+Shift+O, the standard cross-editor
    * "Go to Symbol in File" convention) -- the seventh real LSP-backed
@@ -2711,6 +2833,10 @@ export default function Editor({
       if (e.key === "Escape" && callHierarchyState) {
         setCallHierarchyState(null);
       }
+      // Real quick-fix dismissal (Escape), same real precedence.
+      if (e.key === "Escape" && quickFixState) {
+        setQuickFixState(null);
+      }
       // Real Find & Replace dismissal (Escape) reached only if the user
       // clicked back into the main textarea while the find bar stayed
       // open (its own query/replace inputs handle Escape directly, see
@@ -2756,6 +2882,16 @@ export default function Editor({
       if (e.key === "F2" && !renameState) {
         e.preventDefault();
         triggerRename();
+        return;
+      }
+      // Real quick-fix trigger (Alt+Enter, the standard cross-editor
+      // convention for "show quick fixes at the cursor"). `e.code`
+      // avoidance isn't needed here -- Enter has no layout variance the
+      // way Alt+letter does -- but `e.altKey` (not `e.code`/`e.key` pair
+      // matching) is what makes it Alt+Enter.
+      if (e.altKey && e.key === "Enter" && !quickFixState) {
+        e.preventDefault();
+        triggerQuickFix();
         return;
       }
       // Real "Go to Line" trigger (Ctrl+G, the standard cross-editor
@@ -3103,6 +3239,8 @@ export default function Editor({
       triggerFormatDocument,
       callHierarchyState,
       triggerCallHierarchy,
+      quickFixState,
+      triggerQuickFix,
       file.docId,
       file.path,
       onContentChange,
@@ -3206,6 +3344,23 @@ export default function Editor({
                 <span
                   className={`editor-gutter-breakpoint-dot${hasBreakpoint ? " editor-gutter-breakpoint-dot-active" : ""}${isConditional ? " editor-gutter-breakpoint-dot-conditional" : ""}${isLogpoint ? " editor-gutter-breakpoint-dot-logpoint" : ""}`}
                 />
+              )}
+              {lineDiags && lineDiags.length > 0 && (
+                <span
+                  className="editor-gutter-lightbulb"
+                  title="Show quick fixes"
+                  onClick={(e) => {
+                    // `onClick` + `stopPropagation` (not `onMouseDown`) so
+                    // the lightbulb never races the gutter row's own plain
+                    // breakpoint-toggle click, and never opens a breakpoint
+                    // menu either -- it is a real, distinct control.
+                    e.stopPropagation();
+                    e.preventDefault();
+                    triggerQuickFix(lineDiags[0].line, lineDiags[0].character);
+                  }}
+                >
+                  ⚡
+                </span>
               )}
               {n}
             </div>
@@ -3779,6 +3934,50 @@ export default function Editor({
               >
                 <span className="editor-completion-label">{item.label}</span>
                 {item.detail && <span className="editor-completion-detail">{item.detail}</span>}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+      {quickFixState && (
+        <div
+          className="editor-references-panel mono"
+          style={{ left: quickFixState.x, top: quickFixState.y }}
+        >
+          <div className="editor-references-header">
+            {quickFixState.actions === null
+              ? "Finding quick fixes…"
+              : `${quickFixState.actions.length} code action${quickFixState.actions.length === 1 ? "" : "s"}`}
+          </div>
+          {quickFixState.actions === null ? (
+            <div className="editor-references-item editor-references-item-empty">Loading…</div>
+          ) : quickFixState.actions.length === 0 ? (
+            <div className="editor-references-item editor-references-item-empty">
+              No code actions available
+            </div>
+          ) : (
+            quickFixState.actions.map((action, i) => (
+              <div
+                key={`${codeActionTitle(action)}-${i}`}
+                className="editor-references-item"
+                onMouseDown={(e) => {
+                  // `onMouseDown`, not `onClick` -- the same reasoning as
+                  // the completion dropdown's own established pattern
+                  // (fires before the textarea's blur, so the caret never
+                  // moves before the request goes out).
+                  e.preventDefault();
+                  const raw = action as { title?: string; kind?: string };
+                  setQuickFixState(null);
+                  pendingResolveRef.current = { action: raw };
+                  window.spartan
+                    .call("lsp_code_action_resolve", { doc_id: file.docId, action: raw })
+                    .catch((err: Error) =>
+                      console.error("lsp_code_action_resolve failed:", err)
+                    );
+                }}
+              >
+                <span className="editor-symbol-kind">{codeActionKindLabel(action)}</span>
+                {codeActionTitle(action)}
               </div>
             ))
           )}
