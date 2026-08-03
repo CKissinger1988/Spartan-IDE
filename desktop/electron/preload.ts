@@ -28,6 +28,7 @@ const ALLOWED_METHODS = new Set([
   "lsp_execute_command",
   "lsp_document_symbol",
   "lsp_document_highlight",
+  "lsp_semantic_tokens",
   "lsp_call_hierarchy",
   "format_document",
   "search_project",

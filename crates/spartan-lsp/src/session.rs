@@ -119,6 +119,14 @@ enum QueryKind {
         new_name: String,
     },
     DocumentSymbol,
+    /// Whole-document `textDocument/semanticTokens/full` (semantic
+    /// highlighting) -- like `DocumentSymbol`, covers the whole document
+    /// rather than one cursor position. Answered by `LspClient::
+    /// semantic_tokens`, which returns the already-decoded, legend-resolved
+    /// token spans (a JSON array, not a raw envelope) -- the one query kind
+    /// whose result is not passed through unparsed, because the flat `u32`
+    /// encoding is meaningless without the server's legend.
+    SemanticTokens,
     DocumentHighlight {
         line: i64,
         character: i64,
@@ -521,6 +529,35 @@ impl LspSession {
             .flatten()
     }
 
+    /// Real, synchronous whole-document `textDocument/semanticTokens/full`
+    /// (semantic highlighting) -- the direct sibling of
+    /// `request_document_symbol` above (whole-document, no cursor position),
+    /// sharing the identical query-priority mailbox and the same real
+    /// timeout reasoning. Unlike every other request method, the reply is
+    /// already decoded by `LspClient::semantic_tokens` into legend-resolved
+    /// `{line, character, length, token_type, modifiers}` spans, serialized
+    /// as a JSON array -- the flat `u32` wire encoding is the LSP protocol
+    /// crate's concern, not the caller's. `None` when the server never
+    /// declared `semanticTokensProvider`, or when it answered with a
+    /// null/empty result (a genuinely clean file). Same calling discipline:
+    /// callers must run this from their own dedicated thread, never the
+    /// single request-processing thread every other IPC method shares.
+    pub fn request_semantic_tokens(&self) -> Option<serde_json::Value> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        {
+            let mut guard = self.mailbox.state.lock().unwrap();
+            guard.pending_queries.push_back(PendingQuery {
+                kind: QueryKind::SemanticTokens,
+                reply: reply_tx,
+            });
+        }
+        self.mailbox.cvar.notify_one();
+        reply_rx
+            .recv_timeout(INDEXING_TIMEOUT + DEFAULT_TIMEOUT)
+            .ok()
+            .flatten()
+    }
+
     /// Real, synchronous `textDocument/documentHighlight` -- the eighth
     /// real query method, the direct sibling of `request_hover`/
     /// `request_completion`/`request_definition`/`request_signature_help`/
@@ -784,6 +821,7 @@ fn dispatch_query(client: &mut LspClient, file_uri: &str, query: PendingQuery) {
             new_name,
         } => client.rename(file_uri, line, character, &new_name),
         QueryKind::DocumentSymbol => client.document_symbol(file_uri),
+        QueryKind::SemanticTokens => client.semantic_tokens(file_uri),
         QueryKind::DocumentHighlight { line, character } => {
             client.document_highlight(file_uri, line, character)
         }

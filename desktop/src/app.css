@@ -1074,6 +1074,52 @@
   background: rgba(212, 175, 55, 0.22);
 }
 
+/* Real LSP semantic-token marks (semantic highlighting) -- semi-transparent
+ * tinted underlines positioned over the real token ranges, the same
+ * absolute-positioned-div technique every other mark in this layer uses.
+ * One hue per token category (see `SEMANTIC_TOKEN_MARK_CLASSES` in
+ * Editor.tsx for the type -> class mapping). Deliberately rendered as a
+ * subtle tint + underline rather than a full opaque recolor so the syntax
+ * layer's own glyph colors stay readable through them -- this layer's
+ * established technique, named in `.editor-bracket-pair-mark`'s own history
+ * for the same reason. */
+.editor-semantic-token-mark {
+  position: absolute;
+  box-sizing: border-box;
+  border-bottom: 2px solid transparent;
+  border-radius: 1px;
+}
+
+.editor-semantic-token-struct {
+  background: rgba(46, 125, 255, 0.16);
+  border-bottom-color: rgba(46, 125, 255, 0.6);
+}
+
+.editor-semantic-token-type {
+  background: rgba(96, 165, 250, 0.16);
+  border-bottom-color: rgba(96, 165, 250, 0.6);
+}
+
+.editor-semantic-token-function {
+  background: rgba(168, 85, 247, 0.16);
+  border-bottom-color: rgba(168, 85, 247, 0.6);
+}
+
+.editor-semantic-token-namespace {
+  background: rgba(45, 212, 191, 0.16);
+  border-bottom-color: rgba(45, 212, 191, 0.6);
+}
+
+.editor-semantic-token-variable {
+  background: rgba(74, 222, 128, 0.16);
+  border-bottom-color: rgba(74, 222, 128, 0.6);
+}
+
+.editor-semantic-token-type-param {
+  background: rgba(251, 146, 60, 0.16);
+  border-bottom-color: rgba(251, 146, 60, 0.6);
+}
+
 /* Real bracket-pair colorization -- one of `BRACKET_PAIR_COLOR_COUNT`
  * (4) real colors cycling by nesting depth, so a bracket and its own
  * real match always share a color even across many lines. A real,

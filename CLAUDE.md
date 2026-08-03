@@ -8756,8 +8756,66 @@ first — it's the parity reference until each row there is actually reimplement
   surface, unchanged and by design; the prior pyright finding still stands in this env (pyright
   returns `[]` for real `codeAction` requests — rust-analyzer is what this ships against and was
   verified against); the 3s retry is a bounded settle-wait only for caret-matching diagnostics, not
-  a general timeout; the desktop launch used the dev-mode path, matching every prior desktop pass's
-  harness note.
+   a general timeout; the desktop launch used the dev-mode path, matching every prior desktop pass's
+   harness note.
+- **Real, working code — LSP semantic tokens end-to-end (semantic highlighting in both backend
+  shells)**: `spartan-lsp` gets the real `SemanticTokensLegend`/`SemanticToken` structs and the
+  public `decode_semantic_tokens` free fn in `client.rs` (decodes the flat `data` `u32` stream —
+  5 u32 per token `[deltaLine, deltaStartChar, length, tokenTypeIndex, modifierMask]` — against the
+  server's own legend; the critical non-obvious rule that `deltaLine > 0` **resets the running
+  character to 0 before adding `deltaStartChar`** was verified live against a real rust-analyzer
+  response before any product code), a `semantic_tokens_legend` field captured from the server's
+  own `initialize` response (`None` when no provider is declared → `semantic_tokens()` returns
+  `None`), the full 60-type/23-modifier semanticTokens client capability block in `open_project`
+  (rust-analyzer answers with its entire legend regardless; pyright's prior `semanticTokensProvider:
+  null` finding still stands, rust-analyzer is what this ships against), and the `semantic_tokens()`
+  method itself returning already-decoded, legend-resolved `{line, character, length, token_type,
+  modifiers}` spans (the flat encoding is meaningless without the legend). `session.rs` adds
+  `QueryKind::SemanticTokens` + `request_semantic_tokens()` (whole-document, no line/char, like
+  `lsp_document_symbol`). `spartan-backend`'s `handle_request` gains `lsp_semantic_tokens` — the
+  one deliberate exception to the `lsp_*` envelope-unwrap convention: the event's `result` *is* the
+  payload, emitted as `lsp_semantic_tokens_result` with `{doc_id, result}` — plus two new
+  dispatch tests. On the UI side both backend-connected editors (`desktop/Editor.tsx`,
+  `web/BackendEditor.tsx`) render the tokens as overlay marks in the existing
+  `editor-symbol-highlight-layer` (absolute-positioned divs, same technique as `documentHighlights`
+  /bracket marks, deliberately *not* injected `<span>`s into `highlightedHtml` so
+  `highlightSource` never re-runs), painted through `SEMANTIC_TOKEN_MARK_CLASSES` which only covers
+  the token types lexical highlighting can't know (struct/class/enum/union/typeAlias/builtinType →
+  struct; type/interface → type; function/method/macro → function; namespace/module → namespace;
+  variable/parameter/property/enumMember/constParameter → variable; typeParameter → type-param) —
+  keywords/strings/numbers/comments/operators stay with the existing syntax colors. Fetch
+  discipline: 400ms debounce on `file.content` change, the result applied only when
+  `semanticRequestContentRef` still matches `latestSemanticContentRef` (stale-reply guard), state
+  cleared on doc switch. **A real live-e2e finding shaped the handler**: a not-yet-indexed
+  rust-analyzer genuinely answers the first `textDocument/semanticTokens/full` after open with
+  `{data:null}` (empty), and with no content change nothing re-fetches — the editor stayed
+  mark-less until an edit happened to trigger a fresh fetch. Both shells now run a bounded 5x1.5s
+  retry on an empty result (content-guarded, counter reset on every new content-driven fetch). Two
+  more real desktop wiring gaps were caught only by the live Electron run and fixed: `desktop/
+  electron/preload.ts`'s method allowlist and `desktop/electron/main.ts`'s `spartan:*` IPC handler
+  registry both had to gain `lsp_semantic_tokens` (the error surfaced as `No handler registered for
+  'spartan:lsp_semantic_tokens'`). Also fixed en route: the web shell's missing favicon 404 console
+  error (`<link rel="icon" href="data:," />` in `web/index.html`). **Real verification, no
+  estimation**: `cargo fmt --all -- --check` clean; `cargo test -p spartan-backend --lib` 276 tests
+  all green (two new `lsp_semantic_tokens` dispatch tests) and `cargo test -p spartan-lsp` 14 unit +
+  3 live pyright integration tests green; `npm run typecheck` + builds clean in both `desktop/` and
+  `web/`. **Live end-to-end, real browser** (real `spartan-devserver` + `RUSTUP_HOME`/`CARGO_HOME`
+  override + real rust-analyzer + a real Rust fixture): all checks green — 11 real overlay marks
+  (HashMap struct at line 0 with a correct positive `left` — rust-analyzer's real output, where
+  `HashSet`/`new`/`insert` are honestly `unresolvedReference` since only `HashMap` is imported, is
+  exactly what the mark classes reflect), std/collections namespace marks, main/println function/
+  macro marks, and marks re-fetching after a debounced edit round-trip — with zero console errors.
+  **Live end-to-end, real Electron window** (genuine `electron` binary, real vite dev server,
+  real `spartan-backend` subprocess freshly rebuilt with the new handler — the pre-existing
+  `target/release/spartan-backend` predated this feature and silently lacked the dispatch, a stale-
+  binary catch only the real run could make): all the same checks green with zero console errors.
+  **What this does not confirm**: the pure client-side `web/Editor.tsx` (no backend) intentionally
+  has no semantic-token surface, unchanged and by design; pyright's `semanticTokensProvider: null`
+  finding still stands in this env; the 5x1.5s retry is a bounded settle-wait for the initial
+  indexing window, not a general timeout; the desktop launch used the dev-mode path (`loadURL`
+  against vite), matching every prior desktop pass's harness note. The prior AGENTS.md note that
+  semantic tokens were "genuinely unusable in this dev environment" is superseded: that finding was
+  pyright-specific and the capability is now real and live against rust-analyzer.
 
 ## Build & test
 

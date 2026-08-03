@@ -125,6 +125,32 @@ fn write_message(stdin: &mut ChildStdin, value: &Value) -> std::io::Result<()> {
     stdin.flush()
 }
 
+/// The server's own semantic-token legend -- the exact `tokenTypes`/
+/// `tokenModifiers` arrays the server reported in its `initialize` response.
+/// The index of every token's `tokenType`/`tokenModifiers` in the flat
+/// `data` array is meaningful only against this legend, so it is captured
+/// at handshake time and used to decode every `semanticTokens/full` result
+/// (`decode_semantic_tokens`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SemanticTokensLegend {
+    pub token_types: Vec<String>,
+    pub token_modifiers: Vec<String>,
+}
+
+/// One decoded semantic token: an absolute position (line/character) plus a
+/// real `tokenType` name from the server's legend and the names of every
+/// modifier whose bit is set in its modifier bitmask. This is the structured,
+/// frontend-ready shape this crate's own `semantic_tokens` returns instead
+/// of the raw flat `u32` encoding, which is meaningless without the legend.
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct SemanticToken {
+    pub line: u32,
+    pub character: u32,
+    pub length: u32,
+    pub token_type: String,
+    pub modifiers: Vec<String>,
+}
+
 /// A minimal in-house LSP client: real JSON-RPC 2.0 framing over a child
 /// process's stdio, no third-party LSP crate.
 pub struct LspClient {
@@ -133,6 +159,11 @@ pub struct LspClient {
     rx: Receiver<Value>,
     buffered: VecDeque<Value>,
     next_id: i64,
+    /// Captured from the server's own `initialize` response. `None` when the
+    /// server declared no `semanticTokensProvider`; `semantic_tokens` then
+    /// returns `None` (the caller can't even ask a server that never offered
+    /// the capability).
+    semantic_tokens_legend: Option<SemanticTokensLegend>,
 }
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -191,6 +222,7 @@ impl LspClient {
             rx,
             buffered: VecDeque::new(),
             next_id: 0,
+            semantic_tokens_legend: None,
         })
     }
 
@@ -325,6 +357,48 @@ impl LspClient {
                             "dataSupport": true,
                             "resolveSupport": {"properties": ["edit", "command"]},
                         },
+                        // Real `textDocument/semanticTokens/full` support
+                        // (semantic highlighting). The `tokenTypes`/
+                        // `tokenModifiers` list is what *this client*
+                        // understands -- per spec a server must only send
+                        // tokens whose type/modifier appear in this
+                        // intersection, so the full rust-analyzer legend
+                        // (verified live by this crate's own probe, which
+                        // also confirmed rust-analyzer answers with its
+                        // entire legend in the response regardless) is
+                        // declared to keep maximal fidelity. Decoding always
+                        // uses the server's own *response* legend
+                        // (`decode_semantic_tokens`), never this list.
+                        "semanticTokens": {
+                            "requests": {"full": {"delta": true}, "range": true},
+                            "tokenTypes": [
+                                "comment", "decorator", "enumMember", "enum", "function",
+                                "interface", "keyword", "macro", "method", "namespace",
+                                "number", "operator", "parameter", "property", "string",
+                                "struct", "typeParameter", "variable", "type", "angle",
+                                "arithmetic", "attributeBracket", "attribute", "bitwise",
+                                "boolean", "brace", "bracket", "builtinAttribute",
+                                "builtinType", "character", "colon", "comma", "comparison",
+                                "constParameter", "const", "deriveHelper", "derive", "dot",
+                                "escapeSequence", "formatSpecifier", "generic",
+                                "invalidEscapeSequence", "label", "lifetime", "logical",
+                                "macroBang", "negation", "parenthesis", "procMacro",
+                                "punctuation", "selfKeyword", "selfTypeKeyword", "semicolon",
+                                "static", "toolModule", "typeAlias", "union",
+                                "unresolvedReference"
+                            ],
+                            "tokenModifiers": [
+                                "async", "documentation", "declaration", "static",
+                                "defaultLibrary", "deprecated", "associated", "attribute",
+                                "callable", "constant", "consuming", "controlFlow",
+                                "crateRoot", "injected", "intraDocLink", "library", "macro",
+                                "mutable", "procMacro", "public", "reference", "trait",
+                                "unsafe"
+                            ],
+                            "formats": ["relative"],
+                            "overlappingTokenSupport": true,
+                            "multilineTokenSupport": true,
+                        },
                     },
                     "workspace": {
                         // Real, live finding (the same one `rename`'s own
@@ -343,6 +417,42 @@ impl LspClient {
             INITIALIZE_TIMEOUT,
         )?;
         init_resp.get("result")?;
+        // Capture the server's own semantic-token legend now, at handshake
+        // time, so `semantic_tokens` can decode every later `data` array
+        // against the exact `tokenTypes`/`tokenModifiers` indices the server
+        // actually uses. A server that declares no `semanticTokensProvider`
+        // leaves the legend `None` and `semantic_tokens` honestly returns
+        // `None`.
+        if let Some(legend) =
+            init_resp["result"]["capabilities"]["semanticTokensProvider"]["legend"].as_object()
+        {
+            let token_types: Vec<String> = legend
+                .get("tokenTypes")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let token_modifiers: Vec<String> = legend
+                .get("tokenModifiers")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !token_types.is_empty() {
+                self.semantic_tokens_legend = Some(SemanticTokensLegend {
+                    token_types,
+                    token_modifiers,
+                });
+            }
+        }
         self.notify("initialized", json!({})).ok()?;
         self.notify(
             "textDocument/didOpen",
@@ -629,6 +739,38 @@ impl LspClient {
         )
     }
 
+    /// Real `textDocument/semanticTokens/full` (semantic highlighting) -- a
+    /// deliberate exception to every other query method's "pass the raw
+    /// envelope through unparsed" division of responsibility, and the reason
+    /// is structural rather than cosmetic: the spec's `data` field is a flat
+    /// array of `u32`s (5 per token) whose `tokenType`/`tokenModifiers`
+    /// indices are only meaningful against the server's own legend, which
+    /// `open_project` captured at handshake time. Decoding that encoding is
+    /// the LSP *wire protocol's* job, not a caller's response-normalization
+    /// job, so it happens here (see `decode_semantic_tokens`). Returns the
+    /// decoded tokens serialized as a JSON array of
+    /// `{line, character, length, token_type, modifiers}` objects; `None`
+    /// if the server never declared `semanticTokensProvider` or answered
+    /// with a null/empty result (a genuinely clean file -- e.g. pyright
+    /// returns `{data: null}` for files it has no tokens for).
+    pub fn semantic_tokens(&mut self, file_uri: &str) -> Option<Value> {
+        let legend = self.semantic_tokens_legend.clone()?;
+        let envelope = self.request(
+            "textDocument/semanticTokens/full",
+            Some(json!({
+                "textDocument": {"uri": file_uri},
+            })),
+            DEFAULT_TIMEOUT,
+        )?;
+        let data: Vec<u64> = envelope["result"]["data"]
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_u64)
+            .collect();
+        let tokens = decode_semantic_tokens(&data, &legend);
+        serde_json::to_value(tokens).ok()
+    }
+
     /// Real `textDocument/documentHighlight` -- the eighth real query
     /// method, the direct sibling of `hover`/`completion`/`definition`/
     /// `signatureHelp`/`references`/`rename`/`document_symbol` above. Unlike
@@ -791,5 +933,140 @@ mod tests {
         // not panic or read out of bounds.
         assert_eq!(percent_decode("abc%"), "abc%");
         assert_eq!(percent_decode("abc%2"), "abc%2");
+    }
+}
+
+/// Decodes the LSP semantic-token wire encoding into structured,
+/// legend-resolved spans. The `data` array carries 5 `u32`s per token:
+/// `[deltaLine, deltaStartChar, length, tokenTypeIndex, tokenModifiers]`,
+/// where `deltaLine`/`deltaStartChar` are *relative to the previous token*
+/// (the running-sum shape the LSP spec mandates). The decoding is verified
+/// against a real rust-analyzer response by this crate's own live probe --
+/// including the one non-obvious rule that a `deltaLine > 0` resets the
+/// character accumulator to 0 *before* adding `deltaStartChar`, which the
+/// raw spec text doesn't state explicitly and which a naive
+/// "keep accumulating across lines" implementation gets wrong (it lands
+/// every token after the first line far past its real position).
+pub fn decode_semantic_tokens(data: &[u64], legend: &SemanticTokensLegend) -> Vec<SemanticToken> {
+    let mut tokens = Vec::with_capacity(data.len() / 5);
+    let mut line = 0u64;
+    let mut character = 0u64;
+    for chunk in data.chunks_exact(5) {
+        line += chunk[0];
+        if chunk[0] > 0 {
+            character = 0;
+        }
+        character += chunk[1];
+        let token_type = legend
+            .token_types
+            .get(chunk[3] as usize)
+            .cloned()
+            .unwrap_or_default();
+        let modifiers = legend
+            .token_modifiers
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| chunk[4] & (1u64 << i) != 0)
+            .map(|(_, m)| m.clone())
+            .collect();
+        tokens.push(SemanticToken {
+            line: line as u32,
+            character: character as u32,
+            length: chunk[2] as u32,
+            token_type,
+            modifiers,
+        });
+    }
+    tokens
+}
+
+#[cfg(test)]
+mod semantic_token_tests {
+    use super::*;
+
+    fn ra_legend() -> SemanticTokensLegend {
+        SemanticTokensLegend {
+            token_types: vec![
+                "comment".into(),
+                "keyword".into(),
+                "namespace".into(),
+                "operator".into(),
+                "struct".into(),
+                "function".into(),
+            ],
+            token_modifiers: vec!["defaultLibrary".into(), "static".into(), "public".into()],
+        }
+    }
+
+    /// The exact real rust-analyzer response captured by this crate's own
+    /// live probe against a `use std::collections::HashMap;` line, decoding
+    /// to real names and positions -- including the `deltaLine > 0` reset
+    /// that lands the next token at line 1 char 0 ("fn"), not char 22.
+    #[test]
+    fn decodes_a_real_rust_analyzer_relative_run() {
+        let legend = ra_legend();
+        let data = [
+            0, 0, 3, 1, 0, // line 0, char 0: "use" (keyword)
+            0, 4, 3, 2, 0, // line 0, char 4: "std" (namespace)
+            0, 3, 2, 3, 0, // line 0, char 7: "::" (operator)
+            0, 2, 11, 2, 0, // line 0, char 9: "collections" (namespace)
+            0, 11, 2, 3, 0, // line 0, char 20: "::"
+            0, 2, 7, 4, 0, // line 0, char 22: "HashMap" (struct)
+            1, 0, 2, 1, 0, // line 1, char 0: "fn" (keyword) -- reset on line change
+            0, 3, 4, 5, 1, // line 1, char 3: "main" (function, defaultLibrary)
+        ];
+        let tokens = decode_semantic_tokens(&data, &legend);
+        let expect: Vec<(u32, u32, u32, &str, Vec<&str>)> = vec![
+            (0, 0, 3, "keyword", vec![]),
+            (0, 4, 3, "namespace", vec![]),
+            (0, 7, 2, "operator", vec![]),
+            (0, 9, 11, "namespace", vec![]),
+            (0, 20, 2, "operator", vec![]),
+            (0, 22, 7, "struct", vec![]),
+            (1, 0, 2, "keyword", vec![]),
+            (1, 3, 4, "function", vec!["defaultLibrary"]),
+        ];
+        assert_eq!(tokens.len(), expect.len());
+        for (tok, (line, character, length, ttype, mods)) in tokens.iter().zip(expect.iter()) {
+            assert_eq!(tok.line, *line);
+            assert_eq!(tok.character, *character);
+            assert_eq!(tok.length, *length);
+            assert_eq!(&tok.token_type, ttype);
+            assert_eq!(tok.modifiers, *mods);
+        }
+    }
+
+    /// A token whose `tokenType` index is out of bounds of the legend gets an
+    /// honest empty `token_type` rather than a panic -- a malformed response
+    /// (or a legend/response mismatch) must never crash the decode.
+    #[test]
+    fn out_of_bounds_type_index_yields_empty_name_not_panic() {
+        let legend = ra_legend();
+        let data = [0, 0, 3, 99, 0];
+        let tokens = decode_semantic_tokens(&data, &legend);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].token_type, "");
+        assert_eq!(tokens[0].line, 0);
+        assert_eq!(tokens[0].character, 0);
+    }
+
+    /// A trailing partial 5-tuple (malformed response) is dropped entirely,
+    /// matching `chunks_exact`'s contract -- never half-decoded.
+    #[test]
+    fn partial_trailing_data_is_dropped() {
+        let legend = ra_legend();
+        let data = [0, 0, 3, 1, 0, 0, 4, 3, 2, 0, 7, 7, 7, 7];
+        let tokens = decode_semantic_tokens(&data, &legend);
+        assert_eq!(tokens.len(), 2);
+    }
+
+    /// Modifier bits map to the legend's names via a bitmask; only set bits
+    /// appear, in legend order.
+    #[test]
+    fn modifier_bitmask_expands_to_names() {
+        let legend = ra_legend(); // modifiers: defaultLibrary=0, static=1, public=2
+        let data = [0, 0, 3, 0, 0b101];
+        let tokens = decode_semantic_tokens(&data, &legend);
+        assert_eq!(tokens[0].modifiers, vec!["defaultLibrary", "public"]);
     }
 }

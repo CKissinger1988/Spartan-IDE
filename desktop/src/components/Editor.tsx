@@ -465,6 +465,78 @@ function extractDocumentHighlights(result: unknown): DocumentHighlightItem[] {
     .filter((h): h is DocumentHighlightItem => h !== null);
 }
 
+/** One decoded LSP semantic token (the shape `lsp_semantic_tokens_result`
+ * carries -- already legend-resolved by the backend, so `token_type` is a
+ * real name like `"struct"`/`"function"`, not a server-legend index). */
+interface SemanticTokenItem {
+  line: number;
+  character: number;
+  length: number;
+  token_type: string;
+  modifiers: string[];
+}
+
+/** Normalizes a real `lsp_semantic_tokens_result` `result` (a decoded
+ * `SemanticToken[]`, or `null` for a genuinely clean file). Returns `[]`
+ * for a real, honest "no tokens here". */
+function extractSemanticTokens(result: unknown): SemanticTokenItem[] {
+  if (!Array.isArray(result)) return [];
+  return result.flatMap((entry) => {
+    const e = entry as Partial<SemanticTokenItem>;
+    if (
+      typeof e.line !== "number" ||
+      typeof e.character !== "number" ||
+      typeof e.length !== "number" ||
+      typeof e.token_type !== "string"
+    ) {
+      return [];
+    }
+    return [
+      {
+        line: e.line,
+        character: e.character,
+        length: Math.max(1, e.length),
+        token_type: e.token_type,
+        modifiers: Array.isArray(e.modifiers)
+          ? e.modifiers.filter((m): m is string => typeof m === "string")
+          : [],
+      },
+    ];
+  });
+}
+
+/** Semantic-token marks deliberately render only for the token types that
+ * add real information *on top of* the existing syntax-color layer --
+ * structs/classes/types/functions/macros/namespaces/variables/etc., which
+ * the local highlighter can't know. Keywords, strings, numbers, comments
+ * and operators are already colored by `highlightSource`, so painting marks
+ * on them would be pure visual noise; they're filtered out here. */
+const SEMANTIC_TOKEN_MARK_CLASSES: Record<string, string> = {
+  struct: "editor-semantic-token-struct",
+  class: "editor-semantic-token-struct",
+  enum: "editor-semantic-token-struct",
+  union: "editor-semantic-token-struct",
+  typeAlias: "editor-semantic-token-struct",
+  builtinType: "editor-semantic-token-struct",
+  type: "editor-semantic-token-type",
+  interface: "editor-semantic-token-type",
+  function: "editor-semantic-token-function",
+  method: "editor-semantic-token-function",
+  macro: "editor-semantic-token-function",
+  namespace: "editor-semantic-token-namespace",
+  module: "editor-semantic-token-namespace",
+  variable: "editor-semantic-token-variable",
+  parameter: "editor-semantic-token-variable",
+  property: "editor-semantic-token-variable",
+  enumMember: "editor-semantic-token-variable",
+  constParameter: "editor-semantic-token-variable",
+  typeParameter: "editor-semantic-token-type-param",
+};
+
+function semanticTokenMarkClass(tokenType: string): string | null {
+  return SEMANTIC_TOKEN_MARK_CLASSES[tokenType] ?? null;
+}
+
 /** A real, normalized LSP `SignatureHelp` target -- only the fields this
  * v1 tooltip actually renders. `activeParameterLabel` is `null` whenever
  * the active parameter can't be resolved (no `activeParameter` index sent,
@@ -2286,6 +2358,95 @@ export default function Editor({
     }, HOVER_DELAY_MS);
   }, [file.docId]);
 
+  /** Real, live LSP semantic-token highlighting (semantic highlighting) --
+   * the P1 backlog item whose rust-analyzer support was confirmed by a real
+   * live probe (rust-analyzer declares `semanticTokensProvider` and answers
+   * `textDocument/semanticTokens/full` with real tokens; pyright declares
+   * it too but returns `{data: null}` here, so this is genuinely a no-op
+   * there). The backend's `lsp_semantic_tokens` returns decoded,
+   * legend-resolved `{line, character, length, token_type, modifiers}`
+   * spans for the whole document, rendered as colored marks in the same
+   * overlay layer `documentHighlights` already uses. Two real, deliberate
+   * correctness details: (1) the fetch is debounced on every content change
+   * so marks track edits without hammering the LSP server, and (2) a
+   * response is applied only when the buffer it was requested against is
+   * still the current buffer -- otherwise a stale reply (the user typed
+   * while the request was in flight) could paint marks at positions that
+   * no longer match the text.
+   *
+   * The marks deliberately paint only token types the local highlighter
+   * can't know (structs/functions/types/namespaces/...), never keywords,
+   * strings, numbers, comments or operators, which the syntax layer already
+   * colors -- see `SEMANTIC_TOKEN_MARK_CLASSES` for the exact mapping. */
+  const [semanticTokens, setSemanticTokens] = useState<SemanticTokenItem[]>([]);
+  /** Content snapshot the most recent in-flight request was made against;
+   * `null` when no request is in flight. Compared against the live buffer
+   * (via `latestSemanticContentRef`) when a response arrives. */
+  const semanticRequestContentRef = useRef<string | null>(null);
+  /** The most recently rendered buffer content -- assigned during render so
+   * the event handler below can compare against the *current* buffer even
+   * though its closure's `file.content` is frozen at the last render whose
+   * `docId` matched. */
+  const latestSemanticContentRef = useRef(file.content);
+  latestSemanticContentRef.current = file.content;
+  /** Bounded retry count for the first fetch -- a real, live e2e finding: a
+   * rust-analyzer still finishing its initial indexing can genuinely answer
+   * `textDocument/semanticTokens/full` with `{data: null}` (the first
+   * request made right after open came back empty and the editor stayed
+   * mark-less until an edit happened to trigger a fresh fetch). Reset to 0
+   * on every new content-driven fetch so an idle file never exhausts the
+   * budget permanently. */
+  const semanticRetryRef = useRef(0);
+  const semanticRetryTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event !== "lsp_semantic_tokens_result") return;
+      const d = data as { doc_id: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      if (semanticRequestContentRef.current !== latestSemanticContentRef.current) return;
+      const tokens = extractSemanticTokens(d.result);
+      if (tokens.length === 0 && semanticRetryRef.current < 5) {
+        semanticRetryRef.current += 1;
+        semanticRequestContentRef.current = latestSemanticContentRef.current;
+        semanticRetryTimerRef.current = window.setTimeout(() => {
+          window.spartan
+            .call("lsp_semantic_tokens", { doc_id: d.doc_id })
+            .catch((err: Error) => console.error("lsp_semantic_tokens failed:", err));
+        }, 1500);
+        return;
+      }
+      setSemanticTokens(tokens);
+    });
+    return () => {
+      unsubscribe();
+      if (semanticRetryTimerRef.current !== null) window.clearTimeout(semanticRetryTimerRef.current);
+    };
+  }, [file.docId]);
+
+  useEffect(() => {
+    setSemanticTokens([]);
+    semanticRequestContentRef.current = null;
+    semanticRetryRef.current = 0;
+  }, [file.docId]);
+
+  useEffect(() => {
+    const docId = file.docId;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      semanticRetryRef.current = 0;
+      semanticRequestContentRef.current = file.content;
+      window.spartan
+        .call("lsp_semantic_tokens", { doc_id: docId })
+        .catch((err: Error) => console.error("lsp_semantic_tokens failed:", err));
+    }, 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [file.content, file.docId]);
+
   /** Real "Format Document" (Ctrl+Shift+F) -- the first real caller of the
    * registry's own `formatter` field (real since §20.1, unwired anywhere
    * until now). The backend runs the language's real formatter binary
@@ -3425,6 +3586,22 @@ export default function Editor({
               }}
             />
           ))}
+          {semanticTokens.map((t, i) => {
+            const markClass = semanticTokenMarkClass(t.token_type);
+            if (!markClass) return null;
+            return (
+              <div
+                key={`st:${t.line}:${t.character}:${i}`}
+                className={`editor-semantic-token-mark ${markClass}`}
+                style={{
+                  top: t.line * lineHeightPx,
+                  left: t.character * charWidth,
+                  width: Math.max(2, t.length * charWidth),
+                  height: lineHeightPx,
+                }}
+              />
+            );
+          })}
           {bracketMatch?.map((offset) => {
             const { line, character } = offsetToLineChar(prevContentRef.current, offset);
             return (

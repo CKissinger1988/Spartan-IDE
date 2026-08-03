@@ -1189,6 +1189,45 @@
   background: rgba(212, 175, 55, 0.22);
 }
 
+/* Real LSP semantic-token marks, byte-identical to desktop/'s own copy --
+ * see that file's own comment for the full reasoning. */
+.editor-semantic-token-mark {
+  position: absolute;
+  box-sizing: border-box;
+  border-bottom: 2px solid transparent;
+  border-radius: 1px;
+}
+
+.editor-semantic-token-struct {
+  background: rgba(46, 125, 255, 0.16);
+  border-bottom-color: rgba(46, 125, 255, 0.6);
+}
+
+.editor-semantic-token-type {
+  background: rgba(96, 165, 250, 0.16);
+  border-bottom-color: rgba(96, 165, 250, 0.6);
+}
+
+.editor-semantic-token-function {
+  background: rgba(168, 85, 247, 0.16);
+  border-bottom-color: rgba(168, 85, 247, 0.6);
+}
+
+.editor-semantic-token-namespace {
+  background: rgba(45, 212, 191, 0.16);
+  border-bottom-color: rgba(45, 212, 191, 0.6);
+}
+
+.editor-semantic-token-variable {
+  background: rgba(74, 222, 128, 0.16);
+  border-bottom-color: rgba(74, 222, 128, 0.6);
+}
+
+.editor-semantic-token-type-param {
+  background: rgba(251, 146, 60, 0.16);
+  border-bottom-color: rgba(251, 146, 60, 0.6);
+}
+
 /* Real matching-bracket highlight, byte-identical to desktop/'s own copy. */
 .editor-bracket-match-mark {
   position: absolute;
