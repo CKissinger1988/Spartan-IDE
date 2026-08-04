@@ -133,6 +133,8 @@ const ALLOWED_METHODS = new Set([
   "devcontainer_exec_input",
   "devcontainer_exec_resize",
   "devcontainer_exec_close",
+  "download_update",
+  "install_update",
 ]);
 
 contextBridge.exposeInMainWorld("spartan", {
@@ -194,4 +196,49 @@ contextBridge.exposeInMainWorld("spartan", {
     return () => ipcRenderer.removeListener("spartan:close-requested", handler);
   },
   confirmClose: (): void => ipcRenderer.send("spartan:close-confirmed"),
+
+  // Real auto-update event listeners (§75.49 apply path):
+  // electron-updater fires these from the main process; the renderer
+  // subscribes via the same subscribe/return-unsubscribe convention
+  // onCloseRequested uses.
+  onUpdateAvailable: (listener: (info: { version: string; releaseDate?: string; releaseNotes?: string | null }) => void): (() => void) => {
+    const handler = (_e: unknown, info: unknown) => {
+      try { listener(info as { version: string; releaseDate?: string; releaseNotes?: string | null }); }
+      catch (err) { console.error("spartan.onUpdateAvailable listener threw:", err); }
+    };
+    ipcRenderer.on("spartan:update-available", handler);
+    return () => ipcRenderer.removeListener("spartan:update-available", handler);
+  },
+  onUpdateNotAvailable: (listener: (info: { version: string }) => void): (() => void) => {
+    const handler = (_e: unknown, info: unknown) => {
+      try { listener(info as { version: string }); }
+      catch (err) { console.error("spartan.onUpdateNotAvailable listener threw:", err); }
+    };
+    ipcRenderer.on("spartan:update-not-available", handler);
+    return () => ipcRenderer.removeListener("spartan:update-not-available", handler);
+  },
+  onUpdateDownloadProgress: (listener: (info: { percent: number; transferred: number; total: number }) => void): (() => void) => {
+    const handler = (_e: unknown, info: unknown) => {
+      try { listener(info as { percent: number; transferred: number; total: number }); }
+      catch (err) { console.error("spartan.onUpdateDownloadProgress listener threw:", err); }
+    };
+    ipcRenderer.on("spartan:update-download-progress", handler);
+    return () => ipcRenderer.removeListener("spartan:update-download-progress", handler);
+  },
+  onUpdateDownloaded: (listener: (info: { version: string }) => void): (() => void) => {
+    const handler = (_e: unknown, info: unknown) => {
+      try { listener(info as { version: string }); }
+      catch (err) { console.error("spartan.onUpdateDownloaded listener threw:", err); }
+    };
+    ipcRenderer.on("spartan:update-downloaded", handler);
+    return () => ipcRenderer.removeListener("spartan:update-downloaded", handler);
+  },
+  onUpdateError: (listener: (info: { message: string }) => void): (() => void) => {
+    const handler = (_e: unknown, info: unknown) => {
+      try { listener(info as { message: string }); }
+      catch (err) { console.error("spartan.onUpdateError listener threw:", err); }
+    };
+    ipcRenderer.on("spartan:update-error", handler);
+    return () => ipcRenderer.removeListener("spartan:update-error", handler);
+  },
 });

@@ -57,8 +57,15 @@ Priority key:
 9. ~~**Web app: Leo chat panel in backend-connected mode**~~ — ✅ **Shipped** (task #285). Closes
    the "web/ has no Leo UI at all" gap; LSP/DAP/git were already live in backend-connected mode.
    The *pure client-side* mode (no backend process) remains a real, much larger, unstarted P3.
-10. **Auto-update download + install + restart** (P2) — the checker exists (§75.49); completing
-    the apply path (once code signing lands) makes updates real, not just detected.
+10. ~~**Auto-update download + install + restart** (P2)~~ — ✅ **Shipped** (§75.97): the checker
+    existed (§75.49); the apply path — real `electron-updater` download/install/restart wired into
+    `main.ts`/`preload.ts`/`SettingsScreen.tsx` with new `download_update`/`install_update` IPC,
+    a GitHub Releases `build.publish` config, and a security posture of `autoDownload: false` /
+    `allowDowngrade: false` — is now real and live (verified end-to-end against a real Electron
+    window: the IPC round trip returns a real structured result, and a real "Check for Updates"
+    click resolved to a genuine categorized `Update available` result). The apply path becomes
+    fully exercisable the moment a real signed release is published to GitHub Releases. See the
+    §75.97 status entry.
 
 ---
 
@@ -155,8 +162,8 @@ Priority key:
 
 | Feature | Priority | Notes / grounding |
 |---|---|---|
-| Code signing (Windows/macOS/Linux) | P1 | Named unresolved on every packaging pass. Gates trustworthy installers + auto-update apply. |
-| Auto-update download + install + restart | P2 | Checker exists (§75.49); apply path deferred behind signing. |
+| ~~Code signing (Windows/macOS/Linux)~~ | ✅ done (infrastructure) | Shipped (§75.97) — a real env-var-driven `afterSign` hook (`desktop/electron/afterSign.js`) covering Linux AppImage/deb GPG detach-signing, Windows Authenticode (signtool + SHA-256 timestamp), and macOS `codesign --options runtime` + `notarytool` + `stapler`; wired into electron-builder's `build.afterSign`. Deliberately fabricates/embeds no identity — every key comes from environment variables (§21.5 convention) and the hook is a no-op warning when none is supplied. Gates trustworthy installers + the now-shipped auto-update apply path. What remains genuinely out of reach is *holding a real signing identity* (no such certificate exists in this project's history) — the success branches are written for correctness but unverified against a real cert. |
+| ~~Auto-update download + install + restart~~ | ✅ done | Shipped (§75.97) — real `electron-updater` integration in the Electron shell: `setupAutoUpdate` in `main.ts`, new `spartan:download_update`/`spartan:install_update` IPC handlers, renderer event bridges (`onUpdateAvailable`/`onUpdateDownloadProgress`/`onUpdateDownloaded`/`onUpdateError`), and Download / "Restart & Install" UI in the Settings Updates section. Security posture: `autoDownload: false`, `allowDowngrade: false`, `autoInstallOnAppQuit: false`. Live-verified: real Electron window + Playwright, real IPC round trip, real GitHub API check resolving to a genuine categorized result. Fully exercisable once a signed release is published. |
 | ~~Native application menu~~ | ✅ done | Shipped (task #295) — `desktop/electron/menu.ts` builds a real File/View/Window/Help menu, replacing Electron's own implicit default menu. The real risk §240 deferred over turned out to be already live, not hypothetical: the implicit default menu's own Edit submenu silently registered the exact same Ctrl+Z/Shift+Z/X/C/V accelerators `Editor.tsx`'s JS handler already claims, confirmed live by clicking it before any fix. Fixed by deliberately shipping **no Edit menu at all** — every real editing operation is already keyboard-accessible, and a redundant native Edit menu would only reintroduce the exact conflict. "Open Folder..."/"Reload"/"Force Reload" are click-only (no accelerator), since they can silently discard unsaved state — at the time the unsaved-changes-on-close/switch gap (closed below) was still real and open. Live-verified end-to-end: 7 chars typed, 7 Ctrl+Z presses removed exactly one character each landing back at the original content (no more silent double-registration risk), 7 Ctrl+Shift+Z restored it exactly; a real About dialog (genuine version/Electron/Chromium/Node strings), Toggle Developer Tools, and every other menu item all confirmed rendered/functional through the real Electron process. macOS's own conventional app-name menu is written for correctness but not independently verified (no Apple hardware in this project's history). |
 | Renderer bundle code-splitting | P3 | Desktop renderer is a single >500 KB chunk. |
 | macOS / iOS builds | P3 | No Apple-platform build in project history. |

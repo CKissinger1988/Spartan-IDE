@@ -13,6 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { BackendClient } from "./backend-client.js";
 import { buildApplicationMenu, REPO_URL } from "./menu.js";
+import { setupAutoUpdate, checkAndDownloadUpdate, installUpdateAndRestart } from "./auto-update.js";
 
 const isDev = !app.isPackaged;
 
@@ -458,6 +459,24 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(
     buildApplicationMenu(() => mainWindow, loadRootIntoWindow)
   );
+
+  // Real auto-update infrastructure (§75.49 apply path + code signing):
+  // sets up electron-updater's event handlers and the IPC bridge so the
+  // renderer can trigger download/install/restart.
+  setupAutoUpdate();
+
+  // Real IPC handlers for auto-update actions (separate from the
+  // check_for_updates method which goes through spartan-backend's own
+  // GitHub API check — this uses electron-updater's native flow which
+  // supports actual download/install/restart, not just "is there a newer
+  // commit").
+  ipcMain.handle("spartan:download_update", async () => {
+    return checkAndDownloadUpdate();
+  });
+  ipcMain.handle("spartan:install_update", async () => {
+    installUpdateAndRestart();
+    return { ok: true };
+  });
 
   createWindow();
 

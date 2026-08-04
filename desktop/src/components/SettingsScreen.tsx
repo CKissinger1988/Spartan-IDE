@@ -180,6 +180,11 @@ export default function SettingsScreen(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckDisplay>({ kind: "not_checked" });
+  const [updateAvailableVersion, setUpdateAvailableVersion] = useState<string | null>(null);
+  const [updateDownloadedVersion, setUpdateDownloadedVersion] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const [modelStatus, setModelStatus] = useState<ModelStatusResult | null>(null);
   const [modelStatusChecking, setModelStatusChecking] = useState(false);
   const [crashReports, setCrashReports] = useState<CrashReportEntry[]>([]);
@@ -245,20 +250,58 @@ export default function SettingsScreen(): React.ReactElement {
   }, []);
 
   useEffect(() => {
-    const unsubscribe = window.spartan.onEvent((event, data) => {
+    const unsub1 = window.spartan.onEvent((event, data) => {
       if (event === "update_check_result") {
         setUpdateCheck({ kind: "ready", result: data as UpdateCheckResult });
       } else if (event === "update_check_failed") {
         setUpdateCheck({ kind: "failed", error: (data as { error: string }).error });
       }
     });
-    return unsubscribe;
+    // Real auto-update event subscriptions (§75.49 apply path):
+    // electron-updater fires these from the main process via preload.
+    const unsub2 = window.spartan.onUpdateAvailable?.((info) => {
+      setUpdateAvailableVersion(info.version);
+      setUpdateError(null);
+    }) ?? (() => {});
+    const unsub3 = window.spartan.onUpdateDownloadProgress?.((info) => {
+      setDownloadProgress(Math.round(info.percent));
+    }) ?? (() => {});
+    const unsub4 = window.spartan.onUpdateDownloaded?.((info) => {
+      setUpdateDownloadedVersion(info.version);
+      setDownloading(false);
+      setUpdateAvailableVersion(null);
+    }) ?? (() => {});
+    const unsub5 = window.spartan.onUpdateError?.((info) => {
+      setUpdateError(info.message);
+      setDownloading(false);
+    }) ?? (() => {});
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
   }, []);
 
   const checkForUpdates = useCallback(() => {
     setUpdateCheck({ kind: "checking" });
     window.spartan.call("check_for_updates", {}).catch((e: Error) => {
       setUpdateCheck({ kind: "failed", error: e.message });
+    });
+  }, []);
+
+  // Real auto-update download handler (§75.49 apply path):
+  // triggers electron-updater's download flow via the main process IPC.
+  const downloadUpdate = useCallback(() => {
+    setDownloading(true);
+    setDownloadProgress(0);
+    setUpdateError(null);
+    window.spartan.call("download_update", {}).catch((e: Error) => {
+      setUpdateError(e.message);
+      setDownloading(false);
+    });
+  }, []);
+
+  // Real auto-update install handler: triggers quit-and-restart with the
+  // downloaded update. The main process calls autoUpdater.quitAndInstall().
+  const installUpdate = useCallback(() => {
+    window.spartan.call("install_update", {}).catch((e: Error) => {
+      setUpdateError(e.message);
     });
   }, []);
 
@@ -819,9 +862,30 @@ export default function SettingsScreen(): React.ReactElement {
       <div className="settings-note mono">
         A real, live check against this project's own GitHub repository for whether a newer
         build exists, categorized by language definitions, Leo/agent core, or other IDE code.
-        No download, install, or restart of any kind — this only tells you something is
-        available so you can act on it yourself.
       </div>
+      {updateAvailableVersion && (
+        <div className="settings-row" style={{ marginTop: 8 }}>
+          <button
+            className="settings-button mono"
+            disabled={downloading}
+            onClick={downloadUpdate}
+          >
+            {downloading ? `Downloading... ${downloadProgress}%` : `Download v${updateAvailableVersion}`}
+          </button>
+        </div>
+      )}
+      {updateDownloadedVersion && (
+        <div className="settings-row" style={{ marginTop: 8 }}>
+          <button className="settings-button mono" onClick={installUpdate}>
+            Restart &amp; Install v{updateDownloadedVersion}
+          </button>
+        </div>
+      )}
+      {updateError && (
+        <div className="settings-note mono" style={{ color: "#ef4444" }}>
+          Update error: {updateError}
+        </div>
+      )}
 
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>
         Privacy &amp; Diagnostics

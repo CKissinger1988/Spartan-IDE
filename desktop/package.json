@@ -26,6 +26,13 @@
     "appId": "com.spartan-ide.SpartanIDE",
     "productName": "Spartan IDE",
     "copyright": "Copyright (c) 2026 CKissinger1988. All rights reserved. Proprietary and confidential.",
+    "afterSign": "electron/afterSign.js",
+    "publish": {
+      "provider": "github",
+      "owner": "CKissinger1988",
+      "repo": "Spartan-IDE",
+      "releaseType": "draft"
+    },
     "directories": {
       "output": "dist-package",
       "buildResources": "build-resources"
@@ -93,6 +100,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "@xyflow/react": "^12.3.6",
+    "electron-updater": "^6.8.9",
     "highlight.js": "^11.11.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

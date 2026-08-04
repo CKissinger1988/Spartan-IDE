@@ -43,3 +43,4 @@ legacy/agent-deck-console/data/neural_link/reports/*
 legacy/agent-deck-console/data/neural_link/brainbridge_queue.jsonl
 !legacy/agent-deck-console/data/neural_link/reports/.gitkeep
 legacy/agent-deck-console/dist/
+.opencode-session/

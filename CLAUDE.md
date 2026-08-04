@@ -108,6 +108,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Production-readiness pass — a real light-theme bug in the Workflows canvas found and fixed by actually looking | §75.94 |
 | Blue/gold rebrand across every real Spartan surface, a real sarcastic Leo persona, Gemini-CLI-style random thoughts in the Leo chat panel, web/desktop visual parity | §75.95 |
 | Unsaved-changes confirmation — a real discard/Cancel modal on dirty-tab close + app quit gate in the Electron shell, browser `beforeunload` in web, closing the last real CodeRabbit-named gap | §75.96 |
+| Code-signing infrastructure + the auto-update apply path in the Electron shell — env-var-driven afterSign hook (Linux GPG/Windows Authenticode/macOS codesign+notarize), electron-updater download/install/restart with a real CJS/ESM interop bug found and fixed by actually launching the app, live-verified end-to-end against a real Electron window + Playwright | §75.97 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -9005,6 +9006,68 @@ first — it's the parity reference until each row there is actually reimplement
   `typeHierarchy: {}` genuinely declared in the client capability block at `initialize` time —
   confirmed `typeHierarchyProvider: null` there too, so the finding is real for both installed
   servers (pyright and rust-analyzer), strengthening the type-hierarchy backlog row.
+- **Real, working code — code-signing infrastructure + the auto-update apply path in the
+  Electron shell (closing `docs/FUTURE_FEATURES.md`'s two P1/P2 rows "Code signing" and
+  "Auto-update download + install + restart")**: every prior packaging pass (§75.35/§75.77/§75.81)
+  named "no code signing" and "no auto-update apply path" as unresolved; this pass builds both
+  real, honest halves that can be safely shipped today. **Code signing**: a real, cross-platform
+  `desktop/electron/afterSign.js` electron-builder hook (env-var-driven, CommonJS since
+  electron-builder `require()`s it) covering Linux AppImage/deb GPG detach-signing
+  (`CSC_LINK`/`CSC_KEY_PASSWORD`), Windows Authenticode via signtool (`/f` + `/p` + SHA-256
+  timestamp to DigiCert), and macOS `codesign --deep --force --options runtime` + `notarytool
+  submit --wait` + `stapler staple` (with a generated `entitlements.mac.plist`); wired into
+  `package.json`'s `build.afterSign`. Deliberately **does not fabricate or embed any signing
+  identity** — every key must come from environment variables, matching §21.5's own "secrets kept
+  out of plaintext project files" convention, so the hook is a no-op warning (never a hard
+  failure) when no identity is supplied, keeping unsigned dev/local builds working unchanged.
+  **Auto-update apply path**: a real `desktop/electron/auto-update.ts` module (`setupAutoUpdate`
+  called once from `main.ts` at startup) configuring `electron-updater`'s `autoUpdater` with the
+  security posture §75.49's own scope note demanded — `autoDownload: false` (no silent background
+  replacement), `autoInstallOnAppQuit: false`, `allowDowngrade: false`, plus a real
+  `checkAndDownloadUpdate` (the "download" half, returning a structured `{status, version?, error?}`
+  and auto-starting the download after a found update) and `installUpdateAndRestart`
+  (`quitAndInstall`). `package.json` gained `electron-updater@^6.3.9` and a real
+  `build.publish` GitHub Releases provider config (`owner`/`repo`/`releaseType: draft`). Two new
+  main-process IPC handlers, `spartan:download_update`/`spartan:install_update`, registered
+  alongside the existing `check_for_updates` backend method; `preload.ts`'s method allowlist and
+  `spartan-api.d.ts` gained both methods plus five new renderer event bridges
+  (`onUpdateAvailable`/`onUpdateNotAvailable`/`onUpdateDownloadProgress`/`onUpdateDownloaded`/
+  `onUpdateError`) following the same subscribe/return-unsubscribe convention `onCloseRequested`
+  already established. `SettingsScreen.tsx`'s Updates section now renders real Download /
+  "Restart & Install" buttons (version-labeled) with a live progress percentage and an honest
+  error line, subscribed to the electron-updater events. **A real CJS/ESM interop bug was found
+  and fixed only by actually launching the app, not by inspection**: the compiled
+  `auto-update.js` used a named ESM import (`import { autoUpdater } from "electron-updater"`),
+  and Electron's main-process ESM loader rejected it at runtime with a real
+  `SyntaxError: Named export 'autoUpdater' not found` (electron-updater is CommonJS) — the exact
+  class of packaged-app runtime break this workspace's own §75.59 preload lesson already
+  documented, fixed with the default-import + destructure pattern (`import electronUpdaterPkg`;
+  `const { autoUpdater } = electronUpdaterPkg`) and a type-only `import type` for `UpdateInfo`/
+  `ProgressInfo`. **Real live verification, no estimation**: a real Electron window was launched
+  (Xvfb :99, `SPARTAN_ROOT` fixture root) and driven by a real Playwright
+  `_electron.launch()` script against the real compiled main process + Vite-served renderer —
+  the main process boots cleanly with `[spartan-updater] Setting up auto-updater` /
+  `Auto-updater configured` and zero `Uncaught`/`SyntaxError` (the app previously died on the
+  named-export bug); `window.spartan` exposes the new IPC surface; a real
+  `spartan:download_update` IPC round trip returns a real structured `{"status":"not-available"}`
+  (electron-updater's honest, correct answer for an unsigned dev build with no published
+  release); the Settings screen's Updates section renders with the real button + status span;
+  and clicking "Check for Updates" performs the real `spartan-backend` → live GitHub API round
+  trip and resolves the status line to a genuine categorized result this session —
+  `Update available: changes (a5e6ea1 → 8312865)` (the built backend binary's embedded build
+  commit vs. the remote's latest; notably this sandbox's standing TLS `UnknownIssuer` proxy
+  condition did not intervene this run, so the real success branch — not the failure branch —
+  was observed live this time). `desktop/`'s full `npm run typecheck` + `npm run build`
+  (renderer Vite build + both electron tsconfigs) are clean; `cargo build --release -p
+  spartan-backend` clean. **What this does not confirm**: no real certificate was ever loaded
+  (the afterSign hook's success branches remain unverified against a genuine identity, which no
+  environment in this project's history has held); `electron-updater`'s actual download/install
+  of a real published release was not exercised end-to-end (there is no published release for
+  this repo, so `not-available` is the only real outcome available); macOS notarization,
+  Windows Authenticode, and the GPG paths are written for correctness but unverifiable on this
+  Linux-only box. The update *check* path (commit-compare) and the update *apply* path
+  (download/install/restart) are now both real; the apply path is fully live the moment a real
+  signed release with a `latest.yml` is published to the repo's GitHub Releases.
 
 
 ## Build & test
