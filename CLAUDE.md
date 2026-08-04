@@ -110,6 +110,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Unsaved-changes confirmation — a real discard/Cancel modal on dirty-tab close + app quit gate in the Electron shell, browser `beforeunload` in web, closing the last real CodeRabbit-named gap | §75.96 |
 | Code-signing infrastructure + the auto-update apply path in the Electron shell — env-var-driven afterSign hook (Linux GPG/Windows Authenticode/macOS codesign+notarize), electron-updater download/install/restart with a real CJS/ESM interop bug found and fixed by actually launching the app, live-verified end-to-end against a real Electron window + Playwright | §75.97 |
 | DAP program-path collection in both shells — Go/C#/Kotlin (and any registry-configured language) launchable via a PROGRAM PATH input that overrides auto-resolution; Kotlin's first real dap_command; a stale spartan-devserver binary (it embeds the backend lib) found live and rebuilt; both shells live-verified end-to-end | §75.98 |
+| Live provider verification for `LiteLLMProvider` — real HTTP/SSE integration tests against a real local TCP server; a real bug found and fixed (its `health_check` collapsed real 401/403 into "unreachable", while claude/lmstudio already distinguish "unauthorized"); streaming, incremental tool-call args, cooperative cancellation and all three health states verified over the real wire | §75.99 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -9124,6 +9125,36 @@ first — it's the parity reference until each row there is actually reimplement
   served by the Vite dev server in `electron .` dev mode, which must be running for any
   `_electron.launch()` test to load. The web run proved the full real pipeline end-to-end in a
   plain browser with zero shims.
+
+- **Live `LiteLLMProvider` verification, and a real health-reporting bug fixed
+  (§75.99)**: direct continuation of the backlog's "Live `ClaudeProvider`/`LiteLLMProvider`
+  verification" row — both providers had been "structurally complete, never run against a real
+  endpoint" in this project's history. There is no real LiteLLM proxy, no API key, and no model
+  backend in this environment, so this pass did the honest, still-fully-real thing: it stood up
+  a *real* local HTTP server (a `std::net::TcpListener` on loopback speaking the real
+  OpenAI-compatible wire protocol) and drove the provider through its real `ureq`-backed
+  HTTP/SSE path end-to-end — real request shape (method/URL/JSON body asserted on the wire),
+  real `text/event-stream` framing + SSE parsing, real per-chunk streaming callbacks, real
+  cooperative cancellation (§75.73), and real liveness/health probes. Four new tests in
+  `crates/spartan-model/tests/litellm_live_integration.rs` (no dev-deps — `std` only): a real
+  multi-chunk text stream ending in the `[DONE]` sentinel and a `Stop::EndTurn`; a real
+  incremental tool call (`ToolCallStart` → two `ToolCallArgsChunk` fragments → `ToolCallEnd` →
+  `Stop::ToolUse`) proving the index-to-id accumulation logic on the live wire; real cooperative
+  cancellation (the callback sets the flag on the first delta, and the next loop iteration
+  returns `Err(ProviderError::Cancelled)` without ever waiting on the held-open socket); and the
+  real health probe distinguishing all three wire conditions (200 → `Healthy`, 401 →
+  `Unauthorized`, dead port → `Unreachable`). **A real bug surfaced by writing that health test,
+  not by inspection**: `LiteLLMProvider::health_check` collapsed *every* error into
+  `Unreachable`, unlike `claude.rs` and `lmstudio.rs` which already match `401 | 403` →
+  `Unauthorized` — so a real bad API key at a real LiteLLM proxy was reported to the UI
+  (`model_status_json`'s distinct "unauthorized" vs "unreachable" strings) as "unreachable",
+  misleading exactly the diagnostic those two strings exist to give. Fixed to match the
+  claude/lmstudio precedent. **What this does not confirm**: `ClaudeProvider`'s real Anthropic
+  endpoint still cannot be exercised here (no key, no network path to Anthropic), so that half
+  of the backlog row stays honestly open; and no real model *intelligence* was exercised — the
+  "model" behind the fixture server is scripted wire frames, the same boundary this project's
+  own wire-faithful verification discipline draws. All 55 `spartan-model` tests pass (51 unit +
+  4 live integration), `cargo fmt`/`clippy` clean.
 
 
 ## Build & test

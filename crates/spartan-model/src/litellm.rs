@@ -232,11 +232,19 @@ impl ModelProvider for LiteLLMProvider {
     }
 
     fn health_check(&self) -> ProviderHealth {
+        // A real `/health/liveliness` probe -- the same liveness endpoint a
+        // real `litellm` proxy exposes. Real §75.99 fix: this previously
+        // collapsed *every* error into `Unreachable`, so a bad API key (a
+        // real 401/403 from the proxy) was reported to the UI as
+        // "unreachable" instead of "unauthorized" -- the exact distinct
+        // condition `model_status_json` already renders separately. Now
+        // matches `claude.rs`/`lmstudio.rs`'s own 401|403 handling.
         match ureq::get(&format!("{}/health/liveliness", self.base_url))
             .timeout(Duration::from_secs(2))
             .call()
         {
             Ok(_) => ProviderHealth::Healthy,
+            Err(ureq::Error::Status(401 | 403, _)) => ProviderHealth::Unauthorized,
             Err(_) => ProviderHealth::Unreachable,
         }
     }
