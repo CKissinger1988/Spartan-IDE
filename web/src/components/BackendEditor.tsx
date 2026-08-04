@@ -380,6 +380,48 @@ function extractDocumentSymbols(result: unknown): DocumentSymbolItem[] {
   return out;
 }
 
+/** A real, normalized, flattened LSP workspace symbol, ported verbatim
+ * from `desktop/`'s own `WorkspaceSymbolItem` -- see that file's own doc
+ * comment for the full real reasoning. `path` is decoded from the
+ * backend's `uri` via `fileUriToPath` at normalization time. */
+interface WorkspaceSymbolItem {
+  name: string;
+  kind: number;
+  containerName: string | null;
+  path: string;
+  line: number;
+  character: number;
+}
+
+/** Normalizes a real `lsp_workspace_symbol_result` payload's `result`,
+ * ported verbatim from `desktop/`'s own `extractWorkspaceSymbols` -- see
+ * that file's own doc comment for the full real reasoning (the backend
+ * already decoded the LSP 3.17 `location`-can-be-bare-`{uri}` wire shape;
+ * a `null` result normalizes to an honest empty list, not an error). */
+function extractWorkspaceSymbols(result: unknown): WorkspaceSymbolItem[] {
+  if (!Array.isArray(result)) return [];
+  const out: WorkspaceSymbolItem[] = [];
+  for (const entry of result) {
+    const e = entry as {
+      name?: unknown;
+      kind?: unknown;
+      container_name?: unknown;
+      uri?: unknown;
+      line?: unknown;
+      character?: unknown;
+    };
+    const name = typeof e.name === "string" ? e.name : null;
+    const kind = typeof e.kind === "number" ? e.kind : 0;
+    const uri = typeof e.uri === "string" ? e.uri : null;
+    const line = typeof e.line === "number" ? e.line : null;
+    const character = typeof e.character === "number" ? e.character : null;
+    if (!name || !uri || line === null || character === null) continue;
+    const containerName = typeof e.container_name === "string" ? e.container_name : null;
+    out.push({ name, kind, containerName, path: fileUriToPath(uri), line, character });
+  }
+  return out;
+}
+
 /** A real, normalized LSP `DocumentHighlight`, ported verbatim from
  * `desktop/`'s own `DocumentHighlightItem` -- see that file's own doc
  * comment for the full real reasoning, including the real, named v1
@@ -1992,6 +2034,121 @@ export default function BackendEditor({
       .catch((err: Error) => console.error("lsp_document_symbol failed:", err));
   }, [client, charWidth, lineHeightPx, file.docId]);
 
+  /** Real "Go to Symbol in Workspace" (Ctrl+T), ported verbatim from
+   * `desktop/`'s own identical wiring -- see that file's own doc comment
+   * for the full real reasoning (a searchable palette with a real focused
+   * query `<input>`, debounced `workspace/symbol` requests, keyboard-
+   * navigable results, the same stale-reply guard the other async
+   * overlays use). Reached over `client.onEvent`/`client.call` instead of
+   * `window.spartan`. */
+  const [wsSymbolsState, setWsSymbolsState] = useState<{
+    x: number;
+    y: number;
+    query: string;
+    items: WorkspaceSymbolItem[] | null;
+  } | null>(null);
+  const wsSymbolsInputRef = useRef<HTMLInputElement>(null);
+  const wsSymbolsQueryRef = useRef<string>("");
+  const wsSymbolsDebounceRef = useRef<number | null>(null);
+  const [wsSymbolsSelected, setWsSymbolsSelected] = useState(0);
+
+  useEffect(() => {
+    if (wsSymbolsState) wsSymbolsInputRef.current?.focus();
+  }, [wsSymbolsState]);
+
+  useEffect(() => {
+    const unsubscribe = client.onEvent((e) => {
+      if (e.event !== "lsp_workspace_symbol_result") return;
+      const d = e.data as { doc_id: number; query: string; result: unknown };
+      if (d.doc_id !== file.docId || d.query !== wsSymbolsQueryRef.current) return;
+      setWsSymbolsState((prev) =>
+        prev ? { ...prev, items: extractWorkspaceSymbols(d.result) } : prev
+      );
+    });
+    return unsubscribe;
+  }, [client, file.docId]);
+
+  const fireWorkspaceSymbols = useCallback(
+    (query: string) => {
+      wsSymbolsQueryRef.current = query;
+      setWsSymbolsSelected(0);
+      setWsSymbolsState((prev) => (prev ? { ...prev, query, items: null } : prev));
+      client
+        .call("lsp_workspace_symbol", { doc_id: file.docId, query })
+        .catch((err: Error) => console.error("lsp_workspace_symbol failed:", err));
+    },
+    [client, file.docId]
+  );
+
+  const triggerWorkspaceSymbols = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const { line, character } = offsetToLineChar(el.value, el.selectionStart);
+    const x = el.getBoundingClientRect().left + character * charWidth - el.scrollLeft;
+    const y = el.getBoundingClientRect().top + line * lineHeightPx - el.scrollTop + lineHeightPx;
+    setWsSymbolsState({ x, y, query: "", items: null });
+    fireWorkspaceSymbols("");
+  }, [charWidth, lineHeightPx, file.docId, fireWorkspaceSymbols]);
+
+  const handleWsSymbolsKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const items = wsSymbolsState?.items;
+        if (items && items.length > 0) {
+          const item = items[Math.min(wsSymbolsSelected, items.length - 1)];
+          setWsSymbolsState(null);
+          goToTarget({ path: item.path, line: item.line, character: item.character });
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setWsSymbolsState(null);
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const items = wsSymbolsState?.items;
+        if (items && items.length > 0) {
+          setWsSymbolsSelected((s) => (s + 1) % items.length);
+        }
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const items = wsSymbolsState?.items;
+        if (items && items.length > 0) {
+          setWsSymbolsSelected((s) => (s - 1 + items.length) % items.length);
+        }
+      }
+    },
+    [goToTarget, wsSymbolsSelected, wsSymbolsState]
+  );
+
+  const handleWsSymbolsChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const query = e.target.value;
+      setWsSymbolsState((prev) => (prev ? { ...prev, query } : prev));
+      if (wsSymbolsDebounceRef.current !== null) {
+        window.clearTimeout(wsSymbolsDebounceRef.current);
+      }
+      wsSymbolsDebounceRef.current = window.setTimeout(() => {
+        wsSymbolsDebounceRef.current = null;
+        fireWorkspaceSymbols(query);
+      }, 250);
+    },
+    [fireWorkspaceSymbols]
+  );
+
+  const closeWorkspaceSymbols = useCallback(() => {
+    if (wsSymbolsDebounceRef.current !== null) {
+      window.clearTimeout(wsSymbolsDebounceRef.current);
+      wsSymbolsDebounceRef.current = null;
+    }
+    setWsSymbolsState(null);
+  }, []);
+
   /** Real "Go to Line" (Ctrl+G), ported verbatim from `desktop/`'s own
    * identical wiring -- see that file's own doc comment for the full real
    * reasoning. */
@@ -2426,6 +2583,7 @@ export default function BackendEditor({
       if (!(e.ctrlKey || e.metaKey)) {
         setReferencesState(null);
         setSymbolsState(null);
+        closeWorkspaceSymbols();
         setCallHierarchyState(null);
         setQuickFixState(null);
         return;
@@ -2449,7 +2607,7 @@ export default function BackendEditor({
         .call("lsp_definition", { doc_id: file.docId, line, character })
         .catch((err: Error) => console.error("lsp_definition failed:", err));
     },
-    [client, charWidth, lineHeightPx, file.docId]
+    [client, charWidth, lineHeightPx, file.docId, closeWorkspaceSymbols]
   );
 
   const syncScroll = useCallback(() => {
@@ -2625,6 +2783,12 @@ export default function BackendEditor({
       if (e.key === "Escape" && symbolsState) {
         setSymbolsState(null);
       }
+      // Real workspace-symbol palette dismissal (Escape), reached only if
+      // focus somehow left the palette's own input (which handles its own
+      // Escape directly); ported verbatim from `desktop/`'s own branch.
+      if (e.key === "Escape" && wsSymbolsState) {
+        closeWorkspaceSymbols();
+      }
       // Real call-hierarchy dismissal (Escape), ported verbatim.
       if (e.key === "Escape" && callHierarchyState) {
         setCallHierarchyState(null);
@@ -2728,6 +2892,14 @@ export default function BackendEditor({
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
         triggerDocumentSymbols();
+        return;
+      }
+      // Real "Go to Symbol in Workspace" trigger (Ctrl+T), ported verbatim
+      // from `desktop/`'s own identical branch -- the palette's own input
+      // handles Enter/Escape/Up/Down, so this never fires again while open.
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "t" && !wsSymbolsState) {
+        e.preventDefault();
+        triggerWorkspaceSymbols();
         return;
       }
       // Real "Format Document" trigger (Ctrl+Shift+F).
@@ -3565,6 +3737,62 @@ export default function BackendEditor({
                   {SYMBOL_KIND_LABELS[item.kind] ?? "Symbol"}
                 </span>
                 {item.name}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+      {wsSymbolsState && (
+        <div
+          className="editor-references-panel mono editor-ws-symbols-panel"
+          style={{ left: wsSymbolsState.x, top: wsSymbolsState.y }}
+        >
+          <div className="editor-ws-symbols-input-row">
+            <input
+              ref={wsSymbolsInputRef}
+              className="editor-rename-input"
+              value={wsSymbolsState.query}
+              placeholder="Search workspace symbols…"
+              onChange={handleWsSymbolsChange}
+              onKeyDown={handleWsSymbolsKeyDown}
+            />
+          </div>
+          <div className="editor-references-header">
+            {wsSymbolsState.items === null
+              ? "Searching workspace…"
+              : `${wsSymbolsState.items.length} symbol${wsSymbolsState.items.length === 1 ? "" : "s"}`}
+          </div>
+          {wsSymbolsState.items === null ? (
+            <div className="editor-references-item editor-references-item-empty">Loading…</div>
+          ) : wsSymbolsState.items.length === 0 ? (
+            <div className="editor-references-item editor-references-item-empty">
+              No symbols found
+            </div>
+          ) : (
+            wsSymbolsState.items.map((item, i) => (
+              <div
+                key={`${item.path}:${item.name}:${i}`}
+                className={`editor-references-item editor-symbol-item${
+                  i === wsSymbolsSelected ? " editor-ws-symbols-selected" : ""
+                }`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setWsSymbolsState(null);
+                  goToTarget({ path: item.path, line: item.line, character: item.character });
+                }}
+              >
+                <span className="editor-symbol-kind">
+                  {SYMBOL_KIND_LABELS[item.kind] ?? "Symbol"}
+                </span>
+                {item.name}
+                {item.containerName ? (
+                  <span className="editor-ws-symbols-container">{item.containerName}</span>
+                ) : null}
+                <span className="editor-ws-symbols-path">
+                  {item.path === file.path
+                    ? `line ${item.line + 1}`
+                    : `${item.path}:${item.line + 1}`}
+                </span>
               </div>
             ))
           )}

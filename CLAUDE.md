@@ -8890,6 +8890,75 @@ first — it's the parity reference until each row there is actually reimplement
   after that wait; both shells' UIs already handle this honestly (the requests queue and the
   results render when they arrive), and it is the same 90s-class behavior every LSP integration
   test in this repo already documents.
+- **Real, working code — LSP `workspace/symbol` end-to-end ("Go to Symbol in Workspace") in both
+  backend shells, closing the one P2 LSP row whose "declared but `[]`" finding was pyright-specific**:
+  the same shape as the inlay-hints pass, but a genuinely *workspace-wide* query rather than a
+  per-`textDocument` one. `spartan-lsp` gains the public `WorkspaceSymbol { name, kind,
+  container_name, uri, line, character }` struct and `decode_workspace_symbols` free fn in
+  `client.rs` (flattens the spec's `SymbolInformation[] | WorkspaceSymbol[] | null` result; the
+  one genuinely two-shape field is `location` — pre-3.17 it is always a full `Location` while 3.17
+  added a bare-`{uri}` form whose range rides as a sibling `range` field — both decoded; any entry
+  missing its name, kind, or a resolvable position is skipped never half-decoded; absent
+  `containerName` defaults to `None`; a `null` no-match result is an honest empty array, not
+  `None`), a `workspace_symbol_supported` flag captured from the server's own `initialize`
+  response at handshake (a server that never declared `workspaceSymbolProvider` gets
+  `workspace_symbol()` returning `None` — the client never even asks), and the real
+  `workspace_symbol(query)` method issuing `workspace/symbol` (empty query = "list everything",
+  the convention every real editor's symbol search uses) and returning the already-decoded
+  `WorkspaceSymbol[]` as a JSON array. `session.rs` adds `QueryKind::WorkspaceSymbol { query }` +
+  `request_workspace_symbol(query)` — the one query kind with no cursor position and no document
+  tie at all — sharing the identical query-priority mailbox and the same bounded
+  `INDEXING_TIMEOUT + DEFAULT_TIMEOUT` reasoning as the inlay-hints sibling (for rust-analyzer
+  the workspace symbol index genuinely only exists once its real initial indexing pass finishes,
+  so the bounded wait is the feature's gate, not a workaround). `spartan-backend`'s
+  `handle_request` gains `lsp_workspace_symbol` (its `doc_id` only supplies the live session; the
+  query is the caller's free text; a missing query defaults to the empty "list everything"
+  search) — emitting the decoded symbols as `lsp_workspace_symbol_result` with `{doc_id, query,
+  result}`, plus three new honest-error dispatch tests (unopened doc id; a real open file with no
+  live LSP session; a missing query accepted as an empty search). On the UI side both
+  backend-connected editors (`desktop/Editor.tsx`, `web/BackendEditor.tsx`) gained a genuinely
+  searchable palette: a real focused query `<input>` (the one overlay here that searches, so it
+  needs an input) pinned atop `.editor-references-panel` at the caret, whose free-text query
+  drives debounced (250ms) real `workspace/symbol` requests with the same stale-reply guard the
+  other async overlays use (in-flight query captured in a ref; a result applied only when it still
+  matches), results rendered as a keyboard-navigable (Enter to jump / Escape to close / Up/Down to
+  move) list with per-real-`SymbolKind` glyphs through `SYMBOL_KIND_LABELS`, a
+  `containerName` disambiguation suffix, and a right-floated dim path/line suffix (same-file hits
+  read "line N", cross-file hits read `path:N`), jumping through the existing `goToTarget`
+  cross-file machinery. Trigger is Ctrl+T (VS Code's own standard cross-editor convention for the
+  same action) in both shells, dismissal on Escape integrated with every other overlay, and the
+  two desktop wiring allowlists this feature's sibling passes taught us to watch —
+  `desktop/electron/preload.ts`'s method list and `desktop/electron/main.ts`'s `spartan:*` IPC
+  handler registry — both gained `lsp_workspace_symbol` preemptively. **Real verification, no
+  estimation**: `cargo fmt --all -- --check` clean; `cargo test -p spartan-lsp --lib` 21 tests
+  green (four new `decode_workspace_symbols` tests: a real captured rust-analyzer full-`Location`
+  response decoding to the real `add` function (kind 12) and a `containerName`-carrying entry; the
+  3.17 bare-`{uri}` form decoding to the same shape; malformed/missing-field entries skipped not
+  crashed; `null`/`{}` results decode to empty) and `cargo test -p spartan-backend --lib` 281
+  tests all green including the three new `lsp_workspace_symbol` dispatch tests; clippy clean for
+  both crates (only the same pre-existing `spartan-git` line-313 warning); `npm run typecheck` +
+  both vite builds succeed in `desktop/` and `web/`; `desktop/`'s `build:electron` (both electron
+  tsconfigs) also typechecks clean. **Live end-to-end, real backend + real rust-analyzer**: a new
+  `crates/spartan-backend/tests/lsp_workspace_symbol_integration.rs` drives the real
+  `handle_request` dispatch (`open_file` on a real Cargo fixture → `lsp_workspace_symbol`) against
+  a real `rust-analyzer` subprocess and asserts a real `lsp_workspace_symbol_result` event arrives
+  with the already-decoded, envelope-free `{name, kind, uri, line, character}` array — self-skipping
+  honestly if `rust-analyzer` isn't on `$PATH`, mirroring the sibling `lsp_document_symbol`
+  integration test's shape. The live run produced one real finding that corrected a draft
+  assertion: rust-analyzer's empty-query answer is the *module index* of the loaded workspace once
+  the real ~90s initial indexing pass finishes — the fixture crate's own name plus its real
+  dependencies (`std`, `alloc`, `core`, `proc_macro`, `test`) — not necessarily every function
+  body, whose per-symbol entries can still be unresolved at that window; the test asserts the
+  fixture crate's real module name is present (the honest, guaranteed answer) rather than
+  demanding specific function-level symbols, and asserts the decoded shape of every returned
+  entry. **What this does not confirm**: the pure client-side `web/Editor.tsx` (no backend)
+  intentionally has no workspace-symbol surface, unchanged and by design; pyright's
+  "declares `true` but answers `[]` for every query" finding still stands in this env
+  (rust-analyzer is what this ships against and was verified against); the ~100s wait is the
+  session's real indexing gate, not a general timeout; the desktop launch used the dev-mode path
+  (`loadURL` against vite), matching every prior desktop pass's harness note. The prior AGENTS.md
+  note that `workspace/symbol` was "genuinely unusable in this dev environment" is superseded:
+  that finding was pyright-specific and the capability is now real and live against rust-analyzer.
 
 
 ## Build & test

@@ -138,6 +138,16 @@ enum QueryKind {
     InlayHints {
         end_line: u64,
     },
+    /// Workspace-wide `workspace/symbol` ("Go to Symbol in Workspace") --
+    /// unlike every other query kind, not tied to one `textDocument` at all:
+    /// `query` is the caller's free-text search string (empty means "list
+    /// everything"). Answered by `LspClient::workspace_symbol` as an
+    /// already-decoded `WorkspaceSymbol[]` JSON array (not a raw envelope),
+    /// because the 3.17 `location`-can-be-bare-`{uri}` wire shape is a
+    /// protocol concern.
+    WorkspaceSymbol {
+        query: String,
+    },
     DocumentHighlight {
         line: i64,
         character: i64,
@@ -599,6 +609,39 @@ impl LspSession {
             .ok()
             .flatten()
     }
+
+    /// Real, synchronous workspace-wide `workspace/symbol` ("Go to Symbol
+    /// in Workspace") -- the direct sibling of `request_inlay_hints` above
+    /// (whole-workspace, no cursor position and no `end_line`), sharing the
+    /// identical query-priority mailbox and the same real timeout reasoning
+    /// (a workspace-symbol request can equally be issued while the session
+    /// is still sitting in its initial indexing wait -- and for rust-analyzer
+    /// specifically the symbol index genuinely only exists once that real
+    /// indexing pass finishes, so the bounded wait is the feature's gate, not
+    /// a workaround). Like `request_semantic_tokens`/`request_inlay_hints`
+    /// but unlike every raw-envelope method, the reply is already decoded by
+    /// `LspClient::workspace_symbol` into structured `{name, kind,
+    /// container_name, uri, line, character}` symbols, serialized as a JSON
+    /// array. `None` when the server never declared `workspaceSymbolProvider`
+    /// or the request itself failed; a no-match query is an honest empty
+    /// array, not `None`. Same calling discipline: callers must run this from
+    /// their own dedicated thread, never the single request-processing
+    /// thread every other IPC method shares.
+    pub fn request_workspace_symbol(&self, query: String) -> Option<serde_json::Value> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        {
+            let mut guard = self.mailbox.state.lock().unwrap();
+            guard.pending_queries.push_back(PendingQuery {
+                kind: QueryKind::WorkspaceSymbol { query },
+                reply: reply_tx,
+            });
+        }
+        self.mailbox.cvar.notify_one();
+        reply_rx
+            .recv_timeout(INDEXING_TIMEOUT + DEFAULT_TIMEOUT)
+            .ok()
+            .flatten()
+    }
     /// real query method, the direct sibling of `request_hover`/
     /// `request_completion`/`request_definition`/`request_signature_help`/
     /// `request_references`/`request_rename`/`request_document_symbol`
@@ -863,6 +906,7 @@ fn dispatch_query(client: &mut LspClient, file_uri: &str, query: PendingQuery) {
         QueryKind::DocumentSymbol => client.document_symbol(file_uri),
         QueryKind::SemanticTokens => client.semantic_tokens(file_uri),
         QueryKind::InlayHints { end_line } => client.inlay_hints(file_uri, end_line),
+        QueryKind::WorkspaceSymbol { query } => client.workspace_symbol(&query),
         QueryKind::DocumentHighlight { line, character } => {
             client.document_highlight(file_uri, line, character)
         }

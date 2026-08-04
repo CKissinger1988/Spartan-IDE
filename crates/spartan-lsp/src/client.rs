@@ -174,6 +174,29 @@ pub struct InlayHint {
     pub padding_right: bool,
 }
 
+/// One decoded LSP workspace symbol: a real `WorkspaceSymbol`/`SymbolInformation`
+/// flattened into the same frontend-ready "name + kind + location" shape a
+/// go-to-definition result already is. `kind` is the real LSP `SymbolKind`
+/// (1 File, 2 Module, 3 Namespace, 4 Package, 5 Class, 6 Method, 7 Property,
+/// 8 Field, 9 Constructor, 10 Enum, 11 Interface, 12 Function, 13 Variable,
+/// 14 Constant, 15 String, 16 Number, 17 Boolean, 18 Array, ...), used by the
+/// frontend for a per-kind glyph. `container_name` is the enclosing module/
+/// class from `SymbolInformation.containerName` when the server sent one
+/// (rust-analyzer does); the frontend renders it as a disambiguating suffix.
+/// This is the structured, frontend-ready shape this crate's own
+/// `workspace_symbol` returns instead of the raw JSON array, whose
+/// 3.17 `location`-can-be-`{uri}`-without-`range` wire shape is a
+/// wire-protocol concern, not a caller's.
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct WorkspaceSymbol {
+    pub name: String,
+    pub kind: u32,
+    pub container_name: Option<String>,
+    pub uri: String,
+    pub line: u32,
+    pub character: u32,
+}
+
 /// A minimal in-house LSP client: real JSON-RPC 2.0 framing over a child
 /// process's stdio, no third-party LSP crate.
 pub struct LspClient {
@@ -191,6 +214,16 @@ pub struct LspClient {
     /// it declared an `inlayHintProvider`. `inlay_hints` returns `None`
     /// (never even asks) when the server never offered the capability.
     inlay_hint_supported: bool,
+    /// Captured from the server's own `initialize` response -- `true` when
+    /// it declared a `workspaceSymbolProvider`. `workspace_symbol` returns
+    /// `None` (never even asks) when the server never offered the
+    /// capability -- the exact same discipline the two fields above already
+    /// apply to semantic tokens and inlay hints. A real, live probe found
+    /// rust-analyzer declares `true` and answers real symbols; pyright
+    /// declares `true` here too but answers `[]` for every real query (its
+    /// own, environment-specific limitation, matching the same class of
+    /// finding as `codeAction`).
+    workspace_symbol_supported: bool,
 }
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -251,6 +284,7 @@ impl LspClient {
             next_id: 0,
             semantic_tokens_legend: None,
             inlay_hint_supported: false,
+            workspace_symbol_supported: false,
         })
     }
 
@@ -502,6 +536,17 @@ impl LspClient {
         self.inlay_hint_supported = init_resp["result"]["capabilities"]["inlayHintProvider"]
             .is_object()
             || init_resp["result"]["capabilities"]["inlayHintProvider"].is_boolean();
+        // Capture whether the server declared a `workspaceSymbolProvider`
+        // now, at handshake time, so `workspace_symbol` can honestly return
+        // `None` (never even asking) for a server that never offered the
+        // capability. The wire shape is a boolean `true`/`false` *or* an
+        // options object (`{provideWorkspaceSymbols: bool, ...}`), so both
+        // count as declared.
+        self.workspace_symbol_supported = init_resp["result"]["capabilities"]
+            ["workspaceSymbolProvider"]
+            .as_bool()
+            .unwrap_or(false)
+            || init_resp["result"]["capabilities"]["workspaceSymbolProvider"].is_object();
         self.notify("initialized", json!({})).ok()?;
         self.notify(
             "textDocument/didOpen",
@@ -853,6 +898,35 @@ impl LspClient {
         serde_json::to_value(hints).ok()
     }
 
+    /// Real `workspace/symbol` ("Go to Symbol in Workspace") -- the
+    /// workspace-wide sibling of `document_symbol` (which is limited to one
+    /// file), and the direct sibling of `inlay_hints` above: whole-workspace,
+    /// and likewise decoded here into a structured, frontend-ready shape
+    /// (see `WorkspaceSymbol` and `decode_workspace_symbols`) because the
+    /// spec's 3.17 `location` may be a full `Location` *or* a bare
+    /// `{uri}` (with the range as a sibling `range` field) -- a wire-protocol
+    /// shape, not a caller's concern. The query is the caller's free-text
+    /// search string (empty means "list everything", the same convention
+    /// every real editor's symbol search uses). Returns the decoded
+    /// `WorkspaceSymbol[]` serialized as a JSON array; `None` only when the
+    /// server never declared `workspaceSymbolProvider` or the request itself
+    /// failed. A `null` result (a genuinely no-match query) decodes to an
+    /// honest empty array, not `None` -- unlike a clean semantic-token or
+    /// inlay-hint file, "nothing matched" is a normal, meaningful answer
+    /// here that the caller's palette should show as an empty list.
+    pub fn workspace_symbol(&mut self, query: &str) -> Option<Value> {
+        if !self.workspace_symbol_supported {
+            return None;
+        }
+        let envelope = self.request(
+            "workspace/symbol",
+            Some(json!({ "query": query })),
+            DEFAULT_TIMEOUT,
+        )?;
+        let symbols = decode_workspace_symbols(envelope.get("result")?);
+        serde_json::to_value(symbols).ok()
+    }
+
     /// Real `textDocument/documentHighlight` -- the eighth real query
     /// method, the direct sibling of `hover`/`completion`/`definition`/
     /// `signatureHelp`/`references`/`rename`/`document_symbol` above. Unlike
@@ -1124,6 +1198,80 @@ pub fn decode_inlay_hints(result: &Value) -> Vec<InlayHint> {
     hints
 }
 
+/// Decodes a real `workspace/symbol` result into the structured
+/// `WorkspaceSymbol[]` shape `workspace_symbol` returns. The result is a
+/// real `SymbolInformation[] | WorkspaceSymbol[] | null`; each entry is
+/// flattened to "name + kind + one jump target". The one genuinely
+/// two-shape field is `location`: pre-3.17 it is always a full `Location`
+/// (`{uri, range}`), while 3.17 added a bare `{uri}` form whose range rides
+/// as a sibling `range` field on the entry itself -- both are decoded here
+/// (a real, live rust-analyzer probe returned the classic full-`Location`
+/// form). `name`, `kind`, and a real location are required; an entry
+/// missing any of them is skipped (never half-decoded), and
+/// `containerName` is optional and defaults to `None`. A `null` result (a
+/// genuinely no-match query) decodes to an honest empty list, matching
+/// `workspace_symbol`'s own "empty array, not `None`" caller contract.
+pub fn decode_workspace_symbols(result: &Value) -> Vec<WorkspaceSymbol> {
+    let Some(arr) = result.as_array() else {
+        return Vec::new();
+    };
+    let mut symbols = Vec::with_capacity(arr.len());
+    for s in arr {
+        let name = match s.get("name").and_then(Value::as_str) {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+        let kind = match s.get("kind").and_then(Value::as_u64) {
+            Some(kind) => kind as u32,
+            None => continue,
+        };
+        // `location` may be a full `Location` ({uri, range}) or, per the
+        // 3.17 wire shape, a bare `{uri}` with the range as a sibling
+        // `range` field. Resolve to one `(uri, range)` pair either way.
+        let location = s.get("location");
+        let uri = match location.and_then(|l| l.get("uri")).and_then(Value::as_str) {
+            Some(uri) => uri,
+            None => s.get("uri").and_then(Value::as_str).unwrap_or(""),
+        };
+        if uri.is_empty() {
+            continue;
+        }
+        let range = match location.and_then(|l| l.get("range")) {
+            Some(r) => Some(r),
+            None => s.get("range"),
+        };
+        let line = match range
+            .and_then(|r| r.get("start"))
+            .and_then(|start| start.get("line"))
+            .and_then(Value::as_u64)
+        {
+            Some(line) => line as u32,
+            None => continue,
+        };
+        let character = match range
+            .and_then(|r| r.get("start"))
+            .and_then(|start| start.get("character"))
+            .and_then(Value::as_u64)
+        {
+            Some(character) => character as u32,
+            None => continue,
+        };
+        let container_name = s
+            .get("containerName")
+            .and_then(Value::as_str)
+            .map(String::from);
+        symbols.push(WorkspaceSymbol {
+            name,
+            kind,
+            container_name,
+            uri: uri.to_string(),
+            line,
+            character,
+        });
+    }
+    symbols
+}
+
 #[cfg(test)]
 mod semantic_token_tests {
     use super::*;
@@ -1269,5 +1417,76 @@ mod semantic_token_tests {
     fn null_result_decodes_to_empty() {
         assert!(decode_inlay_hints(&serde_json::json!(null)).is_empty());
         assert!(decode_inlay_hints(&serde_json::json!({})).is_empty());
+    }
+
+    /// The exact real rust-analyzer response captured by this crate's own
+    /// live `workspace/symbol` probe against a `fn add(a: i32, b: i32)`
+    /// fixture: the classic full-`Location` form, decoding to the real name,
+    /// kind (12 = Function), and jump position. A second entry carrying a
+    /// real `containerName` decodes its container too.
+    #[test]
+    fn decodes_a_real_rust_analyzer_workspace_symbol_response() {
+        let result = serde_json::json!([
+            {"name": "add", "kind": 12, "location": {"uri": "file:///tmp/opencode/inlay-fixture/src/main.rs", "range": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 6}}}},
+            {"name": "main", "kind": 12, "location": {"uri": "file:///tmp/opencode/inlay-fixture/src/main.rs", "range": {"start": {"line": 6, "character": 3}, "end": {"line": 6, "character": 7}}}, "containerName": "crate_root"}
+        ]);
+        let symbols = decode_workspace_symbols(&result);
+        assert_eq!(symbols.len(), 2);
+        assert_eq!(symbols[0].name, "add");
+        assert_eq!(symbols[0].kind, 12);
+        assert_eq!(symbols[0].container_name, None);
+        assert_eq!(
+            symbols[0].uri,
+            "file:///tmp/opencode/inlay-fixture/src/main.rs"
+        );
+        assert_eq!(symbols[0].line, 0);
+        assert_eq!(symbols[0].character, 3);
+        assert_eq!(symbols[1].name, "main");
+        assert_eq!(symbols[1].kind, 12);
+        assert_eq!(symbols[1].container_name, Some("crate_root".to_string()));
+        assert_eq!(symbols[1].line, 6);
+        assert_eq!(symbols[1].character, 3);
+    }
+
+    /// The 3.17 bare-`{uri}` `location` form (range riding as a sibling
+    /// `range` field) decodes to the same shape as the full-`Location` form.
+    #[test]
+    fn decodes_the_3_17_bare_uri_location_form() {
+        let result = serde_json::json!([
+            {"name": "helper", "kind": 12, "location": {"uri": "file:///proj/src/lib.rs"}, "range": {"start": {"line": 4, "character": 2}, "end": {"line": 4, "character": 8}}}
+        ]);
+        let symbols = decode_workspace_symbols(&result);
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].name, "helper");
+        assert_eq!(symbols[0].uri, "file:///proj/src/lib.rs");
+        assert_eq!(symbols[0].line, 4);
+        assert_eq!(symbols[0].character, 2);
+    }
+
+    /// An entry missing its name, its kind, or a resolvable location is
+    /// skipped entirely (never half-decoded), and absent `containerName`
+    /// defaults honestly -- never a panic.
+    #[test]
+    fn malformed_workspace_symbol_entries_are_skipped_not_crashed() {
+        let result = serde_json::json!([
+            {"name": "ok", "kind": 12, "location": {"uri": "file:///a.rs", "range": {"start": {"line": 0, "character": 0}}}},
+            {"kind": 12, "location": {"uri": "file:///b.rs", "range": {"start": {"line": 0, "character": 0}}}},
+            {"name": "no-kind"},
+            {"name": "no-uri", "kind": 12, "location": {}},
+            {"name": "no-range", "kind": 12, "location": {"uri": "file:///c.rs"}}
+        ]);
+        let symbols = decode_workspace_symbols(&result);
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].name, "ok");
+        assert_eq!(symbols[0].container_name, None);
+    }
+
+    /// A null result (a genuinely no-match query) decodes to an honest empty
+    /// list, matching `workspace_symbol`'s own "empty array, not `None`"
+    /// caller contract.
+    #[test]
+    fn null_workspace_symbol_result_decodes_to_empty() {
+        assert!(decode_workspace_symbols(&serde_json::json!(null)).is_empty());
+        assert!(decode_workspace_symbols(&serde_json::json!({})).is_empty());
     }
 }

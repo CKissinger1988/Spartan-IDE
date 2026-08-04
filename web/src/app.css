@@ -643,6 +643,49 @@
   margin-right: 6px;
 }
 
+/* Real "Go to Symbol in Workspace" (Ctrl+T) palette, byte-identical to
+ * desktop/'s own copy -- the searchable sibling of the document-symbol
+ * outline: `.editor-references-panel` with a real focused query `<input>`
+ * pinned to its top, a `.editor-ws-symbols-selected` accent for keyboard
+ * navigation, and right-floated dim container/path suffixes. */
+.editor-ws-symbols-panel {
+  min-width: 420px;
+  max-width: 640px;
+  max-height: 320px;
+}
+
+.editor-ws-symbols-input-row {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-ws-symbols-selected {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.editor-ws-symbols-selected .editor-symbol-kind,
+.editor-ws-symbols-selected .editor-ws-symbols-container,
+.editor-ws-symbols-selected .editor-ws-symbols-path {
+  color: var(--accent);
+}
+
+.editor-ws-symbols-container {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  margin-left: 6px;
+}
+
+.editor-ws-symbols-path {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  float: right;
+  margin-left: 10px;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Real LSP find-references panel (task #175, the web/ half of task #174's
  * own desktop-then-web follow-up), byte-identical to desktop/'s own copy. */
 .editor-references-panel {

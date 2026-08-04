@@ -1139,6 +1139,53 @@ fn lsp_inlay_hints(
     Ok(serde_json::json!({ "status": "requested" }))
 }
 
+/// Real, live `workspace/symbol` ("Go to Symbol in Workspace") -- the
+/// direct sibling of `lsp_inlay_hints` above: identical
+/// never-blocks-the-caller shape, and (like `lsp_semantic_tokens` and
+/// `lsp_inlay_hints` but unlike every other `lsp_*` query handler) it does
+/// **not** unwrap a `result` field off a raw JSON-RPC envelope --
+/// `LspSession::request_workspace_symbol` already returns the decoded,
+/// structured `{name, kind, container_name, uri, line, character}` symbol
+/// array (the LSP client crate decodes the 3.17 `location`-can-be-bare-
+/// `{uri}` wire shape), so the event's `result` *is* the payload. The one
+/// real difference from every other handler here: `workspace/symbol` is a
+/// *workspace-wide* request, not a per-`textDocument` one -- the `doc_id`
+/// only supplies the live session to run it through (any open document's
+/// session works; the query itself has no cursor or document). `query` is
+/// the caller's free-text search string; empty means "list everything".
+fn lsp_workspace_symbol(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+    query: String,
+) -> Result<serde_json::Value, String> {
+    let session = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        doc.lsp_session
+            .clone()
+            .ok_or_else(|| "no live LSP session for this file".to_string())?
+    };
+    thread::spawn(move || {
+        let result = session.request_workspace_symbol(query.clone());
+        let event = Event {
+            event: "lsp_workspace_symbol_result".to_string(),
+            data: serde_json::json!({
+                "doc_id": doc_id,
+                "query": query,
+                "result": result,
+            }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+    Ok(serde_json::json!({ "status": "requested" }))
+}
+
 /// Real, live `textDocument/documentHighlight` -- the eighth real query
 /// method, the direct sibling of `lsp_hover`/`lsp_completion`/
 /// `lsp_definition`/`lsp_signature_help`/`lsp_references`/`lsp_rename`/
@@ -5432,6 +5479,16 @@ pub fn handle_request(
         "lsp_inlay_hints" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;
             lsp_inlay_hints(state, out_tx.clone(), doc_id)
+        })(),
+        "lsp_workspace_symbol" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            let query = req
+                .params
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            lsp_workspace_symbol(state, out_tx.clone(), doc_id, query)
         })(),
         "lsp_document_highlight" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;
@@ -11250,6 +11307,70 @@ time.sleep(10)
         assert!(resp.error.unwrap().contains("no live LSP session"));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lsp_workspace_symbol_on_a_real_unopened_doc_id_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "lsp_workspace_symbol",
+            serde_json::json!({ "doc_id": 999, "query": "add" }),
+        );
+        assert!(resp.error.unwrap().contains("no open document"));
+    }
+
+    #[test]
+    fn lsp_workspace_symbol_on_a_real_open_synthetic_file_with_no_lsp_session_errors_honestly() {
+        // The direct sibling of `lsp_inlay_hints`' own identical test above --
+        // same real, honest error path, same "unrecognized extension never
+        // gets a real LSP session" cause. (Unlike every other `lsp_*`
+        // handler's test, this one exercises a workspace-wide request whose
+        // `doc_id` only supplies the session, never a cursor.)
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-lsp-workspace-symbol-no-session-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("data.unknownext");
+        std::fs::write(&file, "hello").unwrap();
+
+        let state = new_state();
+        let open_resp = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        );
+        let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+        let resp = call(
+            &state,
+            2,
+            "lsp_workspace_symbol",
+            serde_json::json!({ "doc_id": doc_id, "query": "add" }),
+        );
+        assert!(resp.error.unwrap().contains("no live LSP session"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lsp_workspace_symbol_accepts_a_missing_query_as_an_empty_search() {
+        // The query param is deliberately optional at the wire level -- an
+        // absent/blank query is the spec's "list everything" convention, so
+        // the dispatch must default it to "" rather than reject the call.
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "lsp_workspace_symbol",
+            serde_json::json!({ "doc_id": 999 }),
+        );
+        assert!(resp.error.unwrap().contains("no open document"));
     }
 
     #[test]
