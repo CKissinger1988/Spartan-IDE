@@ -505,6 +505,65 @@ function extractSemanticTokens(result: unknown): SemanticTokenItem[] {
   });
 }
 
+/** One decoded LSP inlay hint (the shape `lsp_inlay_hints_result` carries --
+ * already decoded by the backend, so `label` is the plain rendered text and
+ * `kind` is the real LSP `InlayHintKind` (1 Type, 2 Parameter, 3 Everything
+ * else) when the server sent one). */
+interface InlayHintItem {
+  line: number;
+  character: number;
+  label: string;
+  kind: number | null;
+  padding_left: boolean;
+  padding_right: boolean;
+}
+
+/** Normalizes a real `lsp_inlay_hints_result` `result` (a decoded
+ * `InlayHint[]`, or `null` for a genuinely hint-free file). Returns `[]`
+ * for a real, honest "no hints here". */
+function extractInlayHints(result: unknown): InlayHintItem[] {
+  if (!Array.isArray(result)) return [];
+  return result.flatMap((entry) => {
+    const e = entry as Partial<InlayHintItem>;
+    if (
+      typeof e.line !== "number" ||
+      typeof e.character !== "number" ||
+      typeof e.label !== "string"
+    ) {
+      return [];
+    }
+    return [
+      {
+        line: e.line,
+        character: e.character,
+        label: e.label,
+        kind: typeof e.kind === "number" ? e.kind : null,
+        padding_left: e.padding_left === true,
+        padding_right: e.padding_right === true,
+      },
+    ];
+  });
+}
+
+/** Inlay-hint render classes, keyed by the real LSP `InlayHintKind` (1 Type,
+ * 2 Parameter, 3 Everything else) -- VS Code's own per-kind coloring,
+ * ported: type hints get the type hue, parameter hints the parameter hue,
+ * everything else the neutral hint hue. `null` means "no real `kind` sent,
+ * use the neutral class". */
+function inlayHintKindClass(kind: number | null): string {
+  if (kind === 1) return "editor-inlay-hint-type";
+  if (kind === 2) return "editor-inlay-hint-parameter";
+  return "editor-inlay-hint-other";
+}
+
+/** Inlay-hint label with the server's real `paddingLeft`/`paddingRight`
+ * flags applied as actual spaces -- the exact convention VS Code's own
+ * inlay-hint renderer uses (a `paddingRight` parameter hint like `a:` is
+ * spaced "a: 1" rather than "a:1"). */
+function renderInlayHintLabel(hint: InlayHintItem): string {
+  return `${hint.padding_left ? " " : ""}${hint.label}${hint.padding_right ? " " : ""}`;
+}
+
 /** Semantic-token marks deliberately render only for the token types that
  * add real information *on top of* the existing syntax-color layer --
  * structs/classes/types/functions/macros/namespaces/variables/etc., which
@@ -2447,6 +2506,81 @@ export default function Editor({
     };
   }, [file.content, file.docId]);
 
+  /** Real, live LSP inlay hints (type hints / parameter hints) -- the P2
+   * backlog item whose rust-analyzer support was confirmed by a real live
+   * probe: rust-analyzer declares `inlayHintProvider` and answers
+   * `textDocument/inlayHint` with real hints (type hints like `: i32` and
+   * parameter hints like `a:` with the real `paddingRight` flag set);
+   * pyright declares `inlayHintProvider: null` here, so this is genuinely a
+   * no-op there -- the LSP client never even asks a server that never
+   * offered the capability. The backend's `lsp_inlay_hints` returns
+   * already-decoded `{line, character, label, kind, padding_left,
+   * padding_right}` hints for the whole document, rendered as text spans in
+   * the same overlay layer `documentHighlights` and the semantic-token
+   * marks already use. It shares the semantic-token fetch's two real
+   * correctness details: debounced on every content change so hints track
+   * edits without hammering the server, and a response applied only when
+   * the buffer it was requested against is still the current buffer
+   * (stale-reply guard). The identical bounded empty-result retry covers
+   * the same live finding -- a rust-analyzer still finishing its initial
+   * indexing can genuinely answer with an empty list the first time, and
+   * without a retry an idle file would stay hint-less until an edit
+   * happened to trigger a fresh fetch. */
+  const [inlayHints, setInlayHints] = useState<InlayHintItem[]>([]);
+  const inlayRequestContentRef = useRef<string | null>(null);
+  const latestInlayContentRef = useRef(file.content);
+  latestInlayContentRef.current = file.content;
+  const inlayRetryRef = useRef(0);
+  const inlayRetryTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = window.spartan.onEvent((event, data) => {
+      if (event !== "lsp_inlay_hints_result") return;
+      const d = data as { doc_id: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      if (inlayRequestContentRef.current !== latestInlayContentRef.current) return;
+      const hints = extractInlayHints(d.result);
+      if (hints.length === 0 && inlayRetryRef.current < 5) {
+        inlayRetryRef.current += 1;
+        inlayRequestContentRef.current = latestInlayContentRef.current;
+        inlayRetryTimerRef.current = window.setTimeout(() => {
+          window.spartan
+            .call("lsp_inlay_hints", { doc_id: d.doc_id })
+            .catch((err: Error) => console.error("lsp_inlay_hints failed:", err));
+        }, 1500);
+        return;
+      }
+      setInlayHints(hints);
+    });
+    return () => {
+      unsubscribe();
+      if (inlayRetryTimerRef.current !== null) window.clearTimeout(inlayRetryTimerRef.current);
+    };
+  }, [file.docId]);
+
+  useEffect(() => {
+    setInlayHints([]);
+    inlayRequestContentRef.current = null;
+    inlayRetryRef.current = 0;
+  }, [file.docId]);
+
+  useEffect(() => {
+    const docId = file.docId;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      inlayRetryRef.current = 0;
+      inlayRequestContentRef.current = file.content;
+      window.spartan
+        .call("lsp_inlay_hints", { doc_id: docId })
+        .catch((err: Error) => console.error("lsp_inlay_hints failed:", err));
+    }, 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [file.content, file.docId]);
+
   /** Real "Format Document" (Ctrl+Shift+F) -- the first real caller of the
    * registry's own `formatter` field (real since §20.1, unwired anywhere
    * until now). The backend runs the language's real formatter binary
@@ -3602,6 +3736,24 @@ export default function Editor({
               />
             );
           })}
+          {!prefs.wordWrap &&
+            inlayHints.map((h, i) => {
+              const label = renderInlayHintLabel(h);
+              return (
+                <div
+                  key={`ih:${h.line}:${h.character}:${i}`}
+                  className={`editor-inlay-hint ${inlayHintKindClass(h.kind)}`}
+                  style={{
+                    top: h.line * lineHeightPx,
+                    left: h.character * charWidth,
+                    width: Math.max(2, label.length * charWidth),
+                    height: lineHeightPx,
+                  }}
+                >
+                  {label}
+                </div>
+              );
+            })}
           {bracketMatch?.map((offset) => {
             const { line, character } = offsetToLineChar(prevContentRef.current, offset);
             return (

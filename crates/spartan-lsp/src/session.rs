@@ -127,6 +127,17 @@ enum QueryKind {
     /// whose result is not passed through unparsed, because the flat `u32`
     /// encoding is meaningless without the server's legend.
     SemanticTokens,
+    /// Whole-document `textDocument/inlayHint` (inlay hints) -- the direct
+    /// sibling of `SemanticTokens`: whole-document, and likewise answered by
+    /// `LspClient::inlay_hints` as an already-decoded `InlayHint[]` JSON
+    /// array (not a raw envelope), because the label's string-or-part-list
+    /// wire shape is a protocol concern. `end_line` is the caller-computed
+    /// last line of the document, used to build the request's `range` --
+    /// the caller has the authoritative current buffer text; the session
+    /// itself never stores a copy beyond the edit coalescing mailbox.
+    InlayHints {
+        end_line: u64,
+    },
     DocumentHighlight {
         line: i64,
         character: i64,
@@ -558,7 +569,36 @@ impl LspSession {
             .flatten()
     }
 
-    /// Real, synchronous `textDocument/documentHighlight` -- the eighth
+    /// Real, synchronous whole-document `textDocument/inlayHint` (inlay
+    /// hints) -- the direct sibling of `request_semantic_tokens` above
+    /// (whole-document, no cursor position), sharing the identical
+    /// query-priority mailbox and the same real timeout reasoning. Unlike
+    /// every other request method, the reply is already decoded by
+    /// `LspClient::inlay_hints` into structured `{line, character, label,
+    /// kind, padding_left, padding_right}` hints, serialized as a JSON
+    /// array. `end_line` must be the document's real last line (the caller
+    /// holds the authoritative current buffer text); a fabricated
+    /// out-of-bounds `range.end` makes real servers answer with a real
+    /// error instead of clamping. `None` when the server never declared
+    /// `inlayHintProvider`, or when it answered with `null` (a genuinely
+    /// hint-free file). Same calling discipline: callers must run this from
+    /// their own dedicated thread, never the single request-processing
+    /// thread every other IPC method shares.
+    pub fn request_inlay_hints(&self, end_line: u64) -> Option<serde_json::Value> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        {
+            let mut guard = self.mailbox.state.lock().unwrap();
+            guard.pending_queries.push_back(PendingQuery {
+                kind: QueryKind::InlayHints { end_line },
+                reply: reply_tx,
+            });
+        }
+        self.mailbox.cvar.notify_one();
+        reply_rx
+            .recv_timeout(INDEXING_TIMEOUT + DEFAULT_TIMEOUT)
+            .ok()
+            .flatten()
+    }
     /// real query method, the direct sibling of `request_hover`/
     /// `request_completion`/`request_definition`/`request_signature_help`/
     /// `request_references`/`request_rename`/`request_document_symbol`
@@ -822,6 +862,7 @@ fn dispatch_query(client: &mut LspClient, file_uri: &str, query: PendingQuery) {
         } => client.rename(file_uri, line, character, &new_name),
         QueryKind::DocumentSymbol => client.document_symbol(file_uri),
         QueryKind::SemanticTokens => client.semantic_tokens(file_uri),
+        QueryKind::InlayHints { end_line } => client.inlay_hints(file_uri, end_line),
         QueryKind::DocumentHighlight { line, character } => {
             client.document_highlight(file_uri, line, character)
         }

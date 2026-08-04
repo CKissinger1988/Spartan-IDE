@@ -1120,6 +1120,45 @@
   border-bottom-color: rgba(251, 146, 60, 0.6);
 }
 
+/* Real LSP inlay-hint spans (type hints / parameter hints) -- the one
+ * mark-family in this layer that renders actual *text* (the hint's own
+ * label, `: i32` / `a:`), not a tinted rectangle, positioned absolutely at
+ * the hint's real line/character with the server's real
+ * `paddingLeft`/`paddingRight` flags already baked into the label as spaces
+ * by `renderInlayHintLabel`. Same absolute-positioned-div technique every
+ * other mark here uses, so it shares the same real scope limit: the
+ * line/character pixel math only matches the rendered grid when word wrap
+ * is off (gated in the render, like the bracket marks). `white-space: pre`
+ * preserves the padding spaces; the label is set to `--text-dim` (the
+ * app's own established hint/dim token) with a faint per-kind background
+ * pill in the same hue family the semantic-token marks already use, so it
+ * reads as a genuine hint next to the real code glyphs in either theme. */
+.editor-inlay-hint {
+  position: absolute;
+  box-sizing: border-box;
+  white-space: pre;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  border-radius: 2px;
+}
+
+.editor-inlay-hint-type {
+  background: rgba(96, 165, 250, 0.14);
+  color: rgba(147, 197, 253, 0.92);
+}
+
+.editor-inlay-hint-parameter {
+  background: rgba(212, 175, 55, 0.12);
+  color: rgba(234, 200, 120, 0.92);
+}
+
+.editor-inlay-hint-other {
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
 /* Real bracket-pair colorization -- one of `BRACKET_PAIR_COLOR_COUNT`
  * (4) real colors cycling by nesting depth, so a bracket and its own
  * real match always share a color even across many lines. A real,

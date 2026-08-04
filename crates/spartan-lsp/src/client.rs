@@ -151,6 +151,29 @@ pub struct SemanticToken {
     pub modifiers: Vec<String>,
 }
 
+/// One decoded LSP inlay hint: an absolute position (line/character), the
+/// label text to render there, and the real `paddingLeft`/`paddingRight`
+/// flags -- how the server asked the label to be spaced (padding-right
+/// renders "name: " with a trailing space, e.g. rust-analyzer's parameter
+/// hints). `kind` is the real LSP `InlayHintKind` when the server sent one
+/// (1 Type, 2 Parameter, 3 Everything else -- used by the frontend for
+/// per-kind coloring) or `None` for servers that omit it. The label is the
+/// concatenation of every `InlayHintLabelPart`'s `value`; each part can
+/// also carry a real `location`/`tooltip` for hover-and-click, deliberately
+/// not rendered by this v1 (the same named scope cut `hover` itself started
+/// with). This is the structured, frontend-ready shape this crate's own
+/// `inlay_hints` returns instead of the raw JSON array, whose label shape
+/// (string *or* part list) is a wire-protocol concern, not a caller's.
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct InlayHint {
+    pub line: u32,
+    pub character: u32,
+    pub label: String,
+    pub kind: Option<u32>,
+    pub padding_left: bool,
+    pub padding_right: bool,
+}
+
 /// A minimal in-house LSP client: real JSON-RPC 2.0 framing over a child
 /// process's stdio, no third-party LSP crate.
 pub struct LspClient {
@@ -164,6 +187,10 @@ pub struct LspClient {
     /// returns `None` (the caller can't even ask a server that never offered
     /// the capability).
     semantic_tokens_legend: Option<SemanticTokensLegend>,
+    /// Captured from the server's own `initialize` response -- `true` when
+    /// it declared an `inlayHintProvider`. `inlay_hints` returns `None`
+    /// (never even asks) when the server never offered the capability.
+    inlay_hint_supported: bool,
 }
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -223,6 +250,7 @@ impl LspClient {
             buffered: VecDeque::new(),
             next_id: 0,
             semantic_tokens_legend: None,
+            inlay_hint_supported: false,
         })
     }
 
@@ -337,6 +365,19 @@ impl LspClient {
                         "documentHighlight": {},
                         "callHierarchy": {},
                         "publishDiagnostics": {},
+                        // Real `textDocument/inlayHint` support (inlay
+                        // hints). `resolveSupport` lets a server attach
+                        // tooltips/text-edits to parts for an optional
+                        // resolve round trip -- this client deliberately
+                        // never calls `inlayHint/resolve` (the rendered
+                        // labels are complete without it), but declaring it
+                        // is what lets richer servers attach the fields a
+                        // future caller could resolve, matching how this
+                        // same block already handles code actions.
+                        "inlayHint": {
+                            "dynamicRegistration": false,
+                            "resolveSupport": {"properties": ["tooltip", "textEdits", "label"]},
+                        },
                         // Real `textDocument/codeAction` support. Real, live
                         // finding that shaped this exact block (confirmed by
                         // this crate's own rust-analyzer probe): without
@@ -453,6 +494,14 @@ impl LspClient {
                 });
             }
         }
+        // Capture whether the server declared an `inlayHintProvider` now,
+        // at handshake time, so `inlay_hints` can honestly return `None`
+        // (never even asking) for a server that never offered the
+        // capability -- the exact same discipline the legend capture above
+        // already applies to semantic tokens.
+        self.inlay_hint_supported = init_resp["result"]["capabilities"]["inlayHintProvider"]
+            .is_object()
+            || init_resp["result"]["capabilities"]["inlayHintProvider"].is_boolean();
         self.notify("initialized", json!({})).ok()?;
         self.notify(
             "textDocument/didOpen",
@@ -771,6 +820,39 @@ impl LspClient {
         serde_json::to_value(tokens).ok()
     }
 
+    /// Real `textDocument/inlayHint` (inlay hints) -- the direct sibling of
+    /// `semantic_tokens` above: whole-document (the spec's `range` covers
+    /// the whole file, since the frontend renders hints for the full
+    /// document rather than a per-viewport range), and likewise decoded
+    /// here into a structured, frontend-ready shape (see `InlayHint` and
+    /// `decode_inlay_hints`) because the label may be either a plain string
+    /// *or* an `InlayHintLabelPart[]` -- a wire-protocol shape, not a
+    /// caller's concern. `end_line` is the caller-computed last line of the
+    /// document (the exact line count, not a guess: a real, live probe
+    /// found rust-analyzer answers an out-of-bounds `range.end` with a real
+    /// `-32603` error rather than clamping). Returns the decoded
+    /// `InlayHint[]` serialized as a JSON array; `None` if the server never
+    /// declared `inlayHintProvider` or answered with `null` (a genuinely
+    /// hint-free file).
+    pub fn inlay_hints(&mut self, file_uri: &str, end_line: u64) -> Option<Value> {
+        if !self.inlay_hint_supported {
+            return None;
+        }
+        let envelope = self.request(
+            "textDocument/inlayHint",
+            Some(json!({
+                "textDocument": {"uri": file_uri},
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": end_line, "character": 0},
+                },
+            })),
+            DEFAULT_TIMEOUT,
+        )?;
+        let hints = decode_inlay_hints(envelope.get("result")?);
+        serde_json::to_value(hints).ok()
+    }
+
     /// Real `textDocument/documentHighlight` -- the eighth real query
     /// method, the direct sibling of `hover`/`completion`/`definition`/
     /// `signatureHelp`/`references`/`rename`/`document_symbol` above. Unlike
@@ -980,6 +1062,68 @@ pub fn decode_semantic_tokens(data: &[u64], legend: &SemanticTokensLegend) -> Ve
     tokens
 }
 
+/// Decodes a real `textDocument/inlayHint` result into the structured
+/// `InlayHint[]` shape `inlay_hints` returns. The label is the one
+/// genuinely two-shape field: the spec allows either a plain string or an
+/// `InlayHintLabelPart[]` (each part a `{value}` plus optional
+/// `location`/`tooltip`/`command`), so this concatenates part `value`s --
+/// and skips a hint whose label is neither shape, alongside one missing a
+/// real position. `kind`/`paddingLeft`/`paddingRight` are optional per
+/// spec; each defaults to `None`/`false` when absent. The decoding is
+/// verified against a real rust-analyzer response by this crate's own live
+/// probe (type hints like `: i32` and parameter hints like `a:`, with the
+/// real `paddingRight` flag on the parameter hints).
+pub fn decode_inlay_hints(result: &Value) -> Vec<InlayHint> {
+    let Some(arr) = result.as_array() else {
+        return Vec::new();
+    };
+    let mut hints = Vec::with_capacity(arr.len());
+    for h in arr {
+        let line = match h
+            .get("position")
+            .and_then(|p| p.get("line"))
+            .and_then(Value::as_u64)
+        {
+            Some(line) => line as u32,
+            None => continue,
+        };
+        let character = match h
+            .get("position")
+            .and_then(|p| p.get("character"))
+            .and_then(Value::as_u64)
+        {
+            Some(character) => character as u32,
+            None => continue,
+        };
+        let label = match h.get("label") {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Array(parts)) => parts
+                .iter()
+                .filter_map(|p| p.get("value").and_then(Value::as_str))
+                .collect(),
+            _ => continue,
+        };
+        let kind = h.get("kind").and_then(Value::as_u64).map(|k| k as u32);
+        let padding_left = h
+            .get("paddingLeft")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let padding_right = h
+            .get("paddingRight")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        hints.push(InlayHint {
+            line,
+            character,
+            label,
+            kind,
+            padding_left,
+            padding_right,
+        });
+    }
+    hints
+}
+
 #[cfg(test)]
 mod semantic_token_tests {
     use super::*;
@@ -1068,5 +1212,62 @@ mod semantic_token_tests {
         let data = [0, 0, 3, 0, 0b101];
         let tokens = decode_semantic_tokens(&data, &legend);
         assert_eq!(tokens[0].modifiers, vec!["defaultLibrary", "public"]);
+    }
+
+    /// The exact real rust-analyzer response captured by this crate's own
+    /// live probe on a `let total = add(1, 2);` fixture: type hints as plain
+    /// string labels (`: i32`, kind Type) and parameter hints as label-part
+    /// arrays (`a:` / `b:`, kind Parameter, with the real `paddingRight`
+    /// flag set so the rendered text is spaced "a: 1").
+    #[test]
+    fn decodes_a_real_rust_analyzer_inlay_hint_response() {
+        let result = serde_json::json!([
+            {"position": {"line": 7, "character": 13}, "label": ": i32", "kind": 1, "paddingLeft": false, "paddingRight": false},
+            {"position": {"line": 7, "character": 20}, "label": [{"value": "a:"}], "kind": 2, "paddingLeft": false, "paddingRight": true},
+            {"position": {"line": 8, "character": 15}, "label": ": i32", "kind": 1},
+        ]);
+        let hints = decode_inlay_hints(&result);
+        assert_eq!(hints.len(), 3);
+        assert_eq!(hints[0].label, ": i32");
+        assert_eq!(hints[0].line, 7);
+        assert_eq!(hints[0].character, 13);
+        assert_eq!(hints[0].kind, Some(1));
+        assert!(!hints[0].padding_left);
+        assert!(!hints[0].padding_right);
+        assert_eq!(hints[1].label, "a:");
+        assert_eq!(hints[1].kind, Some(2));
+        assert!(hints[1].padding_right);
+        assert!(!hints[1].padding_left);
+        assert_eq!(hints[2].label, ": i32");
+        assert_eq!(hints[2].kind, Some(1));
+    }
+
+    /// A hint whose label is neither the string nor the part-array shape is
+    /// skipped entirely, and absent optional fields default honestly --
+    /// never a panic and never a half-decoded hint.
+    #[test]
+    fn malformed_or_missing_fields_are_skipped_not_crashed() {
+        let result = serde_json::json!([
+            {"position": {"line": 0, "character": 1}, "label": "ok"},
+            {"position": {"line": 0, "character": 2}, "label": [{"value": "a"}, {"value": "b"}]},
+            {"position": {"line": 0, "character": 3}, "label": 42},
+            {"label": "no position"},
+            {"position": {"line": 0, "character": 4}, "label": "no kind", "paddingLeft": true},
+        ]);
+        let hints = decode_inlay_hints(&result);
+        assert_eq!(hints.len(), 3);
+        assert_eq!(hints[0].label, "ok");
+        assert_eq!(hints[1].label, "ab");
+        assert_eq!(hints[2].label, "no kind");
+        assert_eq!(hints[2].kind, None);
+        assert!(hints[2].padding_left);
+    }
+
+    /// A null result (a genuinely hint-free file) decodes to an empty list,
+    /// matching `inlay_hints`' own "`None` for null" caller contract.
+    #[test]
+    fn null_result_decodes_to_empty() {
+        assert!(decode_inlay_hints(&serde_json::json!(null)).is_empty());
+        assert!(decode_inlay_hints(&serde_json::json!({})).is_empty());
     }
 }

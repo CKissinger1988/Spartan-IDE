@@ -235,6 +235,7 @@ app.whenReady().then(() => {
     "lsp_document_symbol",
     "lsp_document_highlight",
     "lsp_semantic_tokens",
+    "lsp_inlay_hints",
     "lsp_call_hierarchy",
     "format_document",
     "search_project",

@@ -8816,6 +8816,81 @@ first — it's the parity reference until each row there is actually reimplement
   against vite), matching every prior desktop pass's harness note. The prior AGENTS.md note that
   semantic tokens were "genuinely unusable in this dev environment" is superseded: that finding was
   pyright-specific and the capability is now real and live against rust-analyzer.
+- **Real, working code — LSP inlay hints end-to-end (type/parameter hints in both backend shells),
+  closing the last P2 LSP row whose "not declared here" finding was pyright-specific**: `spartan-lsp`
+  gains the real `InlayHint { line, character, label, kind, padding_left, padding_right }` struct
+  and the public `decode_inlay_hints` free fn in `client.rs` (handles the spec's genuinely
+  two-shape label -- a plain string *or* an `InlayHintLabelPart[]`, concatenating part `value`s;
+  skips any hint missing a real position or with a label of neither shape; absent optional
+  `kind`/`paddingLeft`/`paddingRight` default to `None`/`false`, never a panic), an
+  `inlay_hint_supported` flag captured from the server's own `initialize` response at handshake
+  (a server that never declared `inlayHintProvider` gets `inlay_hints()` returning `None` -- the
+  client never even asks, the same discipline the semantic-token legend already applies), the
+  `inlayHint` client-capability block declaring `dynamicRegistration: false` +
+  `resolveSupport.properties: ["tooltip", "textEdits", "label"]` (the labels this v1 renders are
+  complete without a resolve round trip, matching how the code-action block already declares
+  resolve support it also never calls), and the real `inlay_hints(file_uri, end_line)` method
+  itself issuing a whole-document `textDocument/inlayHint` request (spec requires a `range`, and a
+  real, live probe found rust-analyzer answers an out-of-bounds `range.end` with a real `-32603`
+  error rather than clamping, so the caller computes the document's real last line) and returning
+  the already-decoded `InlayHint[]` as a JSON array. `session.rs` adds `QueryKind::InlayHints {
+  end_line }` + `request_inlay_hints(end_line)` (whole-document, no cursor position, the direct
+  sibling of `request_semantic_tokens`). `spartan-backend`'s `handle_request` gains
+  `lsp_inlay_hints` -- the one real difference from `lsp_semantic_tokens`: it computes the real
+  last line from the authoritative current buffer text (`OpenDoc.document`, the same source every
+  edit already mutates) -- emitting the decoded hints as `lsp_inlay_hints_result` with
+  `{doc_id, result}`, plus two new honest-error dispatch tests (unopened doc id; a real open file
+  with no live LSP session). On the UI side both backend-connected editors
+  (`desktop/Editor.tsx`, `web/BackendEditor.tsx`) render the hints as text spans in the existing
+  `editor-symbol-highlight-layer` (absolutely-positioned divs whose *content* is the hint's own
+  rendered label -- the one mark family in that layer that paints text, not a tinted rectangle --
+  gated off with word wrap on in `desktop/` for the same source-grid-math reason the bracket
+  marks document), colored per real `InlayHintKind` through `inlayHintKindClass` (1 Type / 2
+  Parameter / everything else neutral, VS Code's own per-kind coloring ported) and with the
+  server's real `paddingLeft`/`paddingRight` flags applied as actual spaces by
+  `renderInlayHintLabel` (`a:` + paddingRight renders "a: 1", not "a:1"). Fetch discipline is the
+  semantic-token fetch's own: 400ms debounce on `file.content` change, result applied only when
+  the request-content ref still matches the live buffer (stale-reply guard), state cleared on doc
+  switch, and the same bounded 5x1.5s empty-result retry for the same live finding (a rust-analyzer
+  still finishing initial indexing can answer with an empty list the first time, and no content
+  change would otherwise re-fetch). **Real verification, no estimation**: `cargo fmt --all --
+  --check` clean; `cargo test -p spartan-lsp --lib` 17 tests green (three new `decode_inlay_hints`
+  tests: a real captured rust-analyzer response decoding to exactly the `: i32` kind-1 type hint
+  and `a:`/`b:` kind-2 parameter hints with real `paddingRight`; malformed/missing fields skipped
+  not crashed; `null`/`{}` results decode to empty) and `cargo test -p spartan-backend --lib` 278
+  tests all green including the two new `lsp_inlay_hints` dispatch tests; clippy clean for both
+  crates (only the same pre-existing `spartan-git` line-313 warning); `npm run typecheck` clean
+  and both vite builds succeed in `desktop/` and `web/`; `desktop/`'s `build:electron` (both
+  electron tsconfigs) also typechecks clean. **Live end-to-end, real backend + real browser**: a
+  headed-free Playwright session drove the `web/` shell through a live `spartan-devserver` (real
+  WebSocket transport, real `spartan-backend` embedded, `RUSTUP_HOME`/`CARGO_HOME` intact) against
+  a real Rust fixture opened under a real rust-analyzer session -- 3 real hints rendered in the
+  overlay (`: i32` at line 5 char 13 with the type class and correct absolute `left`/`top` pixel
+  math, `a: ` and `b: ` with the parameter class and the real trailing padding-right space),
+  hints re-rendered after a debounced edit round-trip, zero console errors. A real direct-probe of
+  the transport also confirmed the raw `lsp_inlay_hints_result` payload matches the decode tests
+  byte-for-byte in shape (kind 1/2, `padding_right` flags). **Live end-to-end, real Electron
+  window** (genuine `electron` binary via Playwright `_electron`, real vite dev server on :5173,
+  real `spartan-backend` release subprocess freshly rebuilt with the new handler, `SPARTAN_ROOT`
+  pointing at the fixture, Xvfb -- no shim): all the same checks passed -- 3 real hint spans, the
+  right classes and padding, zero console errors (confirming the two allowlists this feature's
+  sibling pass taught us to watch -- `desktop/electron/preload.ts`'s method list and
+  `desktop/electron/main.ts`'s `spartan:*` IPC handler registry -- both gained `lsp_inlay_hints`
+  preemptively and held). **What this does not confirm**: the pure client-side `web/Editor.tsx`
+  (no backend) intentionally has no inlay-hint surface, unchanged and by design; pyright's
+  `inlayHintProvider: null` finding still stands in this env (rust-analyzer is what this ships
+  against and was verified against); inlay-hint labels with a real per-part `location`/`tooltip`
+  are not rendered (the decoded parts are concatenated, a deliberate v1 scope cut named in
+  `InlayHint`'s own doc comment); the 5x1.5s retry is a bounded settle-wait, not a general
+  timeout; the desktop launch used the dev-mode path (`loadURL` against vite), matching every
+  prior desktop pass's harness note. One real environment finding worth recording: this env's
+  rust-analyzer takes >90s to complete its initial diagnostics pass even on a trivial fixture
+  (the session's real `wait_real_diagnostics` 90s `INDEXING_TIMEOUT` expires first), so the first
+  query -- semantic tokens and inlay hints alike -- is answered only once the dispatch loop starts
+  after that wait; both shells' UIs already handle this honestly (the requests queue and the
+  results render when they arrive), and it is the same 90s-class behavior every LSP integration
+  test in this repo already documents.
+
 
 ## Build & test
 

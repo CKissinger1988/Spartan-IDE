@@ -495,6 +495,70 @@ function semanticTokenMarkClass(tokenType: string): string | null {
   return SEMANTIC_TOKEN_MARK_CLASSES[tokenType] ?? null;
 }
 
+/** One decoded LSP inlay hint, ported verbatim from `desktop/`'s own
+ * `InlayHintItem` -- see that file's own doc comment for the full real
+ * reasoning (the shape `lsp_inlay_hints_result` carries, already decoded by
+ * the backend, so `label` is the plain rendered text and `kind` is the real
+ * LSP `InlayHintKind` (1 Type, 2 Parameter, 3 Everything else) when the
+ * server sent one). */
+interface InlayHintItem {
+  line: number;
+  character: number;
+  label: string;
+  kind: number | null;
+  padding_left: boolean;
+  padding_right: boolean;
+}
+
+/** Normalizes a real `lsp_inlay_hints_result` `result`, ported verbatim
+ * from `desktop/`'s own `extractInlayHints` (a decoded `InlayHint[]`, or
+ * `null` for a genuinely hint-free file). Returns `[]` for a real, honest
+ * "no hints here". */
+function extractInlayHints(result: unknown): InlayHintItem[] {
+  if (!Array.isArray(result)) return [];
+  return result.flatMap((entry) => {
+    const e = entry as Partial<InlayHintItem>;
+    if (
+      typeof e.line !== "number" ||
+      typeof e.character !== "number" ||
+      typeof e.label !== "string"
+    ) {
+      return [];
+    }
+    return [
+      {
+        line: e.line,
+        character: e.character,
+        label: e.label,
+        kind: typeof e.kind === "number" ? e.kind : null,
+        padding_left: e.padding_left === true,
+        padding_right: e.padding_right === true,
+      },
+    ];
+  });
+}
+
+/** Inlay-hint render classes, ported verbatim from `desktop/`'s own
+ * `inlayHintKindClass` -- keyed by the real LSP `InlayHintKind` (1 Type, 2
+ * Parameter, 3 Everything else), VS Code's own per-kind coloring, ported:
+ * type hints get the type hue, parameter hints the parameter hue, everything
+ * else the neutral hint hue. `null` means "no real `kind` sent, use the
+ * neutral class". */
+function inlayHintKindClass(kind: number | null): string {
+  if (kind === 1) return "editor-inlay-hint-type";
+  if (kind === 2) return "editor-inlay-hint-parameter";
+  return "editor-inlay-hint-other";
+}
+
+/** Inlay-hint label with the server's real `paddingLeft`/`paddingRight`
+ * flags applied as actual spaces, ported verbatim from `desktop/`'s own
+ * `renderInlayHintLabel` -- the exact convention VS Code's own inlay-hint
+ * renderer uses (a `paddingRight` parameter hint like `a:` is spaced "a: 1"
+ * rather than "a:1"). */
+function renderInlayHintLabel(hint: InlayHintItem): string {
+  return `${hint.padding_left ? " " : ""}${hint.label}${hint.padding_right ? " " : ""}`;
+}
+
 /** A real, normalized LSP `SignatureHelp` target, ported verbatim from
  * `desktop/`'s own `SignatureHelpTarget` -- see that file's own doc
  * comment for the full real reasoning. */
@@ -2057,6 +2121,66 @@ export default function BackendEditor({
     };
   }, [client, file.content, file.docId]);
 
+  /** Real, live LSP inlay hints (type hints / parameter hints), ported
+   * verbatim from `desktop/`'s own identical wiring -- see that file's own
+   * doc comment for the full real reasoning (the debounced, content-guarded
+   * fetch, the bounded empty-result retry, and the `InlayHintKind`-keyed
+   * render classes). */
+  const [inlayHints, setInlayHints] = useState<InlayHintItem[]>([]);
+  const inlayRequestContentRef = useRef<string | null>(null);
+  const latestInlayContentRef = useRef(file.content);
+  latestInlayContentRef.current = file.content;
+  const inlayRetryRef = useRef(0);
+  const inlayRetryTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = client.onEvent((e) => {
+      if (e.event !== "lsp_inlay_hints_result") return;
+      const d = e.data as { doc_id: number; result: unknown };
+      if (d.doc_id !== file.docId) return;
+      if (inlayRequestContentRef.current !== latestInlayContentRef.current) return;
+      const hints = extractInlayHints(d.result);
+      if (hints.length === 0 && inlayRetryRef.current < 5) {
+        inlayRetryRef.current += 1;
+        inlayRequestContentRef.current = latestInlayContentRef.current;
+        inlayRetryTimerRef.current = window.setTimeout(() => {
+          client
+            .call("lsp_inlay_hints", { doc_id: d.doc_id })
+            .catch((err: Error) => console.error("lsp_inlay_hints failed:", err));
+        }, 1500);
+        return;
+      }
+      setInlayHints(hints);
+    });
+    return () => {
+      unsubscribe();
+      if (inlayRetryTimerRef.current !== null) window.clearTimeout(inlayRetryTimerRef.current);
+    };
+  }, [client, file.docId]);
+
+  useEffect(() => {
+    setInlayHints([]);
+    inlayRequestContentRef.current = null;
+    inlayRetryRef.current = 0;
+  }, [file.docId]);
+
+  useEffect(() => {
+    const docId = file.docId;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      inlayRetryRef.current = 0;
+      inlayRequestContentRef.current = file.content;
+      client
+        .call("lsp_inlay_hints", { doc_id: docId })
+        .catch((err: Error) => console.error("lsp_inlay_hints failed:", err));
+    }, 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [client, file.content, file.docId]);
+
   /** Real "Format Document" (Ctrl+Shift+F), ported verbatim from
    * `desktop/`'s own identical wiring -- see that file's own doc comment
    * for the full real reasoning, including the promise-based completion
@@ -3029,6 +3153,23 @@ export default function BackendEditor({
                   height: lineHeightPx,
                 }}
               />
+            );
+          })}
+          {inlayHints.map((h, i) => {
+            const label = renderInlayHintLabel(h);
+            return (
+              <div
+                key={`ih:${h.line}:${h.character}:${i}`}
+                className={`editor-inlay-hint ${inlayHintKindClass(h.kind)}`}
+                style={{
+                  top: h.line * lineHeightPx,
+                  left: h.character * charWidth,
+                  width: Math.max(2, label.length * charWidth),
+                  height: lineHeightPx,
+                }}
+              >
+                {label}
+              </div>
             );
           })}
           {bracketMatch?.map((offset) => {

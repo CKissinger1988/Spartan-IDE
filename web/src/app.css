@@ -1228,6 +1228,41 @@
   border-bottom-color: rgba(251, 146, 60, 0.6);
 }
 
+/* Real LSP inlay-hint spans (type hints / parameter hints), byte-identical
+ * to desktop/'s own copy -- the one mark-family in this layer that renders
+ * actual *text* (the hint's own label, `: i32` / `a:`), not a tinted
+ * rectangle, positioned absolutely at the hint's real line/character with
+ * the server's real `paddingLeft`/`paddingRight` flags already baked into
+ * the label as spaces by `renderInlayHintLabel`. `white-space: pre`
+ * preserves the padding spaces; the label is dimmed with a faint per-kind
+ * background pill in the same hue family the semantic-token marks already
+ * use. */
+.editor-inlay-hint {
+  position: absolute;
+  box-sizing: border-box;
+  white-space: pre;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  border-radius: 2px;
+}
+
+.editor-inlay-hint-type {
+  background: rgba(96, 165, 250, 0.14);
+  color: rgba(147, 197, 253, 0.92);
+}
+
+.editor-inlay-hint-parameter {
+  background: rgba(212, 175, 55, 0.12);
+  color: rgba(234, 200, 120, 0.92);
+}
+
+.editor-inlay-hint-other {
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
 /* Real matching-bracket highlight, byte-identical to desktop/'s own copy. */
 .editor-bracket-match-mark {
   position: absolute;

@@ -1091,6 +1091,54 @@ fn lsp_semantic_tokens(
     Ok(serde_json::json!({ "status": "requested" }))
 }
 
+/// Real, live `textDocument/inlayHint` (inlay hints) -- the direct sibling
+/// of `lsp_semantic_tokens` above: identical never-blocks-the-caller shape,
+/// whole-document, and (like `lsp_semantic_tokens` but unlike every other
+/// `lsp_*` query handler) it does **not** unwrap a `result` field off a raw
+/// JSON-RPC envelope -- `LspSession::request_inlay_hints` already returns
+/// the decoded, structured `{line, character, label, kind, padding_left,
+/// padding_right}` hint array (the LSP client crate decodes the label's
+/// string-or-part-list wire shape), so the event's `result` *is* the
+/// payload. The one real difference from `lsp_semantic_tokens`: the spec
+/// requires a `range`, and a real, live probe found rust-analyzer answers
+/// an out-of-bounds `range.end` with a real error rather than clamping, so
+/// this computes the document's real last line from the authoritative
+/// current buffer text (`OpenDoc.document`, the same source every edit
+/// already mutates) and passes it to the session.
+fn lsp_inlay_hints(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+) -> Result<serde_json::Value, String> {
+    let (session, end_line) = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        let session = doc
+            .lsp_session
+            .clone()
+            .ok_or_else(|| "no live LSP session for this file".to_string())?;
+        let end_line = doc.document.text().lines().count().saturating_sub(1) as u64;
+        (session, end_line)
+    };
+    thread::spawn(move || {
+        let result = session.request_inlay_hints(end_line);
+        let event = Event {
+            event: "lsp_inlay_hints_result".to_string(),
+            data: serde_json::json!({
+                "doc_id": doc_id,
+                "result": result,
+            }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+    Ok(serde_json::json!({ "status": "requested" }))
+}
+
 /// Real, live `textDocument/documentHighlight` -- the eighth real query
 /// method, the direct sibling of `lsp_hover`/`lsp_completion`/
 /// `lsp_definition`/`lsp_signature_help`/`lsp_references`/`lsp_rename`/
@@ -5380,6 +5428,10 @@ pub fn handle_request(
         "lsp_semantic_tokens" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;
             lsp_semantic_tokens(state, out_tx.clone(), doc_id)
+        })(),
+        "lsp_inlay_hints" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            lsp_inlay_hints(state, out_tx.clone(), doc_id)
         })(),
         "lsp_document_highlight" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;
@@ -11146,6 +11198,53 @@ time.sleep(10)
             &state,
             2,
             "lsp_semantic_tokens",
+            serde_json::json!({ "doc_id": doc_id }),
+        );
+        assert!(resp.error.unwrap().contains("no live LSP session"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lsp_inlay_hints_on_a_real_unopened_doc_id_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "lsp_inlay_hints",
+            serde_json::json!({ "doc_id": 999 }),
+        );
+        assert!(resp.error.unwrap().contains("no open document"));
+    }
+
+    #[test]
+    fn lsp_inlay_hints_on_a_real_open_synthetic_file_with_no_lsp_session_errors_honestly() {
+        // The direct sibling of `lsp_semantic_tokens`' own identical test
+        // above -- same real, honest error path, same "unrecognized
+        // extension never gets a real LSP session" cause.
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-lsp-inlay-hints-no-session-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("data.unknownext");
+        std::fs::write(&file, "hello").unwrap();
+
+        let state = new_state();
+        let open_resp = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        );
+        let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+        let resp = call(
+            &state,
+            2,
+            "lsp_inlay_hints",
             serde_json::json!({ "doc_id": doc_id }),
         );
         assert!(resp.error.unwrap().contains("no live LSP session"));
