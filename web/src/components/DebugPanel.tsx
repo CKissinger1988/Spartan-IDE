@@ -75,6 +75,15 @@ interface DebugPanelProps {
    * final output most right after it exits, not have it disappear the
    * instant the session leaves the live states. */
   outputLog?: OutputEntry[];
+  /** §75.98 program-path collection: an optional pre-built executable
+   * path supplied by the user. For Go/C#/Kotlin (and any other language
+   * whose registry entry has a real `dap_command` but no wired build
+   * step) this is the *only* way a launch succeeds at all; for Rust/
+   * Python it overrides the auto-resolution. Rendered while idle only,
+   * because it's a per-launch input. Absent means the feature isn't
+   * wired for this render. */
+  programPath?: string;
+  onProgramPathChange?: (path: string) => void;
 }
 
 /**
@@ -100,6 +109,8 @@ export default function DebugPanel({
   onRemoveWatch,
   onSetVariable,
   outputLog,
+  programPath,
+  onProgramPathChange,
 }: DebugPanelProps): React.ReactElement | null {
   const [watchDraft, setWatchDraft] = useState("");
   const [editingVariable, setEditingVariable] = useState<string | null>(null);
@@ -260,6 +271,25 @@ export default function DebugPanel({
               ))}
             </div>
           )}
+        </div>
+      )}
+      {!isLive && onProgramPathChange && (
+        <div className="debug-program-path">
+          <span className="debug-program-path-title" title="Optional pre-built executable path. Go/C#/Kotlin need one; Rust/Python use it to skip their auto-resolution.">
+            PROGRAM PATH
+          </span>
+          <input
+            className="debug-program-path-input mono"
+            value={programPath ?? ""}
+            placeholder="path to a pre-built executable (Go/C#/Kotlin)"
+            onChange={(e) => onProgramPathChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                onLaunch();
+              }
+            }}
+          />
         </div>
       )}
       {outputLog && outputLog.length > 0 && (

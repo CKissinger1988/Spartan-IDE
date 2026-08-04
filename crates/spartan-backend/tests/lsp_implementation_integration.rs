@@ -121,8 +121,7 @@ fn lsp_implementation_reports_a_real_rust_analyzer_impl_target() {
         );
         assert_eq!(impl_resp.result.unwrap()["status"], "requested");
 
-        let event =
-            recv_event_matching(&rx, "lsp_implementation_result", Duration::from_secs(105));
+        let event = recv_event_matching(&rx, "lsp_implementation_result", Duration::from_secs(105));
         assert_eq!(event["data"]["doc_id"], doc_id);
         assert_eq!(event["data"]["line"], 0);
         assert_eq!(event["data"]["character"], 6);

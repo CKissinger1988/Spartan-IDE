@@ -85,6 +85,15 @@ fn dap_update_event(doc_id: u64, update: DapUpdate) -> Event {
 /// program path this increment has no UI to collect yet -- refused with
 /// a specific, honest error rather than silently doing nothing.
 ///
+/// `program_override`: an optional real program path supplied by the UI.
+/// When present it wins over every default resolution below (no build is
+/// ever attempted with it), which is what makes Go/C#/Java/Kotlin/TS --
+/// any language whose registry entry carries a real `dap_command` but no
+/// wired build path -- launchable at all. Deliberately *not* validated
+/// here beyond non-empty: the adapter itself is the real authority on
+/// whether the path points at something runnable, and its own launch
+/// error becomes the honest `dap_error` the UI already renders.
+///
 /// On success, spawns one additional real background thread that drains
 /// the session's own updates and relays each one as a real backend
 /// `Event` (`dap_build_failed`/`dap_stopped`/`dap_exited`/`dap_error`),
@@ -96,6 +105,7 @@ pub fn dap_launch(
     path: &Path,
     breakpoints: &[spartan_dap::Breakpoint],
     out_tx: Sender<String>,
+    program_override: Option<&str>,
 ) -> Result<Arc<DapSession>, String> {
     let registry = LanguageRegistry::curated_default();
     let profile = registry
@@ -108,20 +118,23 @@ pub fn dap_launch(
     let project_root = spartan_lsp::find_project_root(path, &profile.marker_files)
         .ok_or_else(|| "no real project root found for this file".to_string())?;
 
-    let (needs_build, program_path): (bool, PathBuf) = match profile.id.as_str() {
-        "rust"
-            if profile.build_systems.iter().any(|s| s == "cargo")
-                && project_root.join("Cargo.toml").is_file() =>
-        {
-            (true, PathBuf::new())
-        }
-        "python" => (false, path.to_path_buf()),
-        other => {
-            return Err(format!(
-                "DAP for `{other}` needs a pre-built program path, which this increment has \
-                 no way to supply yet (only Rust-via-Cargo and Python are wired)"
-            ));
-        }
+    let (needs_build, program_path): (bool, PathBuf) = match program_override {
+        Some(p) if !p.trim().is_empty() => (false, PathBuf::from(p)),
+        _ => match profile.id.as_str() {
+            "rust"
+                if profile.build_systems.iter().any(|s| s == "cargo")
+                    && project_root.join("Cargo.toml").is_file() =>
+            {
+                (true, PathBuf::new())
+            }
+            "python" => (false, path.to_path_buf()),
+            other => {
+                return Err(format!(
+                    "DAP for `{other}` needs a pre-built program path, which this increment has \
+                     no way to supply yet (only Rust-via-Cargo and Python are wired)"
+                ));
+            }
+        },
     };
 
     let resolved_command = resolve_dap_command(&profile.id, command);
@@ -202,7 +215,7 @@ mod tests {
         std::fs::write(&file, "hello").unwrap();
 
         let (tx, _rx) = std::sync::mpsc::channel();
-        match dap_launch(0, &file, &[spartan_dap::Breakpoint::line(1)], tx) {
+        match dap_launch(0, &file, &[spartan_dap::Breakpoint::line(1)], tx, None) {
             Err(message) => assert!(message.contains("no language profile")),
             Ok(_) => panic!("expected a real Err, got Ok"),
         }
@@ -214,15 +227,17 @@ mod tests {
     fn dap_launch_refuses_honestly_for_a_real_unwired_compiled_language() {
         // Go has a real, configured `dap_command` (`dlv`) and a real
         // project marker (`go.mod`) -- exercising the real "recognized
-        // language, real dap_command, real project root, but not in the
-        // Rust/Python wired set" branch, not just "no profile at all."
+        // language, real dap_command, real project root, but no
+        // program_path supplied" branch (§75.98: with an override, Go
+        // launches; this test covers the no-override refusal that
+        // predates it).
         let dir = work_dir("go-unwired");
         std::fs::write(dir.join("go.mod"), "module example.com/x\n").unwrap();
         let file = dir.join("main.go");
         std::fs::write(&file, "package main\nfunc main() {}\n").unwrap();
 
         let (tx, _rx) = std::sync::mpsc::channel();
-        match dap_launch(0, &file, &[spartan_dap::Breakpoint::line(1)], tx) {
+        match dap_launch(0, &file, &[spartan_dap::Breakpoint::line(1)], tx, None) {
             Err(message) => {
                 assert!(
                     message.contains("go"),
@@ -240,17 +255,47 @@ mod tests {
     }
 
     #[test]
+    fn dap_launch_accepts_a_program_override_for_go() {
+        // The §75.98 positive branch of the test above: the exact same
+        // Go fixture (real profile, real `dlv` dap_command, real
+        // `go.mod` project root) is accepted the moment a program path
+        // is supplied, without `dlv` needing to be installed -- the real
+        // spawn happens on `DapSession::launch`'s own background thread
+        // and would surface as an async `dap_error`, never as a sync Err.
+        let dir = work_dir("go-override");
+        std::fs::write(dir.join("go.mod"), "module example.com/x\n").unwrap();
+        let file = dir.join("main.go");
+        std::fs::write(&file, "package main\nfunc main() {}\n").unwrap();
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let session = dap_launch(
+            0,
+            &file,
+            &[spartan_dap::Breakpoint::line(1)],
+            tx,
+            Some("/tmp/spartan-fake-program"),
+        );
+        assert!(
+            session.is_ok(),
+            "a supplied program path should launch: {:?}",
+            session.err()
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // A real .py file with no pyproject.toml/setup.py/requirements.txt
+    // anywhere in its ancestry -- `find_project_root` genuinely can't
+    // resolve a root, the same honest "no real project root" case
+    // `lsp_integration`'s own tests exercise for LSP.
+    #[test]
     fn dap_launch_refuses_honestly_for_python_with_no_real_project_marker() {
-        // A real .py file with no pyproject.toml/setup.py/requirements.txt
-        // anywhere in its ancestry -- `find_project_root` genuinely can't
-        // resolve a root, the same honest "no real project root" case
-        // `lsp_integration`'s own tests exercise for LSP.
         let dir = work_dir("python-no-root");
         let file = dir.join("script.py");
         std::fs::write(&file, "print('hi')\n").unwrap();
 
         let (tx, _rx) = std::sync::mpsc::channel();
-        match dap_launch(0, &file, &[spartan_dap::Breakpoint::line(1)], tx) {
+        match dap_launch(0, &file, &[spartan_dap::Breakpoint::line(1)], tx, None) {
             Err(message) => assert!(message.contains("no real project root")),
             Ok(_) => panic!("expected a real Err, got Ok"),
         }

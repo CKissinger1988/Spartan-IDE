@@ -1645,8 +1645,12 @@ fn chrono_now_iso() -> String {
             let days = hours / 24;
             // Simplified ISO 8601 — not calendar-correct but sufficient
             // for a timestamp the UI only displays, never parses back.
-            format!("2026-01-01T{:02}:{:02}:{:02}Z",
-                hours % 24, mins % 60, secs % 60)
+            format!(
+                "2026-01-01T{:02}:{:02}:{:02}Z",
+                hours % 24,
+                mins % 60,
+                secs % 60
+            )
         })
         .unwrap_or_else(|_| "2026-01-01T00:00:00Z".to_string())
 }
@@ -1655,8 +1659,12 @@ fn chrono_now_iso() -> String {
 fn chrono_from_unix(secs: u64) -> String {
     let mins = secs / 60;
     let hours = mins / 60;
-    format!("2026-01-01T{:02}:{:02}:{:02}Z",
-        hours % 24, mins % 60, secs % 60)
+    format!(
+        "2026-01-01T{:02}:{:02}:{:02}Z",
+        hours % 24,
+        mins % 60,
+        secs % 60
+    )
 }
 
 /// Real `Idle -> Planning` transition plus a real, spawned background
@@ -3542,6 +3550,7 @@ fn dap_launch(
     out_tx: Sender<String>,
     doc_id: u64,
     breakpoints: &[spartan_dap::Breakpoint],
+    program_override: Option<&str>,
 ) -> Result<serde_json::Value, String> {
     let path = {
         let guard = state.lock().map_err(|_| "backend state poisoned")?;
@@ -3551,7 +3560,8 @@ fn dap_launch(
             .ok_or_else(|| format!("no open document with id {doc_id}"))?;
         doc.path.clone()
     };
-    let session = dap_integration::dap_launch(doc_id, &path, breakpoints, out_tx)?;
+    let session =
+        dap_integration::dap_launch(doc_id, &path, breakpoints, out_tx, program_override)?;
     let mut guard = state.lock().map_err(|_| "backend state poisoned")?;
     let session_id = guard.next_dap_id;
     guard.next_dap_id += 1;
@@ -5730,7 +5740,18 @@ pub fn handle_request(
         "dap_launch" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;
             let breakpoints = parse_breakpoints(&req.params);
-            dap_launch(state, out_tx.clone(), doc_id, &breakpoints)
+            let program_override = req
+                .params
+                .get("program_path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            dap_launch(
+                state,
+                out_tx.clone(),
+                doc_id,
+                &breakpoints,
+                program_override.as_deref(),
+            )
         })(),
         "dap_continue" => get_u64_param(&req.params, "session_id")
             .and_then(|id| dap_command(state, id, spartan_dap::DapCommand::Continue)),
@@ -12914,5 +12935,64 @@ time.sleep(10)
         );
         let err = resp.error.expect("no such dap session should error");
         assert!(err.contains("999"), "error should name the bad id: {err}");
+    }
+
+    /// The exact contract this pass's program-path collection feature is
+    /// built on: a registry-configured language that has no built-in
+    /// build resolution (Go) is refused synchronously without a supplied
+    /// program path, and accepted the moment one is supplied -- no real
+    /// adapter needed for either branch to be deterministic (the actual
+    /// `dlv` spawn happens on `DapSession::launch`'s own background
+    /// thread and would surface as an async `dap_error` if it failed).
+    #[test]
+    fn dap_launch_program_override_unlocks_go() {
+        let dir = std::env::temp_dir().join(format!("spartan-backend-go-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("go.mod"), "module example.com/t\n\ngo 1.21\n").unwrap();
+        let go_file = dir.join("main.go");
+        std::fs::write(&go_file, "package main\nfunc main() {}\n").unwrap();
+        let state = new_state();
+
+        let open_resp = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": go_file.to_string_lossy() }),
+        );
+        let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+        let no_path = call(
+            &state,
+            2,
+            "dap_launch",
+            serde_json::json!({ "doc_id": doc_id, "breakpoints": [] }),
+        );
+        let err = no_path
+            .error
+            .expect("go without a program path should error synchronously");
+        assert!(
+            err.contains("pre-built program path"),
+            "error should name the missing path: {err}"
+        );
+
+        let with_path = call(
+            &state,
+            3,
+            "dap_launch",
+            serde_json::json!({
+                "doc_id": doc_id,
+                "breakpoints": [],
+                "program_path": "/tmp/spartan-fake-program"
+            }),
+        );
+        assert!(
+            with_path.error.is_none(),
+            "a supplied program path should be accepted: {:?}",
+            with_path.error
+        );
+        assert!(with_path.result.unwrap()["session_id"].as_u64().is_some());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -209,6 +209,25 @@ mod tests {
     }
 
     #[test]
+    fn kotlin_profile_gained_its_first_real_dap_command() {
+        let registry = LanguageRegistry::curated_default();
+        let kotlin = registry
+            .profile_by_id("kotlin")
+            .expect("kotlin profile must exist");
+        assert_eq!(
+            kotlin.lsp_command.as_ref().unwrap().program,
+            "kotlin-language-server"
+        );
+        assert_eq!(
+            kotlin.dap_command.as_ref().unwrap().program,
+            "kotlin-debug-adapter",
+            "Kotlin's dap_command is a bare binary name with no args, the \
+             exact shape spartan-editor-core's own live-proven test spawns \
+             with DapClient::spawn (§75.98)"
+        );
+    }
+
+    #[test]
     fn detect_project_languages_finds_csharp_from_a_real_csproj() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("MyApp.csproj"), "<Project />").unwrap();

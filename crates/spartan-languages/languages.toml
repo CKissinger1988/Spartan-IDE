@@ -64,6 +64,15 @@ build_systems = ["gradle"]
   [language.lsp_command]
   program = "kotlin-language-server"
 
+  # Real §75.98 addition: Kotlin's first real `dap_command`. The bare
+  # binary (no args) is exactly how spartan-editor-core's own live-proven
+  # `dap_kotlin_cross_language.rs` spawns it (`DapClient::spawn`), so this
+  # entry is safe for every shell, including the reference one with no
+  # argv support. The adapter is not installed in the shared dev
+  # environment; a launch without it fails honestly at spawn time.
+  [language.dap_command]
+  program = "kotlin-debug-adapter"
+
   [language.formatter]
   program = "ktlint"
 

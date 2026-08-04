@@ -163,6 +163,10 @@ export default function App(): React.ReactElement {
   // precedent (e.g. `leo_session_history`'s cap).
   const [dapOutputByDoc, setDapOutputByDoc] = useState<Record<number, OutputEntry[]>>({});
   const MAX_DAP_OUTPUT_LINES = 500;
+  // §75.98 program-path collection: an optional pre-built executable path
+  // for the active file, supplied by the user in DebugPanel. Sent as
+  // `program_path` on the next real `dap_launch`; only used when non-empty.
+  const [programPath, setProgramPath] = useState("");
   // Real DAP watch/REPL expressions (§250) -- a debugger-wide list (not
   // per-doc), re-evaluated against the active session on every stop.
   // `watchResults` is keyed by expression; empty while not stopped.
@@ -766,6 +770,7 @@ export default function App(): React.ReactElement {
           condition: b.condition,
           logMessage: b.logMessage,
         })),
+        ...(programPath.trim() ? { program_path: programPath.trim() } : {}),
       })
       .then((result) => {
         const { session_id } = result as { session_id: number };
@@ -780,7 +785,7 @@ export default function App(): React.ReactElement {
           [docId]: { sessionId: -1, status: "error", message: err.message },
         }));
       });
-  }, [activeFile, breakpointsByDoc]);
+  }, [activeFile, breakpointsByDoc, programPath]);
 
   const dapSendCommand = useCallback(
     (method: string) => {
@@ -973,6 +978,8 @@ export default function App(): React.ReactElement {
                   onRemoveWatch={removeWatch}
                   onSetVariable={setVariable}
                   outputLog={activeFile ? dapOutputByDoc[activeFile.docId] : undefined}
+                  programPath={programPath}
+                  onProgramPathChange={setProgramPath}
                 />
                 <LogcatPanel
                   visible={logcatOpen}

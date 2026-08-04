@@ -1067,6 +1067,36 @@
   border-color: rgb(var(--accent-rgb));
 }
 
+.debug-program-path {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.debug-program-path-title {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.debug-program-path-input {
+  flex: 1;
+  min-width: 120px;
+  padding: 3px 6px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.debug-program-path-input:focus {
+  outline: none;
+  border-color: rgb(var(--accent-rgb));
+}
+
 .debug-watch-list {
   display: flex;
   flex-direction: column;

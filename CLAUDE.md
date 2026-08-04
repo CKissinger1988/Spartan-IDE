@@ -109,6 +109,7 @@ first — it's the parity reference until each row there is actually reimplement
 | Blue/gold rebrand across every real Spartan surface, a real sarcastic Leo persona, Gemini-CLI-style random thoughts in the Leo chat panel, web/desktop visual parity | §75.95 |
 | Unsaved-changes confirmation — a real discard/Cancel modal on dirty-tab close + app quit gate in the Electron shell, browser `beforeunload` in web, closing the last real CodeRabbit-named gap | §75.96 |
 | Code-signing infrastructure + the auto-update apply path in the Electron shell — env-var-driven afterSign hook (Linux GPG/Windows Authenticode/macOS codesign+notarize), electron-updater download/install/restart with a real CJS/ESM interop bug found and fixed by actually launching the app, live-verified end-to-end against a real Electron window + Playwright | §75.97 |
+| DAP program-path collection in both shells — Go/C#/Kotlin (and any registry-configured language) launchable via a PROGRAM PATH input that overrides auto-resolution; Kotlin's first real dap_command; a stale spartan-devserver binary (it embeds the backend lib) found live and rebuilt; both shells live-verified end-to-end | §75.98 |
 
 ## Current status (check this before assuming anything is built)
 
@@ -9068,6 +9069,61 @@ first — it's the parity reference until each row there is actually reimplement
   Linux-only box. The update *check* path (commit-compare) and the update *apply* path
   (download/install/restart) are now both real; the apply path is fully live the moment a real
   signed release with a `latest.yml` is published to the repo's GitHub Releases.
+- **Real, working code — DAP program-path collection, unlocking every registry-configured
+  language in both shells (closing `docs/FUTURE_FEATURES.md`'s P2 row "DAP for
+  C#/Kotlin/Java/Go/TS")**: before this pass, `spartan_backend::dap_integration::dap_launch`
+  hardcoded exactly two languages — Rust-via-Cargo (auto-build) and Python (the file itself) —
+  and refused every *other* language that had a real registry `dap_command` (Go's `dlv`,
+  C#'s `netcoredbg`) with an honest but total "this increment has no way to supply a program
+  path yet" sync error. This pass gives the UI a way to supply it. **Backend**: `dap_launch`
+  gained an optional `program_path` override parameter threaded through the `dap_launch`
+  dispatch (params key `program_path`); when present and non-empty it wins over every default
+  resolution (no build is ever attempted with it — `needs_build: false`), which is what makes
+  any registry-configured adapter launchable at all. Deliberately *not* validated beyond
+  non-empty: the adapter itself is the real authority on whether the path points at something
+  runnable, and its own spawn error becomes the honest `dap_error` the UI already renders.
+  **Registry**: `languages.toml` gained Kotlin's first real `dap_command`
+  (`program = "kotlin-debug-adapter"` — the bare binary, no args, exactly how
+  spartan-editor-core's own live-proven `dap_kotlin_cross_language.rs` spawns it with
+  `DapClient::spawn`, so the entry is safe for every shell including the reference one with no
+  argv support; C#/Go already had theirs). A real, honest gap is explicitly *not* fabricated:
+  TypeScript has no standalone CLI stdio DAP adapter (`js-debug` needs VS Code's extension
+  host; Node's `--inspect` speaks CDP, not DAP) and Java's engine is JDWP, not a DAP adapter —
+  so neither gets a made-up registry entry, and both are documented as real, named,
+  still-open follow-ups rather than silently claimed. **UI (both shells)**: DebugPanel gained a
+  real "PROGRAM PATH" input (idle state only, Enter-to-launch, mirrors the existing watch
+  input's styling) wired from new `programPath` state in both `App.tsx` files through a new
+  `program_path` param on the real `dap_launch` call — Go/C#/Kotlin need it to launch at all;
+  Rust/Python use it to override their auto-resolution. **Real live verification, both shells,
+  no estimation**: a real Go fixture (`go.mod` + `main.go`) was launched in a real Electron
+  window (Xvfb :99) driven by Playwright, and in the real `web/dist` served by a real
+  `spartan-devserver` (over the real WebSocket transport) driven by headless Chromium. In
+  both, the control case (Debug with the input empty) returned the exact pre-feature sync
+  refusal ("`go` needs a pre-built program path..."), and the feature case (a typed program
+  path + Debug) was accepted end-to-end and landed on the honest async result
+  `failed to spawn dlv: No such file or directory (os error 2)` — proving the override
+  traveled from the UI all the way to a real adapter spawn attempt (dlv is genuinely not
+  installed in this environment). **A real, previously-hidden infra finding surfaced by the
+  web live-run, not by inspection**: the first web run failed even though the payload was
+  correct — `spartan-devserver` embeds `spartan-backend` as a *library*, so the devserver
+  binary at `target/release/spartan-devserver` must be rebuilt whenever the backend lib
+  changes; the stale binary was silently running the old dispatch logic. Rebuilding the
+  devserver fixed it, and this coupling is now named here for every future pass. New tests:
+  `dap_launch_program_override_unlocks_go` (dispatch-level, via the real `handle_request`),
+  `dap_launch_accepts_a_program_override_for_go` (module-level), and
+  `kotlin_profile_gained_its_first_real_dap_command` (registry). `cargo fmt`/`build`/
+  `clippy` clean, 287 backend tests pass, 23 spartan-languages tests pass; both shells'
+  `npm run typecheck` + `npm run build` clean. **What this does not confirm**: no real
+  `dlv`/`netcoredbg`/`kotlin-debug-adapter` is installed here, so a real successful Go/C#/
+  Kotlin stop was not (and cannot be) observed — what was proven live is that the program path
+  is collected, transmitted, accepted, and forwarded to a real adapter spawn attempt, with the
+  adapter's own honest absence error surfaced through the exact same path a real launch uses.
+  TypeScript and Java remain genuinely unlaunchable until a real standalone DAP adapter exists
+  for them (named above), and Rust-via-program-path (build-skip override) was not separately
+  live-probed. The desktop run also re-confirmed the standing pattern that the renderer is
+  served by the Vite dev server in `electron .` dev mode, which must be running for any
+  `_electron.launch()` test to load. The web run proved the full real pipeline end-to-end in a
+  plain browser with zero shims.
 
 
 ## Build & test
