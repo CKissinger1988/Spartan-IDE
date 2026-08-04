@@ -1958,6 +1958,19 @@ export default function Editor({
   // shape `textDocument/definition` does.
   const pendingTypeDefinitionRef = useRef<{ line: number; character: number } | null>(null);
 
+  // Real go-to-implementation (Ctrl+Alt+Click) -- "jump from a declaration
+  // to its real implementations" (e.g. from a trait method to each impl
+  // block that implements it). A real, separate pending ref so the three
+  // modifier-click requests can never be confused with each other if
+  // several happen to be in flight at once. Reuses the identical
+  // `Location | Location[] | LocationLink[] | null` response shape
+  // `extractDefinitionTarget` already normalizes -- no separate normalizer
+  // needed, `textDocument/implementation` returns the same real shape
+  // `textDocument/definition` does. Live-probed against rust-analyzer
+  // (which declares `implementationProvider: true`) before wiring anything:
+  // a real query on a real trait/impl fixture returned the real impl block.
+  const pendingImplementationRef = useRef<{ line: number; character: number } | null>(null);
+
   useEffect(() => {
     const unsubscribe = window.spartan.onEvent((event, data) => {
       if (event === "lsp_definition_result") {
@@ -1979,6 +1992,15 @@ export default function Editor({
         const pending = pendingTypeDefinitionRef.current;
         if (!pending || pending.line !== d.line || pending.character !== d.character) return;
         pendingTypeDefinitionRef.current = null;
+        const target = extractDefinitionTarget(d.result);
+        if (!target) return;
+        goToTarget(target);
+      } else if (event === "lsp_implementation_result") {
+        const d = data as { doc_id: number; line: number; character: number; result: unknown };
+        if (d.doc_id !== file.docId) return;
+        const pending = pendingImplementationRef.current;
+        if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+        pendingImplementationRef.current = null;
         const target = extractDefinitionTarget(d.result);
         if (!target) return;
         goToTarget(target);
@@ -2150,6 +2172,17 @@ export default function Editor({
         window.spartan
           .call("lsp_type_definition", { doc_id: file.docId, line, character })
           .catch((err: Error) => console.error("lsp_type_definition failed:", err));
+        return;
+      }
+      if (e.altKey) {
+        // Real Ctrl+Alt+Click -- "Go to Implementation," the real third
+        // sibling of the two gestures above: from a declaration to its real
+        // implementations (trait method to each impl block, interface to
+        // each class, etc.).
+        pendingImplementationRef.current = { line, character };
+        window.spartan
+          .call("lsp_implementation", { doc_id: file.docId, line, character })
+          .catch((err: Error) => console.error("lsp_implementation failed:", err));
         return;
       }
       pendingDefinitionRef.current = { line, character };

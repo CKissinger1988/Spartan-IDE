@@ -625,7 +625,54 @@ fn lsp_type_definition(
     Ok(serde_json::json!({ "status": "requested" }))
 }
 
-/// Real, live `textDocument/signatureHelp` -- the fourth real query method,
+/// Real, live `textDocument/implementation` -- "Go to Implementation," the
+/// direct sibling of `lsp_type_definition` above: identical never-blocks-
+/// the-caller shape, identical envelope-unwrapping. Live-probed against
+/// rust-analyzer before wiring anything: a real initialize handshake
+/// declares `implementationProvider: true`, and a real query on a real
+/// trait/impl fixture (cursor on the trait name) returned the real impl
+/// block -- the capability genuinely works in this environment, unlike
+/// `typeHierarchyProvider`, which rust-analyzer does not declare (and
+/// pyright likewise lacks), the finding that closed the type-hierarchy
+/// backlog item. The raw `Location | Location[] | LocationLink[] | null`
+/// result is passed through unwrapped exactly as the server sent it, left
+/// for the frontend to normalize, matching every other query method.
+fn lsp_implementation(
+    state: &Arc<Mutex<BackendState>>,
+    out_tx: Sender<String>,
+    doc_id: u64,
+    line: i64,
+    character: i64,
+) -> Result<serde_json::Value, String> {
+    let session = {
+        let guard = state.lock().map_err(|_| "backend state poisoned")?;
+        let doc = guard
+            .open_docs
+            .get(&doc_id)
+            .ok_or_else(|| format!("no open document with id {doc_id}"))?;
+        doc.lsp_session
+            .clone()
+            .ok_or_else(|| "no live LSP session for this file".to_string())?
+    };
+    thread::spawn(move || {
+        let raw = session.request_implementation(line, character);
+        let result = raw.and_then(|envelope| envelope.get("result").cloned());
+        let event = Event {
+            event: "lsp_implementation_result".to_string(),
+            data: serde_json::json!({
+                "doc_id": doc_id,
+                "line": line,
+                "character": character,
+                "result": result,
+            }),
+        };
+        if let Ok(l) = serde_json::to_string(&event) {
+            let _ = out_tx.send(l);
+        }
+    });
+    Ok(serde_json::json!({ "status": "requested" }))
+}
+
 /// the direct sibling of `lsp_hover`/`lsp_completion`/`lsp_definition`
 /// above: identical never-blocks-the-caller shape, identical envelope-
 /// unwrapping. A real LSP `SignatureHelp` result (`{signatures,
@@ -5406,6 +5453,12 @@ pub fn handle_request(
             let line = get_u64_param(&req.params, "line")? as i64;
             let character = get_u64_param(&req.params, "character")? as i64;
             lsp_type_definition(state, out_tx.clone(), doc_id, line, character)
+        })(),
+        "lsp_implementation" => (|| {
+            let doc_id = get_u64_param(&req.params, "doc_id")?;
+            let line = get_u64_param(&req.params, "line")? as i64;
+            let character = get_u64_param(&req.params, "character")? as i64;
+            lsp_implementation(state, out_tx.clone(), doc_id, line, character)
         })(),
         "lsp_signature_help" => (|| {
             let doc_id = get_u64_param(&req.params, "doc_id")?;
@@ -10881,6 +10934,53 @@ time.sleep(10)
             &state,
             2,
             "lsp_type_definition",
+            serde_json::json!({ "doc_id": doc_id, "line": 0, "character": 0 }),
+        );
+        assert!(resp.error.unwrap().contains("no live LSP session"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lsp_implementation_on_a_real_unopened_doc_id_errors_honestly() {
+        let state = new_state();
+        let resp = call(
+            &state,
+            1,
+            "lsp_implementation",
+            serde_json::json!({ "doc_id": 999, "line": 0, "character": 0 }),
+        );
+        assert!(resp.error.unwrap().contains("no open document"));
+    }
+
+    #[test]
+    fn lsp_implementation_on_a_real_open_synthetic_file_with_no_lsp_session_errors_honestly() {
+        // The direct sibling of `lsp_type_definition`'s own identical test
+        // above -- same real, honest error path, same "unrecognized
+        // extension never gets a real LSP session" cause.
+        let dir = std::env::temp_dir().join(format!(
+            "spartan-backend-lsp-implementation-no-session-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("data.unknownext");
+        std::fs::write(&file, "hello").unwrap();
+
+        let state = new_state();
+        let open_resp = call(
+            &state,
+            1,
+            "open_file",
+            serde_json::json!({ "path": file.to_string_lossy() }),
+        );
+        let doc_id = open_resp.result.unwrap()["doc_id"].as_u64().unwrap();
+
+        let resp = call(
+            &state,
+            2,
+            "lsp_implementation",
             serde_json::json!({ "doc_id": doc_id, "line": 0, "character": 0 }),
         );
         assert!(resp.error.unwrap().contains("no live LSP session"));

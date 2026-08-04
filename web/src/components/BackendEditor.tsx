@@ -1685,6 +1685,12 @@ export default function BackendEditor({
   // `Location | Location[] | LocationLink[] | null` response shape).
   const pendingTypeDefinitionRef = useRef<{ line: number; character: number } | null>(null);
 
+  // Real go-to-implementation (Ctrl+Alt+Click) -- ported verbatim from
+  // `desktop/`'s own identical wiring; see that file's own doc comment for
+  // why this reuses `extractDefinitionTarget` directly (the same real
+  // `Location | Location[] | LocationLink[] | null` response shape).
+  const pendingImplementationRef = useRef<{ line: number; character: number } | null>(null);
+
   useEffect(() => {
     const unsubscribe = client.onEvent((e) => {
       if (e.event === "lsp_definition_result") {
@@ -1702,6 +1708,15 @@ export default function BackendEditor({
         const pending = pendingTypeDefinitionRef.current;
         if (!pending || pending.line !== d.line || pending.character !== d.character) return;
         pendingTypeDefinitionRef.current = null;
+        const target = extractDefinitionTarget(d.result);
+        if (!target) return;
+        goToTarget(target);
+      } else if (e.event === "lsp_implementation_result") {
+        const d = e.data as { doc_id: number; line: number; character: number; result: unknown };
+        if (d.doc_id !== file.docId) return;
+        const pending = pendingImplementationRef.current;
+        if (!pending || pending.line !== d.line || pending.character !== d.character) return;
+        pendingImplementationRef.current = null;
         const target = extractDefinitionTarget(d.result);
         if (!target) return;
         goToTarget(target);
@@ -2600,6 +2615,13 @@ export default function BackendEditor({
         client
           .call("lsp_type_definition", { doc_id: file.docId, line, character })
           .catch((err: Error) => console.error("lsp_type_definition failed:", err));
+        return;
+      }
+      if (e.altKey) {
+        pendingImplementationRef.current = { line, character };
+        client
+          .call("lsp_implementation", { doc_id: file.docId, line, character })
+          .catch((err: Error) => console.error("lsp_implementation failed:", err));
         return;
       }
       pendingDefinitionRef.current = { line, character };

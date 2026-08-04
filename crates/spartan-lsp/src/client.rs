@@ -398,6 +398,7 @@ impl LspClient {
                         "documentSymbol": {"hierarchicalDocumentSymbolSupport": true},
                         "documentHighlight": {},
                         "callHierarchy": {},
+                        "typeHierarchy": {},
                         "publishDiagnostics": {},
                         // Real `textDocument/inlayHint` support (inlay
                         // hints). `resolveSupport` lets a server attach
@@ -652,6 +653,27 @@ impl LspClient {
     pub fn type_definition(&mut self, file_uri: &str, line: i64, character: i64) -> Option<Value> {
         self.request(
             "textDocument/typeDefinition",
+            Some(json!({
+                "textDocument": {"uri": file_uri},
+                "position": {"line": line, "character": character},
+            })),
+            DEFAULT_TIMEOUT,
+        )
+    }
+
+    /// Real `textDocument/implementation` -- "Go to Implementation," the
+    /// direct sibling of `type_definition` above: jumps from a declaration
+    /// to its real implementations (e.g. from a trait method to each impl
+    /// block that implements it). Live-probed against rust-analyzer before
+    /// wiring anything: a real initialize handshake declares
+    /// `implementationProvider: true` (and a real query against a real
+    /// trait/impl fixture returns the impl block). Same
+    /// `Location | Location[] | LocationLink[] | null` response shape as
+    /// `definition`/`type_definition`, passed through unparsed for the same
+    /// reason.
+    pub fn implementation(&mut self, file_uri: &str, line: i64, character: i64) -> Option<Value> {
+        self.request(
+            "textDocument/implementation",
             Some(json!({
                 "textDocument": {"uri": file_uri},
                 "position": {"line": line, "character": character},

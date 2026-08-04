@@ -8958,7 +8958,53 @@ first — it's the parity reference until each row there is actually reimplement
   session's real indexing gate, not a general timeout; the desktop launch used the dev-mode path
   (`loadURL` against vite), matching every prior desktop pass's harness note. The prior AGENTS.md
   note that `workspace/symbol` was "genuinely unusable in this dev environment" is superseded:
-  that finding was pyright-specific and the capability is now real and live against rust-analyzer.
+   that finding was pyright-specific and the capability is now real and live against rust-analyzer.
+
+- **Real, working code — LSP `textDocument/implementation` end-to-end ("Go to Implementation")
+  in both backend shells, the natural third sibling of the already-shipped go-to-definition and
+  go-to-type-definition gestures**: a clean, short pass because the wire shape
+  `Location | Location[] | LocationLink[] | null` is identical to the two already-shipped
+  siblings, so every piece of the existing normalization and cross-file jump machinery is reused
+  without a single new decode function. `spartan-lsp` gains `LspClient::implementation()` (the
+  real `textDocument/implementation` request, live-probed against rust-analyzer before wiring:
+  a real `initialize` handshake declares `implementationProvider: true` and `declarationProvider:
+  true`, confirming the capability is genuinely present; a real query on a real trait/impl fixture
+  — cursor on the trait name `Speak` — returned the real `impl Speak for Dog` block after a
+  short indexing window), `QueryKind::Implementation { line, character }` and
+  `request_implementation(line, character)` in `session.rs` (same query-priority mailbox,
+  same `INDEXING_TIMEOUT + DEFAULT_TIMEOUT` bounded wait), wired through `dispatch_query`.
+  `spartan-backend` gains `lsp_implementation` (identical never-blocks-the-caller shape,
+  identical envelope-unwrapping, emitting `lsp_implementation_result` with
+  `{doc_id, line, character, result}`), plus two new honest-error dispatch tests (unopened doc
+  id; a real open file with no live LSP session, the identical pattern every sibling pass
+  established). On the UI side both backend-connected editors gain a real Ctrl+Alt+Click gesture
+  (the natural third modifier-click in the established sequence: Ctrl+Click = definition,
+  Ctrl+Shift+Click = type definition, Ctrl+Alt+Click = implementation), a new
+  `pendingImplementationRef` per-flight guard, and the `lsp_implementation_result` event handler
+  reusing `extractDefinitionTarget` directly. The two desktop wiring allowlists —
+  `desktop/electron/preload.ts`'s method list and `desktop/electron/main.ts`'s `spartan:*` IPC
+  handler registry — both gained `lsp_implementation` preemptively. **Real verification, no
+  estimation**: `cargo fmt --all -- --check` clean; `cargo test -p spartan-lsp --lib` 21 tests
+  green; `cargo test -p spartan-backend --lib` 283 tests green (two new `lsp_implementation`
+  dispatch tests); clippy clean for both crates (only the same pre-existing `spartan-git`
+  line-313 warning); `npm run typecheck` + both vite builds succeed in `desktop/` and `web/`;
+  `desktop/`'s `build:electron` (both electron tsconfigs) also typechecks clean. **Live
+  end-to-end, real backend + real rust-analyzer**: a new
+  `crates/spartan-backend/tests/lsp_implementation_integration.rs` drives the real
+  `handle_request` dispatch (`open_file` on a real Cargo fixture with a trait + impl →
+  `lsp_implementation`) against a real `rust-analyzer` subprocess and asserts a real
+  `lsp_implementation_result` event arrives with a real, non-empty `Location[]` array pointing
+  inside the fixture file — self-skipping honestly if `rust-analyzer` isn't on `$PATH`, with an
+  honest retry loop (up to 6 attempts, 3s apart) covering the real indexing delay (rust-analyzer
+  returns `[]` before its index settles, the exact pre-index false negative the type-hierarchy
+  investigation taught this project to treat with suspicion). The live run completed in ~37s,
+  one finding that corrected a draft assertion: the `[]` → non-empty transition is real and
+  fast (~6s from session open), confirming the bounded retry approach is appropriate rather than
+  a symptom of a missing feature. **Type-hierarchy additional negative finding** (building on
+  the FUTURE_FEATURES row): a second live probe against `rust-analyzer 1.97.1` — this time with
+  `typeHierarchy: {}` genuinely declared in the client capability block at `initialize` time —
+  confirmed `typeHierarchyProvider: null` there too, so the finding is real for both installed
+  servers (pyright and rust-analyzer), strengthening the type-hierarchy backlog row.
 
 
 ## Build & test

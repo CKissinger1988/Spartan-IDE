@@ -6,6 +6,15 @@
 //! from `spikes/lsp-spike` rather than an extraction of
 //! `spartan-editor-core`'s own already-tested copy.
 
+// The `initialize` capabilities object in `client.rs` is built as one real,
+// genuinely deep `json!` literal (the full rust-analyzer semantic-token
+// legend alone is ~60 entries), and Rust's default macro recursion limit
+// (128) is right at the edge of what it nests. Every new `textDocument.*`
+// capability block declared here -- `typeHierarchy` being the latest --
+// tips it over, so raise it to 256 rather than restructure a working
+// literal around a compiler default.
+#![recursion_limit = "256"]
+
 mod client;
 mod session;
 

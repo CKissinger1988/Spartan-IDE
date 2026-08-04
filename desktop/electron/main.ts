@@ -226,6 +226,7 @@ app.whenReady().then(() => {
     "lsp_completion",
     "lsp_definition",
     "lsp_type_definition",
+    "lsp_implementation",
     "lsp_signature_help",
     "lsp_references",
     "lsp_rename",
