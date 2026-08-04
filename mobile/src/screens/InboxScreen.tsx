@@ -4,6 +4,7 @@ import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-na
 import { StatusPill } from '../components/StatusPill';
 import { mockSessionThreads } from '../data/mockData';
 import { getLocalTasks, subscribeLocalTasks } from '../data/localTaskStore';
+import { useBackend } from '../lib/backendContext';
 import { cacheSessionThreads, getCachedSessionThreads } from '../lib/edgeCache';
 import { RootStackParamList } from '../navigation/types';
 import { useTheme } from '../ThemeContext';
@@ -46,6 +47,7 @@ const ALL_WORKSPACES = 'All Workspaces';
 export function InboxScreen({ navigation }: Props) {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+  const backend = useBackend();
   const [threads, setThreads] = useState<SessionThread[]>(mockSessionThreads);
   const [fromCache, setFromCache] = useState(false);
   const [query, setQuery] = useState('');
@@ -54,7 +56,26 @@ export function InboxScreen({ navigation }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const localTasks = useSyncExternalStore(subscribeLocalTasks, getLocalTasks);
 
-  const load = useCallback(() => {
+  const load = useCallback(async () => {
+    // §69.1: try the live backend first; fall back to mock data when no
+    // devserver is reachable (the same optional-by-construction pattern
+    // every other screen already uses).
+    if (backend) {
+      try {
+        const resp = (await backend.call('leo_list_sessions')) as {
+          sessions: SessionThread[];
+        };
+        if (resp?.sessions) {
+          setThreads(resp.sessions);
+          setFromCache(false);
+          cacheSessionThreads(resp.sessions);
+          return;
+        }
+      } catch {
+        // Backend unreachable — fall through to mock/cache.
+      }
+    }
+
     // Mock data always "succeeds" today, so this always takes the live
     // branch and just warms the cache — the fallback branch is exercised
     // once a real, sometimes-unreachable session-store client replaces
@@ -63,16 +84,15 @@ export function InboxScreen({ navigation }: Props) {
       setThreads(mockSessionThreads);
       setFromCache(false);
       cacheSessionThreads(mockSessionThreads);
-      return Promise.resolve();
+      return;
     }
 
-    return getCachedSessionThreads().then((cached) => {
-      if (cached) {
-        setThreads(cached);
-        setFromCache(true);
-      }
-    });
-  }, []);
+    const cached = await getCachedSessionThreads();
+    if (cached) {
+      setThreads(cached);
+      setFromCache(true);
+    }
+  }, [backend]);
 
   useEffect(() => {
     load();

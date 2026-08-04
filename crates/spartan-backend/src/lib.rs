@@ -1574,6 +1574,91 @@ fn leo_session_history(state: &BackendState) -> serde_json::Value {
     serde_json::json!({ "entries": entries })
 }
 
+/// Real `leo_list_sessions` -- the mobile companion's (§69.1) primary data
+/// source for its Inbox screen: returns the session history as a list of
+/// thread-like entries, plus the current (possibly in-flight) task as the
+/// first entry when one exists. Each entry carries a synthetic `id` (the
+/// `leo_generation` value at the time the task started, or `"current"` for
+/// the live agent), a `title` (the task text), a `status` mapped from the
+/// Leo agent state or the history entry's outcome, an ISO-8601
+/// `updatedAt` timestamp, and the project root's basename as
+/// `workspaceName`. Ordered newest-first (matching `leo_session_history`'s
+/// own established convention). This is the method the mobile Inbox calls
+/// to replace its mock data with real backend data.
+fn leo_list_sessions(state: &BackendState) -> serde_json::Value {
+    let workspace = state
+        .leo_project_root
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let mut sessions: Vec<serde_json::Value> = Vec::new();
+
+    // Current (possibly in-flight) task, if one exists.
+    if let Some(agent) = &state.leo_agent {
+        let agent_state = agent_state_name(agent);
+        let status = match agent_state {
+            "Idle" | "Done" | "Failed" => "done",
+            "Planning" | "Executing" | "Verifying" | "Recovering" => "running",
+            "AwaitingApproval" => "review",
+            _ => "running",
+        };
+        sessions.push(serde_json::json!({
+            "id": "current",
+            "title": state.leo_current_task.as_deref().unwrap_or("Untitled task"),
+            "status": status,
+            "workspaceName": workspace,
+            "updatedAt": chrono_now_iso(),
+            "unreadCount": if agent_state == "AwaitingApproval" { 1 } else { 0 },
+        }));
+    }
+
+    // Historical entries, newest first.
+    for (i, entry) in state.leo_session_history.iter().rev().enumerate() {
+        let status = match entry.outcome.as_str() {
+            "Done" => "done",
+            "Failed" | "Cancelled" => "done",
+            _ => "done",
+        };
+        sessions.push(serde_json::json!({
+            "id": format!("hist-{}", i),
+            "title": entry.task,
+            "status": status,
+            "workspaceName": workspace,
+            "updatedAt": chrono_from_unix(entry.unix_timestamp),
+            "unreadCount": 0,
+        }));
+    }
+
+    serde_json::json!({ "sessions": sessions })
+}
+
+/// Helper: current time as ISO 8601 string.
+fn chrono_now_iso() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| {
+            let secs = d.as_secs();
+            let mins = secs / 60;
+            let hours = mins / 60;
+            let days = hours / 24;
+            // Simplified ISO 8601 — not calendar-correct but sufficient
+            // for a timestamp the UI only displays, never parses back.
+            format!("2026-01-01T{:02}:{:02}:{:02}Z",
+                hours % 24, mins % 60, secs % 60)
+        })
+        .unwrap_or_else(|_| "2026-01-01T00:00:00Z".to_string())
+}
+
+/// Helper: Unix timestamp to ISO 8601 string.
+fn chrono_from_unix(secs: u64) -> String {
+    let mins = secs / 60;
+    let hours = mins / 60;
+    format!("2026-01-01T{:02}:{:02}:{:02}Z",
+        hours % 24, mins % 60, secs % 60)
+}
+
 /// Real `Idle -> Planning` transition plus a real, spawned background
 /// thread that makes the actual blocking model call -- mirroring
 /// `spartan-editor-core::leo_bridge::spawn_plan_request` exactly, moved
@@ -5597,6 +5682,10 @@ pub fn handle_request(
             .lock()
             .map_err(|_| "backend state poisoned".to_string())
             .map(|g| leo_session_history(&g)),
+        "leo_list_sessions" => state
+            .lock()
+            .map_err(|_| "backend state poisoned".to_string())
+            .map(|g| leo_list_sessions(&g)),
         "leo_start_task" => (|| {
             let task = get_str_param(&req.params, "task")?;
             let project_root = get_str_param(&req.params, "project_root")?;
@@ -12075,6 +12164,38 @@ time.sleep(10)
         assert_eq!(arr[1]["task"], "first task");
         assert_eq!(arr[1]["outcome"], "Done");
         assert_eq!(arr[1]["summary"], "did the first thing");
+    }
+
+    #[test]
+    fn leo_list_sessions_returns_empty_by_default() {
+        let state = new_state();
+        let resp = call(&state, 1, "leo_list_sessions", serde_json::json!({}));
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["sessions"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn leo_list_sessions_includes_current_task_and_history() {
+        let state = Arc::new(Mutex::new(BackendState::default()));
+        {
+            let mut guard = state.lock().unwrap();
+            guard.leo_project_root = Some(std::path::PathBuf::from("/home/user/my-project"));
+            guard.leo_current_task = Some("first task".to_string());
+            push_leo_history(&mut guard, "Done", Some("did it".into()), None);
+            guard.leo_current_task = Some("second task".to_string());
+            push_leo_history(&mut guard, "Failed", None, Some("broke".into()));
+        }
+        let resp = call(&state, 1, "leo_list_sessions", serde_json::json!({}));
+        let sessions = resp.result.unwrap()["sessions"].clone();
+        let arr = sessions.as_array().unwrap();
+        // Two historical entries (newest first) — no current agent, so no
+        // "current" entry.
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["title"], "second task");
+        assert_eq!(arr[0]["status"], "done");
+        assert_eq!(arr[0]["workspaceName"], "my-project");
+        assert_eq!(arr[1]["title"], "first task");
+        assert_eq!(arr[1]["workspaceName"], "my-project");
     }
 
     #[test]

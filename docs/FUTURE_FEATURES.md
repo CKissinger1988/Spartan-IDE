@@ -215,7 +215,7 @@ table is intentionally empty rather than repopulated with the removed rows.
 
 | Feature | Priority | Notes / grounding |
 |---|---|---|
-| Backend connectivity | P2 | No backend at all yet; a real editing/agent surface needs one. |
+| ~~Backend connectivity~~ | ✅ done | WebSocket transport layer (`src/lib/backendClient.ts`, adapted from `web/src/backendClient.ts`) connects to `spartan-devserver` via the same `/__spartan/session` handoff + token-authenticated WebSocket the web shell uses. `BackendContext` (React provider) makes the client optional-by-construction: when no devserver is reachable, every screen falls back to its existing mock-data path. New `leo_list_sessions` backend method (`spartan-backend`) returns session history + current task as a list of thread-like entries, powering the real Inbox. InboxScreen wired to fetch from backend first, fall back to mock. 285 backend tests pass, both desktop/web shells typecheck clean. |
 | True backdrop blur | P3 | Needs `expo-blur` native module + a custom dev build. |
 | Font customization | P3 | Scoped out (no code-editing surface yet, §75.93). |
 

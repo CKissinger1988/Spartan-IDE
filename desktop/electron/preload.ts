@@ -44,6 +44,7 @@ const ALLOWED_METHODS = new Set([
   "leo_reject_call",
   "leo_retry",
   "leo_session_history",
+  "leo_list_sessions",
   "leo_cancel",
   "pty_spawn",
   "pty_input",

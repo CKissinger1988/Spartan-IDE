@@ -250,6 +250,7 @@ app.whenReady().then(() => {
     "leo_reject_call",
     "leo_retry",
     "leo_session_history",
+    "leo_list_sessions",
     "pty_spawn",
     "pty_input",
     "pty_resize",

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { mockArtifacts } from './src/data/mockData';
+import { BackendProvider } from './src/lib/backendContext';
 import {
   addNotificationResponseListener,
   registerNotificationCategories,
@@ -31,11 +32,13 @@ export default function App() {
   }, []);
 
   return (
-    <ThemeProvider>
-      <SafeAreaProvider>
-        <ThemedStatusBar />
-        <RootNavigator />
-      </SafeAreaProvider>
-    </ThemeProvider>
+    <BackendProvider>
+      <ThemeProvider>
+        <SafeAreaProvider>
+          <ThemedStatusBar />
+          <RootNavigator />
+        </SafeAreaProvider>
+      </ThemeProvider>
+    </BackendProvider>
   );
 }
