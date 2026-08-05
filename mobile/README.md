@@ -67,8 +67,9 @@ running:
 
 ```bash
 npx tsc --noEmit          # clean
-npx expo export --platform android   # real Metro bundle, 934 modules, succeeds
-npm test                  # jest-expo + @testing-library/react-native, 106 tests, real assertions
+npx expo export --platform android   # real Metro bundle on a normal Linux host
+npx expo export --platform android --no-bytecode # Android-host fallback when Hermes cannot run on Android
+npm test                  # jest-expo + @testing-library/react-native, 114 tests, real assertions
 ```
 
 **Real Jest coverage exists for both the business-logic layer and the screens themselves.**

@@ -9187,6 +9187,15 @@ first — it's the parity reference until each row there is actually reimplement
   its real `build:wasm` step but cannot continue in this Termux session because the
   `wasm32-unknown-unknown` Rust target is not installed.
 
+- **Linux/Android host verification (§75.103)**: completed the relevant host-side checks after
+  installing Termux's matching `rust-std-wasm32-unknown-unknown` package and `wasm-bindgen-cli
+  0.2.126`. The web shell's real WASM + Vite production build now passes; desktop renderer/
+  Electron TypeScript build passes; web typecheck passes; mobile TypeScript passes; mobile Expo
+  Android export passes with `--no-bytecode` (the normal Hermes bytecode compiler rejects Android
+  as its *host* platform); mobile Jest passes with 114 tests; and `spartan-android` passes 25 tests
+  plus release clippy. No physical Android device/emulator is present, so OS-level rendering,
+  permissions, notifications, camera, voice recognition, and ADB installation remain unverified.
+
 
 ## Build & test
 
