@@ -310,10 +310,8 @@ pub fn parse_github_owner_repo(remote_url: &str) -> Option<(String, String)> {
         rest
     } else if let Some(rest) = remote_url.strip_prefix("http://github.com/") {
         rest
-    } else if let Some(rest) = remote_url.strip_prefix("ssh://git@github.com/") {
-        rest
     } else {
-        return None;
+        remote_url.strip_prefix("ssh://git@github.com/")?
     };
     let trimmed = after_host.trim_end_matches('/').trim_end_matches(".git");
     let (owner, repo) = trimmed.split_once('/')?;
@@ -516,7 +514,13 @@ impl GitRepo {
         let mut opts = StatusOptions::new();
         opts.include_untracked(true)
             .recurse_untracked_dirs(true)
-            .include_ignored(false);
+            .include_ignored(false)
+            // Refresh the index's stat cache before any operation that may
+            // hand the repository to libgit2's stash machinery. Without
+            // this, a same-size edit made immediately after a commit can be
+            // treated as unchanged by the stash tree builder on filesystems
+            // with coarse timestamp resolution.
+            .update_index(true);
         let statuses = self.repo.statuses(Some(&mut opts))?;
         let mut entries: Vec<StatusEntry> = statuses
             .iter()
@@ -1924,6 +1928,21 @@ impl GitRepo {
         if !self.has_uncommitted_tracked_changes()? {
             return Ok(None);
         }
+        // libgit2's stash tree builder relies on the index stat cache when it
+        // computes index-to-worktree content. In particular, a same-size edit
+        // made immediately after a commit can retain identical coarse mtime
+        // data on mobile filesystems and be omitted from the stash. Invalidate
+        // those cached times while preserving every index blob/mode/path so
+        // the real content diff is forced without staging the edit.
+        let mut index = self.repo.index()?;
+        for position in 0..index.len() {
+            if let Some(mut entry) = index.get(position) {
+                entry.ctime = git2::IndexTime::new(0, 0);
+                entry.mtime = git2::IndexTime::new(0, 0);
+                index.add(&entry)?;
+            }
+        }
+        index.write()?;
         let sig = self.repo.signature()?;
         let msg = if message.trim().is_empty() {
             None
@@ -1953,7 +1972,12 @@ impl GitRepo {
     /// working tree and drops it. `libgit2`'s own apply refuses (errors)
     /// on a real conflict rather than force-overwriting, surfaced verbatim.
     pub fn stash_pop(&mut self, index: usize) -> Result<(), git2::Error> {
-        self.repo.stash_pop(index, None)
+        let mut options = git2::StashApplyOptions::new();
+        options.reinstantiate_index();
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force();
+        options.checkout_options(checkout);
+        self.repo.stash_pop(index, Some(&mut options))
     }
 
     /// Real `git stash apply <index>` -- applies the stash back onto the
@@ -1962,7 +1986,12 @@ impl GitRepo {
     /// `stash_pop`: `libgit2`'s own apply errors on a real conflict rather
     /// than force-overwriting, surfaced verbatim.
     pub fn stash_apply(&mut self, index: usize) -> Result<(), git2::Error> {
-        self.repo.stash_apply(index, None)
+        let mut options = git2::StashApplyOptions::new();
+        options.reinstantiate_index();
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force();
+        options.checkout_options(checkout);
+        self.repo.stash_apply(index, Some(&mut options))
     }
 
     /// Real `git stash drop <index>` -- discards a stash without applying.

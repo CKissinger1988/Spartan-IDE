@@ -9168,6 +9168,17 @@ first — it's the parity reference until each row there is actually reimplement
   `llama-cpp-sys-2` build script requires an Android NDK (`ANDROID_NDK`/`NDK_ROOT`), which is not
   configured here.
 
+- **Mobile-safe Git stash restoration (§75.101)**: a real focused verification pass found two
+  `spartan-git` stash regressions that only appeared on this Termux filesystem: same-size edits
+  made immediately after a commit were reported as changed but omitted from libgit2's stash tree
+  because its stat-cache path trusted coarse timestamps, so `stash_pop`/`stash_apply` restored the
+  original content instead of the real edit. `stash_save` now invalidates only index ctime/mtime
+  metadata before handing the repository to libgit2, preserving the real blob/mode/path and never
+  staging the edit; apply/pop use explicit index reinstatement and forced checkout options. The
+  existing two round-trip tests caught the bug and now pass. Full `spartan-git` verification:
+  90 tests pass, doc tests pass, `cargo fmt --all -- --check` and release clippy with `-D warnings`
+  pass. A pre-existing clippy `question_mark` warning in the GitHub remote parser was also fixed.
+
 
 ## Build & test
 
