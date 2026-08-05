@@ -9179,6 +9179,14 @@ first — it's the parity reference until each row there is actually reimplement
   90 tests pass, doc tests pass, `cargo fmt --all -- --check` and release clippy with `-D warnings`
   pass. A pre-existing clippy `question_mark` warning in the GitHub remote parser was also fixed.
 
+- **Web WASM-loader type compatibility (§75.102)**: `web/src/buffer.ts` now normalizes the
+  generated wasm-bindgen loader through `Promise.resolve`, so the shared initialization promise
+  remains correctly typed whether generated glue exposes synchronous or asynchronous init. This
+  fixes the real TypeScript error observed on the current generated-loader typings. Web
+  `npm run typecheck` and desktop `npm run typecheck` both pass. The web production build reached
+  its real `build:wasm` step but cannot continue in this Termux session because the
+  `wasm32-unknown-unknown` Rust target is not installed.
+
 
 ## Build & test
 

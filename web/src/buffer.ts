@@ -17,7 +17,10 @@ let initPromise: Promise<void> | null = null;
  * real Node-side spikes already established for this same crate. */
 export function ensureBufferWasmInit(): Promise<void> {
   if (!initPromise) {
-    initPromise = init().then(() => undefined);
+    // The generated wasm-bindgen loader is typed differently depending on
+    // whether its bundler glue is emitted as async or sync initialization.
+    // Normalize both real shapes to the shared Promise<void> contract.
+    initPromise = Promise.resolve(init()).then(() => undefined);
   }
   return initPromise;
 }
