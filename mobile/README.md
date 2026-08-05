@@ -150,3 +150,40 @@ npm start          # then press a/i/w for Android/iOS/web, or scan the QR code i
 `npm run android` / `npm run ios` need a real device or emulator/simulator, neither of which was
 available when this was built — untested beyond `tsc`/`expo export` for that reason. Voice
 capture additionally needs a custom dev client; Expo Go alone won't load its native module.
+
+## Connecting to a Linux or cloud server
+
+Settings can now save a Spartan endpoint, retry it, and import or scan a versioned Spartan pairing
+QR code. A private-server pairing QR contains an endpoint plus a pairing secret; the app stores the
+secret in SecureStore, not AsyncStorage or a URL. A cloud pairing QR contains only an HTTPS endpoint
+and never a cloud login token.
+
+For a private Linux workstation reachable on LAN or WAN, bind one explicit address and generate an
+opt-in pairing QR:
+
+```bash
+spartan-devserver --host:192.168.1.20 --mobile-pairing-token:replace-with-a-long-random-secret --print-mobile-qr
+```
+
+The private devserver refuses wildcard binds and refuses any non-loopback bind without a pairing
+secret. For WAN use, put the server behind an HTTPS/WSS reverse proxy and enter the public HTTPS
+origin in the app; plain HTTP pairing is suitable only for a trusted LAN because it cannot protect
+the pairing secret in transit.
+
+For SSH-only remote access, leave the devserver on its loopback default and run:
+
+```bash
+./scripts/spartan-ssh-forward --host dev.example.com --user spartan
+```
+
+It exposes only local `127.0.0.1:4400`, uses SSH keepalives, and fails if forwarding cannot be
+established. Pair the app with that loopback endpoint; the private RPC service stays off the WAN.
+
+For Spartan Cloud, deploy behind HTTPS and emit an endpoint-only QR:
+
+```bash
+spartan-cloud-api --bind:0.0.0.0:8080 --public-origin:https://cloud.example.com --print-mobile-qr
+```
+
+Cloud QR codes deliberately do not authenticate a user. The cloud API's `GET /api/health` is an
+unauthenticated deployment probe; every tenant operation still requires its existing bearer session.

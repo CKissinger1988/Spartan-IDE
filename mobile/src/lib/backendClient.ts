@@ -56,15 +56,26 @@ export class BackendClient {
    * `baseUrl` defaults to `http://127.0.0.1:3000` (the devserver's
    * default static port). Override for different host/port configurations.
    */
-  static async connect(opts?: { baseUrl?: string }): Promise<BackendClient> {
+  static async connect(opts?: {
+    baseUrl?: string;
+    pairingToken?: string | null;
+  }): Promise<BackendClient> {
     const baseUrl = opts?.baseUrl ?? 'http://127.0.0.1:3000';
+    const endpoint = new URL(baseUrl);
 
-    const resp = await fetch(baseUrl + '/__spartan/session');
+    const pairingToken = opts?.pairingToken?.trim();
+    const resp = await fetch(baseUrl + '/__spartan/session', {
+      headers: pairingToken ? { 'X-Spartan-Mobile-Pairing': pairingToken } : undefined,
+    });
     if (!resp.ok) {
       throw new Error(`session handoff failed: HTTP ${resp.status}`);
     }
     const session = (await resp.json()) as BackendSession;
-    const url = `ws://127.0.0.1:${session.wsPort}/?token=${encodeURIComponent(session.wsToken)}`;
+    // A phone's 127.0.0.1 is the phone, not the Linux machine running
+    // spartan-devserver. Keep the host from the configured handoff origin;
+    // this is the mobile equivalent of web/src/backendClient.ts's wsHost.
+    const wsScheme = endpoint.protocol === 'https:' ? 'wss' : 'ws';
+    const url = `${wsScheme}://${endpoint.hostname}:${session.wsPort}/?token=${encodeURIComponent(session.wsToken)}`;
 
     const ws = new WebSocket(url);
     await new Promise<void>((resolve, reject) => {

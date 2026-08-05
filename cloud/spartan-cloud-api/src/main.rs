@@ -10,6 +10,9 @@
 
 use std::sync::Arc;
 
+use qrcode::render::unicode;
+use qrcode::QrCode;
+
 use spartan_cloud_api::{router, AppState, Url};
 use spartan_cloud_data::Store;
 use spartan_cloud_runtime::ContainerRuntime;
@@ -42,6 +45,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or("127.0.0.1:8080")
         .to_string();
     let db_path = parse_flag(&args, "--db:").unwrap_or("spartan-cloud.db");
+    let print_mobile_qr = args.iter().any(|arg| arg == "--print-mobile-qr");
+    let public_origin = parse_flag(&args, "--public-origin:");
+    if print_mobile_qr {
+        let origin = public_origin
+            .ok_or("--print-mobile-qr requires --public-origin:https://cloud.example.com")?;
+        if !origin.starts_with("https://") {
+            return Err("cloud mobile pairing QR requires an HTTPS --public-origin".into());
+        }
+        let payload = format!(
+            "spartan://pair/v1?kind=cloud&endpoint={}",
+            origin.replace(':', "%3A").replace('/', "%2F")
+        );
+        let qr = QrCode::new(payload.as_bytes())?;
+        eprintln!(
+            "spartan-cloud-api: scan this cloud endpoint QR (it contains no login token):\n{}",
+            qr.render::<unicode::Dense1x2>().quiet_zone(true).build()
+        );
+    }
     // The real WebAuthn relying-party origin -- must be a real domain name
     // (never a bare IP literal; `Url::domain()` requires one), matching
     // whatever real origin clients will actually connect to. Defaults to

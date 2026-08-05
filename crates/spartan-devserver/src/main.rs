@@ -1,9 +1,11 @@
 //! Real, runnable local devserver binary. Serves the `web/` client and the
 //! same-origin WebSocket token handoff, driving the shared `spartan-backend`
-//! over the reused WebSocket transport. Localhost-only by construction.
+//! over the reused WebSocket transport. Localhost-only by default; a paired
+//! trusted-LAN mode exists for the companion mobile app.
 //!
 //! Usage:
 //!   spartan-devserver [--web-root:<dir>] [--static-port:<port>] [--project-root:<dir>]
+//!                     [--host:<LAN-IP> --mobile-pairing-token:<secret>]
 //!
 //! Defaults: `--web-root:web/dist`, `--static-port:4400`, `--project-root:.`
 //! (the directory the devserver was launched from -- the intended workflow
@@ -11,6 +13,9 @@
 //! IDE launchers already scope themselves to the invoking directory).
 
 use std::path::PathBuf;
+
+use qrcode::render::unicode;
+use qrcode::QrCode;
 
 fn parse_flag<'a>(args: &'a [String], prefix: &str) -> Option<&'a str> {
     args.iter().find_map(|a| a.strip_prefix(prefix))
@@ -27,6 +32,39 @@ fn main() -> std::io::Result<()> {
     let project_root_arg = parse_flag(&args, "--project-root:")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
+    let host = parse_flag(&args, "--host:").unwrap_or("127.0.0.1");
+    let mobile_pairing_token = parse_flag(&args, "--mobile-pairing-token:").map(str::to_owned);
+    let print_mobile_qr = args.iter().any(|arg| arg == "--print-mobile-qr");
+
+    if host == "0.0.0.0" || host == "::" {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "refusing wildcard bind; provide one explicit trusted-LAN IP with --host:<LAN-IP>",
+        ));
+    }
+    if host != "127.0.0.1" && mobile_pairing_token.as_deref().is_none_or(str::is_empty) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "a non-loopback --host requires --mobile-pairing-token:<secret>",
+        ));
+    }
+    if print_mobile_qr {
+        let pairing_token = mobile_pairing_token.as_deref().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "--print-mobile-qr requires --mobile-pairing-token:<secret>",
+            )
+        })?;
+        let payload = format!(
+            "spartan://pair/v1?kind=private&endpoint=http%3A%2F%2F{host}%3A{static_port}&pairing={pairing_token}"
+        );
+        let qr = QrCode::new(payload.as_bytes())
+            .map_err(|e| std::io::Error::other(format!("could not encode pairing QR: {e}")))?;
+        eprintln!(
+            "spartan-devserver: scan this QR only on a trusted device; it grants private-server access:\n{}",
+            qr.render::<unicode::Dense1x2>().quiet_zone(true).build()
+        );
+    }
 
     if !web_root.exists() {
         eprintln!(
@@ -54,5 +92,11 @@ fn main() -> std::io::Result<()> {
         }
     };
 
-    spartan_devserver::run(web_root, "127.0.0.1", static_port, project_root)
+    spartan_devserver::run(
+        web_root,
+        host,
+        static_port,
+        project_root,
+        mobile_pairing_token,
+    )
 }

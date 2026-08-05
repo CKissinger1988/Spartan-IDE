@@ -9410,6 +9410,21 @@ project has run in so far has had it).
 
 ## What NOT to do
 
+### Mobile/Linux and cloud pairing transport — current pass
+
+The mobile companion now stores a configurable private or cloud endpoint, derives its WebSocket
+host from that endpoint instead of incorrectly forcing `127.0.0.1`, and keeps a private-server
+pairing secret in SecureStore. Settings can paste or scan the shared `spartan://pair/v1` QR
+payload. `spartan-devserver` remains loopback-only by default, but can bind one explicit LAN/WAN
+address only when a pairing secret is supplied; non-loopback session handoffs require that secret
+in a header. Both private and cloud server binaries can print a terminal QR code; cloud QR codes
+carry only an HTTPS endpoint, never a bearer token. Spartan Cloud also exposes a minimal public
+`GET /api/health` probe. Focused mobile typecheck/Jest and cloud API tests passed. A verified
+Termux NDK r29 is installed locally, but `llama-cpp-sys-2` currently rejects Android as a build
+host in its own build script, so the private devserver cannot yet be compiled on this Android host.
+`scripts/spartan-ssh-forward` provides a fail-fast, keepalive-backed local forward for SSH-only
+remote access, keeping private RPC off the WAN.
+
 - Don't fork or vendor any VS Code/Monaco/CodeMirror code, ever, for any reason.
 - Don't add a new cloud model provider as a bespoke adapter — it goes through LiteLLM (§44)
   unless there's a specific reason (like Claude's prompt caching) to hand-roll it, as already

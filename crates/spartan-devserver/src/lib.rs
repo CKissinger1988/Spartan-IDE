@@ -146,6 +146,7 @@ pub fn run(
     host: &str,
     static_port: u16,
     project_root: Option<PathBuf>,
+    mobile_pairing_token: Option<String>,
 ) -> std::io::Result<()> {
     // Bind the static server (its port is user-facing) and the WS listener
     // (ephemeral) up front so both real ports are known before wiring.
@@ -181,9 +182,14 @@ pub fn run(
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "(none)".to_string());
+    let mobile_status = if mobile_pairing_token.is_some() {
+        "paired mobile handoff enabled"
+    } else {
+        "mobile handoff disabled"
+    };
     eprintln!(
         "spartan-devserver: serving {web_root:?} on http://{host}:{actual_static_port} \
-         (WebSocket on 127.0.0.1:{ws_port}, token handed off via {}, project root: {project_root_display})",
+         (WebSocket on {host}:{ws_port}, token handed off via {}, {mobile_status}, project root: {project_root_display})",
         static_serve::SESSION_PATH
     );
     static_serve::serve(
@@ -193,6 +199,7 @@ pub fn run(
             ws_port,
             ws_token,
             project_root: project_root.map(|p| p.to_string_lossy().to_string()),
+            mobile_pairing_token,
         },
     )
 }

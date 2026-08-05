@@ -4,19 +4,29 @@
 // existing mock-data path. This is the exact same "optional by
 // construction" pattern web/src/backendClient.ts already establishes.
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { BackendClient } from './backendClient';
+import { DEFAULT_BACKEND_ENDPOINT, getBackendEndpoint, setBackendEndpoint } from './backendEndpoint';
+import { getBackendPairingToken, setBackendPairingToken } from './backendPairing';
 
 interface BackendContextValue {
   /** The live backend client, or null if no devserver is reachable. */
   client: BackendClient | null;
   /** True while the initial connection attempt is in flight. */
   connecting: boolean;
+  endpoint: string;
+  error: string | null;
+  reconnect: () => Promise<void>;
+  updateEndpoint: (endpoint: string, pairingToken: string) => Promise<void>;
 }
 
 const BackendContext = createContext<BackendContextValue>({
   client: null,
   connecting: true,
+  endpoint: DEFAULT_BACKEND_ENDPOINT,
+  error: null,
+  reconnect: async () => {},
+  updateEndpoint: async () => {},
 });
 
 /**
@@ -26,43 +36,64 @@ const BackendContext = createContext<BackendContextValue>({
  * present, `client` stays null and every consumer falls back to mock data.
  */
 export function BackendProvider({
-  baseUrl,
   children,
 }: {
-  baseUrl?: string;
   children: React.ReactNode;
 }) {
   const [client, setClient] = useState<BackendClient | null>(null);
   const [connecting, setConnecting] = useState(true);
+  const [endpoint, setEndpoint] = useState(DEFAULT_BACKEND_ENDPOINT);
+  const [error, setError] = useState<string | null>(null);
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    BackendClient.connect({ baseUrl })
-      .then((c) => {
+    let connectedClient: BackendClient | null = null;
+    setConnecting(true);
+    setError(null);
+    Promise.all([getBackendEndpoint(), getBackendPairingToken()])
+      .then(([storedEndpoint, pairingToken]) => {
+        if (cancelled) return null;
+        setEndpoint(storedEndpoint);
+        return BackendClient.connect({ baseUrl: storedEndpoint, pairingToken });
+      })
+      .then((nextClient) => {
+        if (!nextClient) return;
+        connectedClient = nextClient;
+        if (cancelled) {
+          nextClient.close();
+          return;
+        }
+        setClient(nextClient);
+      })
+      .catch((reason: unknown) => {
         if (!cancelled) {
-          setClient(c);
-          setConnecting(false);
-        } else {
-          c.close();
+          setClient(null);
+          setError(reason instanceof Error ? reason.message : 'Connection failed');
         }
       })
-      .catch(() => {
+      .finally(() => {
         if (!cancelled) setConnecting(false);
       });
     return () => {
       cancelled = true;
+      connectedClient?.close();
     };
-  }, [baseUrl]);
+  }, [connectionAttempt]);
 
-  // Close the WebSocket on unmount.
-  useEffect(() => {
-    return () => {
-      client?.close();
-    };
-  }, [client]);
+  const reconnect = useCallback(async () => {
+    setConnectionAttempt((attempt) => attempt + 1);
+  }, []);
+
+  const updateEndpoint = useCallback(async (nextEndpoint: string, pairingToken: string) => {
+    const saved = await setBackendEndpoint(nextEndpoint);
+    await setBackendPairingToken(pairingToken);
+    setEndpoint(saved);
+    setConnectionAttempt((attempt) => attempt + 1);
+  }, []);
 
   return (
-    <BackendContext.Provider value={{ client, connecting }}>
+    <BackendContext.Provider value={{ client, connecting, endpoint, error, reconnect, updateEndpoint }}>
       {children}
     </BackendContext.Provider>
   );
@@ -76,4 +107,10 @@ export function useBackend(): BackendClient | null {
 /** Whether the initial connection attempt is still in flight. */
 export function useBackendConnecting(): boolean {
   return useContext(BackendContext).connecting;
+}
+
+/** Connection state and controls for the mobile companion's Settings screen. */
+export function useBackendConnection(): Omit<BackendContextValue, 'client'> {
+  const { client: _client, ...connection } = useContext(BackendContext);
+  return connection;
 }
