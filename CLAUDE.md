@@ -9193,7 +9193,11 @@ first — it's the parity reference until each row there is actually reimplement
   Electron TypeScript build passes; web typecheck passes; mobile TypeScript passes; mobile Expo
   Android export passes with `--no-bytecode` (the normal Hermes bytecode compiler rejects Android
   as its *host* platform); mobile Jest passes with 114 tests; and `spartan-android` passes 25 tests
-  plus release clippy. No physical Android device/emulator is present, so OS-level rendering,
+  plus release clippy. The generated WASM module was also executed through its real
+  wasm-bindgen Node target in a document/edit smoke test. A direct `cargo test --target
+  wasm32-unknown-unknown` remains inherently non-runnable here because Cargo tries to execute the
+  `.wasm` test artifact as a native Android process. No physical Android device/emulator is present,
+  so OS-level rendering,
   permissions, notifications, camera, voice recognition, and ADB installation remain unverified.
 
 
