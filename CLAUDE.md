@@ -9156,6 +9156,18 @@ first — it's the parity reference until each row there is actually reimplement
   own wire-faithful verification discipline draws. All 55 `spartan-model` tests pass (51 unit +
   4 live integration), `cargo fmt`/`clippy` clean.
 
+- **Real Leo session timestamps (§75.100)**: fixed the session-history/project-session timestamp
+  helpers in `crates/spartan-backend` so they emit the actual current time and convert stored Unix
+  seconds with calendar-correct RFC 3339 UTC formatting. The previous implementation used a fixed
+  date with only the time-of-day fields, which made history entries appear to come from the wrong
+  day and produced incorrect dates for every Unix timestamp after the first day. Added a regression
+  test covering the Unix epoch, a known calendar date, and the current-time round trip through the
+  real RFC 3339 parser. The `time` dependency is limited to formatting/parsing features; no UI
+  behavior or persisted history schema changed. `cargo fmt --all -- --check` passes. The targeted
+  backend test/clippy build could not complete in this Termux session because the workspace's
+  `llama-cpp-sys-2` build script requires an Android NDK (`ANDROID_NDK`/`NDK_ROOT`), which is not
+  configured here.
+
 
 ## Build & test
 

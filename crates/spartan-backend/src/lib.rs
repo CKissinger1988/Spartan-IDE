@@ -1636,35 +1636,22 @@ fn leo_list_sessions(state: &BackendState) -> serde_json::Value {
 
 /// Helper: current time as ISO 8601 string.
 fn chrono_now_iso() -> String {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| {
-            let secs = d.as_secs();
-            let mins = secs / 60;
-            let hours = mins / 60;
-            let days = hours / 24;
-            // Simplified ISO 8601 — not calendar-correct but sufficient
-            // for a timestamp the UI only displays, never parses back.
-            format!(
-                "2026-01-01T{:02}:{:02}:{:02}Z",
-                hours % 24,
-                mins % 60,
-                secs % 60
-            )
-        })
-        .unwrap_or_else(|_| "2026-01-01T00:00:00Z".to_string())
+    format_iso_timestamp(time::OffsetDateTime::now_utc())
 }
 
 /// Helper: Unix timestamp to ISO 8601 string.
 fn chrono_from_unix(secs: u64) -> String {
-    let mins = secs / 60;
-    let hours = mins / 60;
-    format!(
-        "2026-01-01T{:02}:{:02}:{:02}Z",
-        hours % 24,
-        mins % 60,
-        secs % 60
-    )
+    i64::try_from(secs)
+        .ok()
+        .and_then(|value| time::OffsetDateTime::from_unix_timestamp(value).ok())
+        .map(format_iso_timestamp)
+        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
+}
+
+fn format_iso_timestamp(timestamp: time::OffsetDateTime) -> String {
+    timestamp
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 /// Real `Idle -> Planning` transition plus a real, spawned background
@@ -12217,6 +12204,22 @@ time.sleep(10)
         assert_eq!(arr[0]["workspaceName"], "my-project");
         assert_eq!(arr[1]["title"], "first task");
         assert_eq!(arr[1]["workspaceName"], "my-project");
+    }
+
+    #[test]
+    fn leo_session_timestamps_are_real_rfc3339_utc_values() {
+        assert_eq!(chrono_from_unix(0), "1970-01-01T00:00:00Z");
+        assert_eq!(chrono_from_unix(1_735_689_845), "2025-01-01T00:04:05Z");
+
+        let now = chrono_now_iso();
+        let parsed =
+            time::OffsetDateTime::parse(&now, &time::format_description::well_known::Rfc3339)
+                .expect("current session timestamp should be valid RFC 3339");
+        let wall_clock = time::OffsetDateTime::now_utc();
+        assert!(
+            (wall_clock - parsed).whole_seconds().abs() <= 2,
+            "session timestamp should represent the real current time: {now}"
+        );
     }
 
     #[test]
