@@ -9425,6 +9425,19 @@ host in its own build script, so the private devserver cannot yet be compiled on
 `scripts/spartan-ssh-forward` provides a fail-fast, keepalive-backed local forward for SSH-only
 remote access, keeping private RPC off the WAN.
 
+### GitHub Release updates and first-run guidance — current pass
+
+The canonical release source is now `Spartan-Software-Enterprises/Spartan-IDE` across the shared
+Rust updater, backend check, native editor, Electron publisher/menu, mobile release client, and
+server CLIs. `spartan-devserver --check-update` and `spartan-cloud-api --check-update` compare
+their installed version with GitHub's latest release and print only an operator-controlled install
+URL; they never replace a running service. The Release workflow now packages both Linux server
+binaries, publishes SHA-256 checksums for every artifact, and makes those server artifacts
+available from the same GitHub Release. Electron keeps its native signed download/install flow;
+Android discovery only leads to an Android-confirmed APK installation. Desktop onboarding now
+explains that boundary, mobile has a persistent first-run screen covering pairing/WAN/SSH safety
+and update behavior, and both server binaries print concise first-time deployment/update guidance.
+
 - Don't fork or vendor any VS Code/Monaco/CodeMirror code, ever, for any reason.
 - Don't add a new cloud model provider as a bespoke adapter — it goes through LiteLLM (§44)
   unless there's a specific reason (like Claude's prompt caching) to hand-roll it, as already

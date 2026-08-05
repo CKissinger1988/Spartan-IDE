@@ -395,6 +395,56 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
+  server-linux-package:
+    name: Linux server binaries (private devserver + cloud API)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build server binaries
+        run: |
+          cargo build --release -p spartan-devserver
+          (cd cloud && cargo build --release -p spartan-cloud-api)
+
+      - name: Stage server package
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -m1 '^version' crates/spartan-editor-core/Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          STAGE="spartan-servers-${VERSION}-x86_64-unknown-linux-gnu"
+          mkdir -p "dist/$STAGE"
+          cp target/release/spartan-devserver "dist/$STAGE/"
+          cp cloud/target/release/spartan-cloud-api "dist/$STAGE/"
+          cat > "dist/$STAGE/README.txt" <<EOF
+          Spartan server binaries ${VERSION}
+          ==================================
+
+          spartan-devserver serves a private Linux development workspace.
+          spartan-cloud-api is the optional WAN-capable cloud control plane.
+
+          Check for a newer GitHub Release without changing this machine:
+              ./spartan-devserver --check-update
+              ./spartan-cloud-api --check-update
+
+          Validate the archive before deployment with the SHA256SUMS.txt
+          attached to the same GitHub Release. Installation and service
+          restart remain an operator-controlled deployment action.
+          EOF
+          tar -C dist -czf "dist/${STAGE}.tar.gz" "$STAGE"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-linux-package
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
   create-release:
     name: Create GitHub Release
     needs:
@@ -406,6 +456,7 @@ jobs:
         desktop-windows-package,
         desktop-mac-package,
         web-build,
+        server-linux-package,
       ]
     # Real, deliberate: run even if the three `continue-on-error` desktop
     # jobs above genuinely failed (never-before-verified electron-builder
@@ -447,6 +498,13 @@ jobs:
             echo "name=v${VERSION}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Create SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.apk' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.exe' -o -name '*.dmg' \) -print0 \
+            | sort -z | xargs -0 sha256sum > artifacts/SHA256SUMS.txt
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -471,6 +529,8 @@ jobs:
             artifacts/desktop-windows-package/*.exe
             artifacts/desktop-mac-package/*.dmg
             artifacts/web-package/*.zip
+            artifacts/server-linux-package/*.tar.gz
+            artifacts/SHA256SUMS.txt
           generate_release_notes: true
           draft: false
           body: |

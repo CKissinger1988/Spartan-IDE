@@ -11,7 +11,7 @@ use std::thread;
 /// This project's own real repository and default branch -- matching the
 /// exact values `spartan-updater`'s own live integration test already
 /// uses.
-pub const REPO: &str = "ckissinger1988/spartan-ide";
+pub const REPO: &str = spartan_updater::SPARTAN_REPOSITORY;
 pub const BRANCH: &str = "main";
 
 pub fn spawn_update_check() -> mpsc::Receiver<Result<UpdateCheckResult, UpdateCheckError>> {

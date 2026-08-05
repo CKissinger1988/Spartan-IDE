@@ -4,7 +4,7 @@
   "private": true,
   "license": "Apache-2.0",
   "description": "Spartan IDE desktop shell -- real Electron + React frontend driving the existing Rust core (spartan-buffer, tree-sitter, LSP/DAP, Leo, spartan-git) over a local IPC service. See CLAUDE.md/docs/architecture-spec.md for why this exists alongside crates/spartan-editor-core (the original wgpu-native shell, kept as the backend proof-of-concept and reference).",
-  "homepage": "https://github.com/CKissinger1988/Spartan-IDE",
+  "homepage": "https://github.com/Spartan-Software-Enterprises/Spartan-IDE",
   "author": {
     "name": "CKissinger1988",
     "email": "80974097+CKissinger1988@users.noreply.github.com"
@@ -29,7 +29,7 @@
     "afterSign": "electron/afterSign.js",
     "publish": {
       "provider": "github",
-      "owner": "CKissinger1988",
+      "owner": "Spartan-Software-Enterprises",
       "repo": "Spartan-IDE",
       "releaseType": "draft"
     },

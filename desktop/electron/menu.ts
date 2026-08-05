@@ -64,7 +64,7 @@
 import { app, BrowserWindow, Menu, dialog, shell } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 
-export const REPO_URL = "https://github.com/CKissinger1988/Spartan-IDE";
+export const REPO_URL = "https://github.com/Spartan-Software-Enterprises/Spartan-IDE";
 
 function focusedOrMainWindow(mainWindow: BrowserWindow | null): BrowserWindow | null {
   return BrowserWindow.getFocusedWindow() ?? mainWindow;

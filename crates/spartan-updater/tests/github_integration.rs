@@ -10,7 +10,7 @@
 
 use spartan_updater::check_for_updates;
 
-const REPO: &str = "ckissinger1988/spartan-ide";
+const REPO: &str = spartan_updater::SPARTAN_REPOSITORY;
 const BRANCH: &str = "main";
 
 #[test]

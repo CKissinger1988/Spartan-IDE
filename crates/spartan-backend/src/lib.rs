@@ -5264,7 +5264,7 @@ fn check_for_updates(out_tx: Sender<String>) -> Result<serde_json::Value, String
     // This project's own real repository and default branch -- matching
     // the exact values `update_bridge.rs` in the original wgpu shell
     // already uses (and `spartan-updater`'s own live integration test).
-    const REPO: &str = "ckissinger1988/spartan-ide";
+    const REPO: &str = spartan_updater::SPARTAN_REPOSITORY;
     const BRANCH: &str = "main";
     thread::spawn(move || {
         let event = match spartan_updater::check_for_updates(REPO, BRANCH) {

@@ -5277,6 +5277,7 @@ dependencies = [
  "qrcode",
  "serde_json",
  "spartan-backend",
+ "spartan-updater",
  "tiny_http",
  "tungstenite",
 ]

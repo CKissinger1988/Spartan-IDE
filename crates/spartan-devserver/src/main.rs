@@ -5,7 +5,7 @@
 //!
 //! Usage:
 //!   spartan-devserver [--web-root:<dir>] [--static-port:<port>] [--project-root:<dir>]
-//!                     [--host:<LAN-IP> --mobile-pairing-token:<secret>]
+//!                     [--host:<LAN-IP> --mobile-pairing-token:<secret>] [--check-update]
 //!
 //! Defaults: `--web-root:web/dist`, `--static-port:4400`, `--project-root:.`
 //! (the directory the devserver was launched from -- the intended workflow
@@ -35,6 +35,23 @@ fn main() -> std::io::Result<()> {
     let host = parse_flag(&args, "--host:").unwrap_or("127.0.0.1");
     let mobile_pairing_token = parse_flag(&args, "--mobile-pairing-token:").map(str::to_owned);
     let print_mobile_qr = args.iter().any(|arg| arg == "--print-mobile-qr");
+
+    if args.iter().any(|arg| arg == "--check-update") {
+        let result = spartan_updater::check_latest_release(
+            spartan_updater::SPARTAN_REPOSITORY,
+            env!("CARGO_PKG_VERSION"),
+        )
+        .map_err(|error| std::io::Error::other(format!("GitHub release check failed: {error}")))?;
+        if result.update_available {
+            println!(
+                "Update available: {} -> {}\nInstall from: {}",
+                result.current_version, result.latest_version, result.release_url
+            );
+        } else {
+            println!("spartan-devserver {} is up to date", result.current_version);
+        }
+        return Ok(());
+    }
 
     if host == "0.0.0.0" || host == "::" {
         return Err(std::io::Error::new(
@@ -73,6 +90,9 @@ fn main() -> std::io::Result<()> {
              static requests will 404 until it's present."
         );
     }
+    eprintln!(
+        "spartan-devserver: first-time setup: build web/ before serving it; run --check-update to check official GitHub Releases without changing this host"
+    );
 
     // Canonicalized so the advertised `projectRoot` is a real, absolute
     // path a browser client can pass straight back into `git_status`/

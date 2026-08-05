@@ -15,6 +15,7 @@ license.workspace = true
 
 [dependencies]
 spartan-backend = { path = "../spartan-backend" }
+spartan-updater = { path = "../spartan-updater" }
 serde_json = "1"
 # Sync, tokio-free minimal HTTP server for serving the web/ client and the
 # same-origin /__spartan/session token handoff -- matches this crate's

@@ -23,6 +23,11 @@ use serde_json::Value;
 use std::fmt;
 use std::time::Duration;
 
+/// Canonical GitHub repository used for every Spartan release check. Keeping
+/// this in the shared updater avoids clients silently drifting back to the
+/// historical repository owner.
+pub const SPARTAN_REPOSITORY: &str = "Spartan-Software-Enterprises/Spartan-IDE";
+
 /// The commit this binary was actually built from, captured once at
 /// compile time by `build.rs` -- `"unknown"` is a real, honest value for a
 /// build where `git` wasn't available, not a placeholder to ignore.
@@ -70,6 +75,26 @@ pub struct UpdateCheckResult {
     pub latest_commit: String,
     pub up_to_date: bool,
     pub categories: ChangeCategories,
+}
+
+/// A downloadable file published with a GitHub Release. Consumers choose the
+/// artifact appropriate to their platform; this crate never executes one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseAsset {
+    pub name: String,
+    pub download_url: String,
+}
+
+/// Result of comparing an installed product version with GitHub's latest
+/// published release. `release_url` is a GitHub-owned HTTPS URL that can be
+/// safely shown to a user or operator for a deliberate install.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseCheckResult {
+    pub current_version: String,
+    pub latest_version: String,
+    pub update_available: bool,
+    pub release_url: String,
+    pub assets: Vec<ReleaseAsset>,
 }
 
 #[derive(Debug)]
@@ -120,6 +145,105 @@ fn get_json(url: &str) -> Result<Value, UpdateCheckError> {
         })?;
     resp.into_json::<Value>()
         .map_err(|e| UpdateCheckError::Parse(e.to_string()))
+}
+
+/// Compare semver-like release tags used by this project. A leading `v` is
+/// accepted; prereleases sort before the equivalent stable release. This is
+/// deliberately small and strict rather than accepting a malformed tag and
+/// risking an unintended downgrade/install prompt.
+fn is_newer_version(latest: &str, current: &str) -> Result<bool, UpdateCheckError> {
+    fn parse(version: &str) -> Result<([u64; 3], Option<Vec<String>>), UpdateCheckError> {
+        let version = version.trim().strip_prefix('v').unwrap_or(version.trim());
+        let (core, prerelease) = version.split_once('-').unwrap_or((version, ""));
+        let mut numbers = core.split('.').map(|part| part.parse::<u64>());
+        let parsed = [
+            numbers
+                .next()
+                .ok_or_else(|| {
+                    UpdateCheckError::Parse(format!("invalid release version {version:?}"))
+                })?
+                .map_err(|_| {
+                    UpdateCheckError::Parse(format!("invalid release version {version:?}"))
+                })?,
+            numbers
+                .next()
+                .ok_or_else(|| {
+                    UpdateCheckError::Parse(format!("invalid release version {version:?}"))
+                })?
+                .map_err(|_| {
+                    UpdateCheckError::Parse(format!("invalid release version {version:?}"))
+                })?,
+            numbers
+                .next()
+                .ok_or_else(|| {
+                    UpdateCheckError::Parse(format!("invalid release version {version:?}"))
+                })?
+                .map_err(|_| {
+                    UpdateCheckError::Parse(format!("invalid release version {version:?}"))
+                })?,
+        ];
+        if numbers.next().is_some() {
+            return Err(UpdateCheckError::Parse(format!(
+                "invalid release version {version:?}"
+            )));
+        }
+        let prerelease =
+            (!prerelease.is_empty()).then(|| prerelease.split('.').map(str::to_owned).collect());
+        Ok((parsed, prerelease))
+    }
+
+    let (latest_core, latest_pre) = parse(latest)?;
+    let (current_core, current_pre) = parse(current)?;
+    if latest_core != current_core {
+        return Ok(latest_core > current_core);
+    }
+    match (latest_pre, current_pre) {
+        (None, Some(_)) => Ok(true),
+        (Some(_), None) => Ok(false),
+        (None, None) => Ok(false),
+        (Some(latest_pre), Some(current_pre)) => Ok(latest_pre > current_pre),
+    }
+}
+
+/// Check the latest non-draft GitHub Release for a product version. This is
+/// suitable for mobile and server update *notifications*: installation stays
+/// platform/operator controlled so a network response cannot replace a
+/// running binary or APK by itself.
+pub fn check_latest_release(
+    repo: &str,
+    current_version: &str,
+) -> Result<ReleaseCheckResult, UpdateCheckError> {
+    let release = get_json(&format!(
+        "https://api.github.com/repos/{repo}/releases/latest"
+    ))?;
+    let tag = release["tag_name"].as_str().ok_or_else(|| {
+        UpdateCheckError::Parse("missing 'tag_name' in release response".to_string())
+    })?;
+    let release_url = release["html_url"]
+        .as_str()
+        .filter(|url| url.starts_with("https://github.com/"))
+        .ok_or_else(|| {
+            UpdateCheckError::Parse("missing safe 'html_url' in release response".to_string())
+        })?
+        .to_string();
+    let assets = release["assets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|asset| {
+            Some(ReleaseAsset {
+                name: asset["name"].as_str()?.to_string(),
+                download_url: asset["browser_download_url"].as_str()?.to_string(),
+            })
+        })
+        .collect();
+    Ok(ReleaseCheckResult {
+        current_version: current_version.to_string(),
+        latest_version: tag.trim_start_matches('v').to_string(),
+        update_available: is_newer_version(tag, current_version)?,
+        release_url,
+        assets,
+    })
 }
 
 /// Real, live check against the real GitHub API for `repo` (e.g.
@@ -234,5 +358,19 @@ mod tests {
         // string "unknown" -- never empty, never fabricated.
         let hash = built_commit_hash();
         assert!(!hash.is_empty());
+    }
+
+    #[test]
+    fn release_versions_handle_stable_and_prerelease_ordering() {
+        assert!(is_newer_version("v0.2.0", "0.2.0-beta.1").unwrap());
+        assert!(is_newer_version("0.3.0", "0.2.9").unwrap());
+        assert!(!is_newer_version("0.2.0-beta.1", "0.2.0").unwrap());
+        assert!(!is_newer_version("0.2.0", "0.2.0").unwrap());
+    }
+
+    #[test]
+    fn malformed_release_versions_are_rejected() {
+        assert!(is_newer_version("latest", "0.2.0").is_err());
+        assert!(is_newer_version("0.2", "0.2.0").is_err());
     }
 }

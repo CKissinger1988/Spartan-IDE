@@ -158,6 +158,7 @@ Priority key:
 | Device-picker UI (multi-device) | P3 | Auto-picks first ready device. |
 | logcat filtering / search / level coloring | P3 | Raw verbatim stream only. |
 | Signing / release (AAB) tooling | P3 | Debug-APK build only. |
+| GitHub Release update discovery across mobile and server builds | ✅ done | `spartan-updater` now parses the latest official GitHub Release and compares strict semver-style versions; both server CLIs expose `--check-update`, and mobile has the same guarded release client for its Android surface. Installation remains user/operator-confirmed. The release workflow publishes server binaries and `SHA256SUMS.txt` alongside platform artifacts. |
 
 ## Production, packaging & distribution
 

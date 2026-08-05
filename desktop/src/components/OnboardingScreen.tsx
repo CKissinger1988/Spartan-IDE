@@ -31,6 +31,10 @@ const FEATURES: FeatureHighlight[] = [
     title: "Workflows",
     body: "A real node-graph canvas for launching and monitoring external coding CLIs (Claude, Codex, Gemini) side by side.",
   },
+  {
+    title: "Updates",
+    body: "Spartan checks its official GitHub Releases. The desktop installer uses the platform updater; downloads and restarts require your explicit approval, and Settings always shows the current update state.",
+  },
 ];
 
 /**
