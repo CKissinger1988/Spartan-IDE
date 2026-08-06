@@ -142,6 +142,10 @@ test("a real bundle carries real data-spartan-id attributes for click-to-select 
       assert.ok(result.code.includes("spartan-canvas-focus"), "the real bundle should support preview focus state");
       assert.ok(result.code.includes("spartan-canvas-blur"), "the real bundle should support leaving preview focus state");
       assert.ok(result.code.includes("spartan-canvas-state"), "the real bundle should accept interaction-state preview messages");
+      assert.ok(result.code.includes("spartan-canvas-data-state"), "the real bundle should accept preview-only data-state messages");
+      assert.ok(result.code.includes("Loading..."), "the real bundle should expose a loading state");
+      assert.ok(result.code.includes("Something went wrong"), "the real bundle should expose an error state");
+      assert.ok(result.code.includes("previewDataStateOriginalHtml"), "the real bundle should restore the selected node after a data-state preview");
       assert.ok(
         result.code.includes("data-spartan-preview-hover") && result.code.includes("data-spartan-preview-active"),
         "the real bundle should clone authored hover and active selectors onto temporary state attributes",

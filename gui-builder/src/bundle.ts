@@ -82,6 +82,9 @@ try {
   var selectedEls = [];
   var previewStateEl = null;
   var previewStateStyle = null;
+  var previewDataStateEl = null;
+  var previewDataStateOriginalHtml = null;
+  var previewDataStateOriginalBusy = null;
   var boxModelOverlay = null;
   var boxModelNode = null;
   var focusedEl = null;
@@ -255,6 +258,43 @@ try {
     previewStateEl = candidate;
   }
 
+  // Preview-only data states make common loading/empty/error/edge-content
+  // layouts testable without pretending those states are source edits. The
+  // selected element's original markup and aria-busy value are restored when
+  // the state changes or the parent clears it.
+  function clearPreviewDataState() {
+    if (!previewDataStateEl) return;
+    previewDataStateEl.innerHTML = previewDataStateOriginalHtml || "";
+    if (previewDataStateOriginalBusy === null) previewDataStateEl.removeAttribute("aria-busy");
+    else previewDataStateEl.setAttribute("aria-busy", previewDataStateOriginalBusy);
+    previewDataStateEl = null;
+    previewDataStateOriginalHtml = null;
+    previewDataStateOriginalBusy = null;
+  }
+
+  function previewDataState(nodeId, state) {
+    clearPreviewDataState();
+    if (!nodeId || !state || state === "normal" || state === "populated") return;
+    var candidate = document.querySelector('[data-spartan-id="' + nodeId + '"]');
+    if (!candidate) return;
+    previewDataStateEl = candidate;
+    previewDataStateOriginalHtml = candidate.innerHTML;
+    previewDataStateOriginalBusy = candidate.getAttribute("aria-busy");
+    if (state === "loading") {
+      candidate.setAttribute("aria-busy", "true");
+      candidate.textContent = "Loading...";
+    } else if (state === "empty") {
+      candidate.removeAttribute("aria-busy");
+      candidate.textContent = "No results";
+    } else if (state === "error") {
+      candidate.removeAttribute("aria-busy");
+      candidate.textContent = "Something went wrong";
+    } else if (state === "long") {
+      candidate.removeAttribute("aria-busy");
+      candidate.textContent = "This is intentionally long preview content for checking wrapping, truncation, overflow, and responsive layout behavior across viewport sizes.";
+    }
+  }
+
   function inspectSelection(nodeId) {
     var candidate = nodeId
       ? document.querySelector('[data-spartan-id="' + nodeId + '"]')
@@ -338,6 +378,8 @@ try {
       highlightSelection(event.data.nodeIds || event.data.nodeId || null);
     } else if (event.data && event.data.type === "spartan-canvas-state") {
       previewInteractionState(event.data.nodeId || null, event.data.state || null);
+    } else if (event.data && event.data.type === "spartan-canvas-data-state") {
+      previewDataState(event.data.nodeId || null, event.data.state || null);
     } else if (event.data && event.data.type === "spartan-canvas-box-model") {
       if (event.data.visible) renderBoxModel(event.data.nodeId || null);
       else clearBoxModel();

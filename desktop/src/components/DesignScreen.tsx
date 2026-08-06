@@ -76,6 +76,7 @@ interface VariantClipboard {
 }
 
 type PreviewInteractionState = "normal" | "focus" | "hover" | "active";
+type PreviewDataState = "normal" | "loading" | "empty" | "error" | "populated" | "long";
 
 interface InteractionPreset {
   name: string;
@@ -882,6 +883,7 @@ export default function DesignScreen({
   const [interactionPresetName, setInteractionPresetName] = useState("");
   const [interactionPresets, setInteractionPresets] = useState<InteractionPreset[]>([]);
   const [previewInteractionState, setPreviewInteractionState] = useState<PreviewInteractionState>("normal");
+  const [previewDataState, setPreviewDataState] = useState<PreviewDataState>("normal");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [styleClipboard, setStyleClipboard] = useState<StyleClipboard | null>(null);
@@ -1072,8 +1074,10 @@ export default function DesignScreen({
     setPreviewInspection(null);
     setBoxModelVisible(false);
     setPreviewInteractionState("normal");
+    setPreviewDataState("normal");
     postPreviewMessage({ type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds });
     postPreviewMessage({ type: "spartan-canvas-state", nodeId: selectedId, state: null });
+    postPreviewMessage({ type: "spartan-canvas-data-state", nodeId: selectedId, state: "normal" });
     postPreviewMessage({ type: "spartan-canvas-box-model", nodeId: selectedId, visible: false });
     if (selectedId) {
       postPreviewMessage({ type: "spartan-canvas-inspect", nodeId: selectedId });
@@ -2157,6 +2161,12 @@ export default function DesignScreen({
     setPreviewInteractionState(state ?? "normal");
   }, [postPreviewMessage, selectedId, hasSingleSelection]);
 
+  const setPreviewData = useCallback((state: PreviewDataState) => {
+    if (!selectedId || !hasSingleSelection) return;
+    postPreviewMessage({ type: "spartan-canvas-data-state", nodeId: selectedId, state });
+    setPreviewDataState(state);
+  }, [postPreviewMessage, selectedId, hasSingleSelection]);
+
   const applyInteractionPreset = useCallback((preset: InteractionPreset) => {
     if (!selectedId || !hasSingleSelection) return;
     postPreviewMessage({ type: preset.state === "focus" ? "spartan-canvas-focus" : "spartan-canvas-blur", nodeId: selectedId });
@@ -2582,6 +2592,7 @@ export default function DesignScreen({
                         title={`${item.label} live preview`}
                         onLoad={() => {
                           postPreviewMessage({ type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds });
+                          postPreviewMessage({ type: "spartan-canvas-data-state", nodeId: selectedId, state: previewDataState });
                           postPreviewMessage({ type: "spartan-canvas-box-model", nodeId: selectedId, visible: boxModelVisible });
                           if (selectedId) postPreviewMessage({ type: "spartan-canvas-inspect", nodeId: selectedId });
                         }}
@@ -2602,6 +2613,7 @@ export default function DesignScreen({
                 title="Live preview"
                 onLoad={() => {
                   postPreviewMessage({ type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds });
+                  postPreviewMessage({ type: "spartan-canvas-data-state", nodeId: selectedId, state: previewDataState });
                   postPreviewMessage({ type: "spartan-canvas-box-model", nodeId: selectedId, visible: boxModelVisible });
                   if (selectedId) postPreviewMessage({ type: "spartan-canvas-inspect", nodeId: selectedId });
                 }}
@@ -3047,6 +3059,25 @@ export default function DesignScreen({
                   <button className="design-secondary-action mono" onClick={() => setBoxModel(!boxModelVisible)}>
                     {boxModelVisible ? "Hide box model" : "Show box model"}
                   </button>
+                </div>
+                <div className="design-interaction-presets" aria-label="Preview data states">
+                  <div className="design-preview-status mono">
+                    Data state: {previewDataState}
+                  </div>
+                  <select
+                    className="design-input mono"
+                    aria-label="Preview data state"
+                    value={previewDataState}
+                    onChange={(event) => setPreviewData(event.target.value as PreviewDataState)}
+                  >
+                    <option value="normal">Normal</option>
+                    <option value="loading">Loading</option>
+                    <option value="empty">Empty</option>
+                    <option value="error">Error</option>
+                    <option value="populated">Populated</option>
+                    <option value="long">Long content</option>
+                  </select>
+                  <div className="design-preview-status mono">Preview-only content; source is unchanged.</div>
                 </div>
                 <div className="design-interaction-presets" aria-label="Reusable interaction state presets">
                   <div className="design-preview-status mono">

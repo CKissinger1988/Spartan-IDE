@@ -276,6 +276,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Synchronized Desktop/Tablet/Mobile responsive comparison matrix | Real |
 | Preset preview orientation switching between Auto, Portrait, and Landscape | Real |
 | Reusable per-file interaction-state presets and preview controls | Real |
+| Preview-only loading, empty, error, populated, and long-content data states | Real |
 
 ## Model management
 
