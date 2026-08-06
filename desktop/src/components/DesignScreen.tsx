@@ -809,6 +809,7 @@ export default function DesignScreen({
   const [tokenDrafts, setTokenDrafts] = useState<Record<string, string>>({});
   const [tokensOpen, setTokensOpen] = useState(false);
   const [tokenFilter, setTokenFilter] = useState("");
+  const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [newTokenName, setNewTokenName] = useState("");
   const [newTokenValue, setNewTokenValue] = useState("");
   const [newTokenFile, setNewTokenFile] = useState("");
@@ -1663,6 +1664,17 @@ export default function DesignScreen({
     }
   }, []);
 
+  const copyTokenReference = useCallback(async (token: DiscoveredToken) => {
+    const key = `${token.file}:${token.name}`;
+    try {
+      await navigator.clipboard.writeText(`var(${token.name})`);
+      setCopiedToken(key);
+      window.setTimeout(() => setCopiedToken((current) => current === key ? null : current), 1600);
+    } catch (e) {
+      setError(`Could not copy token reference: ${(e as Error).message}`);
+    }
+  }, []);
+
   const copyInspection = useCallback(async () => {
     if (!previewInspection || !selectedNode) return;
     try {
@@ -2270,6 +2282,13 @@ export default function DesignScreen({
                           onClick={() => void applyTokenDefinition(token)}
                         >
                           Save
+                        </button>
+                        <button
+                          className="design-token-save mono"
+                          title={`Copy var(${token.name})`}
+                          onClick={() => void copyTokenReference(token)}
+                        >
+                          {copiedToken === tokenKey ? "Copied" : "Copy"}
                         </button>
                       </div>
                     );
