@@ -36,6 +36,7 @@ import LeoChatPanel from "./components/LeoChatPanel";
 import NewProjectWizard from "./components/NewProjectWizard";
 import UnsavedChangesModal from "./components/UnsavedChangesModal";
 import OnboardingScreen from "./components/OnboardingScreen";
+import DevicePreview from "./components/DevicePreview";
 import { applyReduceMotion } from "./reduceMotion";
 import { applyTheme, type ThemeName } from "./applyTheme";
 import { applyFontFamily } from "./applyFontFamily";
@@ -1045,12 +1046,14 @@ export default function App(): React.ReactElement {
               {screen === "settings" && <SettingsScreen />}
               {screen === "containers" && <DevContainersScreen root={ROOT} />}
               {screen === "models" && <ModelsScreen />}
+              {screen === "device-preview" && <DevicePreview />}
               {screen !== "workflows" &&
                 screen !== "console" &&
                 screen !== "sessions" &&
                 screen !== "settings" &&
                 screen !== "containers" &&
-                screen !== "models" && <Placeholder screen={screen} />}
+                screen !== "models" &&
+                screen !== "device-preview" && <Placeholder screen={screen} />}
             </div>
           </>
         )}

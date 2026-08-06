@@ -165,6 +165,15 @@ The result lands in `desktop/dist-package/` (gitignored). `package.json`'s
 build, not a publicly distributed release). Windows/macOS targets aren't
 configured; this environment has no way to build or verify them.
 
+## Device Preview
+
+The desktop shell includes a real `Device Preview` screen in the left navigation.
+It renders a project URL in an isolated iframe at selectable iPhone, Pixel, iPad,
+Galaxy Tab, and desktop CSS viewports. Use the controls to rotate the device,
+change preview zoom, and show the safe-area boundary while checking responsive
+layouts. The panel reports emulated CSS dimensions and DPR; native sensors, OS
+chrome, and hardware behavior still require a real emulator or device.
+
 ## A real, environment-specific network condition — and a real bug it uncovered
 
 Every session before the one that launched a real Electron window for the
