@@ -1916,9 +1916,22 @@ export default function DesignScreen({
           fromFile: activeFile.path,
           source: activeFile.content,
         })) as { components: DiscoveredComponent[] };
+        const projectComponents = new Map(
+          components.map((component) => [`${component.file}:${component.name}:${component.isDefault ? "default" : "named"}`, component])
+        );
+        const liveComponents = liveResult.components.map((component) => {
+          const existing = projectComponents.get(`${component.file}:${component.name}:${component.isDefault ? "default" : "named"}`);
+          return {
+            ...existing,
+            ...component,
+            ...(existing?.usageCount !== undefined && component.usageCount === undefined ? { usageCount: existing.usageCount } : {}),
+            ...(existing?.usageFiles && component.usageFiles === undefined ? { usageFiles: existing.usageFiles } : {}),
+            ...(existing?.usageLocations && component.usageLocations === undefined ? { usageLocations: existing.usageLocations } : {}),
+          };
+        });
         components = [
           ...components.filter((component) => component.file !== activeFile.path),
-          ...liveResult.components,
+          ...liveComponents,
         ];
       }
       setPalette(components);
