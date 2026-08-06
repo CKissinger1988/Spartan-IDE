@@ -206,6 +206,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Parsed JSX/JavaScript expression prop editing | Real |
 | JSX prop removal | Real |
 | Inline style-property removal with safe empty-style cleanup | Real |
+| Existing prop/style quick pickers with literal/expression seeding | Real |
 | Configurable string props and initial text for inserted elements | Real |
 | Desktop/Tablet/Mobile viewport presets and zoom | Real |
 | Reusable component state machines and interaction-state controls | Planned |

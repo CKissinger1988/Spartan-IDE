@@ -252,6 +252,7 @@ const STYLE_PROPERTIES: StylePropertyDef[] = [
  * real CSS property can collide with, so `styleDef` lookup stays a plain
  * name match with no separate "is this custom" flag to keep in sync. */
 const CUSTOM_STYLE_PROPERTY = "__custom__";
+const CUSTOM_PROP = "__spartan_custom_prop__";
 
 /** The catalog grouped for `<optgroup>`, preserving each group's first
  * appearance order in `STYLE_PROPERTIES` rather than sorting -- the
@@ -778,6 +779,45 @@ export default function DesignScreen({
     [selectedNode]
   );
 
+  /** Selecting a real existing prop makes the inspector useful as an
+   * inspector, not only as a raw source-edit form: literal and expression
+   * summaries seed the matching value control, while a style/object summary
+   * deliberately clears the value instead of fabricating source. */
+  const selectProp = useCallback(
+    (name: string) => {
+      if (name === CUSTOM_PROP || name === "") {
+        setPropKey("");
+        setPropValue("");
+        setPropValueType("string");
+        return;
+      }
+      const summary = selectedNode?.props[name];
+      setPropKey(name);
+      if (summary?.kind === "string") {
+        setPropValue(summary.value);
+        setPropValueType("string");
+      } else if (summary?.kind === "expression") {
+        setPropValue(summary.source);
+        setPropValueType("expression");
+      } else {
+        setPropValue("");
+        setPropValueType("expression");
+      }
+    },
+    [selectedNode]
+  );
+
+  const selectStyleRemovalProperty = useCallback(
+    (name: string) => {
+      if (name === CUSTOM_STYLE_PROPERTY || name === "") {
+        setPropKey("");
+        return;
+      }
+      setPropKey(name);
+    },
+    []
+  );
+
   /** Re-scans the real project every time the palette is opened, never
    * caching -- a component file can be created or renamed between two
    * opens, the same "state can change between opens" reasoning the Git
@@ -1246,9 +1286,20 @@ export default function DesignScreen({
             </div>
             {editKind === "PropChange" && (
               <>
+                <select
+                  className="design-input mono"
+                  aria-label="Existing or custom prop"
+                  value={selectedNode?.props[propKey] ? propKey : ""}
+                  onChange={(e) => selectProp(e.target.value)}
+                >
+                  <option value="">Select an existing prop…</option>
+                  {Object.keys(selectedNode.props).map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
                 <input
                   className="design-input mono"
-                  placeholder="prop name"
+                  placeholder="prop name (or choose above)"
                   value={propKey}
                   onChange={(e) => setPropKey(e.target.value)}
                 />
@@ -1316,13 +1367,26 @@ export default function DesignScreen({
               </>
             )}
             {editKind === "StyleRemove" && (
-              <input
-                className="design-input mono"
-                placeholder="style property to remove"
-                aria-label="Style property to remove"
-                value={propKey}
-                onChange={(e) => setPropKey(e.target.value)}
-              />
+              <>
+                <select
+                  className="design-input mono"
+                  aria-label="Existing or custom style property"
+                  value={selectedNode?.props.style?.kind === "style" && selectedNode.props.style.entries[propKey] ? propKey : ""}
+                  onChange={(e) => selectStyleRemovalProperty(e.target.value)}
+                >
+                  <option value="">Select an existing style…</option>
+                  {selectedNode?.props.style?.kind === "style" && Object.keys(selectedNode.props.style.entries).map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+                <input
+                  className="design-input mono"
+                  placeholder="style property to remove (or choose above)"
+                  aria-label="Custom style property to remove"
+                  value={propKey}
+                  onChange={(e) => setPropKey(e.target.value)}
+                />
+              </>
             )}
             {editKind === "PropRemove" && (
               <input
