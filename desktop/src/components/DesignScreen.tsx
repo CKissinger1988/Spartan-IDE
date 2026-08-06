@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { OpenFile } from "./Editor";
+import { screenReaderPreview as sharedScreenReaderPreview } from "../../../gui-builder/src/accessibility";
+import type { ScreenReaderNode } from "../../../gui-builder/src/accessibility";
 
 interface StyleEntryValue {
   kind: "literal" | "expression";
@@ -939,6 +941,10 @@ export default function DesignScreen({
   const accessibilityFindings = useMemo(
     () => selectedNode ? accessibilityAudit(selectedNode, previewInspection?.nodeId === selectedNode.id ? previewInspection : null) : [],
     [selectedNode, previewInspection]
+  );
+  const screenReaderEstimate = useMemo(
+    () => selectedNode ? sharedScreenReaderPreview(selectedNode as ScreenReaderNode) : null,
+    [selectedNode]
   );
 
   const saveViewportPreset = useCallback(() => {
@@ -1931,7 +1937,9 @@ export default function DesignScreen({
         `Accessibility audit for <${selectedNode.tagName}> (${selectedNode.id})`,
         `Bounds: ${Math.round(previewInspection.rect.x)},${Math.round(previewInspection.rect.y)} → ${Math.round(previewInspection.rect.right)},${Math.round(previewInspection.rect.bottom)}`,
         `Rendered size: ${Math.round(previewInspection.rect.width)}×${Math.round(previewInspection.rect.height)}px`,
-      ...accessibilityFindings.map((finding) => `${finding.severity.toUpperCase()}: ${finding.message}`),
+        `Estimated screen reader announcement: ${screenReaderEstimate?.announcement ?? "Unavailable"}`,
+        ...(screenReaderEstimate?.details ?? []).map((detail) => `Screen reader detail: ${detail}`),
+        ...accessibilityFindings.map((finding) => `${finding.severity.toUpperCase()}: ${finding.message}`),
     ];
     try {
       await navigator.clipboard.writeText(lines.join("\n"));
@@ -1940,7 +1948,7 @@ export default function DesignScreen({
     } catch (e) {
       setError(`Could not copy accessibility report: ${(e as Error).message}`);
     }
-  }, [selectedNode, previewInspection, accessibilityFindings]);
+  }, [selectedNode, previewInspection, screenReaderEstimate, accessibilityFindings]);
 
   const copyDesignHandoff = useCallback(async () => {
     if (!selectedNode || !previewInspection) return;
@@ -1963,6 +1971,10 @@ export default function DesignScreen({
       "",
       "## Accessibility audit",
       findings,
+      "",
+      "## Estimated screen reader announcement",
+      screenReaderEstimate?.announcement ?? "Unavailable",
+      ...(screenReaderEstimate?.details ?? []).map((detail) => `- ${detail}`),
     ].join("\n");
     try {
       await navigator.clipboard.writeText(report);
@@ -1971,7 +1983,7 @@ export default function DesignScreen({
     } catch (e) {
       setError(`Could not copy design handoff: ${(e as Error).message}`);
     }
-  }, [activeFile?.path, selectedNode, previewInspection, accessibilityFindings]);
+  }, [activeFile?.path, selectedNode, previewInspection, accessibilityFindings, screenReaderEstimate]);
 
   const copySelectedJsx = useCallback(async () => {
     if (!selectedNode?.sourceText || !hasSingleSelection) return;
@@ -2851,6 +2863,14 @@ export default function DesignScreen({
                 <div className="design-preview-status mono" aria-label="Accessibility audit">
                   Accessibility audit
                 </div>
+                {screenReaderEstimate && (
+                  <div className="design-preview-status mono" aria-label="Estimated screen reader announcement">
+                    <strong>Screen reader preview:</strong> {screenReaderEstimate.announcement}
+                    {screenReaderEstimate.details.length > 0 && (
+                      <span> · {screenReaderEstimate.details.join(" · ")}</span>
+                    )}
+                  </div>
+                )}
                 <button className="design-secondary-action mono design-inspection-copy" onClick={() => void copyAccessibilityReport()}>
                   {copiedAccessibility ? "Copied accessibility report" : "Copy accessibility report"}
                 </button>

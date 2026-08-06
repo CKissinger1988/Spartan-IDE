@@ -56,7 +56,12 @@ summarizes.
 - The Design screen can paste a copied subtree as either a child or the next
   sibling of one or many selected elements; root sibling targets are refused
   safely and multi-target insertion is atomic.
-- `src/*.test.ts` — 145 real tests (Node's built-in `node:test` runner, no
+- The Design inspector includes an explicitly labelled estimated screen-reader
+  announcement showing the selected element's inferred role, accessible name,
+  heading level, and parsed ARIA state. It is included in copied accessibility
+  reports and design handoffs; dynamic labelled-by resolution remains clearly
+  identified as an estimate.
+- `src/*.test.ts` — 150 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.
