@@ -157,6 +157,27 @@ function applyStyleClearMany(nodesById: Map<string, AnyNode>, edit: Extract<Canv
   }
 }
 
+function applyStyleChangeMany(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "StyleChangeMany" }>): void {
+  const ids = [...new Set(edit.nodeIds)];
+  if (ids.length === 0) throw new Error("StyleChangeMany requires at least one selected element.");
+  const elements = ids.map((id) => {
+    const element = nodesById.get(id);
+    if (!element) throw new Error(`No element with id "${id}" found in the current source.`);
+    return { id, element };
+  });
+  // Validate every existing style target before mutating any element. A new
+  // style attribute is safe, while a dynamic style expression is not.
+  for (const { id, element } of elements) {
+    const styleAttr = findAttribute(element, "style");
+    const container = styleAttr?.value;
+    if (styleAttr && (!container || container.type !== "JSXExpressionContainer" || container.expression.type !== "ObjectExpression")) {
+      throw new Error(`StyleChangeMany target "${id}" is not a plain object expression; refusing a partial multi-node edit.`);
+    }
+  }
+  if (edit.valueType === "expression") parsePropExpression(edit.value);
+  for (const { element } of elements) applyStyleChange(element, edit.property, edit.value, edit.valueType);
+}
+
 function parsePropExpression(value: string): AnyNode {
   try {
     const wrapped = recast.parse(`const __spartanProp = (${value});`, { parser: parserAdapter }) as AnyNode;
@@ -772,6 +793,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       applyStyleChange(element, edit.property, edit.value, edit.valueType);
       break;
     }
+    case "StyleChangeMany":
+      applyStyleChangeMany(nodesById, edit);
+      break;
     case "StyleRemove": {
       const element = nodesById.get(edit.nodeId);
       if (!element) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);

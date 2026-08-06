@@ -8,7 +8,7 @@
  * real JS/JSX AST work actually happens, per §6.1's own "lightweight
  * dev-server bridge" description).
  *
- * All twenty-one members of the full spec's `CanvasEdit` union are now real and
+ * All twenty-two members of the full spec's `CanvasEdit` union are now real and
  * implemented by `applyCanvasEdit`: `StyleChange`/`PropChange` (original
  * v1), and `Reparent`/`ComponentInsert` (closing the gap this file's own
  * doc comment used to name as unattempted -- see edit.ts's doc comment
@@ -76,6 +76,14 @@ export type CanvasEdit =
       value: string;
       /** Preserve a copied style expression such as `C.text` instead of
        * coercing it into a string literal. */
+      valueType?: "string" | "expression";
+    }
+  /** Applies one style property to multiple selected elements atomically. */
+  | {
+      kind: "StyleChangeMany";
+      nodeIds: string[];
+      property: string;
+      value: string;
       valueType?: "string" | "expression";
     }
   /** Removes one property from a plain inline style object. */

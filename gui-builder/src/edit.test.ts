@@ -60,6 +60,20 @@ test("StyleChange refuses to overwrite a non-plain-object style value", () => {
   );
 });
 
+test("StyleChangeMany updates every selected style atomically", () => {
+  const source = `const X = () => <main><div style={{ color: "red" }} /><span style={{ padding: 4 }} /></main>;`;
+  const result = applyCanvasEdit(source, { kind: "StyleChangeMany", nodeIds: ["n1", "n2"], property: "color", value: "blue" });
+  assert.equal((result.match(/color:\s*"blue"/g) ?? []).length, 2);
+});
+
+test("StyleChangeMany refuses a dynamic style before partially changing earlier nodes", () => {
+  const source = `const X = () => <main><div style={{ color: "red" }} /><span style={styles.text} /></main>;`;
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "StyleChangeMany", nodeIds: ["n1", "n2"], property: "color", value: "blue" }),
+    /refusing a partial multi-node edit/,
+  );
+});
+
 test("StyleRemove removes one inline style property and preserves its sibling", () => {
   const source = `const X = () => <div style={{ color: "red", padding: 4 }} />;`;
   const result = applyCanvasEdit(source, { kind: "StyleRemove", nodeId: "n0", property: "color" });

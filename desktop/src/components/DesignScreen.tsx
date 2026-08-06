@@ -1620,29 +1620,39 @@ export default function DesignScreen({
 
   const insertAsset = useCallback(
     async (asset: DiscoveredAsset) => {
-      if (!activeFile || !selectedId || !hasSingleSelection) return;
-      await applyEditObject({
-        kind: "ComponentInsert",
-        parentId: selectedId,
-        tagName: "img",
-        props: { src: asset.referencePath, alt: asset.label },
-      });
+      if (!activeFile || selectedIds.length === 0) return;
+      if (selectedIds.length > 1) {
+        await applyEditObject({
+          kind: "ComponentInsertMany",
+          nodeIds: selectedIds,
+          placement: "child",
+          tagName: "img",
+          props: { src: asset.referencePath, alt: asset.label },
+        });
+      } else {
+        await applyEditObject({
+          kind: "ComponentInsert",
+          parentId: selectedIds[0],
+          tagName: "img",
+          props: { src: asset.referencePath, alt: asset.label },
+        });
+      }
     },
-    [activeFile, selectedId, hasSingleSelection, applyEditObject]
+    [activeFile, selectedIds, applyEditObject]
   );
 
   const applyAssetBackground = useCallback(
     async (asset: DiscoveredAsset) => {
-      if (!activeFile || !selectedId || !hasSingleSelection) return;
+      if (!activeFile || selectedIds.length === 0) return;
       const safeReference = asset.referencePath.replace(/["\\]/g, "\\$&");
       await applyEditObject({
-        kind: "StyleChange",
-        nodeId: selectedId,
+        kind: "StyleChangeMany",
+        nodeIds: selectedIds,
         property: "backgroundImage",
         value: `url("${safeReference}")`,
       });
     },
-    [activeFile, selectedId, hasSingleSelection, applyEditObject]
+    [activeFile, selectedIds, applyEditObject]
   );
 
   const copyAssetPath = useCallback(async (asset: DiscoveredAsset) => {
@@ -2216,8 +2226,8 @@ export default function DesignScreen({
                       <div key={asset.file} className="design-asset-row">
                         <button
                           className="design-palette-item mono"
-                          disabled={!selectedId || !hasSingleSelection}
-                          title={selectedId && hasSingleSelection ? `Insert ${asset.label} into the selected element` : "Select exactly one element in the tree first"}
+                          disabled={selectedIds.length === 0}
+                          title={selectedIds.length > 0 ? `Insert ${asset.label} into ${selectedIds.length === 1 ? "the selected element" : `${selectedIds.length} selected elements`}` : "Select one or more elements in the tree first"}
                           onClick={() => insertAsset(asset)}
                         >
                           <span className="design-palette-name">▧ {asset.label}</span>
@@ -2225,8 +2235,8 @@ export default function DesignScreen({
                         </button>
                         <button
                           className="design-asset-action mono"
-                          disabled={!selectedId || !hasSingleSelection}
-                          title={selectedId && hasSingleSelection ? `Use ${asset.label} as the selected element's background image` : "Select exactly one element in the tree first"}
+                          disabled={selectedIds.length === 0}
+                          title={selectedIds.length > 0 ? `Use ${asset.label} as the background image for ${selectedIds.length === 1 ? "the selected element" : `${selectedIds.length} selected elements`}` : "Select one or more elements in the tree first"}
                           onClick={() => void applyAssetBackground(asset)}
                         >
                           BG

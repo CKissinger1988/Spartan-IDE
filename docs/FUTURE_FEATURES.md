@@ -189,7 +189,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Sandboxed live React preview | Real |
 | Structure tree, click selection, and drag-to-reparent | Real |
 | Prop/style controls and component-library discovery/imports | Real |
-| Image asset discovery and insertion with relative JSX references | Real |
+| Image asset discovery and atomic single/multi-selection insertion with relative JSX references | Real |
 | CSS custom-property discovery and application to selected style properties | Real |
 | Safe selected-element deletion with subtree removal | Real |
 | Selected-element duplication with nested subtree cloning | Real |
@@ -220,7 +220,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Multi-selection subtree deletion with overlap and root safety guards | Real |
 | Multi-selection subtree duplication with overlap and root safety guards | Real |
 | Multi-selection sibling reordering with stable relative order | Real |
-| Batch prop/style changes across selected nodes with structural-edit safety gates | Real |
+| Atomic batch prop/style changes across selected nodes with structural-edit safety gates | Real |
 | Safe JSX tag renaming with paired closing-tag updates | Real |
 | Multi-selection JSX tag renaming with paired closing-tag updates | Real |
 | Multi-selection direct text replacement with ambiguous-fragment safety | Real |
@@ -254,7 +254,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Source-location reveal from selected Design nodes into the Editor | Real |
 | Exact selected-element JSX source copy from the Design inspector | Real |
 | Selected-element accessibility audit overlay (alt text, accessible names, target size, contrast) | Real |
-| Relative image asset insertion as inline background images | Real |
+| Relative image asset insertion as inline background images across single/multi-selection | Real |
 | Configurable string props and initial text for inserted elements | Real |
 | Desktop/Tablet/Mobile viewport presets and zoom | Real |
 | Reusable per-file interaction-state presets and preview controls | Real |
