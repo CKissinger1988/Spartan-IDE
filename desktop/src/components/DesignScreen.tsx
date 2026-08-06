@@ -92,6 +92,39 @@ interface PropClipboard {
   entries: Record<string, PropClipboardEntry>;
 }
 
+const STYLE_CLIPBOARD_KIND = "spartan.gui-builder.styles";
+const PROP_CLIPBOARD_KIND = "spartan.gui-builder.props";
+const CLIPBOARD_VERSION = 1;
+
+function parseDesignClipboard(raw: string, kind: typeof STYLE_CLIPBOARD_KIND): StyleClipboard | null;
+function parseDesignClipboard(raw: string, kind: typeof PROP_CLIPBOARD_KIND): PropClipboard | null;
+function parseDesignClipboard(raw: string, kind: string): StyleClipboard | PropClipboard | null {
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    if (value.kind !== kind || value.version !== CLIPBOARD_VERSION || typeof value.sourcePath !== "string" || typeof value.sourceTagName !== "string") return null;
+    if (!value.entries || typeof value.entries !== "object" || Array.isArray(value.entries)) return null;
+    const entries = value.entries as Record<string, unknown>;
+    if (kind === STYLE_CLIPBOARD_KIND) {
+      const valid = Object.values(entries).every((entry) => {
+        if (!entry || typeof entry !== "object") return false;
+        const item = entry as Record<string, unknown>;
+        return item.kind === "literal" && typeof item.value === "string"
+          || item.kind === "expression" && typeof item.source === "string";
+      });
+      return valid ? { sourcePath: value.sourcePath, sourceTagName: value.sourceTagName, entries: entries as StyleClipboard["entries"] } : null;
+    }
+    const valid = Object.values(entries).every((entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      const item = entry as Record<string, unknown>;
+      return item.kind === "string" && typeof item.value === "string"
+        || item.kind === "expression" && typeof item.source === "string";
+    });
+    return valid ? { sourcePath: value.sourcePath, sourceTagName: value.sourceTagName, entries: entries as PropClipboard["entries"] } : null;
+  } catch {
+    return null;
+  }
+}
+
 interface DesignScreenProps {
   activeFile: OpenFile | null;
   openFiles: OpenFile[];
@@ -1220,22 +1253,28 @@ export default function DesignScreen({
     });
   }, [activeFile, selectedId, selectedIds, canReorderSelection, roots, applyEditObject]);
 
-  const copyStyles = useCallback(() => {
+  const copyStyles = useCallback(async () => {
     if (!selectedNode || !hasSingleSelection) return;
     const style = selectedNode.props.style;
     if (!style || style.kind !== "style" || Object.keys(style.entries).length === 0) {
       setError("The selected element has no plain inline styles to copy.");
       return;
     }
-    setStyleClipboard({
+    const clipboard: StyleClipboard = {
       sourcePath: activeFile?.path ?? "",
       sourceTagName: selectedNode.tagName,
       entries: Object.fromEntries(Object.entries(style.entries).map(([name, entry]) => [name, { ...entry }])),
-    });
+    };
+    setStyleClipboard(clipboard);
+    try {
+      await navigator.clipboard.writeText(JSON.stringify({ kind: STYLE_CLIPBOARD_KIND, version: CLIPBOARD_VERSION, ...clipboard }));
+    } catch {
+      // Keep the in-memory clipboard usable when the host denies clipboard permission.
+    }
     setError(null);
   }, [activeFile?.path, selectedNode, hasSingleSelection]);
 
-  const copyProps = useCallback(() => {
+  const copyProps = useCallback(async () => {
     if (!selectedNode || !hasSingleSelection) return;
     const entries: Record<string, PropClipboardEntry> = {};
     for (const [name, summary] of Object.entries(selectedNode.props)) {
@@ -1249,11 +1288,17 @@ export default function DesignScreen({
       setError("The selected element has no literal or expression props to copy.");
       return;
     }
-    setPropClipboard({
+    const clipboard: PropClipboard = {
       sourcePath: activeFile?.path ?? "",
       sourceTagName: selectedNode.tagName,
       entries,
-    });
+    };
+    setPropClipboard(clipboard);
+    try {
+      await navigator.clipboard.writeText(JSON.stringify({ kind: PROP_CLIPBOARD_KIND, version: CLIPBOARD_VERSION, ...clipboard }));
+    } catch {
+      // Keep the in-memory clipboard usable when the host denies clipboard permission.
+    }
     setError(null);
   }, [activeFile?.path, selectedNode, hasSingleSelection]);
 
@@ -1271,11 +1316,22 @@ export default function DesignScreen({
   }, [activeFile, selectedIds, canClearSelectionStyles, applyEditObject]);
 
   const pasteStyles = useCallback(async () => {
-    if (!styleClipboard || !activeFile || selectedIds.length === 0) return;
-    const hasExpressions = Object.values(styleClipboard.entries).some((entry) => entry.kind === "expression");
-    const entries = styleClipboard.sourcePath === activeFile.path
-      ? Object.entries(styleClipboard.entries)
-      : Object.entries(styleClipboard.entries).filter(([, entry]) => entry.kind === "literal");
+    if (!activeFile || selectedIds.length === 0) return;
+    let clipboard = styleClipboard;
+    try {
+      const systemClipboard = parseDesignClipboard(await navigator.clipboard.readText(), STYLE_CLIPBOARD_KIND);
+      if (systemClipboard) {
+        clipboard = systemClipboard;
+        setStyleClipboard(systemClipboard);
+      }
+    } catch {
+      // Fall back to the session clipboard when system clipboard access is unavailable.
+    }
+    if (!clipboard) return;
+    const hasExpressions = Object.values(clipboard.entries).some((entry) => entry.kind === "expression");
+    const entries = clipboard.sourcePath === activeFile.path
+      ? Object.entries(clipboard.entries)
+      : Object.entries(clipboard.entries).filter(([, entry]) => entry.kind === "literal");
     if (entries.length === 0) {
       setError("The copied styles contain only expression values, which cannot be pasted into another component file.");
       return;
@@ -1285,17 +1341,28 @@ export default function DesignScreen({
       valueType: entry.kind === "expression" ? "expression" : "string",
     }]));
     await applyEditObject({ kind: "StyleBatchMany", nodeIds: selectedIds, entries: batchEntries });
-    if (styleClipboard.sourcePath !== activeFile.path && hasExpressions) {
+    if (clipboard.sourcePath !== activeFile.path && hasExpressions) {
       setError("Pasted literal styles; expression-valued styles were skipped because the target file may not share their bindings.");
     }
   }, [styleClipboard, activeFile, selectedIds, applyEditObject]);
 
   const pasteProps = useCallback(async () => {
-    if (!propClipboard || !activeFile || selectedIds.length === 0) return;
-    const hasExpressions = Object.values(propClipboard.entries).some((entry) => entry.kind === "expression");
-    const entries = propClipboard.sourcePath === activeFile.path
-      ? Object.entries(propClipboard.entries)
-      : Object.entries(propClipboard.entries).filter(([, entry]) => entry.kind === "string");
+    if (!activeFile || selectedIds.length === 0) return;
+    let clipboard = propClipboard;
+    try {
+      const systemClipboard = parseDesignClipboard(await navigator.clipboard.readText(), PROP_CLIPBOARD_KIND);
+      if (systemClipboard) {
+        clipboard = systemClipboard;
+        setPropClipboard(systemClipboard);
+      }
+    } catch {
+      // Fall back to the session clipboard when system clipboard access is unavailable.
+    }
+    if (!clipboard) return;
+    const hasExpressions = Object.values(clipboard.entries).some((entry) => entry.kind === "expression");
+    const entries = clipboard.sourcePath === activeFile.path
+      ? Object.entries(clipboard.entries)
+      : Object.entries(clipboard.entries).filter(([, entry]) => entry.kind === "string");
     if (entries.length === 0) {
       setError("The copied props contain only expressions, which cannot be pasted into another component file.");
       return;
@@ -1305,7 +1372,7 @@ export default function DesignScreen({
       valueType: entry.kind,
     }]));
     await applyEditObject({ kind: "PropBatchMany", nodeIds: selectedIds, entries: batchEntries });
-    if (propClipboard.sourcePath !== activeFile.path && hasExpressions) {
+    if (clipboard.sourcePath !== activeFile.path && hasExpressions) {
       setError("Pasted literal props; expression-valued props were skipped because the target file may not share their bindings.");
     }
   }, [propClipboard, activeFile, selectedIds, applyEditObject]);
