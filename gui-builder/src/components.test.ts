@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverComponents, relativeSpecifier } from "./components.js";
+import { discoverComponents, discoverComponentsInSource, relativeSpecifier } from "./components.js";
 
 function fixture(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), "spartan-components-"));
@@ -101,4 +101,13 @@ test("importFrom is a real relative specifier, and null for the target file itse
 test("relativeSpecifier strips the extension and keeps a leading ./ for a sibling", () => {
   assert.equal(relativeSpecifier("/p/a/Home.jsx", "/p/a/Card.jsx"), "./Card");
   assert.equal(relativeSpecifier("/p/a/Home.jsx", "/p/b/Card.tsx"), "../b/Card");
+});
+
+test("discovers exported components from an unsaved source buffer", () => {
+  const file = "/workspace/project/src/Live.tsx";
+  const components = discoverComponentsInSource("export const LiveCard = () => <div />;\nexport default LiveCard;", file, file);
+  assert.deepEqual(components.map(({ name, isDefault, importFrom }) => ({ name, isDefault, importFrom })), [
+    { name: "LiveCard", isDefault: false, importFrom: null },
+    { name: "LiveCard", isDefault: true, importFrom: null },
+  ]);
 });

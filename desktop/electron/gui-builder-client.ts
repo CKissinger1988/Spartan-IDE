@@ -105,6 +105,11 @@ export class GuiBuilderClient {
     return JSON.parse(stdout);
   }
 
+  async discoverComponentsFromSource(path: string, fromFile: string, source: string): Promise<unknown> {
+    const stdout = await runCli(this.cliPath, ["component-source", path, fromFile], source);
+    return JSON.parse(stdout);
+  }
+
   async discoverAssets(rootDir: string, fromFile?: string): Promise<unknown> {
     const args = fromFile ? ["assets", rootDir, fromFile] : ["assets", rootDir];
     const stdout = await runCli(this.cliPath, args);

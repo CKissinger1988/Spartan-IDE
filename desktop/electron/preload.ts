@@ -41,6 +41,7 @@ const ALLOWED_METHODS = new Set([
   "design_bundle_source",
   "design_apply_edit",
   "design_components",
+  "design_components_source",
   "design_assets",
   "design_tokens",
   "design_tokens_source",

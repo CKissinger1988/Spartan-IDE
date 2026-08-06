@@ -40,7 +40,7 @@ import { parseComponent } from "./parse.js";
 import { applyCanvasEdit } from "./edit.js";
 import { bundleComponent } from "./bundle.js";
 import { bundleComponentSource } from "./bundle.js";
-import { discoverComponents } from "./components.js";
+import { discoverComponents, discoverComponentsInSource } from "./components.js";
 import { discoverAssets } from "./assets.js";
 import { applyTokenValue, defineTokenValue, discoverTokens, discoverTokensInSource, removeTokenValue } from "./tokens.js";
 import type { CanvasEdit } from "./types.js";
@@ -148,6 +148,15 @@ function runComponents(rootDir: string | undefined, fromFile: string | undefined
   }
 }
 
+function runComponentSource(path: string | undefined, fromFile: string | undefined): void {
+  if (!path) fail("usage: cli.js component-source <component-file> [from-file] (source read from stdin)");
+  try {
+    process.stdout.write(JSON.stringify({ components: discoverComponentsInSource(readStdin(), path, fromFile ?? path) }));
+  } catch (e) {
+    fail(`failed to discover components from ${path}: ${(e as Error).message}`);
+  }
+}
+
 function runAssets(rootDir: string | undefined, fromFile: string | undefined): void {
   if (!rootDir) {
     fail("usage: cli.js assets <project-dir> [from-file]");
@@ -217,6 +226,8 @@ async function main(): Promise<void> {
     runParseSource(process.argv[3]);
   } else if (mode === "components") {
     runComponents(process.argv[3], process.argv[4]);
+  } else if (mode === "component-source") {
+    runComponentSource(process.argv[3], process.argv[4]);
   } else if (mode === "assets") {
     runAssets(process.argv[3], process.argv[4]);
   } else if (mode === "tokens") {

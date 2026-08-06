@@ -1610,7 +1610,19 @@ export default function DesignScreen({
         rootDir: projectRoot,
         fromFile: activeFile?.path,
       })) as { components: DiscoveredComponent[] };
-      setPalette(result.components);
+      let components = result.components;
+      if (activeFile?.path) {
+        const liveResult = (await window.spartan.call("design_components_source", {
+          path: activeFile.path,
+          fromFile: activeFile.path,
+          source: activeFile.content,
+        })) as { components: DiscoveredComponent[] };
+        components = [
+          ...components.filter((component) => component.file !== activeFile.path),
+          ...liveResult.components,
+        ];
+      }
+      setPalette(components);
     } catch (e) {
       setError((e as Error).message);
     }

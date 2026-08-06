@@ -158,6 +158,24 @@ export function relativeSpecifier(fromFile: string, toFile: string): string {
   return rel;
 }
 
+/** Discovers exported components from an already-loaded source buffer. This
+ * is the live-editor counterpart to `discoverComponents`; it never reads
+ * from disk and therefore reflects unsaved exports immediately. */
+export function discoverComponentsInSource(source: string, file: string, fromFile?: string): DiscoveredComponent[] {
+  let ast: { program?: { body?: unknown[] } };
+  try {
+    ast = parserAdapter.parse(source) as { program?: { body?: unknown[] } };
+  } catch {
+    return [];
+  }
+  return exportedComponentNames(ast.program?.body ?? []).map(({ name, isDefault }) => ({
+    name,
+    file,
+    isDefault,
+    importFrom: fromFile && file === fromFile ? null : fromFile ? relativeSpecifier(fromFile, file) : null,
+  }));
+}
+
 /**
  * Discovers every exported React component under `rootDir`. When
  * `fromFile` is given, each result also carries the real relative
@@ -177,21 +195,7 @@ export function discoverComponents(rootDir: string, fromFile?: string): Discover
 
   const out: DiscoveredComponent[] = [];
   for (const file of files) {
-    let ast: { program?: { body?: unknown[] } };
-    try {
-      ast = parserAdapter.parse(readFileSync(file, "utf8")) as { program?: { body?: unknown[] } };
-    } catch {
-      continue;
-    }
-    const body = ast.program?.body ?? [];
-    for (const { name, isDefault } of exportedComponentNames(body)) {
-      out.push({
-        name,
-        file,
-        isDefault,
-        importFrom: fromFile && file === fromFile ? null : fromFile ? relativeSpecifier(fromFile, file) : null,
-      });
-    }
+    try { out.push(...discoverComponentsInSource(readFileSync(file, "utf8"), file, fromFile)); } catch { /* skip unreadable files */ }
   }
   return out;
 }

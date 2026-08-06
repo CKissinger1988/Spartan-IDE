@@ -400,6 +400,13 @@ app.whenReady().then(() => {
     }
   );
   ipcMain.handle(
+    "spartan:design_components_source",
+    async (_event, params: { path: string; fromFile: string; source: string }) => {
+      if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
+      return guiBuilder.discoverComponentsFromSource(params.path, params.fromFile, params.source);
+    }
+  );
+  ipcMain.handle(
     "spartan:design_assets",
     async (_event, params: { rootDir: string; fromFile?: string }) => {
       if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
