@@ -12,6 +12,7 @@ export interface DiscoveredToken {
   references: string[];
   usageCount?: number;
   usageFiles?: string[];
+  usageLocations?: Array<{ file: string; line: number; column: number }>;
 }
 
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", "out", ".cache"]);
@@ -33,21 +34,28 @@ function collectFiles(dir: string, depth: number, out: string[], extensions: Set
   }
 }
 
-function collectTokenUsages(rootDir: string): Map<string, { count: number; files: string[] }> {
+function collectTokenUsages(rootDir: string): Map<string, { count: number; files: string[]; locations: Array<{ file: string; line: number; column: number }> }> {
   const files: string[] = [];
   collectFiles(rootDir, 0, files, SOURCE_EXTENSIONS);
   files.sort();
-  const usages = new Map<string, { count: number; files: string[] }>();
+  const usages = new Map<string, { count: number; files: string[]; locations: Array<{ file: string; line: number; column: number }> }>();
   const reference = /var\(\s*(--[a-zA-Z0-9_-]+)\b/g;
   for (const file of files) {
     let source: string;
     try { source = readFileSync(file, "utf8"); } catch { continue; }
-    const names = new Map<string, number>();
-    for (const match of source.matchAll(reference)) names.set(match[1], (names.get(match[1]) ?? 0) + 1);
-    for (const [name, count] of names) {
-      const usage = usages.get(name) ?? { count: 0, files: [] };
-      usage.count += count;
+    const locations = new Map<string, Array<{ line: number; column: number }>>();
+    for (const match of source.matchAll(reference)) {
+      const before = source.slice(0, match.index ?? 0);
+      const lineBreak = before.lastIndexOf("\n");
+      const tokenLocations = locations.get(match[1]) ?? [];
+      tokenLocations.push({ line: before.split("\n").length, column: (match.index ?? 0) - lineBreak - 1 });
+      locations.set(match[1], tokenLocations);
+    }
+    for (const [name, positions] of locations) {
+      const usage = usages.get(name) ?? { count: 0, files: [], locations: [] };
+      usage.count += positions.length;
       usage.files.push(file);
+      usage.locations.push(...positions.map((position) => ({ file, ...position })));
       usages.set(name, usage);
     }
   }
@@ -143,7 +151,7 @@ export function discoverTokens(rootDir: string): DiscoveredToken[] {
     try { source = readFileSync(file, "utf8"); } catch { continue; }
     result.push(...discoverTokensInSource(source, file, rootDir).map((token) => {
       const usage = usages.get(token.name);
-      return { ...token, usageCount: usage?.count ?? 0, usageFiles: usage?.files ?? [] };
+      return { ...token, usageCount: usage?.count ?? 0, usageFiles: usage?.files ?? [], usageLocations: usage?.locations ?? [] };
     }));
   }
   return result;

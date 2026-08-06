@@ -56,6 +56,11 @@ test("indexes token references across project source files while skipping depend
   const [token] = discoverTokens(root);
   assert.equal(token.usageCount, 3);
   assert.deepEqual(token.usageFiles, [join(root, "src/Button.tsx"), join(root, "theme.css")]);
+  assert.deepEqual(token.usageLocations?.map(({ file, line }) => ({ file, line })), [
+    { file: join(root, "src/Button.tsx"), line: 1 },
+    { file: join(root, "theme.css"), line: 1 },
+    { file: join(root, "theme.css"), line: 1 },
+  ]);
 });
 
 test("applies one token value while preserving neighboring CSS source", () => {

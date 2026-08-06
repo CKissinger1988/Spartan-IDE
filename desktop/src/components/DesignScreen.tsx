@@ -84,6 +84,7 @@ interface DiscoveredToken {
   references: string[];
   usageCount?: number;
   usageFiles?: string[];
+  usageLocations?: Array<{ file: string; line: number; column: number }>;
 }
 
 interface VariantPreset {
@@ -3358,8 +3359,21 @@ export default function DesignScreen({
                       <span>{tokenUsageSelection.name} · {tokenUsageSelection.usageCount ?? 0} reference{(tokenUsageSelection.usageCount ?? 0) === 1 ? "" : "s"}</span>
                       <button className="design-asset-action mono" onClick={() => setTokenUsageSelection(null)}>Close</button>
                     </div>
-                    {(tokenUsageSelection.usageFiles ?? []).length === 0 ? (
+                    {(tokenUsageSelection.usageLocations ?? []).length === 0 && (tokenUsageSelection.usageFiles ?? []).length === 0 ? (
                       <div className="design-palette-empty mono">No direct var() references found.</div>
+                    ) : (tokenUsageSelection.usageLocations ?? []).length > 0 ? (
+                      <div className="design-palette-usage-files">
+                        {(tokenUsageSelection.usageLocations ?? []).map((location) => (
+                          <button
+                            key={`${location.file}:${location.line}:${location.column}`}
+                            className="design-palette-usage-file mono"
+                            title={`Reveal ${location.file} at line ${location.line}`}
+                            onClick={() => onRevealSource(location.file, location.line, location.column)}
+                          >
+                            {displayUsagePath(projectRoot, location.file)}:{location.line}
+                          </button>
+                        ))}
+                      </div>
                     ) : (
                       <div className="design-palette-usage-files">
                         {(tokenUsageSelection.usageFiles ?? []).map((file) => (
