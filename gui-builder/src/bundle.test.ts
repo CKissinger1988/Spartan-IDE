@@ -128,6 +128,8 @@ test("a real bundle carries real data-spartan-id attributes for click-to-select 
         result.code.includes("spartan-canvas-inspect-result"),
         "the real bundle should report rendered geometry and computed styles",
       );
+      assert.ok(result.code.includes("x: rect.x"), "the real bundle should report viewport-relative x coordinates");
+      assert.ok(result.code.includes("right: rect.right"), "the real bundle should report viewport-relative right bounds");
       assert.ok(
         result.code.includes("getComputedStyle"),
         "the real bundle should inspect styles inside the sandbox where the DOM is readable",

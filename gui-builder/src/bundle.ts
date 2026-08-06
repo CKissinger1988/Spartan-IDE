@@ -265,7 +265,14 @@ try {
     window.parent.postMessage({
       type: "spartan-canvas-inspect-result",
       nodeId: nodeId,
-      rect: { width: rect.width, height: rect.height },
+      rect: {
+        x: rect.x,
+        y: rect.y,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      },
       styles: {
         display: style.display,
         position: style.position,

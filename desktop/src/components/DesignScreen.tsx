@@ -77,7 +77,7 @@ interface InteractionPreset {
 
 interface PreviewInspection {
   nodeId: string;
-  rect: { width: number; height: number };
+  rect: { x: number; y: number; right: number; bottom: number; width: number; height: number };
   styles: Record<string, string>;
 }
 
@@ -353,7 +353,7 @@ function inspectionCssSnapshot(inspection: PreviewInspection, tagName: string): 
     .map(([name, value]) => `  ${cssPropertyName(name)}: ${value};`);
   lines.push(`  width: ${Math.round(inspection.rect.width)}px;`);
   lines.push(`  height: ${Math.round(inspection.rect.height)}px;`);
-  return `/* Rendered <${tagName}> ${inspection.nodeId} snapshot */\n${tagName} {\n${lines.join("\n")}\n}`;
+  return `/* Rendered <${tagName}> ${inspection.nodeId} snapshot · bounds ${Math.round(inspection.rect.x)},${Math.round(inspection.rect.y)} → ${Math.round(inspection.rect.right)},${Math.round(inspection.rect.bottom)} */\n${tagName} {\n${lines.join("\n")}\n}`;
 }
 
 type AccessibilitySeverity = "error" | "warning" | "pass" | "info";
@@ -1832,9 +1832,10 @@ export default function DesignScreen({
 
   const copyAccessibilityReport = useCallback(async () => {
     if (!selectedNode || !previewInspection) return;
-    const lines = [
-      `Accessibility audit for <${selectedNode.tagName}> (${selectedNode.id})`,
-      `Rendered size: ${Math.round(previewInspection.rect.width)}×${Math.round(previewInspection.rect.height)}px`,
+      const lines = [
+        `Accessibility audit for <${selectedNode.tagName}> (${selectedNode.id})`,
+        `Bounds: ${Math.round(previewInspection.rect.x)},${Math.round(previewInspection.rect.y)} → ${Math.round(previewInspection.rect.right)},${Math.round(previewInspection.rect.bottom)}`,
+        `Rendered size: ${Math.round(previewInspection.rect.width)}×${Math.round(previewInspection.rect.height)}px`,
       ...accessibilityFindings.map((finding) => `${finding.severity.toUpperCase()}: ${finding.message}`),
     ];
     try {
@@ -2560,6 +2561,7 @@ export default function DesignScreen({
                 <div className="design-inspection-title">Rendered preview</div>
                 <div className="design-inspection-grid">
                   <span>size</span><strong>{Math.round(previewInspection.rect.width)} × {Math.round(previewInspection.rect.height)} px</strong>
+                  <span>bounds</span><strong>{Math.round(previewInspection.rect.x)}, {Math.round(previewInspection.rect.y)} → {Math.round(previewInspection.rect.right)}, {Math.round(previewInspection.rect.bottom)}</strong>
                   <span>display</span><strong>{previewInspection.styles.display}</strong>
                   <span>position</span><strong>{previewInspection.styles.position}</strong>
                   <span>z-index</span><strong>{previewInspection.styles.zIndex || "auto"}</strong>
