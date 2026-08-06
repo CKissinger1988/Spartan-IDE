@@ -539,6 +539,44 @@ test("SubtreeInsert honors an explicit sibling insertion index", () => {
   assert.match(result, /<a \/>[\s\S]*<span \/>[\s\S]*<b \/>/);
 });
 
+test("SubtreeInsertMany pastes one independent subtree into every selected child target", () => {
+  const source = `const X = () => <main><section /><article /></main>;`;
+  const result = applyCanvasEdit(source, {
+    kind: "SubtreeInsertMany",
+    nodeIds: ["n1", "n2"],
+    placement: "child",
+    source: `<span className="shared" />`,
+  });
+  assert.equal((result.match(/className="shared"/g) ?? []).length, 2);
+  assert.doesNotThrow(() => parseComponent(result));
+});
+
+test("SubtreeInsertMany places sibling copies after every selected direct child", () => {
+  const source = `const X = () => <main><section /><article /><footer /></main>;`;
+  const result = applyCanvasEdit(source, {
+    kind: "SubtreeInsertMany",
+    nodeIds: ["n1", "n2"],
+    placement: "sibling",
+    source: `<span data-paste="shared" />`,
+  });
+  assert.equal((result.match(/data-paste="shared"/g) ?? []).length, 2);
+  assert.match(result, /<section \/>[\s\S]*<span data-paste="shared" \/>[\s\S]*<article \/>[\s\S]*<span data-paste="shared" \/>[\s\S]*<footer \/>/);
+  assert.doesNotThrow(() => parseComponent(result));
+});
+
+test("SubtreeInsertMany rejects a mixed root sibling selection before mutating", () => {
+  const source = `const X = () => <main><section /></main>; const Y = () => <aside />;`;
+  assert.throws(
+    () => applyCanvasEdit(source, {
+      kind: "SubtreeInsertMany",
+      nodeIds: ["n0", "n1"],
+      placement: "sibling",
+      source: `<span />`,
+    }),
+    /top-level root/,
+  );
+});
+
 test("SubtreeInsert refuses fragments and multiple roots", () => {
   const source = `const X = () => <main />;`;
   assert.throws(

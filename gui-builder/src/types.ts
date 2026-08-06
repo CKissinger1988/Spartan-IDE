@@ -221,4 +221,7 @@ export type CanvasEdit =
    * silently change surrounding structure. Bindings are intentionally not
    * imported by this low-level edit -- the Design screen only offers cross-
    * file paste when the copied source came from the same file. */
-  | { kind: "SubtreeInsert"; parentId: string; source: string; index?: number };
+  | { kind: "SubtreeInsert"; parentId: string; source: string; index?: number }
+  /** Inserts one identical parsed subtree into every selected target. All
+   * targets are validated before any child or sibling is inserted. */
+  | { kind: "SubtreeInsertMany"; nodeIds: string[]; placement: "child" | "sibling"; source: string };

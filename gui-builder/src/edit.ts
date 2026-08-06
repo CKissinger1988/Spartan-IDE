@@ -889,6 +889,41 @@ function applySubtreeInsert(nodesById: Map<string, AnyNode>, edit: Extract<Canva
   spliceIn(parent, parseSubtreeSource(edit.source), edit.index);
 }
 
+function applySubtreeInsertMany(
+  nodesById: Map<string, AnyNode>,
+  parentOf: Map<string, AnyNode | null>,
+  edit: Extract<CanvasEdit, { kind: "SubtreeInsertMany" }>,
+): void {
+  const ids = [...new Set(edit.nodeIds)];
+  if (ids.length === 0) throw new Error("SubtreeInsertMany requires at least one selected element.");
+  const targets = ids.map((id) => {
+    const node = nodesById.get(id);
+    if (!node) throw new Error(`No element with id "${id}" found in the current source.`);
+    return { id, node, parent: parentOf.get(id) };
+  });
+  const template = parseSubtreeSource(edit.source);
+  const clone = () => JSON.parse(JSON.stringify(template)) as AnyNode;
+  if (edit.placement === "child") {
+    for (const target of targets) ensureOpenForChildren(target.node);
+    for (const target of targets) (target.node.children as AnyNode[]).push(clone());
+    return;
+  }
+  const placements = targets.map((target) => {
+    if (!target.parent) throw new Error(`SubtreeInsertMany sibling placement cannot target top-level root "${target.id}".`);
+    const siblings = target.parent.children as AnyNode[];
+    const index = siblings.indexOf(target.node);
+    if (index === -1) throw new Error(`SubtreeInsertMany sibling placement requires direct JSX children for "${target.id}".`);
+    return { parent: target.parent, index };
+  });
+  const grouped = new Map<AnyNode, { parent: AnyNode; index: number }[]>();
+  for (const placement of placements) grouped.set(placement.parent, [...(grouped.get(placement.parent) ?? []), placement]);
+  for (const entries of grouped.values()) {
+    for (const placement of entries.sort((a, b) => b.index - a.index)) {
+      (placement.parent.children as AnyNode[]).splice(placement.index + 1, 0, clone());
+    }
+  }
+}
+
 /** Parses `source`, locates the element(s) `edit` refers to (using the
  * exact same id-assignment traversal `parseComponent` uses, run fresh
  * against this parse -- see tree.ts), mutates the AST in place, and
@@ -1006,6 +1041,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       break;
     case "SubtreeInsert":
       applySubtreeInsert(nodesById, edit);
+      break;
+    case "SubtreeInsertMany":
+      applySubtreeInsertMany(nodesById, parentOf, edit);
       break;
   }
 

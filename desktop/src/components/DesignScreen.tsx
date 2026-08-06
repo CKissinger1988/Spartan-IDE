@@ -986,6 +986,8 @@ export default function DesignScreen({
   const canReorderSelection = selectedParentEntries.length > 0
     && !!firstSelectedParentId
     && selectedParentEntries.every((entry) => entry?.parent.id === firstSelectedParentId);
+  const canPasteSubtreeSibling = selectedIds.length > 0
+    && selectedIds.every((id) => !!findParentEntry(roots, id));
   const canMoveSelectionUp = canReorderSelection && selectedParentEntries.some(
     (entry) => !!entry && entry.index > 0 && !selectedIds.includes(entry.parent.children[entry.index - 1].id),
   );
@@ -1999,7 +2001,7 @@ export default function DesignScreen({
   }, [activeFile?.path, hasSingleSelection, selectedNode]);
 
   const pasteSubtree = useCallback(async () => {
-    if (!activeFile || !hasSingleSelection || selectedIds.length !== 1) return;
+    if (!activeFile || selectedIds.length === 0) return;
     let clipboard = subtreeClipboard;
     try {
       const systemClipboard = parseDesignClipboard(await navigator.clipboard.readText(), SUBTREE_CLIPBOARD_KIND);
@@ -2018,18 +2020,27 @@ export default function DesignScreen({
       setError("Subtree paste is limited to the same component file so imported bindings cannot silently break the preview.");
       return;
     }
-    const target = subtreePastePlacement === "sibling" ? findParentEntry(roots, selectedIds[0]) : null;
-    if (subtreePastePlacement === "sibling" && !target) {
-      setError("A top-level component root cannot receive a subtree as a sibling.");
+    if (subtreePastePlacement === "sibling" && !selectedIds.every((id) => !!findParentEntry(roots, id))) {
+      setError("Subtree sibling paste requires every selected element to have a direct JSX parent.");
       return;
     }
-    await applyEditObject({
-      kind: "SubtreeInsert",
-      parentId: target?.parent.id ?? selectedIds[0],
-      index: target ? target.index + 1 : undefined,
-      source: clipboard.source,
-    });
-  }, [activeFile, hasSingleSelection, selectedIds, subtreeClipboard, subtreePastePlacement, roots, applyEditObject]);
+    if (selectedIds.length === 1) {
+      const target = subtreePastePlacement === "sibling" ? findParentEntry(roots, selectedIds[0]) : null;
+      await applyEditObject({
+        kind: "SubtreeInsert",
+        parentId: target?.parent.id ?? selectedIds[0],
+        index: target ? target.index + 1 : undefined,
+        source: clipboard.source,
+      });
+    } else {
+      await applyEditObject({
+        kind: "SubtreeInsertMany",
+        nodeIds: selectedIds,
+        placement: subtreePastePlacement,
+        source: clipboard.source,
+      });
+    }
+  }, [activeFile, selectedIds, subtreeClipboard, subtreePastePlacement, roots, applyEditObject]);
 
   const setPreviewFocus = useCallback((focused: boolean) => {
     if (!selectedId || !hasSingleSelection) return;
@@ -2781,7 +2792,7 @@ export default function DesignScreen({
                 </button>
               </>
             )}
-            {hasSingleSelection && (
+            {selectionCount > 0 && (
               <div className="design-palette-placement mono" aria-label="Subtree paste placement">
                 <span>Paste subtree as</span>
                 <label>
@@ -2796,7 +2807,7 @@ export default function DesignScreen({
                   <input
                     type="radio"
                     checked={subtreePastePlacement === "sibling"}
-                    disabled={!findParentEntry(roots, selectedIds[0])}
+                    disabled={!canPasteSubtreeSibling}
                     onChange={() => setSubtreePastePlacement("sibling")}
                   />
                   sibling
@@ -2805,8 +2816,8 @@ export default function DesignScreen({
             )}
             <button
               className="design-secondary-action mono design-reveal-source"
-              disabled={!hasSingleSelection}
-              title="Paste a same-file Spartan GUI Builder subtree as a child of the selected element"
+              disabled={selectionCount === 0}
+              title="Paste a same-file Spartan GUI Builder subtree using the selected child or sibling placement"
               onClick={() => void pasteSubtree()}
             >
               Paste subtree{subtreeClipboard ? ` · <${subtreeClipboard.sourceTagName}>` : ""}
