@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All seventeen members of the `CanvasEdit` union are real and implemented:
+ * All eighteen members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -118,6 +118,30 @@ function applyStyleClear(element: AnyNode): void {
   }
   const attributes = element.openingElement.attributes as AnyNode[];
   attributes.splice(attributes.indexOf(styleAttr), 1);
+}
+
+function applyStyleClearMany(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "StyleClearMany" }>): void {
+  const ids = [...new Set(edit.nodeIds)];
+  if (ids.length === 0) throw new Error("StyleClearMany requires at least one selected element.");
+  const elements = ids.map((id) => {
+    const element = nodesById.get(id);
+    if (!element) throw new Error(`No element with id "${id}" found in the current source.`);
+    return { id, element };
+  });
+  // Validate every target before removing any attribute so a mixed or stale
+  // selection cannot leave a partially-cleared source behind.
+  for (const { id, element } of elements) {
+    const styleAttr = findAttribute(element, "style");
+    const container = styleAttr?.value;
+    if (!styleAttr || !container || container.type !== "JSXExpressionContainer" || container.expression.type !== "ObjectExpression") {
+      throw new Error(`StyleClearMany target "${id}" is not a plain object expression; refusing a partial multi-node edit.`);
+    }
+  }
+  for (const { element } of elements) {
+    const styleAttr = findAttribute(element, "style");
+    const attributes = element.openingElement.attributes as AnyNode[];
+    attributes.splice(attributes.indexOf(styleAttr), 1);
+  }
 }
 
 function parsePropExpression(value: string): AnyNode {
@@ -614,6 +638,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       applyStyleClear(element);
       break;
     }
+    case "StyleClearMany":
+      applyStyleClearMany(nodesById, edit);
+      break;
     case "PropChange": {
       const element = nodesById.get(edit.nodeId);
       if (!element) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);

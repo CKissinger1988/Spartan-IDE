@@ -712,6 +712,9 @@ export default function DesignScreen({
   const canMoveSelectionDown = canReorderSelection && selectedParentEntries.some(
     (entry) => !!entry && entry.index < entry.parent.children.length - 1 && !selectedIds.includes(entry.parent.children[entry.index + 1].id),
   );
+  const selectedStyleNodes = selectedIds.map((id) => findNode(roots, id));
+  const canClearSelectionStyles = selectedStyleNodes.length > 0
+    && selectedStyleNodes.every((node) => node?.props.style?.kind === "style");
   const filteredRoots = useMemo(() => filterTree(roots, treeFilter), [roots, treeFilter]);
 
   useEffect(() => {
@@ -1058,14 +1061,17 @@ export default function DesignScreen({
   }, [activeFile?.path, selectedNode, hasSingleSelection]);
 
   const clearStylesSelected = useCallback(async () => {
-    if (!activeFile || !selectedId || !hasSingleSelection) return;
-    if (selectedNode?.props.style?.kind !== "style") {
-      setError("The selected element has no plain inline styles to clear; dynamic style expressions are preserved.");
+    if (!activeFile || selectedIds.length === 0) return;
+    if (!canClearSelectionStyles) {
+      setError("Every selected element must have a plain inline style object; dynamic style expressions are preserved.");
       return;
     }
-    if (!window.confirm("Remove all plain inline styles from the selected element?")) return;
-    await applyEditObject({ kind: "StyleClear", nodeId: selectedId });
-  }, [activeFile, selectedId, hasSingleSelection, selectedNode?.props.style?.kind, applyEditObject]);
+    const description = selectedIds.length === 1 ? "the selected element" : `${selectedIds.length} selected elements`;
+    if (!window.confirm(`Remove all plain inline styles from ${description}?`)) return;
+    await applyEditObject(selectedIds.length === 1
+      ? { kind: "StyleClear", nodeId: selectedIds[0] }
+      : { kind: "StyleClearMany", nodeIds: selectedIds });
+  }, [activeFile, selectedIds, canClearSelectionStyles, applyEditObject]);
 
   const pasteStyles = useCallback(async () => {
     if (!styleClipboard || !activeFile || selectedIds.length === 0) return;
@@ -1185,7 +1191,7 @@ export default function DesignScreen({
     (editKind === "PropChange" || editKind === "PropRemove" || editKind === "StyleChange" || editKind === "StyleRemove"
       ? !!propKey.trim()
       : editKind === "StyleClear"
-        ? hasSingleSelection && selectedNode?.props.style?.kind === "style"
+        ? canClearSelectionStyles
       : editKind === "TextChange"
         ? hasSingleSelection
         : editKind === "TagChange"
@@ -1493,8 +1499,10 @@ export default function DesignScreen({
       if (!propKey.trim()) return;
       edit = { kind: "StyleRemove", nodeId: selectedId, property: propKey };
     } else if (editKind === "StyleClear") {
-      if (!hasSingleSelection || selectedNode?.props.style?.kind !== "style") return;
-      edit = { kind: "StyleClear", nodeId: selectedId };
+      if (!canClearSelectionStyles) return;
+      edit = selectedIds.length > 1
+        ? { kind: "StyleClearMany", nodeIds: selectedIds }
+        : { kind: "StyleClear", nodeId: selectedId };
     } else if (editKind === "TextChange") {
       edit = { kind: "TextChange", nodeId: selectedId, text: textValue };
     } else if (editKind === "TagChange") {
@@ -1544,7 +1552,7 @@ export default function DesignScreen({
     setInsertTagName("");
     setInsertProps("");
     setInsertText("");
-  }, [activeFile, selectedId, selectedIds, selectedSibling, selectedNode?.props.style?.kind, hasSingleSelection, propKey, propValue, propValueType, textValue, tagName, wrapTagName, editKind, reparentTargetId, insertTagName, insertProps, insertText, applyEditObject, applyEditBatch]);
+  }, [activeFile, selectedId, selectedIds, selectedSibling, canClearSelectionStyles, hasSingleSelection, propKey, propValue, propValueType, textValue, tagName, wrapTagName, editKind, reparentTargetId, insertTagName, insertProps, insertText, applyEditObject, applyEditBatch]);
 
   if (!activeFile || !isComponentFile(activeFile.path)) {
     return (
@@ -1928,10 +1936,10 @@ export default function DesignScreen({
               <button
                 className="design-danger-action mono"
                 onClick={() => void clearStylesSelected()}
-                disabled={!hasSingleSelection || selectedNode?.props.style?.kind !== "style"}
-                title="Remove every plain inline style from the selected element; dynamic style expressions are preserved"
+                disabled={!canClearSelectionStyles}
+                title="Remove every plain inline style from the selection; dynamic style expressions are preserved"
               >
-                Clear inline styles
+                {selectionCount > 1 ? `Clear styles on ${selectionCount} selected elements` : "Clear inline styles"}
               </button>
             </div>
             {styleClipboard && (

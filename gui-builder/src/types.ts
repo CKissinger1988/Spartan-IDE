@@ -8,7 +8,7 @@
  * real JS/JSX AST work actually happens, per §6.1's own "lightweight
  * dev-server bridge" description).
  *
- * All seventeen members of the full spec's `CanvasEdit` union are now real and
+ * All eighteen members of the full spec's `CanvasEdit` union are now real and
  * implemented by `applyCanvasEdit`: `StyleChange`/`PropChange` (original
  * v1), and `Reparent`/`ComponentInsert` (closing the gap this file's own
  * doc comment used to name as unattempted -- see edit.ts's doc comment
@@ -80,6 +80,8 @@ export type CanvasEdit =
   | { kind: "StyleRemove"; nodeId: string; property: string }
   /** Removes a complete plain inline style object, preserving dynamic styles. */
   | { kind: "StyleClear"; nodeId: string }
+  /** Removes complete plain inline style objects from multiple nodes atomically. */
+  | { kind: "StyleClearMany"; nodeIds: string[] }
   | {
       kind: "PropChange";
       nodeId: string;

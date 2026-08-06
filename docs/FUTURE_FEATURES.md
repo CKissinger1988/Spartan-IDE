@@ -207,6 +207,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | JSX prop removal | Real |
 | Inline style-property removal with safe empty-style cleanup | Real |
 | One-click clearing of plain inline styles with dynamic-style safety guard | Real |
+| Batch plain inline-style clearing with atomic dynamic-style protection | Real |
 | Existing prop/style quick pickers with literal/expression seeding | Real |
 | Synchronized tree/canvas selection highlight across preview reloads | Real |
 | Shift-click multi-selection with synchronized multi-node canvas highlights | Real |

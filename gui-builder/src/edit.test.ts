@@ -104,6 +104,21 @@ test("StyleClear refuses dynamic style expressions", () => {
   );
 });
 
+test("StyleClearMany clears every selected plain style object atomically", () => {
+  const source = `const X = () => <main><div className="a" style={{ color: "red" }} /><span style={{ padding: 4 }} /></main>;`;
+  const result = applyCanvasEdit(source, { kind: "StyleClearMany", nodeIds: ["n1", "n2"] });
+  assert.equal(result, `const X = () => <main><div className="a" /><span /></main>;`);
+});
+
+test("StyleClearMany refuses a dynamic member without partially clearing earlier nodes", () => {
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <main><div style={{ color: "red" }} /><span style={styles.text} /></main>;`, {
+      kind: "StyleClearMany", nodeIds: ["n1", "n2"],
+    }),
+    /refusing a partial multi-node edit/,
+  );
+});
+
 test("PropChange updates an existing string prop", () => {
   const source = `const X = () => <button className="btn">Go</button>;`;
   const result = applyCanvasEdit(source, { kind: "PropChange", nodeId: "n0", prop: "className", value: "btn-primary" });
