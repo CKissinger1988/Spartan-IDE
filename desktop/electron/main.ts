@@ -411,6 +411,13 @@ app.whenReady().then(() => {
     return guiBuilder.discoverTokens(params.rootDir);
   });
   ipcMain.handle(
+    "spartan:design_tokens_source",
+    async (_event, params: { path: string; rootDir: string; source: string }) => {
+      if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
+      return guiBuilder.discoverTokensFromSource(params.path, params.rootDir, params.source);
+    }
+  );
+  ipcMain.handle(
     "spartan:design_token_apply",
     async (_event, params: { path: string; name: string; value: string; source: string }) => {
       if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");

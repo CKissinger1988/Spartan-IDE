@@ -1755,12 +1755,24 @@ export default function DesignScreen({
       const result = (await window.spartan.call("design_tokens", { rootDir: projectRoot })) as {
         tokens: DiscoveredToken[];
       };
-      setTokens(result.tokens);
-      setTokenDrafts(Object.fromEntries(result.tokens.map((token) => [`${token.file}:${token.name}`, token.value])));
+      const liveResults = await Promise.all(openCssFiles.map(async (file) => (
+        await window.spartan.call("design_tokens_source", {
+          path: file.path,
+          rootDir: projectRoot,
+          source: file.content,
+        }) as { tokens: DiscoveredToken[] }
+      )));
+      const merged = new Map(result.tokens.map((token) => [`${token.file}:${token.name}`, token]));
+      for (const liveResult of liveResults) {
+        for (const token of liveResult.tokens) merged.set(`${token.file}:${token.name}`, token);
+      }
+      const nextTokens = [...merged.values()];
+      setTokens(nextTokens);
+      setTokenDrafts(Object.fromEntries(nextTokens.map((token) => [`${token.file}:${token.name}`, token.value])));
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [tokensOpen, projectRoot]);
+  }, [tokensOpen, projectRoot, openCssFiles]);
 
   const applyToken = useCallback(
     async (token: DiscoveredToken) => {

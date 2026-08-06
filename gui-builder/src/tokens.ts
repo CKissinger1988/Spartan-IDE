@@ -78,22 +78,29 @@ export function defineTokenValue(source: string, name: string, value: string): s
   return source.slice(0, match.index) + updated + source.slice(match.index + match[0].length);
 }
 
+/** Finds declarations in one already-loaded stylesheet without executing CSS. */
+export function discoverTokensInSource(source: string, file: string, rootDir: string): DiscoveredToken[] {
+  const result: DiscoveredToken[] = [];
+  const declaration = /(--[a-zA-Z0-9_-]+)\s*:\s*([^;{}]+)\s*;?/g;
+  for (const match of source.matchAll(declaration)) {
+    const name = match[1];
+    const value = match[2].trim();
+    if (!value) continue;
+    result.push({ name, value, file, relativePath: posixPath(relative(rootDir, file)) });
+  }
+  return result;
+}
+
 /** Finds declarations such as `--color-accent: #e33;` without executing CSS. */
 export function discoverTokens(rootDir: string): DiscoveredToken[] {
   const files: string[] = [];
   collectFiles(rootDir, 0, files);
   files.sort();
   const result: DiscoveredToken[] = [];
-  const declaration = /(--[a-zA-Z0-9_-]+)\s*:\s*([^;{}]+)\s*;?/g;
   for (const file of files) {
     let source: string;
     try { source = readFileSync(file, "utf8"); } catch { continue; }
-    for (const match of source.matchAll(declaration)) {
-      const name = match[1];
-      const value = match[2].trim();
-      if (!value) continue;
-      result.push({ name, value, file, relativePath: posixPath(relative(rootDir, file)) });
-    }
+    result.push(...discoverTokensInSource(source, file, rootDir));
   }
   return result;
 }

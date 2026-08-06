@@ -43,6 +43,7 @@ const ALLOWED_METHODS = new Set([
   "design_components",
   "design_assets",
   "design_tokens",
+  "design_tokens_source",
   "design_token_apply",
   "design_token_define",
   "leo_status",

@@ -42,7 +42,7 @@ import { bundleComponent } from "./bundle.js";
 import { bundleComponentSource } from "./bundle.js";
 import { discoverComponents } from "./components.js";
 import { discoverAssets } from "./assets.js";
-import { applyTokenValue, defineTokenValue, discoverTokens } from "./tokens.js";
+import { applyTokenValue, defineTokenValue, discoverTokens, discoverTokensInSource } from "./tokens.js";
 import type { CanvasEdit } from "./types.js";
 
 function fail(message: string): never {
@@ -169,6 +169,15 @@ function runTokens(rootDir: string | undefined): void {
   }
 }
 
+function runTokenSource(path: string | undefined, rootDir: string | undefined): void {
+  if (!path || !rootDir) fail("usage: cli.js token-source <css-file> <project-dir> (source read from stdin)");
+  try {
+    process.stdout.write(JSON.stringify({ tokens: discoverTokensInSource(readStdin(), path, rootDir) }));
+  } catch (e) {
+    fail(`failed to discover tokens from ${path}: ${(e as Error).message}`);
+  }
+}
+
 function runTokenApply(path: string | undefined, name: string | undefined, value: string | undefined): void {
   if (!path || !name || value === undefined) fail("usage: cli.js token-apply <css-file> <token-name> <value> (source read from stdin)");
   try {
@@ -203,6 +212,8 @@ async function main(): Promise<void> {
     runAssets(process.argv[3], process.argv[4]);
   } else if (mode === "tokens") {
     runTokens(process.argv[3]);
+  } else if (mode === "token-source") {
+    runTokenSource(process.argv[3], process.argv[4]);
   } else if (mode === "token-apply") {
     runTokenApply(process.argv[3], process.argv[4], process.argv[5]);
   } else if (mode === "token-define") {

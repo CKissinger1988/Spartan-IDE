@@ -34,14 +34,15 @@ summarizes.
   project-relative paths and JSX references computed from the open component file.
 - `src/tokens.ts` — real CSS custom-property discovery for applying existing
   design tokens as `var(--token)` values in inline styles, plus safe source-
-  preserving definition creation and value edits.
+  preserving definition creation and value edits, including unsaved source
+  buffer discovery.
 - `src/bundle.ts` — real esbuild bundling with `data-spartan-id` annotation and
   sandboxed-preview click/drag relays, including an in-memory source path for
   previews of unsaved editor changes.
 - The desktop preview uses generation-guarded parse/bundle refreshes, so a
   slower response for an older unsaved buffer cannot overwrite the newest tree
   or iframe bundle.
-- `src/*.test.ts` — 125 real tests (Node's built-in `node:test` runner, no
+- `src/*.test.ts` — 126 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyTokenValue, defineTokenValue, discoverTokens } from "./tokens.js";
+import { applyTokenValue, defineTokenValue, discoverTokens, discoverTokensInSource } from "./tokens.js";
 
 test("discovers real CSS custom properties and preserves their source values", () => {
   const root = mkdtempSync(join(tmpdir(), "spartan-tokens-"));
@@ -18,6 +18,13 @@ test("discovers repeated declarations as real file-level entries", () => {
   const root = mkdtempSync(join(tmpdir(), "spartan-tokens-"));
   writeFileSync(join(root, "a.css"), ".one { --color: red; } .two { --color: blue; }");
   assert.deepEqual(discoverTokens(root).map((token) => token.value), ["red", "blue"]);
+});
+
+test("discovers tokens from an unsaved source buffer with the real project-relative path", () => {
+  const root = "/workspace/project";
+  const file = "/workspace/project/src/theme.css";
+  const tokens = discoverTokensInSource(":root { --live: 18px; }", file, root);
+  assert.deepEqual(tokens, [{ name: "--live", value: "18px", file, relativePath: "src/theme.css" }]);
 });
 
 test("never walks dependency or build output", () => {
