@@ -40,6 +40,12 @@ export interface DiscoveredComponent {
    * renderer process has no `node:path`.
    */
   importFrom: string | null;
+  /** Project-wide direct JSX usage scan; absent for source-only discovery. */
+  usageCount?: number;
+  usageFiles?: string[];
+  /** Parsed from a real leading `@deprecated` JSDoc tag, when present. */
+  deprecated?: boolean;
+  replacement?: string;
 }
 
 /** Directories never worth walking for a component palette -- build
@@ -99,8 +105,20 @@ function collectFiles(dir: string, depth: number, out: string[]): void {
 
 /** Pulls every exported, capitalized binding name out of one already-
  * parsed module body, tagging which one (if any) is the default export. */
-function exportedComponentNames(body: unknown[]): { name: string; isDefault: boolean }[] {
-  const found: { name: string; isDefault: boolean }[] = [];
+function deprecationMetadata(node: Record<string, unknown>): { deprecated?: boolean; replacement?: string } {
+  const comments = Array.isArray(node.leadingComments) ? node.leadingComments : [];
+  const text = comments.map((comment) => {
+    const value = comment as Record<string, unknown>;
+    return typeof value.value === "string" ? value.value : "";
+  }).join("\n");
+  if (!/@deprecated\b/i.test(text)) return {};
+  const replacement = text.match(/@(?:replacement|see)\s+[`']?([A-Z][A-Za-z0-9_.]*)[`']?/i)
+    ?? text.match(/@deprecated[\s\S]*?\buse\s+[`']?([A-Z][A-Za-z0-9_.]*)[`']?\s+instead/i);
+  return { deprecated: true, ...(replacement ? { replacement: replacement[1] } : {}) };
+}
+
+function exportedComponentNames(body: unknown[]): { name: string; isDefault: boolean; deprecated?: boolean; replacement?: string }[] {
+  const found: { name: string; isDefault: boolean; deprecated?: boolean; replacement?: string }[] = [];
   for (const raw of body) {
     const node = raw as Record<string, unknown>;
     if (node.type === "ExportDefaultDeclaration") {
@@ -109,12 +127,12 @@ function exportedComponentNames(body: unknown[]): { name: string; isDefault: boo
       // `export default function Card() {}` / `export default class Card {}`
       const id = decl.id as Record<string, unknown> | undefined;
       if (id && typeof id.name === "string") {
-        found.push({ name: id.name, isDefault: true });
+        found.push({ name: id.name, isDefault: true, ...deprecationMetadata(node) });
         continue;
       }
       // `export default Card;` -- a binding declared elsewhere in the file.
       if (decl.type === "Identifier" && typeof decl.name === "string") {
-        found.push({ name: decl.name, isDefault: true });
+        found.push({ name: decl.name, isDefault: true, ...deprecationMetadata(node) });
       }
       // An anonymous `export default () => ...` has no name to offer a
       // palette, so it is deliberately skipped rather than invented.
@@ -125,11 +143,11 @@ function exportedComponentNames(body: unknown[]): { name: string; isDefault: boo
     if (decl) {
       if (decl.type === "FunctionDeclaration" || decl.type === "ClassDeclaration") {
         const id = decl.id as Record<string, unknown> | undefined;
-        if (id && typeof id.name === "string") found.push({ name: id.name, isDefault: false });
+        if (id && typeof id.name === "string") found.push({ name: id.name, isDefault: false, ...deprecationMetadata(node) });
       } else if (decl.type === "VariableDeclaration") {
         for (const d of (decl.declarations as Record<string, unknown>[]) ?? []) {
           const id = d.id as Record<string, unknown> | undefined;
-          if (id && typeof id.name === "string") found.push({ name: id.name, isDefault: false });
+          if (id && typeof id.name === "string") found.push({ name: id.name, isDefault: false, ...deprecationMetadata(node) });
         }
       }
       continue;
@@ -138,7 +156,7 @@ function exportedComponentNames(body: unknown[]): { name: string; isDefault: boo
     for (const spec of (node.specifiers as Record<string, unknown>[]) ?? []) {
       const exported = spec.exported as Record<string, unknown> | undefined;
       if (exported && typeof exported.name === "string") {
-        found.push({ name: exported.name, isDefault: exported.name === "default" });
+        found.push({ name: exported.name, isDefault: exported.name === "default", ...deprecationMetadata(node) });
       }
     }
   }
@@ -168,12 +186,51 @@ export function discoverComponentsInSource(source: string, file: string, fromFil
   } catch {
     return [];
   }
-  return exportedComponentNames(ast.program?.body ?? []).map(({ name, isDefault }) => ({
+  const sourceTags = collectJsxTagNames(ast);
+  return exportedComponentNames(ast.program?.body ?? []).map(({ name, isDefault, deprecated, replacement }) => ({
     name,
     file,
     isDefault,
     importFrom: fromFile && file === fromFile ? null : fromFile ? relativeSpecifier(fromFile, file) : null,
+    usageCount: sourceTags.get(name) ?? 0,
+    usageFiles: sourceTags.has(name) ? [file] : [],
+    ...(deprecated ? { deprecated: true } : {}),
+    ...(replacement ? { replacement } : {}),
   }));
+}
+
+function jsxName(node: unknown): string | null {
+  if (!node || typeof node !== "object") return null;
+  const value = node as Record<string, unknown>;
+  if (value.type === "JSXIdentifier" && typeof value.name === "string") return value.name;
+  if (value.type === "JSXMemberExpression") {
+    const object = jsxName(value.object);
+    const property = jsxName(value.property);
+    return object && property ? `${object}.${property}` : null;
+  }
+  return null;
+}
+
+/** Counts real JSX opening tags in a parsed source buffer without regex false positives. */
+function collectJsxTagNames(ast: unknown): Map<string, number> {
+  const result = new Map<string, number>();
+  const seen = new Set<object>();
+  const visit = (value: unknown): void => {
+    if (!value || typeof value !== "object") return;
+    const object = value as Record<string, unknown>;
+    if (seen.has(object)) return;
+    seen.add(object);
+    if (object.type === "JSXElement" || object.type === "JSXOpeningElement" || object.type === "JSXClosingElement") {
+      const name = jsxName(object.type === "JSXElement" ? (object.openingElement as Record<string, unknown> | undefined)?.name : object.name);
+      if (name) result.set(name, (result.get(name) ?? 0) + (object.type === "JSXElement" ? 1 : 0));
+    }
+    for (const child of Object.values(object)) {
+      if (Array.isArray(child)) child.forEach(visit);
+      else visit(child);
+    }
+  };
+  visit(ast);
+  return result;
 }
 
 /**
@@ -194,8 +251,28 @@ export function discoverComponents(rootDir: string, fromFile?: string): Discover
   files.sort();
 
   const out: DiscoveredComponent[] = [];
+  const sources = new Map<string, string>();
   for (const file of files) {
-    try { out.push(...discoverComponentsInSource(readFileSync(file, "utf8"), file, fromFile)); } catch { /* skip unreadable files */ }
+    try {
+      const source = readFileSync(file, "utf8");
+      sources.set(file, source);
+      out.push(...discoverComponentsInSource(source, file, fromFile));
+    } catch { /* skip unreadable files */ }
   }
-  return out;
+  const usageByFile = new Map<string, Map<string, number>>();
+  for (const [file, source] of sources) {
+    try {
+      usageByFile.set(file, collectJsxTagNames(parserAdapter.parse(source)));
+    } catch {
+      usageByFile.set(file, new Map());
+    }
+  }
+  return out.map((component) => {
+    const usageFiles = [...usageByFile.entries()]
+      .filter(([, tags]) => (tags.get(component.name) ?? 0) > 0)
+      .map(([file]) => file);
+    const usageCount = [...usageByFile.values()]
+      .reduce((count, tags) => count + (tags.get(component.name) ?? 0), 0);
+    return { ...component, usageCount, usageFiles };
+  });
 }

@@ -53,6 +53,10 @@ interface DiscoveredComponent {
   file: string;
   isDefault: boolean;
   importFrom: string | null;
+  usageCount?: number;
+  usageFiles?: string[];
+  deprecated?: boolean;
+  replacement?: string;
 }
 
 interface DiscoveredAsset {
@@ -991,7 +995,7 @@ export default function DesignScreen({
       };
     })();
   const previewMatrixViewports = useMemo(
-    () => buildPreviewBreakpoints(DESIGN_VIEWPORTS, breakpoints),
+    () => buildPreviewBreakpoints(DESIGN_VIEWPORTS.map((item) => ({ name: item.label, width: item.width, height: item.height })), breakpoints),
     [breakpoints],
   );
 
@@ -1124,7 +1128,7 @@ export default function DesignScreen({
   const filteredPalette = useMemo(() => {
     const query = paletteFilter.trim().toLowerCase();
     if (!query) return palette;
-    return palette.filter((component) => `${component.name} ${component.file} ${component.importFrom ?? ""}`.toLowerCase().includes(query));
+    return palette.filter((component) => `${component.name} ${component.file} ${component.importFrom ?? ""} ${component.replacement ?? ""}`.toLowerCase().includes(query));
   }, [palette, paletteFilter]);
   const filteredAssets = useMemo(() => {
     const query = assetFilter.trim().toLowerCase();
@@ -2970,9 +2974,11 @@ export default function DesignScreen({
                       }
                       onClick={() => insertComponent(c)}
                     >
-                      <span className="design-palette-name">&lt;{c.name} /&gt;</span>
+                      <span className="design-palette-name">{c.deprecated ? "⚠ " : ""}&lt;{c.name} /&gt;</span>
                       <span className="design-palette-from">
                         {c.importFrom ?? "this file"}
+                        {typeof c.usageCount === "number" ? ` · ${c.usageCount} usage${c.usageCount === 1 ? "" : "s"}` : ""}
+                        {c.deprecated ? ` · deprecated${c.replacement ? ` → ${c.replacement}` : ""}` : ""}
                       </span>
                     </button>
                   ))

@@ -111,3 +111,28 @@ test("discovers exported components from an unsaved source buffer", () => {
     { name: "LiveCard", isDefault: true, importFrom: null },
   ]);
 });
+
+test("indexes real direct JSX usages and deprecation replacement metadata", () => {
+  const root = fixture({
+    "Button.jsx": "/** @deprecated Use PrimaryButton instead. */\nexport function Button() { return <button />; }\n",
+    "PrimaryButton.jsx": "export function PrimaryButton() { return <button />; }\n",
+    "App.jsx": "import { Button } from './Button';\nexport default function App() { return <main><Button /><Button /></main>; }\n",
+  });
+  const button = discoverComponents(root).find((component) => component.name === "Button" && component.file.endsWith("Button.jsx"));
+  assert.equal(button?.deprecated, true);
+  assert.equal(button?.replacement, "PrimaryButton");
+  assert.equal(button?.usageCount, 2);
+  assert.ok(button?.usageFiles?.some((file) => file.endsWith("App.jsx")));
+});
+
+test("usage indexing ignores dependency and build output", () => {
+  const root = fixture({
+    "Card.jsx": "export function Card() { return <div />; }\n",
+    "App.jsx": "export default function App() { return <Card />; }\n",
+    "node_modules/pkg/Uses.jsx": "export default function Uses() { return <Card />; }\n",
+    "dist/Built.jsx": "export default function Built() { return <Card />; }\n",
+  });
+  const card = discoverComponents(root).find((component) => component.name === "Card");
+  assert.equal(card?.usageCount, 1);
+  assert.equal(card?.usageFiles?.length, 1);
+});
