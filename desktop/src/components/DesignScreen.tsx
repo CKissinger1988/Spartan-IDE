@@ -1024,31 +1024,6 @@ export default function DesignScreen({
     [activeFile, onContentChange, refresh]
   );
 
-  const applyEditBatch = useCallback(
-    async (edits: Record<string, unknown>[]) => {
-      if (!activeFile || edits.length === 0) return;
-      try {
-        let source = activeFile.content;
-        for (const edit of edits) {
-          const result = (await window.spartan.call("design_apply_edit", { edit, source })) as { source: string };
-          source = result.source;
-        }
-        await window.spartan.call("edit", {
-          doc_id: activeFile.docId,
-          start_char: 0,
-          end_char: [...activeFile.content].length,
-          text: source,
-        });
-        setPreviewSource(null);
-        onContentChange(activeFile.path, source);
-        await refresh(activeFile.path, source);
-      } catch (e) {
-        setError((e as Error).message);
-      }
-    },
-    [activeFile, onContentChange, refresh]
-  );
-
   const undoRedo = useCallback(
     async (direction: "undo" | "redo") => {
       if (!activeFile) return;
@@ -1305,18 +1280,15 @@ export default function DesignScreen({
       setError("The copied styles contain only expression values, which cannot be pasted into another component file.");
       return;
     }
-    const edits = selectedIds.flatMap((nodeId) => entries.map(([property, entry]) => ({
-      kind: "StyleChange",
-      nodeId,
-      property,
+    const batchEntries = Object.fromEntries(entries.map(([property, entry]) => [property, {
       value: entry.kind === "literal" ? entry.value ?? "" : entry.source ?? "",
-      valueType: entry.kind,
-    })));
-    await applyEditBatch(edits);
+      valueType: entry.kind === "expression" ? "expression" : "string",
+    }]));
+    await applyEditObject({ kind: "StyleBatchMany", nodeIds: selectedIds, entries: batchEntries });
     if (styleClipboard.sourcePath !== activeFile.path && hasExpressions) {
       setError("Pasted literal styles; expression-valued styles were skipped because the target file may not share their bindings.");
     }
-  }, [styleClipboard, activeFile, selectedIds, applyEditBatch]);
+  }, [styleClipboard, activeFile, selectedIds, applyEditObject]);
 
   const pasteProps = useCallback(async () => {
     if (!propClipboard || !activeFile || selectedIds.length === 0) return;
@@ -1328,18 +1300,15 @@ export default function DesignScreen({
       setError("The copied props contain only expressions, which cannot be pasted into another component file.");
       return;
     }
-    const edits = selectedIds.flatMap((nodeId) => entries.map(([prop, entry]) => ({
-      kind: "PropChange",
-      nodeId,
-      prop,
+    const batchEntries = Object.fromEntries(entries.map(([prop, entry]) => [prop, {
       value: entry.kind === "string" ? entry.value ?? "" : entry.source ?? "",
       valueType: entry.kind,
-    })));
-    await applyEditBatch(edits);
+    }]));
+    await applyEditObject({ kind: "PropBatchMany", nodeIds: selectedIds, entries: batchEntries });
     if (propClipboard.sourcePath !== activeFile.path && hasExpressions) {
       setError("Pasted literal props; expression-valued props were skipped because the target file may not share their bindings.");
     }
-  }, [propClipboard, activeFile, selectedIds, applyEditBatch]);
+  }, [propClipboard, activeFile, selectedIds, applyEditObject]);
 
   // Keep common canvas shortcuts scoped to the Design screen and out of the
   // inspector's own inputs. Escape clears any selection; Delete/Backspace and
@@ -1994,7 +1963,7 @@ export default function DesignScreen({
     setInsertTagName("");
     setInsertProps("");
     setInsertText("");
-  }, [activeFile, selectedId, selectedIds, selectedSibling, canClearSelectionStyles, hasSingleSelection, propKey, propValue, propValueType, textValue, tagName, wrapTagName, editKind, reparentTargetId, insertTagName, insertProps, insertText, applyEditObject, applyEditBatch]);
+  }, [activeFile, selectedId, selectedIds, selectedSibling, canClearSelectionStyles, hasSingleSelection, propKey, propValue, propValueType, textValue, tagName, wrapTagName, editKind, reparentTargetId, insertTagName, insertProps, insertText, applyEditObject]);
 
   if (!activeFile || !isComponentFile(activeFile.path)) {
     return (

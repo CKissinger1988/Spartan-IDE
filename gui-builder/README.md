@@ -42,7 +42,7 @@ summarizes.
 - The desktop preview uses generation-guarded parse/bundle refreshes, so a
   slower response for an older unsaved buffer cannot overwrite the newest tree
   or iframe bundle.
-- `src/*.test.ts` — 133 real tests (Node's built-in `node:test` runner, no
+- `src/*.test.ts` — 137 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.

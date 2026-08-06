@@ -89,6 +89,25 @@ test("StyleRemoveMany refuses a missing property before partially changing earli
   );
 });
 
+test("StyleBatchMany pastes multiple literal and expression styles atomically", () => {
+  const source = `const X = () => <main><div style={{ color: "red" }} /><span style={{ padding: 4 }} /></main>;`;
+  const result = applyCanvasEdit(source, {
+    kind: "StyleBatchMany",
+    nodeIds: ["n1", "n2"],
+    entries: { color: { value: "blue" }, opacity: { value: "theme.opacity", valueType: "expression" } },
+  });
+  assert.equal((result.match(/color:\s*"blue"/g) ?? []).length, 2);
+  assert.equal((result.match(/opacity:\s*\(theme\.opacity\)/g) ?? []).length, 2);
+});
+
+test("StyleBatchMany validates every target before partially pasting styles", () => {
+  const source = `const X = () => <main><div style={{ color: "red" }} /><span style={styles.text} /></main>;`;
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "StyleBatchMany", nodeIds: ["n1", "n2"], entries: { color: { value: "blue" } } }),
+    /refusing a partial multi-node edit/,
+  );
+});
+
 test("StyleRemove removes one inline style property and preserves its sibling", () => {
   const source = `const X = () => <div style={{ color: "red", padding: 4 }} />;`;
   const result = applyCanvasEdit(source, { kind: "StyleRemove", nodeId: "n0", property: "color" });
@@ -213,6 +232,25 @@ test("PropRemoveMany refuses a missing attribute before partially changing earli
   assert.throws(
     () => applyCanvasEdit(source, { kind: "PropRemoveMany", nodeIds: ["n1", "n2"], prop: "id" }),
     /refusing a partial multi-node edit/,
+  );
+});
+
+test("PropBatchMany pastes multiple literal and expression props atomically", () => {
+  const source = `const X = () => <main><div title="old" /><span title="old" /></main>;`;
+  const result = applyCanvasEdit(source, {
+    kind: "PropBatchMany",
+    nodeIds: ["n1", "n2"],
+    entries: { title: { value: "new" }, count: { value: "items.length", valueType: "expression" } },
+  });
+  assert.equal((result.match(/title="new"/g) ?? []).length, 2);
+  assert.equal((result.match(/count=\{\(items\.length\)\}/g) ?? []).length, 2);
+});
+
+test("PropBatchMany validates all entries before partially pasting props", () => {
+  const source = `const X = () => <main><div title="old" /><span title="old" /></main>;`;
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "PropBatchMany", nodeIds: ["n1", "n2"], entries: { title: { value: "new" }, "bad prop": { value: "x" } } }),
+    /valid JSX attribute name/,
   );
 });
 

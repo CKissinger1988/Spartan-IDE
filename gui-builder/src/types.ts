@@ -8,7 +8,7 @@
  * real JS/JSX AST work actually happens, per §6.1's own "lightweight
  * dev-server bridge" description).
  *
- * All twenty-six members of the full spec's `CanvasEdit` union are now real and
+ * All twenty-eight members of the full spec's `CanvasEdit` union are now real and
  * implemented by `applyCanvasEdit`: `StyleChange`/`PropChange` (original
  * v1), and `Reparent`/`ComponentInsert` (closing the gap this file's own
  * doc comment used to name as unattempted -- see edit.ts's doc comment
@@ -86,6 +86,12 @@ export type CanvasEdit =
       value: string;
       valueType?: "string" | "expression";
     }
+  /** Applies multiple style properties to multiple selected elements atomically. */
+  | {
+      kind: "StyleBatchMany";
+      nodeIds: string[];
+      entries: Record<string, { value: string; valueType?: "string" | "expression" }>;
+    }
   /** Removes one property from a plain inline style object. */
   | { kind: "StyleRemove"; nodeId: string; property: string }
   /** Removes one style property from multiple selected elements atomically. */
@@ -108,6 +114,12 @@ export type CanvasEdit =
       prop: string;
       value: string;
       valueType?: "string" | "number" | "boolean" | "expression";
+    }
+  /** Applies multiple props to multiple selected elements atomically. */
+  | {
+      kind: "PropBatchMany";
+      nodeIds: string[];
+      entries: Record<string, { value: string; valueType?: "string" | "number" | "boolean" | "expression" }>;
     }
   /** Removes one named JSX attribute from the selected element. */
   | { kind: "PropRemove"; nodeId: string; prop: string }

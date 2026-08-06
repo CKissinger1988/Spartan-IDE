@@ -221,6 +221,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Multi-selection subtree duplication with overlap and root safety guards | Real |
 | Multi-selection sibling reordering with stable relative order | Real |
 | Atomic batch prop/style changes and removals across selected nodes with structural-edit safety gates | Real |
+| Atomic multi-property style/prop clipboard paste across selections | Real |
 | Safe JSX tag renaming with paired closing-tag updates | Real |
 | Multi-selection JSX tag renaming with paired closing-tag updates | Real |
 | Multi-selection direct text replacement with ambiguous-fragment safety | Real |

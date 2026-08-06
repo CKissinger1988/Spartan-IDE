@@ -198,6 +198,29 @@ function applyStyleChangeMany(nodesById: Map<string, AnyNode>, edit: Extract<Can
   for (const { element } of elements) applyStyleChange(element, edit.property, edit.value, edit.valueType);
 }
 
+function applyStyleBatchMany(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "StyleBatchMany" }>): void {
+  const ids = [...new Set(edit.nodeIds)];
+  const entries = Object.entries(edit.entries);
+  if (ids.length === 0) throw new Error("StyleBatchMany requires at least one selected element.");
+  if (entries.length === 0) throw new Error("StyleBatchMany requires at least one style entry.");
+  const elements = ids.map((id) => {
+    const element = nodesById.get(id);
+    if (!element) throw new Error(`No element with id "${id}" found in the current source.`);
+    const styleAttr = findAttribute(element, "style");
+    const container = styleAttr?.value;
+    if (styleAttr && (!container || container.type !== "JSXExpressionContainer" || container.expression.type !== "ObjectExpression")) {
+      throw new Error(`StyleBatchMany target "${id}" is not a plain object expression; refusing a partial multi-node edit.`);
+    }
+    return element;
+  });
+  for (const [, entry] of entries) {
+    if (entry.valueType === "expression") parsePropExpression(entry.value);
+  }
+  for (const element of elements) {
+    for (const [property, entry] of entries) applyStyleChange(element, property, entry.value, entry.valueType);
+  }
+}
+
 function parsePropExpression(value: string): AnyNode {
   try {
     const wrapped = recast.parse(`const __spartanProp = (${value});`, { parser: parserAdapter }) as AnyNode;
@@ -257,6 +280,25 @@ function applyPropChangeMany(nodesById: Map<string, AnyNode>, edit: Extract<Canv
   });
   if (edit.valueType && edit.valueType !== "string") propValueNode(edit.value, edit.valueType);
   for (const element of elements) applyPropChange(element, edit.prop, edit.value, edit.valueType);
+}
+
+function applyPropBatchMany(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "PropBatchMany" }>): void {
+  const ids = [...new Set(edit.nodeIds)];
+  const entries = Object.entries(edit.entries);
+  if (ids.length === 0) throw new Error("PropBatchMany requires at least one selected element.");
+  if (entries.length === 0) throw new Error("PropBatchMany requires at least one prop entry.");
+  for (const [prop, entry] of entries) {
+    if (!isValidJsxAttributeName(prop)) throw new Error(`PropBatchMany property "${prop}" is not a valid JSX attribute name.`);
+    if (entry.valueType && entry.valueType !== "string") propValueNode(entry.value, entry.valueType);
+  }
+  const elements = ids.map((id) => {
+    const element = nodesById.get(id);
+    if (!element) throw new Error(`No element with id "${id}" found in the current source.`);
+    return element;
+  });
+  for (const element of elements) {
+    for (const [prop, entry] of entries) applyPropChange(element, prop, entry.value, entry.valueType);
+  }
 }
 
 function applyPropRemove(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "PropRemove" }>): void {
@@ -845,6 +887,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
     case "StyleChangeMany":
       applyStyleChangeMany(nodesById, edit);
       break;
+    case "StyleBatchMany":
+      applyStyleBatchMany(nodesById, edit);
+      break;
     case "StyleRemove": {
       const element = nodesById.get(edit.nodeId);
       if (!element) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
@@ -871,6 +916,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
     }
     case "PropChangeMany":
       applyPropChangeMany(nodesById, edit);
+      break;
+    case "PropBatchMany":
+      applyPropBatchMany(nodesById, edit);
       break;
     case "PropRemove":
       applyPropRemove(nodesById, edit);
