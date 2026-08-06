@@ -42,6 +42,11 @@ summarizes.
 - The desktop preview uses generation-guarded parse/bundle refreshes, so a
   slower response for an older unsaved buffer cannot overwrite the newest tree
   or iframe bundle.
+- Preview variants can be copied as versioned `spartan.gui-builder.variant`
+  JSON to the system clipboard and imported into another open component file;
+  when clipboard permission is unavailable, the Design screen keeps a
+  session-local fallback. Imported snapshots retain their source path so the
+  UI can warn when relative imports may need adjustment.
 - `src/*.test.ts` — 138 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines

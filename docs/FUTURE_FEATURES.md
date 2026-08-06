@@ -200,6 +200,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Unsaved-buffer-aware Design tree and live preview | Real |
 | Preview-only prop/style variant controls with reset/apply workflow | Real |
 | Named per-file variant preset save/load/delete | Real |
+| Versioned system-clipboard export/import for preview variants | Real |
 | Direct JSX text-content editing | Real |
 | Font asset discovery with relative-path copy action | Real |
 | Font asset format-aware @font-face CSS snippet copy action | Real |

@@ -60,6 +60,13 @@ interface VariantPreset {
   updatedAt: number;
 }
 
+interface VariantClipboard {
+  sourcePath: string;
+  name: string;
+  source: string;
+  updatedAt: number;
+}
+
 type PreviewInteractionState = "normal" | "focus" | "hover" | "active";
 
 interface InteractionPreset {
@@ -94,15 +101,27 @@ interface PropClipboard {
 
 const STYLE_CLIPBOARD_KIND = "spartan.gui-builder.styles";
 const PROP_CLIPBOARD_KIND = "spartan.gui-builder.props";
+const VARIANT_CLIPBOARD_KIND = "spartan.gui-builder.variant";
 const CLIPBOARD_VERSION = 1;
 
 function parseDesignClipboard(raw: string, kind: typeof STYLE_CLIPBOARD_KIND): StyleClipboard | null;
 function parseDesignClipboard(raw: string, kind: typeof PROP_CLIPBOARD_KIND): PropClipboard | null;
-function parseDesignClipboard(raw: string, kind: string): StyleClipboard | PropClipboard | null {
+function parseDesignClipboard(raw: string, kind: typeof VARIANT_CLIPBOARD_KIND): VariantClipboard | null;
+function parseDesignClipboard(raw: string, kind: string): StyleClipboard | PropClipboard | VariantClipboard | null {
   try {
     const value = JSON.parse(raw) as Record<string, unknown>;
-    if (value.kind !== kind || value.version !== CLIPBOARD_VERSION || typeof value.sourcePath !== "string" || typeof value.sourceTagName !== "string") return null;
-    if (!value.entries || typeof value.entries !== "object" || Array.isArray(value.entries)) return null;
+    if (value.kind !== kind || value.version !== CLIPBOARD_VERSION || typeof value.sourcePath !== "string") return null;
+    if (kind === VARIANT_CLIPBOARD_KIND) {
+      return typeof value.name === "string" && value.name.trim().length > 0 && typeof value.source === "string" && value.source.trim().length > 0
+        ? {
+          sourcePath: value.sourcePath,
+          name: value.name.trim(),
+          source: value.source,
+          updatedAt: typeof value.updatedAt === "number" && Number.isFinite(value.updatedAt) ? value.updatedAt : Date.now(),
+        }
+        : null;
+    }
+    if (typeof value.sourceTagName !== "string" || !value.entries || typeof value.entries !== "object" || Array.isArray(value.entries)) return null;
     const entries = value.entries as Record<string, unknown>;
     if (kind === STYLE_CLIPBOARD_KIND) {
       const valid = Object.values(entries).every((entry) => {
@@ -812,6 +831,8 @@ export default function DesignScreen({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [styleClipboard, setStyleClipboard] = useState<StyleClipboard | null>(null);
   const [propClipboard, setPropClipboard] = useState<PropClipboard | null>(null);
+  const [variantClipboard, setVariantClipboard] = useState<VariantClipboard | null>(null);
+  const [copiedVariant, setCopiedVariant] = useState<string | null>(null);
   const [previewInspection, setPreviewInspection] = useState<PreviewInspection | null>(null);
   const [boxModelVisible, setBoxModelVisible] = useState(false);
   const [copiedInspection, setCopiedInspection] = useState(false);
@@ -1173,6 +1194,58 @@ export default function DesignScreen({
     },
     [variantStorageKey, variantPresets]
   );
+
+  const copyVariant = useCallback(async (preset: VariantPreset) => {
+    const clipboard: VariantClipboard = {
+      sourcePath: activeFile?.path ?? "",
+      name: preset.name,
+      source: preset.source,
+      updatedAt: preset.updatedAt,
+    };
+    setVariantClipboard(clipboard);
+    setCopiedVariant(preset.name);
+    window.setTimeout(() => setCopiedVariant((current) => current === preset.name ? null : current), 1600);
+    try {
+      await navigator.clipboard.writeText(JSON.stringify({ kind: VARIANT_CLIPBOARD_KIND, version: CLIPBOARD_VERSION, ...clipboard }));
+    } catch {
+      // Keep the in-memory preset clipboard usable when the host denies permission.
+    }
+  }, [activeFile?.path]);
+
+  const importVariant = useCallback(async () => {
+    if (!activeFile || !variantStorageKey) return;
+    let clipboard = variantClipboard;
+    try {
+      const systemClipboard = parseDesignClipboard(await navigator.clipboard.readText(), VARIANT_CLIPBOARD_KIND);
+      if (systemClipboard) {
+        clipboard = systemClipboard;
+        setVariantClipboard(systemClipboard);
+      }
+    } catch {
+      // Fall back to the session clipboard when system clipboard access is unavailable.
+    }
+    if (!clipboard) {
+      setError("Copy a saved preview variant first, or place a Spartan GUI Builder variant on the system clipboard.");
+      return;
+    }
+    const preset: VariantPreset = {
+      name: clipboard.name,
+      source: clipboard.source,
+      updatedAt: Date.now(),
+    };
+    const next = [preset, ...variantPresets.filter((item) => item.name !== preset.name)];
+    setVariantPresets(next);
+    try {
+      window.localStorage.setItem(variantStorageKey, JSON.stringify(next));
+    } catch (e) {
+      setError(`Could not save imported variant: ${(e as Error).message}`);
+      return;
+    }
+    await loadVariant(preset);
+    setError(clipboard.sourcePath && clipboard.sourcePath !== activeFile.path
+      ? `Imported “${preset.name}” from ${clipboard.sourcePath}; relative imports may need adjustment.`
+      : null);
+  }, [activeFile, variantStorageKey, variantClipboard, variantPresets, loadVariant]);
 
   const saveInteractionPreset = useCallback(() => {
     if (!interactionStorageKey || !interactionPresetName.trim()) return;
@@ -2963,13 +3036,32 @@ export default function DesignScreen({
         ) : (
           <div className="leo-status-message mono">Click a node in the tree or preview to select it.</div>
         )}
-        {variantPresets.length > 0 && (
+        {activeFile && isComponentFile(activeFile.path) && (
           <div className="design-variant-list">
-            <div className="design-panel-label">Saved variants</div>
-            {variantPresets.map((preset) => (
+            <div className="design-variant-header">
+              <div className="design-panel-label">Saved variants</div>
+              <button
+                className="design-secondary-action mono"
+                onClick={() => void importVariant()}
+                disabled={!activeFile}
+                title="Import a versioned Spartan GUI Builder preview variant from the system clipboard"
+              >
+                Import variant
+              </button>
+            </div>
+            {variantPresets.length === 0 ? (
+              <div className="design-preview-status mono">No saved variants. Import one from the system clipboard.</div>
+            ) : variantPresets.map((preset) => (
               <div className="design-variant-row" key={preset.name}>
                 <button className="design-variant-load mono" onClick={() => void loadVariant(preset)}>
                   {preset.name}
+                </button>
+                <button
+                  className="design-asset-action mono"
+                  title={`Copy ${preset.name} as a portable GUI Builder variant`}
+                  onClick={() => void copyVariant(preset)}
+                >
+                  {copiedVariant === preset.name ? "Copied" : "Copy"}
                 </button>
                 <button className="design-variant-delete mono" title={`Delete ${preset.name}`} onClick={() => deleteVariant(preset.name)}>
                   ×

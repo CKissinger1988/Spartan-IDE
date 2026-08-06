@@ -3658,6 +3658,24 @@
   border-top: 1px solid var(--border);
 }
 
+.design-variant-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 8px 4px;
+}
+
+.design-variant-header .design-panel-label {
+  padding: 0;
+}
+
+.design-variant-header .design-secondary-action {
+  width: auto;
+  margin: 0;
+  white-space: nowrap;
+}
+
 .design-variant-row {
   display: flex;
   align-items: center;
