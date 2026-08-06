@@ -36,6 +36,19 @@ function isValidIdentifierName(name: string): boolean {
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name);
 }
 
+function isValidJsxTagName(name: string): boolean {
+  const parts = name.split(".");
+  return parts.length > 0 && parts.every(isValidIdentifierName);
+}
+
+function jsxTagNameNode(name: string): AnyNode {
+  const parts = name.split(".");
+  return parts.slice(1).reduce<AnyNode>(
+    (object, property) => b.jsxMemberExpression(object, b.jsxIdentifier(property)),
+    b.jsxIdentifier(parts[0]) as AnyNode,
+  );
+}
+
 function isValidJsxAttributeName(name: string): boolean {
   return /^[A-Za-z_:][A-Za-z0-9:._-]*$/.test(name);
 }
@@ -632,9 +645,9 @@ function applyComponentInsert(nodesById: Map<string, AnyNode>, edit: Extract<Can
   if (!parent) {
     throw new Error(`No element with id "${edit.parentId}" found in the current source.`);
   }
-  if (!isValidIdentifierName(edit.tagName)) {
+  if (!isValidJsxTagName(edit.tagName)) {
     throw new Error(
-      `"${edit.tagName}" is not a supported JSX tag name for ComponentInsert -- must be a single valid identifier (member-expression tags like "Foo.Bar" are a real, deliberate v1 scope cut).`,
+      `"${edit.tagName}" is not a supported JSX tag name for ComponentInsert -- use dot-separated valid JSX identifiers (for example "Button" or "UI.Button").`,
     );
   }
   const attributes = Object.entries(edit.props ?? {}).map(([name, value]) => {
@@ -644,10 +657,11 @@ function applyComponentInsert(nodesById: Map<string, AnyNode>, edit: Extract<Can
     return b.jsxAttribute(b.jsxIdentifier(name), b.stringLiteral(value));
   });
   const hasText = edit.childrenText !== undefined;
-  const opening = b.jsxOpeningElement(b.jsxIdentifier(edit.tagName), attributes, !hasText);
+  const tagName = jsxTagNameNode(edit.tagName);
+  const opening = b.jsxOpeningElement(tagName, attributes, !hasText);
   const newElement = b.jsxElement(
     opening,
-    hasText ? b.jsxClosingElement(b.jsxIdentifier(edit.tagName)) : null,
+    hasText ? b.jsxClosingElement(tagName) : null,
     hasText ? [b.jsxText(edit.childrenText ?? "")] : [],
   );
   spliceIn(parent, newElement, edit.index);
@@ -741,7 +755,7 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       // source references an undefined binding and the live preview
       // breaks on the very next bundle (task #278).
       if (edit.importFrom) {
-        ensureImport(ast, edit.tagName, edit.importFrom, edit.importIsDefault ?? false);
+        ensureImport(ast, edit.tagName.split(".")[0], edit.importFrom, edit.importIsDefault ?? false);
       }
       break;
   }

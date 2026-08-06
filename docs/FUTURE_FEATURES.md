@@ -222,6 +222,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Safe wrapping of direct selected elements in a new JSX container | Real |
 | Multi-selection grouping into one shared JSX wrapper | Real |
 | Component insertion as a sibling after the selected node | Real |
+| Component insertion with dot-separated JSX member-expression tags and root-binding imports | Real |
 | Component palette child/sibling placement control | Real |
 | Searchable component palette by name or source path | Real |
 | Searchable image/font asset palette by label or project path | Real |

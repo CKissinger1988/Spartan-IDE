@@ -115,7 +115,8 @@ function isComponentFile(path: string): boolean {
 }
 
 function isValidTagName(name: string): boolean {
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name.trim());
+  const parts = name.trim().split(".");
+  return parts.length > 0 && parts.every((part) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(part));
 }
 
 function searchableNodeText(node: ComponentNode): string {
@@ -2385,7 +2386,7 @@ export default function DesignScreen({
               <>
                 <input
                   className="design-input mono"
-                  placeholder={editKind === "ComponentInsertSibling" ? "sibling tag name (e.g. Button)" : "new tag name (e.g. Button)"}
+                  placeholder={editKind === "ComponentInsertSibling" ? "sibling tag name (e.g. Button or UI.Button)" : "new tag name (e.g. Button or UI.Button)"}
                   value={insertTagName}
                   onChange={(e) => setInsertTagName(e.target.value)}
                 />

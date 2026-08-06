@@ -130,10 +130,9 @@ export type CanvasEdit =
    * (a real cycle). */
   | { kind: "Reparent"; nodeId: string; newParentId: string; index?: number }
   /** Creates a brand-new element and inserts it as a child of `parentId`
-   * at `index` (default: append). `tagName` must be a single valid JSX
-   * identifier (e.g. `"div"`, `"Card"`) -- member-expression tag names
-   * (`Foo.Bar`) are a real, deliberate v1 scope cut, refused with a
-   * clear error rather than silently mishandled. `props`, if given, are
+   * at `index` (default: append). `tagName` must be a valid JSX identifier
+   * or dot-separated member expression (e.g. `"div"`, `"Card"`, or
+   * `"UI.Button"`). `props`, if given, are
    * always inserted as plain string-literal JSX attributes (the same
    * real limitation `PropChange` already has). `childrenText`, when given,
    * creates one direct JSX text child so the inspector can create useful

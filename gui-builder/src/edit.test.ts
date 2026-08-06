@@ -574,10 +574,34 @@ test("ComponentInsert honors an explicit index among existing children", () => {
   assert.equal(roots[0].children[1].tagName, "Mid");
 });
 
-test("ComponentInsert refuses a member-expression tag name in this v1", () => {
+test("ComponentInsert supports member-expression tag names and preserves content", () => {
   const source = `const X = () => <div />;`;
+  const result = applyCanvasEdit(source, {
+    kind: "ComponentInsert",
+    parentId: "n0",
+    tagName: "UI.Button",
+    props: { label: "Click me" },
+    childrenText: "Save",
+  });
+  assert.match(result, /<UI\.Button label="Click me">Save<\/UI\.Button>/);
+  assert.doesNotThrow(() => parseComponent(result));
+});
+
+test("ComponentInsert imports the root binding for a member-expression tag", () => {
+  const result = applyCanvasEdit(`const X = () => <div />;`, {
+    kind: "ComponentInsert",
+    parentId: "n0",
+    tagName: "UI.Button",
+    importFrom: "./ui",
+    importIsDefault: true,
+  });
+  assert.match(result, /import UI from "\.\/ui"/);
+  assert.match(result, /<UI\.Button \/>/);
+});
+
+test("ComponentInsert rejects malformed member-expression tag names", () => {
   assert.throws(
-    () => applyCanvasEdit(source, { kind: "ComponentInsert", parentId: "n0", tagName: "Foo.Bar" }),
+    () => applyCanvasEdit(`const X = () => <div />;`, { kind: "ComponentInsert", parentId: "n0", tagName: "UI..Button" }),
     /not a supported JSX tag name/,
   );
 });
