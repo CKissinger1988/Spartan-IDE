@@ -48,6 +48,7 @@ interface Settings {
    * before declaring a task `Done`. `null` (the default) keeps
    * `Verifying` a real, momentary, always-passing waypoint. */
   leo_verify_command: string | null;
+  github_token: string | null;
   /** Real user-defined snippets (the follow-up the curated-snippets pass
    * named) -- persisted as `spartan_settings::UserSnippet` objects and
    * honored by both shells' `findSnippet` on top of the curated
@@ -351,6 +352,9 @@ export default function SettingsScreen(): React.ReactElement {
           ...(overrides.leo_verify_command !== undefined
             ? { leo_verify_command: overrides.leo_verify_command ?? "" }
             : {}),
+          ...(overrides.github_token !== undefined
+            ? { github_token: overrides.github_token ?? "" }
+            : {}),
           // Real full-list patch shape: `Some(list)` replaces the whole
           // `Settings.user_snippets` list (the snippet editor sends the
           // entire edited list every save); omitted entirely when no
@@ -530,6 +534,35 @@ export default function SettingsScreen(): React.ReactElement {
         family applies live, everywhere in the app, immediately. Leave it blank to use the real
         bundled JetBrains Mono; a name here must already be installed on this machine (or resolve
         via a real system font-fallback) to actually take visible effect.
+      </div>
+
+      <div className="settings-section-label mono" style={{ marginTop: 28 }}>
+        Git — GitHub credentials
+      </div>
+      <div className="settings-row">
+        <label className="settings-label mono">Personal access token</label>
+        <input
+          className="settings-select mono"
+          type="password"
+          autoComplete="off"
+          placeholder={settings.github_token ? "Token saved — enter to replace" : "ghp_…"}
+          disabled={saving}
+          defaultValue=""
+          onBlur={(e) => {
+            const token = e.target.value.trim();
+            if (token) save({ github_token: token });
+          }}
+          style={{ width: 260 }}
+        />
+        {settings.github_token && (
+          <button className="settings-button mono" disabled={saving} onClick={() => save({ github_token: null })}>
+            Clear
+          </button>
+        )}
+      </div>
+      <div className="settings-note mono">
+        Used for HTTPS GitHub clone, fetch, pull, and push. The token is stored in the shared
+        settings file and is never returned to the renderer; it is never sent to non-GitHub remotes.
       </div>
 
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>

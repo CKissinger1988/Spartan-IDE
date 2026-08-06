@@ -236,15 +236,27 @@ fn flush_selection_group(
 /// default/anonymous credential (local `file://` remotes need none, so the
 /// callback typically isn't even invoked for those). An interactive
 /// username/password or HTTPS-token prompt is a named, open follow-up.
-fn make_remote_callbacks() -> git2::RemoteCallbacks<'static> {
+fn make_remote_callbacks(github_token: Option<String>) -> git2::RemoteCallbacks<'static> {
     let mut cb = git2::RemoteCallbacks::new();
-    cb.credentials(|_url, username_from_url, allowed| {
+    cb.credentials(move |url, username_from_url, allowed| {
         if allowed.contains(git2::CredentialType::SSH_KEY) {
             if let Some(user) = username_from_url {
                 if let Ok(cred) = git2::Cred::ssh_key_from_agent(user) {
                     return Ok(cred);
                 }
             }
+        }
+        // Never send a GitHub token to an arbitrary configured remote. The
+        // token is only valid for HTTPS GitHub hosts; SSH still uses the
+        // agent path above.
+        if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT)
+            && github_token.is_some()
+            && url.starts_with("https://github.com/")
+        {
+            return git2::Cred::userpass_plaintext(
+                "x-access-token",
+                github_token.as_deref().unwrap(),
+            );
         }
         git2::Cred::default()
     });
@@ -483,8 +495,16 @@ impl GitRepo {
     /// none). An interactive HTTPS-token prompt is the same named, open
     /// follow-up as for the other remote ops, not attempted here.
     pub fn clone(url: &str, dest: &Path) -> Result<Self, git2::Error> {
+        Self::clone_with_github_token(url, dest, None)
+    }
+
+    pub fn clone_with_github_token(
+        url: &str,
+        dest: &Path,
+        github_token: Option<String>,
+    ) -> Result<Self, git2::Error> {
         let mut fo = git2::FetchOptions::new();
-        fo.remote_callbacks(make_remote_callbacks());
+        fo.remote_callbacks(make_remote_callbacks(github_token));
         let mut builder = git2::build::RepoBuilder::new();
         builder.fetch_options(fo);
         let repo = builder.clone(url, dest)?;
@@ -1824,9 +1844,17 @@ impl GitRepo {
     /// Real fetch from a configured remote using its own default refspecs
     /// (updates the remote-tracking refs; does not touch the working tree).
     pub fn fetch(&self, remote_name: &str) -> Result<(), git2::Error> {
+        self.fetch_with_github_token(remote_name, None)
+    }
+
+    pub fn fetch_with_github_token(
+        &self,
+        remote_name: &str,
+        github_token: Option<String>,
+    ) -> Result<(), git2::Error> {
         let mut remote = self.repo.find_remote(remote_name)?;
         let mut fo = git2::FetchOptions::new();
-        fo.remote_callbacks(make_remote_callbacks());
+        fo.remote_callbacks(make_remote_callbacks(github_token));
         let empty: [&str; 0] = [];
         remote.fetch(&empty, Some(&mut fo), None)
     }
@@ -1836,9 +1864,18 @@ impl GitRepo {
     /// auth failure) surfaces `libgit2`'s own real error verbatim -- never
     /// a force-push, which would need an explicit, separate opt-in.
     pub fn push(&self, remote_name: &str, branch: &str) -> Result<(), git2::Error> {
+        self.push_with_github_token(remote_name, branch, None)
+    }
+
+    pub fn push_with_github_token(
+        &self,
+        remote_name: &str,
+        branch: &str,
+        github_token: Option<String>,
+    ) -> Result<(), git2::Error> {
         let mut remote = self.repo.find_remote(remote_name)?;
         let mut po = git2::PushOptions::new();
-        po.remote_callbacks(make_remote_callbacks());
+        po.remote_callbacks(make_remote_callbacks(github_token));
         let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
         remote.push(&[refspec.as_str()], Some(&mut po))
     }
@@ -1855,7 +1892,16 @@ impl GitRepo {
         remote_name: &str,
         branch: &str,
     ) -> Result<PullOutcome, git2::Error> {
-        self.fetch(remote_name)?;
+        self.pull_fast_forward_with_github_token(remote_name, branch, None)
+    }
+
+    pub fn pull_fast_forward_with_github_token(
+        &self,
+        remote_name: &str,
+        branch: &str,
+        github_token: Option<String>,
+    ) -> Result<PullOutcome, git2::Error> {
+        self.fetch_with_github_token(remote_name, github_token)?;
         let fetch_head = self.repo.find_reference("FETCH_HEAD")?;
         let fetch_commit = self.repo.reference_to_annotated_commit(&fetch_head)?;
         let (analysis, _) = self.repo.merge_analysis(&[&fetch_commit])?;

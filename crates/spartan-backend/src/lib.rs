@@ -4919,7 +4919,9 @@ fn git_clone(parent_dir: &str, url: &str, name: &str) -> Result<serde_json::Valu
             ));
         }
     }
-    spartan_git::GitRepo::clone(url, &dest).map_err(|e| format!("git clone: {e}"))?;
+    let github_token = spartan_settings::load().github_token;
+    spartan_git::GitRepo::clone_with_github_token(url, &dest, github_token)
+        .map_err(|e| format!("git clone: {e}"))?;
     Ok(serde_json::json!({
         "project_root": dest.to_string_lossy(),
         "name": safe_name,
@@ -4933,7 +4935,8 @@ fn git_clone(parent_dir: &str, url: &str, name: &str) -> Result<serde_json::Valu
 fn git_fetch(project_root: &str, remote: &str) -> Result<serde_json::Value, String> {
     let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
         .ok_or("no git repository found at or above this path")?;
-    repo.fetch(remote).map_err(|e| format!("git fetch: {e}"))?;
+    repo.fetch_with_github_token(remote, spartan_settings::load().github_token)
+        .map_err(|e| format!("git fetch: {e}"))?;
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -4943,7 +4946,7 @@ fn git_fetch(project_root: &str, remote: &str) -> Result<serde_json::Value, Stri
 fn git_push(project_root: &str, remote: &str, branch: &str) -> Result<serde_json::Value, String> {
     let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
         .ok_or("no git repository found at or above this path")?;
-    repo.push(remote, branch)
+    repo.push_with_github_token(remote, branch, spartan_settings::load().github_token)
         .map_err(|e| format!("git push: {e}"))?;
     Ok(serde_json::json!({ "ok": true }))
 }
@@ -4955,7 +4958,7 @@ fn git_pull(project_root: &str, remote: &str, branch: &str) -> Result<serde_json
     let repo = spartan_git::GitRepo::discover(std::path::Path::new(project_root))
         .ok_or("no git repository found at or above this path")?;
     let outcome = repo
-        .pull_fast_forward(remote, branch)
+        .pull_fast_forward_with_github_token(remote, branch, spartan_settings::load().github_token)
         .map_err(|e| format!("git pull: {e}"))?;
     let s = match outcome {
         spartan_git::PullOutcome::UpToDate => "up_to_date",

@@ -35,9 +35,11 @@ Priority key:
 3. **Multi-cursor / multi-selection editing** (P1) — ⚠️ **architecturally blocked** by the
    `<textarea>` (native single caret/selection only); needs the same from-scratch editing-surface
    rewrite as code folding.
- 4. ~~**Git: remote push/pull/fetch + clone** (P1)~~ — ✅ **Shipped** (fetch/pull/push in both
-    shells' Git panels; `spartan_git` remote ops against real remotes; clone UI now also shipped,
-    see below). Interactive auth-token UI remains a follow-up. See CLAUDE.md's own status entry.
+4. ~~**Git: remote push/pull/fetch + clone** (P1)~~ — ✅ **Shipped** (fetch/pull/push in both
+   shells' Git panels; `spartan_git` remote ops against real remotes; clone UI and GitHub HTTPS
+   personal-access-token support are shipped. The desktop Settings screen stores the token masked,
+   and the backend only sends it to `https://github.com/...` remotes; SSH-agent and non-GitHub
+   remotes remain unchanged.) See CLAUDE.md's own status entry.
 5. ~~**Inline git blame** (P1)~~ — ✅ **Shipped** (Alt+B blame gutter in both shells, backed by
    `spartan_git::blame_file`). See CLAUDE.md's own status entry.
 6. ~~**Snippets / tab-completion expansion** (P1)~~ — ✅ **Shipped** (curated per-language
