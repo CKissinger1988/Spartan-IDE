@@ -2118,6 +2118,11 @@ export default function DesignScreen({
                 Clipboard: {Object.keys(styleClipboard.entries).length} styles from &lt;{styleClipboard.sourceTagName}&gt;
               </div>
             )}
+            {propClipboard && (
+              <div className="design-preview-status mono">
+                Prop clipboard: {Object.keys(propClipboard.entries).length} props from &lt;{propClipboard.sourceTagName}&gt;
+              </div>
+            )}
             <div className="design-edit-kind">
               <label>
                 <input
