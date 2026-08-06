@@ -49,6 +49,8 @@ export interface ComponentNode {
    * location metadata. Optional only for parser nodes that genuinely lack
    * location data (for example a synthetic AST supplied by a caller). */
   sourceLocation?: SourceLocation;
+  /** Exact source slice for this JSX element, when parser offsets exist. */
+  sourceText?: string;
   props: Record<string, PropSummary>;
   children: ComponentNode[];
   /** Direct text children only, concatenated; `null` if this element has

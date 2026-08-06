@@ -166,6 +166,7 @@ function walk(
         id,
         tagName: tagNameOf(node),
         sourceLocation: sourceLocationOf(node),
+        sourceText: sourceSlice(ctx.source, node),
         props: propsOf(ctx.source, node),
         children,
         textContent: textContentOf(node),

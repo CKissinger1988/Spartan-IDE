@@ -21,6 +21,7 @@ interface ComponentNode {
     endLine: number;
     endColumn: number;
   };
+  sourceText?: string;
   props: Record<string, PropSummary>;
   children: ComponentNode[];
   textContent: string | null;
@@ -1510,6 +1511,16 @@ export default function DesignScreen({
     }
   }, [previewInspection, selectedNode]);
 
+  const copySelectedJsx = useCallback(async () => {
+    if (!selectedNode?.sourceText || !hasSingleSelection) return;
+    try {
+      await navigator.clipboard.writeText(selectedNode.sourceText);
+      setError(null);
+    } catch (e) {
+      setError(`Could not copy selected JSX: ${(e as Error).message}`);
+    }
+  }, [hasSingleSelection, selectedNode]);
+
   const setPreviewFocus = useCallback((focused: boolean) => {
     if (!selectedId || !hasSingleSelection) return;
     iframeRef.current?.contentWindow?.postMessage(
@@ -2005,6 +2016,15 @@ export default function DesignScreen({
                 onClick={() => onRevealSource(activeFile.path, selectedNode.sourceLocation!.startLine, selectedNode.sourceLocation!.startColumn)}
               >
                 Reveal in Editor · line {selectedNode.sourceLocation.startLine}
+              </button>
+            )}
+            {hasSingleSelection && selectedNode.sourceText && (
+              <button
+                className="design-secondary-action mono design-reveal-source"
+                title="Copy the selected element's exact JSX source"
+                onClick={() => void copySelectedJsx()}
+              >
+                Copy JSX
               </button>
             )}
             {hasSingleSelection && previewInspection?.nodeId === selectedNode.id && (
