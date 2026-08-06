@@ -241,12 +241,21 @@ function flattenNodes(roots: ComponentNode[], depth = 0): { id: string; tagName:
   ]);
 }
 
+type InsertPropValueType = "number" | "boolean" | "expression";
+
+interface ParsedInsertProps {
+  props: Record<string, string>;
+  propValues: Record<string, { value: string; valueType: InsertPropValueType }>;
+}
+
 /** Parses the inspector's deliberately small, readable prop format:
- * one `name=value` pair per line. ComponentInsert keeps these values as
- * string literals, while the existing Prop editor remains available for
- * numbers, booleans, and expressions after insertion. */
-function parseInsertProps(input: string): Record<string, string> {
+ * `name=value` creates a string prop, while `name:number=3`,
+ * `name:boolean=true`, and `name:expression=handleClick` create typed JSX
+ * expression values. Braced expressions are accepted too, so
+ * `onClick:expression={handleClick}` is convenient in the form. */
+function parseInsertProps(input: string): ParsedInsertProps {
   const props: Record<string, string> = {};
+  const propValues: ParsedInsertProps["propValues"] = {};
   for (const [index, rawLine] of input.split("\n").entries()) {
     const line = rawLine.trim();
     if (!line) continue;
@@ -254,13 +263,24 @@ function parseInsertProps(input: string): Record<string, string> {
     if (separator <= 0) {
       throw new Error(`Inserted prop line ${index + 1} must use name=value format.`);
     }
-    const name = line.slice(0, separator).trim();
+    const rawName = line.slice(0, separator).trim();
+    const typedMatch = rawName.match(/^(.*):(number|boolean|expression)$/);
+    const name = typedMatch?.[1]?.trim() ?? rawName;
     if (!/^[A-Za-z_:][A-Za-z0-9:._-]*$/.test(name)) {
       throw new Error(`Inserted prop "${name}" must be a valid JSX attribute name.`);
     }
-    props[name] = line.slice(separator + 1).trim();
+    const value = line.slice(separator + 1).trim();
+    if (typedMatch) {
+      const valueType = typedMatch[2] as InsertPropValueType;
+      const expressionValue = valueType === "expression" && value.startsWith("{") && value.endsWith("}")
+        ? value.slice(1, -1).trim()
+        : value;
+      propValues[name] = { value: expressionValue, valueType };
+    } else {
+      props[name] = value;
+    }
   }
-  return props;
+  return { props, propValues };
 }
 
 function cssPropertyName(name: string): string {
@@ -1627,9 +1647,9 @@ export default function DesignScreen({
     } else {
       if (!insertTagName.trim()) return;
       if (editKind === "ComponentInsertSibling" && !selectedSibling) return;
-      let props: Record<string, string>;
+      let parsedProps: ParsedInsertProps;
       try {
-        props = parseInsertProps(insertProps);
+        parsedProps = parseInsertProps(insertProps);
       } catch (e) {
         setError((e as Error).message);
         return;
@@ -1640,7 +1660,8 @@ export default function DesignScreen({
         tagName: insertTagName.trim(),
       };
       if (editKind === "ComponentInsertSibling") edit.index = selectedSibling!.index + 1;
-      if (Object.keys(props).length > 0) edit.props = props;
+      if (Object.keys(parsedProps.props).length > 0) edit.props = parsedProps.props;
+      if (Object.keys(parsedProps.propValues).length > 0) edit.propValues = parsedProps.propValues;
       if (insertText !== "") edit.childrenText = insertText;
     }
     if (selectedIds.length > 1 && ["PropChange", "PropRemove", "StyleChange", "StyleRemove"].includes(editKind)) {
@@ -2393,7 +2414,7 @@ export default function DesignScreen({
                 <textarea
                   className="design-input mono design-text-input"
                   aria-label="Inserted string props"
-                  placeholder="props: name=value (one per line)"
+                  placeholder="props: name=value or name:type=value (one per line)"
                   value={insertProps}
                   onChange={(e) => setInsertProps(e.target.value)}
                   rows={3}

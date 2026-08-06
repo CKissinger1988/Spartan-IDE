@@ -132,9 +132,9 @@ export type CanvasEdit =
   /** Creates a brand-new element and inserts it as a child of `parentId`
    * at `index` (default: append). `tagName` must be a valid JSX identifier
    * or dot-separated member expression (e.g. `"div"`, `"Card"`, or
-   * `"UI.Button"`). `props`, if given, are
-   * always inserted as plain string-literal JSX attributes (the same
-   * real limitation `PropChange` already has). `childrenText`, when given,
+   * `"UI.Button"`). `props`, if given, are inserted as string-literal JSX
+   * attributes. `propValues` adds typed number, boolean, or parsed expression
+   * attributes without requiring a second edit. `childrenText`, when given,
    * creates one direct JSX text child so the inspector can create useful
    * content-bearing elements without an immediate editor switch. */
   | {
@@ -143,6 +143,10 @@ export type CanvasEdit =
       tagName: string;
       index?: number;
       props?: Record<string, string>;
+      propValues?: Record<string, {
+        value: string;
+        valueType: "number" | "boolean" | "expression";
+      }>;
       childrenText?: string;
       /** Module specifier to import `tagName` from, when the component
        * being inserted lives in another file (task #278's real

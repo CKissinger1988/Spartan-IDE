@@ -554,6 +554,36 @@ test("ComponentInsert creates a content-bearing element with string props", () =
   assert.doesNotThrow(() => parseComponent(result));
 });
 
+test("ComponentInsert writes typed number, boolean, and expression props", () => {
+  const result = applyCanvasEdit(`const X = () => <main />;`, {
+    kind: "ComponentInsert",
+    parentId: "n0",
+    tagName: "Button",
+    propValues: {
+      count: { value: "3", valueType: "number" },
+      disabled: { value: "false", valueType: "boolean" },
+      onClick: { value: "() => submit()", valueType: "expression" },
+    },
+  });
+  assert.match(result, /count=\{3\}/);
+  assert.match(result, /disabled=\{false\}/);
+  assert.match(result, /onClick=\{\(\(\) => submit\(\)\)\}/);
+  assert.doesNotThrow(() => parseComponent(result));
+});
+
+test("ComponentInsert refuses duplicate string and typed prop values", () => {
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <main />;`, {
+      kind: "ComponentInsert",
+      parentId: "n0",
+      tagName: "Button",
+      props: { count: "3" },
+      propValues: { count: { value: "3", valueType: "number" } },
+    }),
+    /duplicate values for prop "count"/,
+  );
+});
+
 test("ComponentInsert rejects an invalid string prop name", () => {
   assert.throws(
     () => applyCanvasEdit(`const X = () => <main />;`, {

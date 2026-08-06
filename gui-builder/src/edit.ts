@@ -656,6 +656,15 @@ function applyComponentInsert(nodesById: Map<string, AnyNode>, edit: Extract<Can
     }
     return b.jsxAttribute(b.jsxIdentifier(name), b.stringLiteral(value));
   });
+  for (const [name, typed] of Object.entries(edit.propValues ?? {})) {
+    if (!isValidJsxAttributeName(name)) {
+      throw new Error(`"${name}" is not a supported JSX prop name for ComponentInsert -- must be a valid identifier.`);
+    }
+    if (Object.prototype.hasOwnProperty.call(edit.props ?? {}, name)) {
+      throw new Error(`ComponentInsert received duplicate values for prop "${name}".`);
+    }
+    attributes.push(b.jsxAttribute(b.jsxIdentifier(name), b.jsxExpressionContainer(propValueNode(typed.value, typed.valueType))));
+  }
   const hasText = edit.childrenText !== undefined;
   const tagName = jsxTagNameNode(edit.tagName);
   const opening = b.jsxOpeningElement(tagName, attributes, !hasText);
