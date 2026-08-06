@@ -210,6 +210,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Synchronized tree/canvas selection highlight across preview reloads | Real |
 | Collapsible structure-tree navigation with accessible expand state | Real |
 | Searchable structure-tree filtering with ancestor preservation | Real |
+| Guided layout, positioning, grid, overflow, and visual-effects style controls | Real |
 | Configurable string props and initial text for inserted elements | Real |
 | Desktop/Tablet/Mobile viewport presets and zoom | Real |
 | Reusable component state machines and interaction-state controls | Planned |
