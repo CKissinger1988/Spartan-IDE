@@ -3398,6 +3398,17 @@
   background: color-mix(in srgb, var(--text, #d8d8d8) 10%, transparent);
 }
 
+.design-secondary-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.design-preview-status {
+  padding: 4px 12px 8px;
+  color: var(--accent, #d68bff);
+  font-size: 11px;
+}
+
 .design-edit-panel .leo-btn {
   margin: 10px 12px 0;
   align-self: flex-start;

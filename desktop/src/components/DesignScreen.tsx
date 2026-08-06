@@ -446,6 +446,7 @@ export default function DesignScreen({
 }: DesignScreenProps): React.ReactElement {
   const [roots, setRoots] = useState<ComponentNode[]>([]);
   const [bundleCode, setBundleCode] = useState<string | null>(null);
+  const [previewSource, setPreviewSource] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [propKey, setPropKey] = useState("");
@@ -525,6 +526,7 @@ export default function DesignScreen({
           end_char: oldLength,
           text: result.source,
         });
+        setPreviewSource(null);
         onContentChange(activeFile.path, result.source);
         await refresh(activeFile.path, result.source);
       } catch (e) {
@@ -543,6 +545,7 @@ export default function DesignScreen({
           content: string;
         };
         if (!result.changed) return;
+        setPreviewSource(null);
         onContentChange(activeFile.path, result.content);
         await refresh(activeFile.path, result.content);
       } catch (e) {
@@ -551,6 +554,41 @@ export default function DesignScreen({
     },
     [activeFile, onContentChange, refresh]
   );
+
+  const buildFormEdit = useCallback((): Record<string, unknown> | null => {
+    if (!selectedId) return null;
+    if (editKind === "PropChange") {
+      if (!propKey.trim()) return null;
+      return { kind: "PropChange", nodeId: selectedId, prop: propKey, value: propValue, valueType: propValueType };
+    }
+    if (editKind === "StyleChange") {
+      if (!propKey.trim()) return null;
+      return { kind: "StyleChange", nodeId: selectedId, property: propKey, value: propValue };
+    }
+    return null;
+  }, [selectedId, editKind, propKey, propValue, propValueType]);
+
+  const previewFormEdit = useCallback(async () => {
+    if (!activeFile) return;
+    const edit = buildFormEdit();
+    if (!edit) return;
+    try {
+      const result = (await window.spartan.call("design_apply_edit", {
+        edit,
+        source: previewSource ?? activeFile.content,
+      })) as { source: string };
+      setPreviewSource(result.source);
+      await refresh(activeFile.path, result.source);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [activeFile, buildFormEdit, previewSource, refresh]);
+
+  const resetPreview = useCallback(async () => {
+    if (!activeFile || previewSource === null) return;
+    setPreviewSource(null);
+    await refresh(activeFile.path, activeFile.content);
+  }, [activeFile, previewSource, refresh]);
 
   /** Real drag-to-reparent (task #279), shared by the canvas drop relay
    * and the "Move into" form. `gui-builder`'s own `Reparent` already
@@ -579,6 +617,7 @@ export default function DesignScreen({
 
   useEffect(() => {
     if (activeFile && isComponentFile(activeFile.path)) {
+      setPreviewSource(null);
       refresh(activeFile.path, activeFile.content);
     } else {
       setRoots([]);
@@ -798,6 +837,11 @@ export default function DesignScreen({
         <button className="design-toolbar-button mono" title="Redo the last undone edit" onClick={() => void undoRedo("redo")}>
           Redo
         </button>
+        {previewSource !== null && (
+          <button className="design-toolbar-button mono" title="Discard preview-only changes" onClick={() => void resetPreview()}>
+            Reset preview
+          </button>
+        )}
       </div>
       <div className="design-tree-panel">
         <div className="design-panel-label">Structure</div>
@@ -1067,6 +1111,14 @@ export default function DesignScreen({
             <button className="leo-btn leo-btn-approve" onClick={applyEdit} disabled={!canApply}>
               Apply
             </button>
+            {(editKind === "PropChange" || editKind === "StyleChange") && (
+              <button className="design-secondary-action mono" onClick={() => void previewFormEdit()} disabled={!canApply}>
+                Preview variant
+              </button>
+            )}
+            {previewSource !== null && (
+              <div className="design-preview-status mono">Preview-only changes active</div>
+            )}
           </>
         ) : (
           <div className="leo-status-message mono">Click a node in the tree or preview to select it.</div>

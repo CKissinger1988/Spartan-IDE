@@ -197,8 +197,9 @@ palette that applies existing `var(--token)` values to selected style properties
 | Open-tab component file switcher in Design mode | Real |
 | Design-mode undo/redo controls backed by document history | Real |
 | Unsaved-buffer-aware Design tree and live preview | Real |
+| Preview-only prop/style variant controls with reset/apply workflow | Real |
 | Desktop/Tablet/Mobile viewport presets and zoom | Real |
-| Font asset management, token definition editing, component variants, and multi-file visual workspace | Planned |
+| Font asset management, token definition editing, component state machines, and multi-file visual workspace | Planned |
 
 ## Model management
 
