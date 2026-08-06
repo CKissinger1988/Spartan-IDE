@@ -17,6 +17,8 @@ export interface DiscoveredAsset {
   referencePath: string;
   kind: "image" | "font";
   label: string;
+  /** CSS family name derived from the font filename; omitted for images. */
+  fontFamily?: string;
   /** Ready-to-copy CSS for font assets; omitted for images. */
   fontFaceSnippet?: string;
 }
@@ -80,11 +82,15 @@ function fontFormat(file: string): string {
   }
 }
 
+export function fontFamilyName(label: string): string {
+  return label.replace(/\.[^.]+$/, "").replace(/["\\]/g, "");
+}
+
 /** Builds a format-aware, ready-to-paste @font-face declaration without
  * reading or executing the font file. */
-export function fontFaceSnippet(asset: Pick<DiscoveredAsset, "kind" | "label" | "referencePath">): string | undefined {
+export function fontFaceSnippet(asset: Pick<DiscoveredAsset, "kind" | "label" | "referencePath" | "fontFamily">): string | undefined {
   if (asset.kind !== "font") return undefined;
-  const family = asset.label.replace(/\.[^.]+$/, "").replace(/["\\]/g, "");
+  const family = asset.fontFamily ?? fontFamilyName(asset.label);
   return `@font-face {\n  font-family: "${family}";\n  src: url("${asset.referencePath.replace(/["\\]/g, "\\$&")}") format("${fontFormat(asset.label)}");\n  font-style: normal;\n  font-weight: 400;\n}`;
 }
 
@@ -102,7 +108,10 @@ export function discoverAssets(rootDir: string, fromFile?: string): DiscoveredAs
     kind,
     label: file.slice(file.lastIndexOf(sep) + 1),
     };
-    asset.fontFaceSnippet = fontFaceSnippet(asset);
+    if (kind === "font") {
+      asset.fontFamily = fontFamilyName(asset.label);
+      asset.fontFaceSnippet = fontFaceSnippet(asset);
+    }
     return asset;
   });
 }

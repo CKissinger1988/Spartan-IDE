@@ -46,6 +46,13 @@ test("generates a format-aware @font-face snippet for a discovered font", () => 
   assert.equal(font.fontFaceSnippet, fontFaceSnippet(font));
 });
 
+test("derives a usable CSS family name for a discovered font", () => {
+  const assets = discoverAssets(fixture(["fonts/Brand Sans.woff2"]));
+  const font = assets.find((asset) => asset.kind === "font");
+  assert.ok(font);
+  assert.equal(font.fontFamily, "Brand Sans");
+});
+
 test("never walks dependency or build output", () => {
   const root = fixture(["src/App.tsx", "node_modules/pkg/logo.png", "dist/generated.png", "public/ok.png"]);
   assert.deepEqual(discoverAssets(root).map((asset) => asset.relativePath), ["public/ok.png"]);

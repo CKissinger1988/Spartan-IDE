@@ -204,6 +204,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Direct JSX text-content editing | Real |
 | Font asset discovery with relative-path copy action | Real |
 | Font asset format-aware @font-face CSS snippet copy action | Real |
+| Apply discovered font families to selected elements, including atomic multi-selection | Real |
 | CSS token definition creation and value editing with document-history integration | Real |
 | Copyable `var(--token)` references from the design-token palette | Real |
 | Unsaved CSS-buffer token discovery in the Design palette | Real |

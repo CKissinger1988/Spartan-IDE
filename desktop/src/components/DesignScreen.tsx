@@ -44,6 +44,7 @@ interface DiscoveredAsset {
   referencePath: string;
   kind: "image" | "font";
   label: string;
+  fontFamily?: string;
   fontFaceSnippet?: string;
 }
 
@@ -1808,6 +1809,13 @@ export default function DesignScreen({
     }
   }, []);
 
+  const applyFontFamily = useCallback(async (asset: DiscoveredAsset) => {
+    if (!asset.fontFamily || selectedIds.length === 0) return;
+    await applyEditObject(selectedIds.length === 1
+      ? { kind: "StyleChange", nodeId: selectedIds[0], property: "fontFamily", value: asset.fontFamily }
+      : { kind: "StyleChangeMany", nodeIds: selectedIds, property: "fontFamily", value: asset.fontFamily });
+  }, [selectedIds, applyEditObject]);
+
   const copyTokenReference = useCallback(async (token: DiscoveredToken) => {
     const key = `${token.file}:${token.name}`;
     try {
@@ -2409,6 +2417,14 @@ export default function DesignScreen({
                         >
                           <span className="design-palette-name">Aa {asset.label}</span>
                           <span className="design-palette-from">{copiedAsset === asset.file ? "Copied · " : "Copy · "}{asset.referencePath}</span>
+                        </button>
+                        <button
+                          className="design-asset-action mono"
+                          disabled={!asset.fontFamily || selectedIds.length === 0}
+                          title={selectedIds.length > 0 ? `Apply the ${asset.fontFamily ?? asset.label} family to ${selectedIds.length === 1 ? "the selected element" : `${selectedIds.length} selected elements`}` : "Select one or more elements first"}
+                          onClick={() => void applyFontFamily(asset)}
+                        >
+                          Use
                         </button>
                         <button
                           className="design-asset-action mono"
