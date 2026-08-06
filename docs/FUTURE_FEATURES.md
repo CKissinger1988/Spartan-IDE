@@ -215,6 +215,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Custom responsive viewport width/height controls | Real |
 | Project-scoped named viewport presets with persistence and deletion | Real |
 | Project-scoped named responsive breakpoints included in the comparison matrix | Real |
+| Live selected-element geometry/style diff between adjacent breakpoint tiles | Real |
 | Parsed JSX/JavaScript expression prop editing | Real |
 | JSX prop removal | Real |
 | Inline style-property removal with safe empty-style cleanup | Real |

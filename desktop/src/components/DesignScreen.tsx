@@ -11,6 +11,7 @@ import { buildThemeOverride } from "../../../gui-builder/src/theme";
 import { buildTokenReference } from "../../../gui-builder/src/token-reference";
 import { buildPreviewBreakpoints, normalizeResponsiveBreakpoints } from "../../../gui-builder/src/breakpoints";
 import type { ResponsiveBreakpoint } from "../../../gui-builder/src/breakpoints";
+import { describeResponsiveDiff } from "../../../gui-builder/src/responsive-diff";
 import type { ComponentPropDefinition } from "../../../gui-builder/src/scaffold";
 
 interface StyleEntryValue {
@@ -905,6 +906,7 @@ export default function DesignScreen({
   const [variantClipboard, setVariantClipboard] = useState<VariantClipboard | null>(null);
   const [copiedVariant, setCopiedVariant] = useState<string | null>(null);
   const [previewInspection, setPreviewInspection] = useState<PreviewInspection | null>(null);
+  const [matrixInspections, setMatrixInspections] = useState<Record<string, PreviewInspection>>({});
   const [boxModelVisible, setBoxModelVisible] = useState(false);
   const [copiedInspection, setCopiedInspection] = useState(false);
   const [copiedAccessibility, setCopiedAccessibility] = useState(false);
@@ -1128,6 +1130,7 @@ export default function DesignScreen({
   // tree selects a node, and when a fresh bundle replaces the iframe DOM.
   useEffect(() => {
     setPreviewInspection(null);
+    setMatrixInspections({});
     setBoxModelVisible(false);
     setPreviewInteractionState("normal");
     setPreviewDataState("normal");
@@ -1754,12 +1757,17 @@ export default function DesignScreen({
         // or into a descendant), which surface here as a normal error.
         void applyReparentEdit(event.data.nodeId, event.data.newParentId);
       } else if (event.data?.type === "spartan-canvas-inspect-result" && event.data.nodeId === selectedId) {
-        setPreviewInspection(event.data as PreviewInspection);
+        const matrixEntry = previewMatrixViewports.find((item) => previewMatrixRefs.current[item.id]?.contentWindow === event.source);
+        if (matrixEntry) {
+          setMatrixInspections((current) => ({ ...current, [matrixEntry.id]: event.data as PreviewInspection }));
+        } else {
+          setPreviewInspection(event.data as PreviewInspection);
+        }
       }
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [applyReparentEdit, selectedId, selectNodes]);
+  }, [applyReparentEdit, previewMatrixViewports, selectedId, selectNodes]);
 
   // Real, per-kind readiness check -- each structural kind names a
   // different second operand (`reparentTargetId` vs. `insertTagName`)
@@ -3386,6 +3394,23 @@ export default function DesignScreen({
                     </div>
                   )}
                 </div>
+              </div>
+            )}
+            {hasSingleSelection && previewMatrix && Object.keys(matrixInspections).length > 0 && (
+              <div className="design-inspection mono" aria-label="Responsive visual diff">
+                <div className="design-inspection-title">Responsive visual diff</div>
+                <div className="design-preview-status mono">Selected element changes between adjacent breakpoint tiles.</div>
+                {previewMatrixViewports.map((item, index) => {
+                  const inspection = matrixInspections[item.id];
+                  const previous = index > 0 ? matrixInspections[previewMatrixViewports[index - 1].id] : undefined;
+                  const changes = describeResponsiveDiff(previous ?? null, inspection ?? null);
+                  return (
+                    <div className="design-preview-status mono" key={item.id}>
+                      <strong>{item.label} · {item.width}×{item.height}:</strong>{" "}
+                      {!inspection ? "Waiting for tile inspection…" : index === 0 ? "baseline" : changes.length > 0 ? changes.join(" · ") : "no measured change"}
+                    </div>
+                  );
+                })}
               </div>
             )}
             <button className="design-danger-action mono" onClick={deleteSelected} disabled={selectionCount === 0}>
