@@ -3,6 +3,7 @@ import type { OpenFile } from "./Editor";
 import { screenReaderPreview as sharedScreenReaderPreview } from "../../../gui-builder/src/accessibility";
 import type { ScreenReaderNode } from "../../../gui-builder/src/accessibility";
 import { designClipboardShortcut } from "../../../gui-builder/src/shortcuts";
+import { buildDesignHandoffMarkdown } from "../../../gui-builder/src/handoff";
 
 interface StyleEntryValue {
   kind: "literal" | "expression";
@@ -1956,27 +1957,16 @@ export default function DesignScreen({
     const sourceLocation = selectedNode.sourceLocation
       ? `${activeFile?.path ?? "(unknown file)"}:${selectedNode.sourceLocation.startLine}:${selectedNode.sourceLocation.startColumn}`
       : activeFile?.path ?? "(unknown file)";
-    const findings = accessibilityFindings.length > 0
-      ? accessibilityFindings.map((finding) => `- ${finding.severity.toUpperCase()}: ${finding.message}`).join("\n")
-      : "- INFO: No audit findings were produced.";
-    const report = [
-      "# Spartan GUI Builder design handoff",
-      `Element: <${selectedNode.tagName}> #${selectedNode.id}`,
-      `Source: ${sourceLocation}`,
-      "",
-      "## JSX source",
-      selectedNode.sourceText ?? "(exact JSX source unavailable)",
-      "",
-      "## Rendered inspection",
-      inspectionCssSnapshot(previewInspection, selectedNode.tagName),
-      "",
-      "## Accessibility audit",
-      findings,
-      "",
-      "## Estimated screen reader announcement",
-      screenReaderEstimate?.announcement ?? "Unavailable",
-      ...(screenReaderEstimate?.details ?? []).map((detail) => `- ${detail}`),
-    ].join("\n");
+    const report = buildDesignHandoffMarkdown({
+      tagName: selectedNode.tagName,
+      nodeId: selectedNode.id,
+      sourceLocation,
+      sourceText: selectedNode.sourceText ?? "",
+      renderedSnapshot: inspectionCssSnapshot(previewInspection, selectedNode.tagName),
+      screenReaderAnnouncement: screenReaderEstimate?.announcement ?? "Unavailable",
+      screenReaderDetails: screenReaderEstimate?.details ?? [],
+      findings: accessibilityFindings,
+    });
     try {
       await navigator.clipboard.writeText(report);
       setCopiedHandoff(true);
@@ -1984,6 +1974,29 @@ export default function DesignScreen({
     } catch (e) {
       setError(`Could not copy design handoff: ${(e as Error).message}`);
     }
+  }, [activeFile?.path, selectedNode, previewInspection, accessibilityFindings, screenReaderEstimate]);
+
+  const downloadDesignSpec = useCallback(() => {
+    if (!selectedNode || !previewInspection) return;
+    const sourceLocation = selectedNode.sourceLocation
+      ? `${activeFile?.path ?? "(unknown file)"}:${selectedNode.sourceLocation.startLine}:${selectedNode.sourceLocation.startColumn}`
+      : activeFile?.path ?? "(unknown file)";
+    const report = buildDesignHandoffMarkdown({
+      tagName: selectedNode.tagName,
+      nodeId: selectedNode.id,
+      sourceLocation,
+      sourceText: selectedNode.sourceText ?? "",
+      renderedSnapshot: inspectionCssSnapshot(previewInspection, selectedNode.tagName),
+      screenReaderAnnouncement: screenReaderEstimate?.announcement ?? "Unavailable",
+      screenReaderDetails: screenReaderEstimate?.details ?? [],
+      findings: accessibilityFindings,
+    });
+    const url = URL.createObjectURL(new Blob([report], { type: "text/markdown;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${selectedNode.tagName}-${selectedNode.id}-design-spec.md`;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }, [activeFile?.path, selectedNode, previewInspection, accessibilityFindings, screenReaderEstimate]);
 
   const copySelectedJsx = useCallback(async () => {
@@ -2883,6 +2896,9 @@ export default function DesignScreen({
                 </button>
                 <button className="design-secondary-action mono design-inspection-copy" onClick={() => void copyDesignHandoff()}>
                   {copiedHandoff ? "Copied design handoff" : "Copy design handoff"}
+                </button>
+                <button className="design-secondary-action mono design-inspection-copy" onClick={downloadDesignSpec}>
+                  Download design spec
                 </button>
                 <div className="design-preview-status mono" aria-label="Accessibility audit">
                   Accessibility audit

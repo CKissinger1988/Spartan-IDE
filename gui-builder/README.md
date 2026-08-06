@@ -65,7 +65,10 @@ summarizes.
   `Ctrl/Cmd+Alt+B` copies the selected subtree and
   `Ctrl/Cmd+Alt+P` pastes it using the selected child/sibling placement;
   the established style and prop clipboard chords remain unchanged.
-- `src/*.test.ts` — 153 real tests (Node's built-in `node:test` runner, no
+- The inspector can also download the selected live inspection as a portable
+  Markdown design spec containing source JSX, rendered styles/bounds, audit
+  findings, and the estimated screen-reader announcement.
+- `src/*.test.ts` — 155 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.

@@ -270,6 +270,7 @@ touching security, sandboxing, or approval flows (§9, §36).
 - GUI Builder live inspection also reports viewport-relative selected-element bounds in the inspector and copied CSS/accessibility handoff data.
 - GUI Builder's accessibility surface includes an estimated screen-reader announcement for the selected element, including inferred role, accessible name, heading level, and parsed ARIA state, backed by five focused semantic-preview tests.
 - GUI Builder can copy a combined selected-element design handoff containing source JSX, source location, rendered styles/bounds, and accessibility findings.
+- GUI Builder can download that selected-element handoff as a shareable Markdown design spec.
 - GUI Builder accessibility auditing now recognizes custom ARIA roles, keyboard focus requirements, activation handlers, and intentionally decorative images.
 - GUI Builder viewport presets support Auto, Portrait, and Landscape orientation switching; custom viewports retain their explicit width and height.
 - GUI Builder font assets can apply their derived family name to one or many selected elements while retaining the copyable `@font-face` snippet action.
