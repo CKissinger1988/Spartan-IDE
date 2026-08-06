@@ -79,6 +79,8 @@ interface DiscoveredToken {
   relativePath: string;
   tier: TokenTier;
   references: string[];
+  usageCount?: number;
+  usageFiles?: string[];
 }
 
 interface VariantPreset {
@@ -961,6 +963,7 @@ export default function DesignScreen({
   const [tokens, setTokens] = useState<DiscoveredToken[]>([]);
   const [tokenDrafts, setTokenDrafts] = useState<Record<string, string>>({});
   const [tokensOpen, setTokensOpen] = useState(false);
+  const [tokenUsageSelection, setTokenUsageSelection] = useState<DiscoveredToken | null>(null);
   const [tokenFilter, setTokenFilter] = useState("");
   const [tokenTierFilter, setTokenTierFilter] = useState<"all" | TokenTier>("all");
   const [previewThemes, setPreviewThemes] = useState<PreviewTheme[]>([]);
@@ -1143,7 +1146,7 @@ export default function DesignScreen({
   const filteredTokens = useMemo(() => {
     const query = tokenFilter.trim().toLowerCase();
     return tokens.filter((token) => (tokenTierFilter === "all" || token.tier === tokenTierFilter)
-      && (!query || `${token.name} ${token.value} ${token.file} ${token.relativePath} ${token.references.join(" ")}`.toLowerCase().includes(query)));
+      && (!query || `${token.name} ${token.value} ${token.file} ${token.relativePath} ${token.references.join(" ")} ${(token.usageFiles ?? []).join(" ")}`.toLowerCase().includes(query)));
   }, [tokens, tokenFilter, tokenTierFilter]);
   const openCssFiles = useMemo(
     () => openFiles.filter((file) => /\.(css|scss|sass|less)$/i.test(file.path)),
@@ -3299,6 +3302,25 @@ export default function DesignScreen({
                     </div>
                   ))}
                 </div>
+                {tokenUsageSelection && (
+                  <div className="design-palette-usage" aria-label={`Usage locations for ${tokenUsageSelection.name}`}>
+                    <div className="design-palette-usage-header mono">
+                      <span>{tokenUsageSelection.name} · {tokenUsageSelection.usageCount ?? 0} reference{(tokenUsageSelection.usageCount ?? 0) === 1 ? "" : "s"}</span>
+                      <button className="design-asset-action mono" onClick={() => setTokenUsageSelection(null)}>Close</button>
+                    </div>
+                    {(tokenUsageSelection.usageFiles ?? []).length === 0 ? (
+                      <div className="design-palette-empty mono">No direct var() references found.</div>
+                    ) : (
+                      <div className="design-palette-usage-files">
+                        {(tokenUsageSelection.usageFiles ?? []).map((file) => (
+                          <button key={file} className="design-palette-usage-file mono" onClick={() => onOpenFile(file)}>
+                            {displayUsagePath(projectRoot, file)}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {tokens.length === 0 ? (
                   <div className="design-palette-empty mono">No CSS custom properties found under the project root.</div>
                 ) : filteredTokens.length === 0 ? (
@@ -3320,7 +3342,14 @@ export default function DesignScreen({
                           onClick={() => applyToken(token)}
                         >
                           <span className="design-palette-name">{token.name} · {token.tier}</span>
-                          <span className="design-palette-from">{editKind === "PropChange" ? "Bind · " : "Use · "}{token.value}{token.references.length > 0 ? ` → ${token.references.join(", ")}` : ""} · {token.relativePath}</span>
+                          <span className="design-palette-from">{editKind === "PropChange" ? "Bind · " : "Use · "}{token.value}{token.references.length > 0 ? ` → ${token.references.join(", ")}` : ""} · {token.relativePath} · {token.usageCount ?? 0} use{(token.usageCount ?? 0) === 1 ? "" : "s"}</span>
+                        </button>
+                        <button
+                          className="design-token-save mono"
+                          title={`Inspect ${token.name} usage locations`}
+                          onClick={() => setTokenUsageSelection(token)}
+                        >
+                          Info
                         </button>
                         <input
                           className="design-token-value mono"

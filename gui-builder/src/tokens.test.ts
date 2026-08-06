@@ -43,6 +43,21 @@ test("never walks dependency or build output", () => {
   assert.deepEqual(discoverTokens(root).map((token) => token.name), ["--good"]);
 });
 
+test("indexes token references across project source files while skipping dependencies and builds", () => {
+  const root = mkdtempSync(join(tmpdir(), "spartan-tokens-"));
+  mkdirSync(join(root, "src"), { recursive: true });
+  mkdirSync(join(root, "node_modules/pkg"), { recursive: true });
+  mkdirSync(join(root, "dist"), { recursive: true });
+  writeFileSync(join(root, "theme.css"), ":root { --accent: #d33; } .button { color: var(--accent); background: var(--accent); }");
+  writeFileSync(join(root, "src/Button.tsx"), "export const style = { color: 'var(--accent)' };\n");
+  writeFileSync(join(root, "node_modules/pkg/ignored.tsx"), "const value = 'var(--accent)';\n");
+  writeFileSync(join(root, "dist/ignored.js"), "const value = 'var(--accent)';\n");
+
+  const [token] = discoverTokens(root);
+  assert.equal(token.usageCount, 3);
+  assert.deepEqual(token.usageFiles, [join(root, "src/Button.tsx"), join(root, "theme.css")]);
+});
+
 test("applies one token value while preserving neighboring CSS source", () => {
   const source = ":root {\n  --brand: #d33;\n  --gap: 8px;\n}\n.button { color: var(--brand); }\n";
   const result = applyTokenValue(source, "--brand", "#246");

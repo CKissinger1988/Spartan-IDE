@@ -10,13 +10,16 @@ export interface DiscoveredToken {
   relativePath: string;
   tier: TokenTier;
   references: string[];
+  usageCount?: number;
+  usageFiles?: string[];
 }
 
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", "out", ".cache"]);
 const CSS_EXTENSIONS = new Set([".css", ".scss", ".sass", ".less"]);
+const SOURCE_EXTENSIONS = new Set([".css", ".scss", ".sass", ".less", ".js", ".jsx", ".ts", ".tsx"]);
 const MAX_DEPTH = 12;
 
-function collectFiles(dir: string, depth: number, out: string[]): void {
+function collectFiles(dir: string, depth: number, out: string[], extensions: Set<string>): void {
   if (depth > MAX_DEPTH) return;
   let entries: string[];
   try { entries = readdirSync(dir); } catch { return; }
@@ -25,9 +28,30 @@ function collectFiles(dir: string, depth: number, out: string[]): void {
     const full = join(dir, entry);
     let stats;
     try { stats = statSync(full); } catch { continue; }
-    if (stats.isDirectory()) collectFiles(full, depth + 1, out);
-    else if (CSS_EXTENSIONS.has(extname(entry).toLowerCase())) out.push(full);
+    if (stats.isDirectory()) collectFiles(full, depth + 1, out, extensions);
+    else if (extensions.has(extname(entry).toLowerCase())) out.push(full);
   }
+}
+
+function collectTokenUsages(rootDir: string): Map<string, { count: number; files: string[] }> {
+  const files: string[] = [];
+  collectFiles(rootDir, 0, files, SOURCE_EXTENSIONS);
+  files.sort();
+  const usages = new Map<string, { count: number; files: string[] }>();
+  const reference = /var\(\s*(--[a-zA-Z0-9_-]+)\b/g;
+  for (const file of files) {
+    let source: string;
+    try { source = readFileSync(file, "utf8"); } catch { continue; }
+    const names = new Map<string, number>();
+    for (const match of source.matchAll(reference)) names.set(match[1], (names.get(match[1]) ?? 0) + 1);
+    for (const [name, count] of names) {
+      const usage = usages.get(name) ?? { count: 0, files: [] };
+      usage.count += count;
+      usage.files.push(file);
+      usages.set(name, usage);
+    }
+  }
+  return usages;
 }
 
 function posixPath(value: string): string { return value.split(sep).join("/"); }
@@ -110,13 +134,17 @@ export function discoverTokensInSource(source: string, file: string, rootDir: st
 /** Finds declarations such as `--color-accent: #e33;` without executing CSS. */
 export function discoverTokens(rootDir: string): DiscoveredToken[] {
   const files: string[] = [];
-  collectFiles(rootDir, 0, files);
+  collectFiles(rootDir, 0, files, CSS_EXTENSIONS);
   files.sort();
+  const usages = collectTokenUsages(rootDir);
   const result: DiscoveredToken[] = [];
   for (const file of files) {
     let source: string;
     try { source = readFileSync(file, "utf8"); } catch { continue; }
-    result.push(...discoverTokensInSource(source, file, rootDir));
+    result.push(...discoverTokensInSource(source, file, rootDir).map((token) => {
+      const usage = usages.get(token.name);
+      return { ...token, usageCount: usage?.count ?? 0, usageFiles: usage?.files ?? [] };
+    }));
   }
   return result;
 }
