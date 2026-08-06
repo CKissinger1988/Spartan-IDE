@@ -48,6 +48,8 @@ interface DiscoveredToken {
 
 interface DesignScreenProps {
   activeFile: OpenFile | null;
+  openFiles: OpenFile[];
+  onOpenFile: (path: string) => void;
   onContentChange: (path: string, content: string, saved?: boolean) => void;
   /** Real project root, used to scan for the component palette. Absent
    * means the palette simply isn't offered -- there's nothing honest to
@@ -437,6 +439,8 @@ function StyleValueControl({
  */
 export default function DesignScreen({
   activeFile,
+  openFiles,
+  onOpenFile,
   onContentChange,
   projectRoot,
 }: DesignScreenProps): React.ReactElement {
@@ -749,6 +753,21 @@ export default function DesignScreen({
 
   return (
     <div className="design-screen">
+      <div className="design-file-toolbar mono">
+        <label htmlFor="design-file-select">Component file</label>
+        <select
+          id="design-file-select"
+          value={activeFile.path}
+          onChange={(event) => onOpenFile(event.target.value)}
+        >
+          {openFiles.filter((file) => isComponentFile(file.path)).map((file) => (
+            <option key={file.path} value={file.path}>
+              {file.path.split(/[\\/]/).pop()}{file.dirty ? " •" : ""}
+            </option>
+          ))}
+        </select>
+        <span className="design-file-path" title={activeFile.path}>{activeFile.path}</span>
+      </div>
       <div className="design-tree-panel">
         <div className="design-panel-label">Structure</div>
         {roots.map((root) => (

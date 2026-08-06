@@ -3069,10 +3069,41 @@
  * structural tree, live sandboxed iframe preview, edit panel. */
 .design-screen {
   height: 100%;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 260px;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.design-file-toolbar {
+  grid-column: 1 / -1;
   display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border, #303030);
+  background: var(--panel, #1b1b1b);
+}
+
+.design-file-toolbar select {
+  max-width: 220px;
+  border: 1px solid var(--border, #454545);
+  background: var(--input, #151515);
+  color: var(--text, #d8d8d8);
+  font: inherit;
+}
+
+.design-file-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted, #8d8d8d);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .design-tree-panel {
+  grid-column: 1;
+  grid-row: 2;
   width: 220px;
   border-right: 1px solid var(--border);
   overflow-y: auto;
@@ -3113,8 +3144,10 @@
 }
 
 .design-preview {
-  flex: 1;
+  grid-column: 2;
+  grid-row: 2;
   min-width: 0;
+  min-height: 0;
   background: #fff;
 }
 
@@ -3168,6 +3201,8 @@
 }
 
 .design-edit-panel {
+  grid-column: 3;
+  grid-row: 2;
   width: 260px;
   border-left: 1px solid var(--border);
   overflow-y: auto;

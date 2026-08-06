@@ -194,6 +194,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Safe selected-element deletion with subtree removal | Real |
 | Selected-element duplication with nested subtree cloning | Real |
 | Typed string/number/boolean prop editing | Real |
+| Open-tab component file switcher in Design mode | Real |
 | Desktop/Tablet/Mobile viewport presets and zoom | Real |
 | Font asset management, token definition editing, component variants, and multi-file visual workspace | Planned |
 

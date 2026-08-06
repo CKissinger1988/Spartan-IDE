@@ -1046,6 +1046,8 @@ export default function App(): React.ReactElement {
               {screen === "design" && (
                 <DesignScreen
                   activeFile={activeFile}
+                  openFiles={files}
+                  onOpenFile={openFile}
                   onContentChange={handleContentChange}
                   projectRoot={ROOT}
                 />
