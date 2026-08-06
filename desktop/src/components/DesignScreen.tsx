@@ -2166,9 +2166,12 @@ export default function DesignScreen({
 
   const applyFontFamily = useCallback(async (asset: DiscoveredAsset) => {
     if (!asset.fontFamily || selectedIds.length === 0) return;
-    await applyEditObject(selectedIds.length === 1
-      ? { kind: "StyleChange", nodeId: selectedIds[0], property: "fontFamily", value: asset.fontFamily }
-      : { kind: "StyleChangeMany", nodeIds: selectedIds, property: "fontFamily", value: asset.fontFamily });
+    const entries = {
+      fontFamily: { value: asset.fontFamily },
+      ...(asset.fontWeight !== undefined ? { fontWeight: { value: String(asset.fontWeight) } } : {}),
+      ...(asset.fontStyle ? { fontStyle: { value: asset.fontStyle } } : {}),
+    };
+    await applyEditObject({ kind: "StyleBatchMany", nodeIds: selectedIds, entries });
   }, [selectedIds, applyEditObject]);
 
   const copyTokenReference = useCallback(async (token: DiscoveredToken) => {
@@ -3259,7 +3262,7 @@ export default function DesignScreen({
                         <button
                           className="design-asset-action mono"
                           disabled={!asset.fontFamily || selectedIds.length === 0}
-                          title={selectedIds.length > 0 ? `Apply the ${asset.fontFamily ?? asset.label} family to ${selectedIds.length === 1 ? "the selected element" : `${selectedIds.length} selected elements`}` : "Select one or more elements first"}
+                          title={selectedIds.length > 0 ? `Apply ${asset.fontFamily ?? asset.label} (${asset.fontWeight ?? 400} ${asset.fontStyle ?? "normal"}) to ${selectedIds.length === 1 ? "the selected element" : `${selectedIds.length} selected elements`}` : "Select one or more elements first"}
                           onClick={() => void applyFontFamily(asset)}
                         >
                           Use
