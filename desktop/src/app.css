@@ -3199,6 +3199,25 @@
   accent-color: var(--accent);
 }
 
+.design-custom-viewport {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.design-custom-viewport label {
+  gap: 3px;
+}
+
+.design-custom-viewport input {
+  width: 58px;
+  padding: 3px 4px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font: inherit;
+}
+
 .design-preview-stage {
   position: relative;
   height: calc(100% - 36px);

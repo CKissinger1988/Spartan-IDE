@@ -68,6 +68,7 @@ const DESIGN_VIEWPORTS = [
   { id: "tablet", label: "Tablet", width: 768, height: 1024 },
   { id: "mobile", label: "Mobile", width: 390, height: 844 },
 ] as const;
+type DesignViewportId = (typeof DESIGN_VIEWPORTS)[number]["id"] | "custom";
 
 function isComponentFile(path: string): boolean {
   return path.endsWith(".jsx") || path.endsWith(".tsx");
@@ -474,10 +475,14 @@ export default function DesignScreen({
   const [tokens, setTokens] = useState<DiscoveredToken[]>([]);
   const [tokenDrafts, setTokenDrafts] = useState<Record<string, string>>({});
   const [tokensOpen, setTokensOpen] = useState(false);
-  const [viewportId, setViewportId] = useState<(typeof DESIGN_VIEWPORTS)[number]["id"]>("desktop");
+  const [viewportId, setViewportId] = useState<DesignViewportId>("desktop");
+  const [customViewportWidth, setCustomViewportWidth] = useState(1024);
+  const [customViewportHeight, setCustomViewportHeight] = useState(768);
   const [previewZoom, setPreviewZoom] = useState(75);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const viewport = DESIGN_VIEWPORTS.find((item) => item.id === viewportId) ?? DESIGN_VIEWPORTS[0];
+  const viewport = viewportId === "custom"
+    ? { id: "custom", label: "Custom", width: customViewportWidth, height: customViewportHeight }
+    : DESIGN_VIEWPORTS.find((item) => item.id === viewportId) ?? DESIGN_VIEWPORTS[0];
 
   // Declared up here, not down beside the other render-time derivations,
   // because `selectStyleProperty`'s own `useCallback` dependency array
@@ -968,8 +973,15 @@ export default function DesignScreen({
             Viewport
             <select value={viewportId} onChange={(event) => setViewportId(event.target.value as typeof viewportId)}>
               {DESIGN_VIEWPORTS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+              <option value="custom">Custom</option>
             </select>
           </label>
+          {viewportId === "custom" && (
+            <span className="design-custom-viewport">
+              <label>W <input type="number" min={200} max={3000} value={customViewportWidth} onChange={(event) => setCustomViewportWidth(Math.max(200, Math.min(3000, Number(event.target.value) || 200)))} /></label>
+              <label>H <input type="number" min={200} max={3000} value={customViewportHeight} onChange={(event) => setCustomViewportHeight(Math.max(200, Math.min(3000, Number(event.target.value) || 200)))} /></label>
+            </span>
+          )}
           <label>
             Zoom {previewZoom}%
             <input type="range" min={25} max={100} step={5} value={previewZoom} onChange={(event) => setPreviewZoom(Number(event.target.value))} />
