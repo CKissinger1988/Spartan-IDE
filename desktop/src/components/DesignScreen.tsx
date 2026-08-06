@@ -679,6 +679,7 @@ export default function DesignScreen({
   const [paletteFilter, setPaletteFilter] = useState("");
   const [assets, setAssets] = useState<DiscoveredAsset[]>([]);
   const [assetsOpen, setAssetsOpen] = useState(false);
+  const [assetFilter, setAssetFilter] = useState("");
   const [copiedAsset, setCopiedAsset] = useState<string | null>(null);
   const [tokens, setTokens] = useState<DiscoveredToken[]>([]);
   const [tokenDrafts, setTokenDrafts] = useState<Record<string, string>>({});
@@ -724,6 +725,11 @@ export default function DesignScreen({
     if (!query) return palette;
     return palette.filter((component) => `${component.name} ${component.file} ${component.importFrom ?? ""}`.toLowerCase().includes(query));
   }, [palette, paletteFilter]);
+  const filteredAssets = useMemo(() => {
+    const query = assetFilter.trim().toLowerCase();
+    if (!query) return assets;
+    return assets.filter((asset) => `${asset.label} ${asset.file} ${asset.relativePath} ${asset.referencePath}`.toLowerCase().includes(query));
+  }, [assets, assetFilter]);
 
   useEffect(() => {
     setTextValue(selectedNode?.textContent ?? "");
@@ -1133,6 +1139,7 @@ export default function DesignScreen({
       setVariantName("");
       setInteractionPresetName("");
       setPaletteFilter("");
+      setAssetFilter("");
       const key = `spartan.gui-builder.variants:${activeFile.path}`;
       const interactionKey = `spartan.gui-builder.interactions:${activeFile.path}`;
       try {
@@ -1751,13 +1758,24 @@ export default function DesignScreen({
             </button>
             {assetsOpen && (
               <div className="design-palette">
+                <input
+                  className="design-palette-filter mono"
+                  aria-label="Filter discovered assets"
+                  placeholder="Filter assets…"
+                  value={assetFilter}
+                  onChange={(event) => setAssetFilter(event.target.value)}
+                />
                 {assets.length === 0 ? (
                   <div className="design-palette-empty mono">
                     No image or font assets found under the project root.
                   </div>
+                ) : filteredAssets.length === 0 ? (
+                  <div className="design-palette-empty mono">
+                    No assets match “{assetFilter}”.
+                  </div>
                 ) : (
                   <>
-                    {assets.filter((asset) => asset.kind === "image").map((asset) => (
+                    {filteredAssets.filter((asset) => asset.kind === "image").map((asset) => (
                       <div key={asset.file} className="design-asset-row">
                         <button
                           className="design-palette-item mono"
@@ -1778,7 +1796,7 @@ export default function DesignScreen({
                         </button>
                       </div>
                     ))}
-                    {assets.filter((asset) => asset.kind === "font").map((asset) => (
+                    {filteredAssets.filter((asset) => asset.kind === "font").map((asset) => (
                       <button
                         key={asset.file}
                         className="design-palette-item mono"

@@ -221,6 +221,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Component insertion as a sibling after the selected node | Real |
 | Component palette child/sibling placement control | Real |
 | Searchable component palette by name or source path | Real |
+| Searchable image/font asset palette by label or project path | Real |
 | Safe unwrapping of attribute-free direct wrappers | Real |
 | Same-parent sibling reordering with Move up/Move down controls | Real |
 | Keyboard canvas shortcuts (Escape clear, Delete remove, Ctrl/Cmd+D duplicate) | Real |
