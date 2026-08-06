@@ -1,4 +1,4 @@
-/** Real image-asset discovery for the GUI Builder palette.
+/** Real image/font asset discovery for the GUI Builder palette.
  *
  * This is intentionally a filesystem/metadata operation only: image files
  * are never read into the renderer and no project code is executed. The
@@ -15,7 +15,7 @@ export interface DiscoveredAsset {
   relativePath: string;
   /** POSIX path usable as a JSX `src` from `fromFile`. */
   referencePath: string;
-  kind: "image";
+  kind: "image" | "font";
   label: string;
 }
 
@@ -31,6 +31,7 @@ const SKIP_DIRS = new Set([
 ]);
 
 const IMAGE_EXTENSIONS = new Set([".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"]);
+const FONT_EXTENSIONS = new Set([".eot", ".otf", ".ttf", ".woff", ".woff2"]);
 const MAX_DEPTH = 12;
 
 function collectFiles(dir: string, depth: number, out: string[]): void {
@@ -51,7 +52,7 @@ function collectFiles(dir: string, depth: number, out: string[]): void {
       continue;
     }
     if (stats.isDirectory()) collectFiles(full, depth + 1, out);
-    else if (IMAGE_EXTENSIONS.has(extname(entry).toLowerCase())) out.push(full);
+    else if (IMAGE_EXTENSIONS.has(extname(entry).toLowerCase()) || FONT_EXTENSIONS.has(extname(entry).toLowerCase())) out.push(full);
   }
 }
 
@@ -66,7 +67,7 @@ function relativeReference(fromFile: string | undefined, file: string): string {
   return result;
 }
 
-/** Discovers image assets under `rootDir`, ignoring dependency/build trees. */
+/** Discovers image and font assets under `rootDir`, ignoring dependency/build trees. */
 export function discoverAssets(rootDir: string, fromFile?: string): DiscoveredAsset[] {
   const files: string[] = [];
   collectFiles(rootDir, 0, files);
@@ -75,7 +76,7 @@ export function discoverAssets(rootDir: string, fromFile?: string): DiscoveredAs
     file,
     relativePath: posixPath(relative(rootDir, file)),
     referencePath: relativeReference(fromFile, file),
-    kind: "image" as const,
+    kind: IMAGE_EXTENSIONS.has(extname(file).toLowerCase()) ? "image" as const : "font" as const,
     label: file.slice(file.lastIndexOf(sep) + 1),
   }));
 }

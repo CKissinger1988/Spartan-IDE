@@ -35,7 +35,7 @@ interface DiscoveredAsset {
   file: string;
   relativePath: string;
   referencePath: string;
-  kind: "image";
+  kind: "image" | "font";
   label: string;
 }
 
@@ -470,6 +470,7 @@ export default function DesignScreen({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [assets, setAssets] = useState<DiscoveredAsset[]>([]);
   const [assetsOpen, setAssetsOpen] = useState(false);
+  const [copiedAsset, setCopiedAsset] = useState<string | null>(null);
   const [tokens, setTokens] = useState<DiscoveredToken[]>([]);
   const [tokensOpen, setTokensOpen] = useState(false);
   const [viewportId, setViewportId] = useState<(typeof DESIGN_VIEWPORTS)[number]["id"]>("desktop");
@@ -814,6 +815,15 @@ export default function DesignScreen({
     [activeFile, selectedId, applyEditObject]
   );
 
+  const copyAssetPath = useCallback(async (asset: DiscoveredAsset) => {
+    try {
+      await navigator.clipboard.writeText(asset.referencePath);
+      setCopiedAsset(asset.file);
+    } catch (e) {
+      setError(`Could not copy asset path: ${(e as Error).message}`);
+    }
+  }, []);
+
   const toggleTokens = useCallback(async () => {
     if (tokensOpen) {
       setTokensOpen(false);
@@ -992,21 +1002,34 @@ export default function DesignScreen({
               <div className="design-palette">
                 {assets.length === 0 ? (
                   <div className="design-palette-empty mono">
-                    No image assets found under the project root.
+                    No image or font assets found under the project root.
                   </div>
                 ) : (
-                  assets.map((asset) => (
-                    <button
-                      key={asset.file}
-                      className="design-palette-item mono"
-                      disabled={!selectedId}
-                      title={selectedId ? `Insert ${asset.label} into the selected element` : "Select an element in the tree first"}
-                      onClick={() => insertAsset(asset)}
-                    >
-                      <span className="design-palette-name">▧ {asset.label}</span>
-                      <span className="design-palette-from">{asset.relativePath}</span>
-                    </button>
-                  ))
+                  <>
+                    {assets.filter((asset) => asset.kind === "image").map((asset) => (
+                      <button
+                        key={asset.file}
+                        className="design-palette-item mono"
+                        disabled={!selectedId}
+                        title={selectedId ? `Insert ${asset.label} into the selected element` : "Select an element in the tree first"}
+                        onClick={() => insertAsset(asset)}
+                      >
+                        <span className="design-palette-name">▧ {asset.label}</span>
+                        <span className="design-palette-from">{asset.relativePath}</span>
+                      </button>
+                    ))}
+                    {assets.filter((asset) => asset.kind === "font").map((asset) => (
+                      <button
+                        key={asset.file}
+                        className="design-palette-item mono"
+                        title={`Copy the relative font path ${asset.referencePath}`}
+                        onClick={() => void copyAssetPath(asset)}
+                      >
+                        <span className="design-palette-name">Aa {asset.label}</span>
+                        <span className="design-palette-from">{copiedAsset === asset.file ? "Copied · " : "Copy · "}{asset.referencePath}</span>
+                      </button>
+                    ))}
+                  </>
                 )}
               </div>
             )}

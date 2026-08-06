@@ -30,8 +30,15 @@ test("computes a real JSX reference path relative to the open component", () => 
   assert.equal(asset.referencePath, "../assets/hero.png");
 });
 
+test("discovers font assets with a real relative reference path", () => {
+  const root = fixture(["src/pages/Home.tsx", "src/fonts/Inter.woff2", "src/fonts/Inter.ttf"]);
+  const fromFile = join(root, "src/pages/Home.tsx");
+  const fonts = discoverAssets(root, fromFile).filter((asset) => asset.kind === "font");
+  assert.deepEqual(fonts.map((font) => font.relativePath), ["src/fonts/Inter.ttf", "src/fonts/Inter.woff2"]);
+  assert.equal(fonts[0].referencePath, "../fonts/Inter.ttf");
+});
+
 test("never walks dependency or build output", () => {
   const root = fixture(["src/App.tsx", "node_modules/pkg/logo.png", "dist/generated.png", "public/ok.png"]);
   assert.deepEqual(discoverAssets(root).map((asset) => asset.relativePath), ["public/ok.png"]);
 });
-
