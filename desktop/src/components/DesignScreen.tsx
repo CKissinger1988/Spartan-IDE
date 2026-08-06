@@ -1590,11 +1590,17 @@ export default function DesignScreen({
                   <span>size</span><strong>{Math.round(previewInspection.rect.width)} × {Math.round(previewInspection.rect.height)} px</strong>
                   <span>display</span><strong>{previewInspection.styles.display}</strong>
                   <span>position</span><strong>{previewInspection.styles.position}</strong>
+                  <span>z-index</span><strong>{previewInspection.styles.zIndex || "auto"}</strong>
                   <span>font</span><strong>{previewInspection.styles.fontSize}</strong>
                   <span>color</span><strong>{previewInspection.styles.color}</strong>
                   <span>background</span><strong>{previewInspection.styles.backgroundColor}</strong>
-                  <span>padding</span><strong>{previewInspection.styles.padding}</strong>
-                  <span>margin</span><strong>{previewInspection.styles.margin}</strong>
+                  <span>padding</span><strong>{previewInspection.styles.padding} · {previewInspection.styles.paddingTop}/{previewInspection.styles.paddingRight}/{previewInspection.styles.paddingBottom}/{previewInspection.styles.paddingLeft}</strong>
+                  <span>border</span><strong>{previewInspection.styles.borderTopWidth}/{previewInspection.styles.borderRightWidth}/{previewInspection.styles.borderBottomWidth}/{previewInspection.styles.borderLeftWidth}</strong>
+                  <span>margin</span><strong>{previewInspection.styles.margin} · {previewInspection.styles.marginTop}/{previewInspection.styles.marginRight}/{previewInspection.styles.marginBottom}/{previewInspection.styles.marginLeft}</strong>
+                  <span>flex</span><strong>{previewInspection.styles.flexDirection || "—"} · {previewInspection.styles.flexWrap || "—"}</strong>
+                  <span>alignment</span><strong>{previewInspection.styles.justifyContent || "—"} / {previewInspection.styles.alignItems || "—"}</strong>
+                  <span>grid</span><strong>{previewInspection.styles.gridTemplateColumns || "—"} / {previewInspection.styles.gridTemplateRows || "—"}</strong>
+                  <span>overflow</span><strong>{previewInspection.styles.overflowX} / {previewInspection.styles.overflowY}</strong>
                 </div>
                 <button className="design-secondary-action mono design-inspection-copy" onClick={() => void copyInspection()}>
                   {copiedInspection ? "Copied CSS snapshot" : "Copy CSS snapshot"}

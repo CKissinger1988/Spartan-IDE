@@ -217,6 +217,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Guided layout, positioning, grid, overflow, and visual-effects style controls | Real |
 | Debounced live editor-buffer parsing and visual preview refresh | Real |
 | Selected-element rendered geometry and computed-style inspection | Real |
+| Computed box-model, flex/grid alignment, z-index, and overflow inspection | Real |
 | Copyable rendered CSS snapshots from the selected preview element | Real |
 | Focus-state preview controls for authored `:focus` styles | Real |
 | Static hover/active preview controls for authored `:hover`/`:active` styles | Real |
