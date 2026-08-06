@@ -434,7 +434,7 @@ function StyleValueControl({
  * the exact same `edit` IPC call typing already uses, so a canvas edit
  * gets the same undo/dirty tracking as any other edit.
  *
- * All seven real `CanvasEdit` kinds `gui-builder` itself supports are now
+ * All eight real `CanvasEdit` kinds `gui-builder` itself supports are now
  * wired here: `PropChange`/`StyleChange` (mutate the selected node) and
  * `Reparent`/`ComponentInsert` (structural edits, closing the gap this
  * screen's own edit form used to leave unreachable even after
@@ -462,7 +462,7 @@ export default function DesignScreen({
   const [propValue, setPropValue] = useState("");
   const [textValue, setTextValue] = useState("");
   const [propValueType, setPropValueType] = useState<"string" | "number" | "boolean" | "expression">("string");
-  const [editKind, setEditKind] = useState<"PropChange" | "StyleChange" | "TextChange" | "Reparent" | "ComponentInsert">(
+  const [editKind, setEditKind] = useState<"PropChange" | "PropRemove" | "StyleChange" | "TextChange" | "Reparent" | "ComponentInsert">(
     "PropChange"
   );
   const [reparentTargetId, setReparentTargetId] = useState("");
@@ -580,6 +580,10 @@ export default function DesignScreen({
     if (editKind === "PropChange") {
       if (!propKey.trim()) return null;
       return { kind: "PropChange", nodeId: selectedId, prop: propKey, value: propValue, valueType: propValueType };
+    }
+    if (editKind === "PropRemove") {
+      if (!propKey.trim()) return null;
+      return { kind: "PropRemove", nodeId: selectedId, prop: propKey };
     }
     if (editKind === "StyleChange") {
       if (!propKey.trim()) return null;
@@ -720,7 +724,7 @@ export default function DesignScreen({
   const canApply =
     !!activeFile &&
     !!selectedId &&
-    (editKind === "PropChange" || editKind === "StyleChange"
+    (editKind === "PropChange" || editKind === "PropRemove" || editKind === "StyleChange"
       ? !!propKey.trim()
       : editKind === "TextChange"
         ? true
@@ -899,6 +903,9 @@ export default function DesignScreen({
     if (editKind === "PropChange") {
       if (!propKey.trim()) return;
       edit = { kind: "PropChange", nodeId: selectedId, prop: propKey, value: propValue, valueType: propValueType };
+    } else if (editKind === "PropRemove") {
+      if (!propKey.trim()) return;
+      edit = { kind: "PropRemove", nodeId: selectedId, prop: propKey };
     } else if (editKind === "StyleChange") {
       if (!propKey.trim()) return;
       edit = { kind: "StyleChange", nodeId: selectedId, property: propKey, value: propValue };
@@ -1165,6 +1172,14 @@ export default function DesignScreen({
               <label>
                 <input
                   type="radio"
+                  checked={editKind === "PropRemove"}
+                  onChange={() => setEditKind("PropRemove")}
+                />
+                Remove prop
+              </label>
+              <label>
+                <input
+                  type="radio"
                   checked={editKind === "Reparent"}
                   onChange={() => setEditKind("Reparent")}
                 />
@@ -1250,6 +1265,14 @@ export default function DesignScreen({
                 )}
               </>
             )}
+            {editKind === "PropRemove" && (
+              <input
+                className="design-input mono"
+                placeholder="prop name to remove"
+                value={propKey}
+                onChange={(e) => setPropKey(e.target.value)}
+              />
+            )}
             {editKind === "TextChange" && (
               <textarea
                 className="design-input mono design-text-input"
@@ -1286,7 +1309,7 @@ export default function DesignScreen({
             <button className="leo-btn leo-btn-approve" onClick={applyEdit} disabled={!canApply}>
               Apply
             </button>
-            {(editKind === "PropChange" || editKind === "StyleChange" || editKind === "TextChange") && (
+            {(editKind === "PropChange" || editKind === "PropRemove" || editKind === "StyleChange" || editKind === "TextChange") && (
               <button className="design-secondary-action mono" onClick={() => void previewFormEdit()} disabled={!canApply}>
                 Preview variant
               </button>

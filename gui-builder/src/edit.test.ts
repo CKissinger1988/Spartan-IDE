@@ -98,6 +98,21 @@ test("PropChange rejects invalid expression input", () => {
   );
 });
 
+test("PropRemove removes a named JSX attribute and preserves its siblings", () => {
+  const result = applyCanvasEdit(`const X = () => <div id="keep" title="remove" />;`, {
+    kind: "PropRemove", nodeId: "n0", prop: "title",
+  });
+  assert.match(result, /id="keep"/);
+  assert.doesNotMatch(result, /title=/);
+});
+
+test("PropRemove reports an unknown attribute instead of silently doing nothing", () => {
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <div />;`, { kind: "PropRemove", nodeId: "n0", prop: "title" }),
+    /could not find attribute/,
+  );
+});
+
 test("TextChange updates direct JSX text and preserves the surrounding element", () => {
   const source = `const X = () => <button className="cta">Before</button>;`;
   const result = applyCanvasEdit(source, { kind: "TextChange", nodeId: "n0", text: "After" });

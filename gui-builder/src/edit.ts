@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All seven members of the `CanvasEdit` union are real and implemented:
+ * All eight members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -124,6 +124,17 @@ function applyPropChange(
       ),
     );
   }
+}
+
+function applyPropRemove(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "PropRemove" }>): void {
+  const element = nodesById.get(edit.nodeId);
+  if (!element) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
+  const attributes = element.openingElement.attributes as AnyNode[];
+  const index = attributes.findIndex(
+    (attr) => attr.type === "JSXAttribute" && attr.name.type === "JSXIdentifier" && attr.name.name === edit.prop,
+  );
+  if (index === -1) throw new Error(`PropRemove could not find attribute "${edit.prop}" on element "${edit.nodeId}".`);
+  attributes.splice(index, 1);
 }
 
 function applyTextChange(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "TextChange" }>): void {
@@ -310,6 +321,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       applyPropChange(element, edit.prop, edit.value, edit.valueType);
       break;
     }
+    case "PropRemove":
+      applyPropRemove(nodesById, edit);
+      break;
     case "TextChange":
       applyTextChange(nodesById, edit);
       break;
