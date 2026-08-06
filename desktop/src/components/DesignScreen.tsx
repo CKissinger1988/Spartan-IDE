@@ -96,6 +96,7 @@ const DESIGN_VIEWPORTS = [
   { id: "mobile", label: "Mobile", width: 390, height: 844 },
 ] as const;
 type DesignViewportId = (typeof DESIGN_VIEWPORTS)[number]["id"] | "custom";
+type ComponentInsertPlacement = "child" | "sibling";
 
 function isComponentFile(path: string): boolean {
   return path.endsWith(".jsx") || path.endsWith(".tsx");
@@ -674,6 +675,7 @@ export default function DesignScreen({
   const [insertText, setInsertText] = useState("");
   const [palette, setPalette] = useState<DiscoveredComponent[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteInsertPlacement, setPaletteInsertPlacement] = useState<ComponentInsertPlacement>("child");
   const [assets, setAssets] = useState<DiscoveredAsset[]>([]);
   const [assetsOpen, setAssetsOpen] = useState(false);
   const [copiedAsset, setCopiedAsset] = useState<string | null>(null);
@@ -1285,7 +1287,8 @@ export default function DesignScreen({
     }
   }, [paletteOpen, projectRoot, activeFile?.path]);
 
-  /** Inserts a discovered component as a child of the selected node,
+  /** Inserts a discovered component at the palette's selected child/sibling
+   * placement, carrying its import along when it lives in another file -- the whole
    * carrying its import along when it lives in another file -- the whole
    * point of a component browser over the plain tag-name field, which
    * could only ever produce an undefined binding for a cross-file
@@ -1293,18 +1296,21 @@ export default function DesignScreen({
   const insertComponent = useCallback(
     async (component: DiscoveredComponent) => {
       if (!activeFile || !selectedId || !hasSingleSelection) return;
+      const sibling = paletteInsertPlacement === "sibling" ? findParentEntry(roots, selectedId) : null;
+      if (paletteInsertPlacement === "sibling" && !sibling) return;
       const edit: Record<string, unknown> = {
         kind: "ComponentInsert",
-        parentId: selectedId,
+        parentId: sibling?.parent.id ?? selectedId,
         tagName: component.name,
       };
+      if (sibling) edit.index = sibling.index + 1;
       if (component.importFrom) {
         edit.importFrom = component.importFrom;
         edit.importIsDefault = component.isDefault;
       }
       await applyEditObject(edit);
     },
-    [activeFile, selectedId, hasSingleSelection, applyEditObject]
+    [activeFile, selectedId, hasSingleSelection, paletteInsertPlacement, roots, applyEditObject]
   );
 
   const toggleAssets = useCallback(async () => {
@@ -1675,6 +1681,25 @@ export default function DesignScreen({
             </button>
             {paletteOpen && (
               <div className="design-palette">
+                <div className="design-palette-placement mono" aria-label="Component insertion placement">
+                  <span>Insert as</span>
+                  <label>
+                    <input
+                      type="radio"
+                      checked={paletteInsertPlacement === "child"}
+                      onChange={() => setPaletteInsertPlacement("child")}
+                    />
+                    child
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      checked={paletteInsertPlacement === "sibling"}
+                      onChange={() => setPaletteInsertPlacement("sibling")}
+                    />
+                    sibling
+                  </label>
+                </div>
                 {palette.length === 0 ? (
                   <div className="design-palette-empty mono">
                     No exported components found under the project root.
@@ -1687,7 +1712,7 @@ export default function DesignScreen({
                       disabled={!selectedId || !hasSingleSelection}
                       title={
                         selectedId && hasSingleSelection
-                          ? `Insert <${c.name} /> into the selected element${
+                          ? `Insert <${c.name} /> as a ${paletteInsertPlacement} of the selected element${
                               c.importFrom ? ` and import it from "${c.importFrom}"` : ""
                             }`
                           : "Select an element in the tree first"
