@@ -94,4 +94,10 @@ export class GuiBuilderClient {
     const stdout = await runCli(this.cliPath, args);
     return JSON.parse(stdout);
   }
+
+  async discoverAssets(rootDir: string, fromFile?: string): Promise<unknown> {
+    const args = fromFile ? ["assets", rootDir, fromFile] : ["assets", rootDir];
+    const stdout = await runCli(this.cliPath, args);
+    return JSON.parse(stdout);
+  }
 }

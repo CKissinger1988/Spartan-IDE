@@ -39,6 +39,7 @@ const ALLOWED_METHODS = new Set([
   "design_bundle",
   "design_apply_edit",
   "design_components",
+  "design_assets",
   "leo_status",
   "leo_start_task",
   "leo_approve_plan",

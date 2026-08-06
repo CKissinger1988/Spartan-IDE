@@ -31,6 +31,14 @@ interface DiscoveredComponent {
   importFrom: string | null;
 }
 
+interface DiscoveredAsset {
+  file: string;
+  relativePath: string;
+  referencePath: string;
+  kind: "image";
+  label: string;
+}
+
 interface DesignScreenProps {
   activeFile: OpenFile | null;
   onContentChange: (path: string, content: string, saved?: boolean) => void;
@@ -438,6 +446,8 @@ export default function DesignScreen({
   const [insertTagName, setInsertTagName] = useState("");
   const [palette, setPalette] = useState<DiscoveredComponent[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [assets, setAssets] = useState<DiscoveredAsset[]>([]);
+  const [assetsOpen, setAssetsOpen] = useState(false);
   const [viewportId, setViewportId] = useState<(typeof DESIGN_VIEWPORTS)[number]["id"]>("desktop");
   const [previewZoom, setPreviewZoom] = useState(75);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -617,6 +627,37 @@ export default function DesignScreen({
     [activeFile, selectedId, applyEditObject]
   );
 
+  const toggleAssets = useCallback(async () => {
+    if (assetsOpen) {
+      setAssetsOpen(false);
+      return;
+    }
+    setAssetsOpen(true);
+    if (!projectRoot) return;
+    try {
+      const result = (await window.spartan.call("design_assets", {
+        rootDir: projectRoot,
+        fromFile: activeFile?.path,
+      })) as { assets: DiscoveredAsset[] };
+      setAssets(result.assets);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [assetsOpen, projectRoot, activeFile?.path]);
+
+  const insertAsset = useCallback(
+    async (asset: DiscoveredAsset) => {
+      if (!activeFile || !selectedId) return;
+      await applyEditObject({
+        kind: "ComponentInsert",
+        parentId: selectedId,
+        tagName: "img",
+        props: { src: asset.referencePath, alt: asset.label },
+      });
+    },
+    [activeFile, selectedId, applyEditObject]
+  );
+
   const applyEdit = useCallback(async () => {
     if (!activeFile || !selectedId) return;
     let edit: Record<string, unknown>;
@@ -721,6 +762,31 @@ export default function DesignScreen({
                       <span className="design-palette-from">
                         {c.importFrom ?? "this file"}
                       </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+            <button className="design-palette-toggle mono" onClick={toggleAssets}>
+              {assetsOpen ? "▾" : "▸"} Assets{assets.length > 0 ? ` (${assets.length})` : ""}
+            </button>
+            {assetsOpen && (
+              <div className="design-palette">
+                {assets.length === 0 ? (
+                  <div className="design-palette-empty mono">
+                    No image assets found under the project root.
+                  </div>
+                ) : (
+                  assets.map((asset) => (
+                    <button
+                      key={asset.file}
+                      className="design-palette-item mono"
+                      disabled={!selectedId}
+                      title={selectedId ? `Insert ${asset.label} into the selected element` : "Select an element in the tree first"}
+                      onClick={() => insertAsset(asset)}
+                    >
+                      <span className="design-palette-name">▧ {asset.label}</span>
+                      <span className="design-palette-from">{asset.relativePath}</span>
                     </button>
                   ))
                 )}

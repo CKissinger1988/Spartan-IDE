@@ -177,8 +177,9 @@ Priority key:
 
 The GUI Builder has been reintroduced at the user's explicit request. The AST-sync,
 esbuild preview, component palette, click-to-select, drag-to-reparent, prop/style controls,
-and structural edit operations are wired back into the desktop shell. The first new increment
-adds responsive viewport preview with Desktop/Tablet/Mobile presets and zoom control.
+structural edit operations, and image asset discovery/insertion are wired back into the desktop
+shell. The first increments add responsive viewport preview with Desktop/Tablet/Mobile presets,
+zoom control, and a project image-asset palette that inserts relative JSX references.
 
 | Feature | Status |
 |---|---|
@@ -186,8 +187,9 @@ adds responsive viewport preview with Desktop/Tablet/Mobile presets and zoom con
 | Sandboxed live React preview | Real |
 | Structure tree, click selection, and drag-to-reparent | Real |
 | Prop/style controls and component-library discovery/imports | Real |
+| Image asset discovery and insertion with relative JSX references | Real |
 | Desktop/Tablet/Mobile viewport presets and zoom | Real |
-| Asset management, design-token editor, component variants, and multi-file visual workspace | Planned |
+| Font asset management, design-token editor, component variants, and multi-file visual workspace | Planned |
 
 ## Model management
 

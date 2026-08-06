@@ -12,6 +12,7 @@
  *   node dist/cli.js apply <editJson>                (Canvas -> Code, §75.42)
  *   node dist/cli.js bundle <path-to-jsx-or-tsx-file> (live visual render, §75.52)
  *   node dist/cli.js components <project-dir> [from-file] (component browser, task #278)
+ *   node dist/cli.js assets <project-dir> [from-file] (image asset browser)
  *
  * "parse" mode reads the file at `<path>` from disk (§6.2 step 1 -- there is
  * no live buffer on this side, so it always reflects what's actually on
@@ -36,6 +37,7 @@ import { parseComponent } from "./parse.js";
 import { applyCanvasEdit } from "./edit.js";
 import { bundleComponent } from "./bundle.js";
 import { discoverComponents } from "./components.js";
+import { discoverAssets } from "./assets.js";
 import type { CanvasEdit } from "./types.js";
 
 function fail(message: string): never {
@@ -120,6 +122,18 @@ function runComponents(rootDir: string | undefined, fromFile: string | undefined
   }
 }
 
+function runAssets(rootDir: string | undefined, fromFile: string | undefined): void {
+  if (!rootDir) {
+    fail("usage: cli.js assets <project-dir> [from-file]");
+  }
+  try {
+    const assets = discoverAssets(rootDir, fromFile);
+    process.stdout.write(JSON.stringify({ assets }));
+  } catch (e) {
+    fail(`failed to discover assets: ${(e as Error).message}`);
+  }
+}
+
 async function main(): Promise<void> {
   const mode = process.argv[2];
   if (mode === "apply") {
@@ -128,6 +142,8 @@ async function main(): Promise<void> {
     await runBundle(process.argv[3]);
   } else if (mode === "components") {
     runComponents(process.argv[3], process.argv[4]);
+  } else if (mode === "assets") {
+    runAssets(process.argv[3], process.argv[4]);
   } else {
     runParse(mode);
   }

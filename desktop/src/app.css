@@ -3309,6 +3309,13 @@
   white-space: nowrap;
 }
 
+.design-palette-item .design-palette-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .design-edit-panel .leo-btn {
   margin: 10px 12px 0;
   align-self: flex-start;
