@@ -1318,6 +1318,18 @@ export default function DesignScreen({
     const handler = (event: KeyboardEvent) => {
       const target = event.target;
       if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable=\"true\"]")) return;
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "c") {
+        event.preventDefault();
+        if (event.altKey) copyProps();
+        else copyStyles();
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "v") {
+        event.preventDefault();
+        if (event.altKey) void pasteProps();
+        else void pasteStyles();
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
         void undoRedo(event.shiftKey ? "redo" : "undo");
@@ -1345,7 +1357,7 @@ export default function DesignScreen({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [selectionCount, deleteSelected, duplicateSelected, undoRedo]);
+  }, [selectionCount, deleteSelected, duplicateSelected, undoRedo, copyStyles, pasteStyles, copyProps, pasteProps]);
 
   useEffect(() => {
     if (!viewportStorageKey) {
@@ -2487,33 +2499,37 @@ export default function DesignScreen({
             <div className="design-inspection-actions">
               <button
                 className="design-secondary-action mono"
+                aria-keyshortcuts="Control+Shift+C Meta+Shift+C"
                 onClick={copyStyles}
                 disabled={!hasSingleSelection || selectedNode.props.style?.kind !== "style" || Object.keys(selectedNode.props.style.entries).length === 0}
-                title={hasSingleSelection ? "Copy every plain inline style entry from the selected element" : "Select exactly one styled element first"}
+                title={hasSingleSelection ? "Copy every plain inline style entry from the selected element (Ctrl/Cmd+Shift+C)" : "Select exactly one styled element first"}
               >
                 Copy styles
               </button>
               <button
                 className="design-secondary-action mono"
+                aria-keyshortcuts="Control+Shift+V Meta+Shift+V"
                 onClick={() => void pasteStyles()}
                 disabled={!styleClipboard || selectionCount === 0}
-                title={styleClipboard ? `Paste ${Object.keys(styleClipboard.entries).length} copied styles onto the selection` : "Copy styles from an element first"}
+                title={styleClipboard ? `Paste ${Object.keys(styleClipboard.entries).length} copied styles onto the selection (Ctrl/Cmd+Shift+V)` : "Copy styles from an element first"}
               >
                 Paste styles{styleClipboard ? ` (${Object.keys(styleClipboard.entries).length})` : ""}
               </button>
               <button
                 className="design-secondary-action mono"
+                aria-keyshortcuts="Control+Alt+Shift+C Meta+Alt+Shift+C"
                 onClick={copyProps}
                 disabled={!hasSingleSelection || !selectedNode || Object.keys(selectedNode.props).every((name) => selectedNode.props[name].kind === "style")}
-                title={hasSingleSelection ? "Copy literal and expression JSX props from the selected element" : "Select exactly one element first"}
+                title={hasSingleSelection ? "Copy literal and expression JSX props from the selected element (Ctrl/Cmd+Alt+Shift+C)" : "Select exactly one element first"}
               >
                 Copy props
               </button>
               <button
                 className="design-secondary-action mono"
+                aria-keyshortcuts="Control+Alt+Shift+V Meta+Alt+Shift+V"
                 onClick={() => void pasteProps()}
                 disabled={!propClipboard || selectionCount === 0}
-                title={propClipboard ? `Paste ${Object.keys(propClipboard.entries).length} copied props onto the selection` : "Copy props from an element first"}
+                title={propClipboard ? `Paste ${Object.keys(propClipboard.entries).length} copied props onto the selection (Ctrl/Cmd+Alt+Shift+V)` : "Copy props from an element first"}
               >
                 Paste props{propClipboard ? ` (${Object.keys(propClipboard.entries).length})` : ""}
               </button>
