@@ -1973,8 +1973,14 @@ export default function DesignScreen({
       if (Object.keys(parsedProps.propValues).length > 0) edit.propValues = parsedProps.propValues;
       if (insertText !== "") edit.childrenText = insertText;
     }
-    if (selectedIds.length > 1 && ["PropChange", "PropRemove", "StyleChange", "StyleRemove"].includes(editKind)) {
-      await applyEditBatch(selectedIds.map((nodeId) => ({ ...edit, nodeId })));
+    if (selectedIds.length > 1 && editKind === "PropChange") {
+      await applyEditObject({ kind: "PropChangeMany", nodeIds: selectedIds, prop: propKey, value: propValue, valueType: propValueType });
+    } else if (selectedIds.length > 1 && editKind === "PropRemove") {
+      await applyEditObject({ kind: "PropRemoveMany", nodeIds: selectedIds, prop: propKey });
+    } else if (selectedIds.length > 1 && editKind === "StyleChange") {
+      await applyEditObject({ kind: "StyleChangeMany", nodeIds: selectedIds, property: propKey, value: propValue });
+    } else if (selectedIds.length > 1 && editKind === "StyleRemove") {
+      await applyEditObject({ kind: "StyleRemoveMany", nodeIds: selectedIds, property: propKey });
     } else {
       await applyEditObject(edit);
     }

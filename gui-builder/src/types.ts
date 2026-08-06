@@ -8,7 +8,7 @@
  * real JS/JSX AST work actually happens, per §6.1's own "lightweight
  * dev-server bridge" description).
  *
- * All twenty-two members of the full spec's `CanvasEdit` union are now real and
+ * All twenty-six members of the full spec's `CanvasEdit` union are now real and
  * implemented by `applyCanvasEdit`: `StyleChange`/`PropChange` (original
  * v1), and `Reparent`/`ComponentInsert` (closing the gap this file's own
  * doc comment used to name as unattempted -- see edit.ts's doc comment
@@ -88,6 +88,8 @@ export type CanvasEdit =
     }
   /** Removes one property from a plain inline style object. */
   | { kind: "StyleRemove"; nodeId: string; property: string }
+  /** Removes one style property from multiple selected elements atomically. */
+  | { kind: "StyleRemoveMany"; nodeIds: string[]; property: string }
   /** Removes a complete plain inline style object, preserving dynamic styles. */
   | { kind: "StyleClear"; nodeId: string }
   /** Removes complete plain inline style objects from multiple nodes atomically. */
@@ -99,8 +101,18 @@ export type CanvasEdit =
       value: string;
       valueType?: "string" | "number" | "boolean" | "expression";
     }
+  /** Applies one prop value to multiple selected elements atomically. */
+  | {
+      kind: "PropChangeMany";
+      nodeIds: string[];
+      prop: string;
+      value: string;
+      valueType?: "string" | "number" | "boolean" | "expression";
+    }
   /** Removes one named JSX attribute from the selected element. */
   | { kind: "PropRemove"; nodeId: string; prop: string }
+  /** Removes one JSX attribute from multiple selected elements atomically. */
+  | { kind: "PropRemoveMany"; nodeIds: string[]; prop: string }
   /** Replaces the direct JSX text content of an element. If the element has
    * no direct text child, a new text child is appended. */
   | { kind: "TextChange"; nodeId: string; text: string }

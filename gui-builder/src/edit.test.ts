@@ -74,6 +74,21 @@ test("StyleChangeMany refuses a dynamic style before partially changing earlier 
   );
 });
 
+test("StyleRemoveMany removes one property from every selected style atomically", () => {
+  const source = `const X = () => <main><div style={{ color: "red", padding: 4 }} /><span style={{ color: "blue" }} /></main>;`;
+  const result = applyCanvasEdit(source, { kind: "StyleRemoveMany", nodeIds: ["n1", "n2"], property: "color" });
+  assert.doesNotMatch(result, /color:/);
+  assert.match(result, /padding: 4/);
+});
+
+test("StyleRemoveMany refuses a missing property before partially changing earlier nodes", () => {
+  const source = `const X = () => <main><div style={{ color: "red" }} /><span style={{ padding: 4 }} /></main>;`;
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "StyleRemoveMany", nodeIds: ["n1", "n2"], property: "color" }),
+    /refusing a partial multi-node edit/,
+  );
+});
+
 test("StyleRemove removes one inline style property and preserves its sibling", () => {
   const source = `const X = () => <div style={{ color: "red", padding: 4 }} />;`;
   const result = applyCanvasEdit(source, { kind: "StyleRemove", nodeId: "n0", property: "color" });
@@ -184,6 +199,20 @@ test("PropChange rejects invalid expression input", () => {
       kind: "PropChange", nodeId: "n0", prop: "onClick", value: "() =>", valueType: "expression",
     }),
     /expression is not valid/,
+  );
+});
+
+test("PropChangeMany updates every selected prop atomically", () => {
+  const source = `const X = () => <main><div aria-label="old" /><span aria-label="old" /></main>;`;
+  const result = applyCanvasEdit(source, { kind: "PropChangeMany", nodeIds: ["n1", "n2"], prop: "aria-label", value: "new" });
+  assert.equal((result.match(/aria-label="new"/g) ?? []).length, 2);
+});
+
+test("PropRemoveMany refuses a missing attribute before partially changing earlier nodes", () => {
+  const source = `const X = () => <main><div id="first" /><span className="second" /></main>;`;
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "PropRemoveMany", nodeIds: ["n1", "n2"], prop: "id" }),
+    /refusing a partial multi-node edit/,
   );
 });
 

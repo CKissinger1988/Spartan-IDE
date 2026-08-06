@@ -120,6 +120,26 @@ function applyStyleRemove(element: AnyNode, property: string): void {
   }
 }
 
+function applyStyleRemoveMany(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "StyleRemoveMany" }>): void {
+  const ids = [...new Set(edit.nodeIds)];
+  if (ids.length === 0) throw new Error("StyleRemoveMany requires at least one selected element.");
+  const elements = ids.map((id) => {
+    const element = nodesById.get(id);
+    if (!element) throw new Error(`No element with id "${id}" found in the current source.`);
+    const styleAttr = findAttribute(element, "style");
+    const container = styleAttr?.value;
+    if (!styleAttr || !container || container.type !== "JSXExpressionContainer" || container.expression.type !== "ObjectExpression") {
+      throw new Error(`StyleRemoveMany target "${id}" is not a plain object expression; refusing a partial multi-node edit.`);
+    }
+    const hasProperty = (container.expression.properties as AnyNode[]).some(
+      (prop) => prop.type === "ObjectProperty" && !prop.computed && propertyKeyName(prop) === edit.property,
+    );
+    if (!hasProperty) throw new Error(`StyleRemoveMany could not find style property "${edit.property}" on element "${id}"; refusing a partial multi-node edit.`);
+    return element;
+  });
+  for (const element of elements) applyStyleRemove(element, edit.property);
+}
+
 function applyStyleClear(element: AnyNode): void {
   const styleAttr = findAttribute(element, "style");
   if (!styleAttr) throw new Error(`StyleClear could not find a style attribute on the selected element.`);
@@ -226,6 +246,19 @@ function applyPropChange(
   }
 }
 
+function applyPropChangeMany(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "PropChangeMany" }>): void {
+  if (!isValidJsxAttributeName(edit.prop)) throw new Error(`PropChangeMany property "${edit.prop}" is not a valid JSX attribute name.`);
+  const ids = [...new Set(edit.nodeIds)];
+  if (ids.length === 0) throw new Error("PropChangeMany requires at least one selected element.");
+  const elements = ids.map((id) => {
+    const element = nodesById.get(id);
+    if (!element) throw new Error(`No element with id "${id}" found in the current source.`);
+    return element;
+  });
+  if (edit.valueType && edit.valueType !== "string") propValueNode(edit.value, edit.valueType);
+  for (const element of elements) applyPropChange(element, edit.prop, edit.value, edit.valueType);
+}
+
 function applyPropRemove(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "PropRemove" }>): void {
   const element = nodesById.get(edit.nodeId);
   if (!element) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
@@ -235,6 +268,22 @@ function applyPropRemove(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEd
   );
   if (index === -1) throw new Error(`PropRemove could not find attribute "${edit.prop}" on element "${edit.nodeId}".`);
   attributes.splice(index, 1);
+}
+
+function applyPropRemoveMany(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "PropRemoveMany" }>): void {
+  const ids = [...new Set(edit.nodeIds)];
+  if (ids.length === 0) throw new Error("PropRemoveMany requires at least one selected element.");
+  const attributesByElement = ids.map((id) => {
+    const element = nodesById.get(id);
+    if (!element) throw new Error(`No element with id "${id}" found in the current source.`);
+    const attributes = element.openingElement.attributes as AnyNode[];
+    const index = attributes.findIndex(
+      (attr) => attr.type === "JSXAttribute" && attr.name.type === "JSXIdentifier" && attr.name.name === edit.prop,
+    );
+    if (index === -1) throw new Error(`PropRemoveMany could not find attribute "${edit.prop}" on element "${id}"; refusing a partial multi-node edit.`);
+    return { attributes, index };
+  });
+  for (const { attributes, index } of attributesByElement) attributes.splice(index, 1);
 }
 
 function applyTextChange(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "TextChange" }>): void {
@@ -802,6 +851,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       applyStyleRemove(element, edit.property);
       break;
     }
+    case "StyleRemoveMany":
+      applyStyleRemoveMany(nodesById, edit);
+      break;
     case "StyleClear": {
       const element = nodesById.get(edit.nodeId);
       if (!element) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
@@ -817,8 +869,14 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       applyPropChange(element, edit.prop, edit.value, edit.valueType);
       break;
     }
+    case "PropChangeMany":
+      applyPropChangeMany(nodesById, edit);
+      break;
     case "PropRemove":
       applyPropRemove(nodesById, edit);
+      break;
+    case "PropRemoveMany":
+      applyPropRemoveMany(nodesById, edit);
       break;
     case "TextChange":
       applyTextChange(nodesById, edit);
