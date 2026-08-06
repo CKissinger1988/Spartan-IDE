@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverAssets, fontFaceSnippet, sanitizeSvgMarkup } from "./assets.js";
+import { discoverAssets, fontFaceSnippet, fontMetadata, sanitizeSvgMarkup } from "./assets.js";
 
 function fixture(files: string[]): string {
   const root = mkdtempSync(join(tmpdir(), "spartan-assets-"));
@@ -44,6 +44,22 @@ test("generates a format-aware @font-face snippet for a discovered font", () => 
   assert.ok(font);
   assert.equal(fontFaceSnippet(font), `@font-face {\n  font-family: "Inter";\n  src: url("../fonts/Inter.woff2") format("woff2");\n  font-style: normal;\n  font-weight: 400;\n}`);
   assert.equal(font.fontFaceSnippet, fontFaceSnippet(font));
+});
+
+test("infers conventional font weight and italic metadata", () => {
+  assert.deepEqual(fontMetadata("Inter-SemiBoldItalic.woff2"), { fontWeight: 600, fontStyle: "italic" });
+  assert.deepEqual(fontMetadata("Brand-700.woff2"), { fontWeight: 700, fontStyle: "normal" });
+  assert.deepEqual(fontMetadata("Display-Variable.woff2"), { fontWeight: "100 900", fontStyle: "normal" });
+});
+
+test("generates metadata-aware @font-face declarations", () => {
+  const root = fixture(["fonts/Inter-BoldItalic.woff2"]);
+  const font = discoverAssets(root).find((asset) => asset.kind === "font");
+  assert.ok(font);
+  assert.equal(font.fontWeight, 700);
+  assert.equal(font.fontStyle, "italic");
+  assert.match(font.fontFaceSnippet ?? "", /font-style: italic;/);
+  assert.match(font.fontFaceSnippet ?? "", /font-weight: 700;/);
 });
 
 test("derives a usable CSS family name for a discovered font", () => {

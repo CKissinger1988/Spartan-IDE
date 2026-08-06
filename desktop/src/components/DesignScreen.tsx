@@ -69,6 +69,8 @@ interface DiscoveredAsset {
   kind: "image" | "font";
   label: string;
   fontFamily?: string;
+  fontWeight?: number | string;
+  fontStyle?: "normal" | "italic";
   fontFaceSnippet?: string;
   usageCount?: number;
   usageFiles?: string[];
@@ -3252,7 +3254,7 @@ export default function DesignScreen({
                           onClick={() => void copyAssetPath(asset)}
                         >
                           <span className="design-palette-name">Aa {asset.label}</span>
-                          <span className="design-palette-from">{copiedAsset === asset.file ? "Copied · " : "Copy · "}{asset.referencePath} · {asset.usageCount ?? 0} use{(asset.usageCount ?? 0) === 1 ? "" : "s"}</span>
+                          <span className="design-palette-from">{copiedAsset === asset.file ? "Copied · " : "Copy · "}{asset.referencePath} · {asset.fontWeight ?? 400} {asset.fontStyle ?? "normal"} · {asset.usageCount ?? 0} use{(asset.usageCount ?? 0) === 1 ? "" : "s"}</span>
                         </button>
                         <button
                           className="design-asset-action mono"

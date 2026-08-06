@@ -32,6 +32,8 @@ summarizes.
   palette.
 - `src/assets.ts` — real depth-bounded image/font asset discovery with
   project-relative paths and JSX references computed from the open component file.
+  Font filenames also provide deterministic family, weight, and italic metadata
+  for generated `@font-face` declarations.
 - `src/tokens.ts` — real CSS custom-property discovery for applying existing
   design tokens as `var(--token)` values in inline styles, plus safe source-
   preserving definition creation, value edits, and safe removal, including

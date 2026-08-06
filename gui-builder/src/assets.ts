@@ -19,6 +19,10 @@ export interface DiscoveredAsset {
   label: string;
   /** CSS family name derived from the font filename; omitted for images. */
   fontFamily?: string;
+  /** CSS font weight inferred from a conventional font filename. */
+  fontWeight?: number | string;
+  /** CSS font style inferred from a conventional font filename. */
+  fontStyle?: "normal" | "italic";
   /** Ready-to-copy CSS for font assets; omitted for images. */
   fontFaceSnippet?: string;
   /** Number of direct source references found across the project. */
@@ -198,12 +202,50 @@ export function fontFamilyName(label: string): string {
   return label.replace(/\.[^.]+$/, "").replace(/["\\]/g, "");
 }
 
+const FONT_WEIGHT_NAMES: Array<[RegExp, number]> = [
+  [/\b(?:thin|hairline)\b/, 100],
+  [/\b(?:extra|ultra)[ -]?light\b/, 200],
+  [/\blight\b/, 300],
+  [/\b(?:regular|book|normal)\b/, 400],
+  [/\bmedium\b/, 500],
+  [/\b(?:semi|demi)[ -]?bold\b/, 600],
+  [/\b(?:extra|ultra)[ -]?bold\b/, 800],
+  [/\bbold\b/, 700],
+  [/\b(?:black|heavy)\b/, 900],
+];
+
+function normalizedFontLabel(label: string): string {
+  return label
+    .replace(/\.[^.]+$/, "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([a-z])([0-9])/gi, "$1 $2")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .toLowerCase()
+    .trim();
+}
+
+/** Infers useful CSS metadata from common font naming conventions without
+ * opening or parsing the binary font file. */
+export function fontMetadata(label: string): { fontWeight: number | string; fontStyle: "normal" | "italic" } {
+  const normalized = normalizedFontLabel(label);
+  const numericWeight = normalized.match(/\b([1-9]00)\b/);
+  const fontWeight = numericWeight
+    ? Number(numericWeight[1])
+    : normalized.includes("variable") || normalized.includes("var")
+      ? "100 900"
+      : FONT_WEIGHT_NAMES.find(([pattern]) => pattern.test(normalized))?.[1] ?? 400;
+  return { fontWeight, fontStyle: /\b(?:italic|oblique)\b/.test(normalized) ? "italic" : "normal" };
+}
+
 /** Builds a format-aware, ready-to-paste @font-face declaration without
  * reading or executing the font file. */
-export function fontFaceSnippet(asset: Pick<DiscoveredAsset, "kind" | "label" | "referencePath" | "fontFamily">): string | undefined {
+export function fontFaceSnippet(asset: Pick<DiscoveredAsset, "kind" | "label" | "referencePath" | "fontFamily" | "fontWeight" | "fontStyle">): string | undefined {
   if (asset.kind !== "font") return undefined;
   const family = asset.fontFamily ?? fontFamilyName(asset.label);
-  return `@font-face {\n  font-family: "${family}";\n  src: url("${asset.referencePath.replace(/["\\]/g, "\\$&")}") format("${fontFormat(asset.label)}");\n  font-style: normal;\n  font-weight: 400;\n}`;
+  const metadata = fontMetadata(asset.label);
+  const fontWeight = asset.fontWeight ?? metadata.fontWeight;
+  const fontStyle = asset.fontStyle ?? metadata.fontStyle;
+  return `@font-face {\n  font-family: "${family}";\n  src: url("${asset.referencePath.replace(/["\\]/g, "\\$&")}") format("${fontFormat(asset.label)}");\n  font-style: ${fontStyle};\n  font-weight: ${fontWeight};\n}`;
 }
 
 /** Discovers image and font assets under `rootDir`, ignoring dependency/build trees. */
@@ -226,6 +268,7 @@ export function discoverAssets(rootDir: string, fromFile?: string, sourceOverrid
     };
     if (kind === "font") {
       asset.fontFamily = fontFamilyName(asset.label);
+      Object.assign(asset, fontMetadata(asset.label));
       asset.fontFaceSnippet = fontFaceSnippet(asset);
     }
     return asset;
