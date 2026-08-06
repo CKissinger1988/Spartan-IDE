@@ -3331,6 +3331,21 @@
   background: color-mix(in srgb, var(--danger, #b64b4b) 14%, transparent);
 }
 
+.design-secondary-action {
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #454545);
+  background: transparent;
+  color: var(--text, #d8d8d8);
+  cursor: pointer;
+  text-align: left;
+}
+
+.design-secondary-action:hover {
+  background: color-mix(in srgb, var(--text, #d8d8d8) 10%, transparent);
+}
+
 .design-edit-panel .leo-btn {
   margin: 10px 12px 0;
   align-self: flex-start;

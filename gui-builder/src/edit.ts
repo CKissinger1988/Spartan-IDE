@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All five members of the `CanvasEdit` union are real and implemented:
+ * All six members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -186,6 +186,28 @@ function applyDelete(
   spliceOut(parent.children as AnyNode[], node);
 }
 
+function applyDuplicate(
+  nodesById: Map<string, AnyNode>,
+  parentOf: Map<string, AnyNode | null>,
+  edit: Extract<CanvasEdit, { kind: "Duplicate" }>,
+): void {
+  const node = nodesById.get(edit.nodeId);
+  if (!node) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
+  const parent = parentOf.get(edit.nodeId);
+  if (parent === undefined) throw new Error(`Internal error: no parent entry tracked for id "${edit.nodeId}".`);
+  if (parent === null) {
+    throw new Error(`Element "${edit.nodeId}" is a top-level component root -- duplicate a child element instead.`);
+  }
+  const siblings = parent.children as AnyNode[];
+  const index = siblings.indexOf(node);
+  if (index === -1) throw new Error("Internal error: a tracked element was not found in its parent's children.");
+  // Babel/Recast AST nodes are plain JSON-shaped data. Cloning the complete
+  // subtree keeps attributes, text, nested elements, and comments without
+  // sharing mutable child arrays with the original.
+  const clone = JSON.parse(JSON.stringify(node)) as AnyNode;
+  spliceIn(parent, clone, index + 1);
+}
+
 function applyComponentInsert(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "ComponentInsert" }>): void {
   const parent = nodesById.get(edit.parentId);
   if (!parent) {
@@ -230,6 +252,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
     }
     case "Delete":
       applyDelete(nodesById, parentOf, edit);
+      break;
+    case "Duplicate":
+      applyDuplicate(nodesById, parentOf, edit);
       break;
     case "Reparent":
       applyReparent(nodesById, parentOf, edit);

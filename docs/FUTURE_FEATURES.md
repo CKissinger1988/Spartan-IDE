@@ -192,6 +192,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Image asset discovery and insertion with relative JSX references | Real |
 | CSS custom-property discovery and application to selected style properties | Real |
 | Safe selected-element deletion with subtree removal | Real |
+| Selected-element duplication with nested subtree cloning | Real |
 | Desktop/Tablet/Mobile viewport presets and zoom | Real |
 | Font asset management, token definition editing, component variants, and multi-file visual workspace | Planned |
 

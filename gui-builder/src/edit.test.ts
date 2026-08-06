@@ -169,6 +169,24 @@ test("Delete refuses to remove a top-level component root", () => {
   );
 });
 
+test("Duplicate clones an element and its nested subtree immediately after the original", () => {
+  const source = `const X = () => <main><article data-kind="card"><span>copy me</span></article><aside /></main>;`;
+  const result = applyCanvasEdit(source, { kind: "Duplicate", nodeId: "n1" });
+  const roots = parseComponent(result);
+  assert.equal(roots[0].children.length, 3);
+  assert.equal(roots[0].children[1].tagName, "article");
+  assert.equal(roots[0].children[1].children[0].textContent, "copy me");
+  assert.notEqual(roots[0].children[1].id, roots[0].children[2].id);
+});
+
+test("Duplicate refuses to clone a top-level component root", () => {
+  const source = `const X = () => <main><span /></main>;`;
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "Duplicate", nodeId: "n0" }),
+    /top-level component root/,
+  );
+});
+
 test("ComponentInsert applies real string-literal props to the new element", () => {
   const source = `const X = () => <div />;`;
   const result = applyCanvasEdit(source, {
