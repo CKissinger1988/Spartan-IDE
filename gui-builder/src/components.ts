@@ -19,7 +19,7 @@
  * Naming it here rather than pretending to deeper certainty.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, dirname, extname, sep } from "node:path";
+import { join, relative, dirname, extname, sep, resolve as resolvePath } from "node:path";
 import { parserAdapter } from "./parserAdapter.js";
 
 export interface ComponentPropHint {
@@ -217,9 +217,107 @@ function typeMembers(node: unknown): Record<string, Record<string, unknown>> {
   return {};
 }
 
+type PropTypeMembers = Record<string, Record<string, unknown>>;
+type PropTypeCatalog = Map<string, PropTypeMembers>;
+const MAX_IMPORTED_TYPE_FILES = 256;
+
+function attachTypeSource(members: PropTypeMembers, source: string): PropTypeMembers {
+  return Object.fromEntries(Object.entries(members).map(([name, member]) => [name, { ...member, __source: source }]));
+}
+
+function parsedBody(source: string): unknown[] {
+  try {
+    const ast = parserAdapter.parse(source) as { program?: { body?: unknown[] } };
+    return ast.program?.body ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function typeDeclarations(source: string): Map<string, PropTypeMembers> {
+  const result = new Map<string, PropTypeMembers>();
+  for (const raw of parsedBody(source)) {
+    const node = raw as Record<string, unknown>;
+    const declaration = node.type === "ExportNamedDeclaration" ? node.declaration as Record<string, unknown> | undefined : node;
+    if (!declaration || (declaration.type !== "TSInterfaceDeclaration" && declaration.type !== "TSTypeAliasDeclaration")) continue;
+    const name = identifierName(declaration.id);
+    if (name) result.set(name, attachTypeSource(typeMembers(declaration), source));
+  }
+  return result;
+}
+
+/** Resolves only relative imports inside the project root. Bare package
+ * imports and paths escaping the root are intentionally ignored, so type
+ * discovery never turns the palette scan into arbitrary filesystem access. */
+function resolveProjectImport(rootDir: string, fromFile: string, specifier: string): string | null {
+  if (!specifier.startsWith(".")) return null;
+  const root = resolvePath(rootDir);
+  const base = resolvePath(dirname(fromFile), specifier);
+  const candidates = [base, ...[".ts", ".tsx", ".js", ".jsx", ".d.ts"].map((extension) => `${base}${extension}`),
+    ...[".ts", ".tsx", ".js", ".jsx"].map((extension) => join(base, `index${extension}`))];
+  for (const candidate of candidates) {
+    const resolved = resolvePath(candidate);
+    if (resolved !== root && !resolved.startsWith(`${root}${sep}`)) continue;
+    try {
+      if (statSync(resolved).isFile()) return resolved;
+    } catch {
+      // A missing extension candidate is expected; try the next one.
+    }
+  }
+  return null;
+}
+
+function buildPropTypeCatalog(rootDir: string, sources: Map<string, string>): PropTypeCatalog {
+  const catalog: PropTypeCatalog = new Map();
+  const pending = [...sources.entries()];
+  const seen = new Set<string>();
+  while (pending.length > 0 && seen.size < MAX_IMPORTED_TYPE_FILES) {
+    const [file, knownSource] = pending.shift()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    let source = knownSource;
+    if (!sources.has(file)) {
+      try { source = readFileSync(file, "utf8"); } catch { continue; }
+    }
+    for (const [name, members] of typeDeclarations(source)) catalog.set(`${file}\0${name}`, members);
+    for (const raw of parsedBody(source)) {
+      const node = raw as Record<string, unknown>;
+      if (node.type !== "ImportDeclaration") continue;
+      const specifier = (node.source as Record<string, unknown> | undefined)?.value;
+      if (typeof specifier !== "string") continue;
+      const importedFile = resolveProjectImport(rootDir, file, specifier);
+      if (!importedFile || seen.has(importedFile)) continue;
+      pending.push([importedFile, ""]);
+    }
+  }
+  return catalog;
+}
+
+function importedPropTypes(source: string, file: string, rootDir: string, catalog: PropTypeCatalog): Map<string, PropTypeMembers> {
+  const result = new Map<string, PropTypeMembers>();
+  for (const raw of parsedBody(source)) {
+    const node = raw as Record<string, unknown>;
+    if (node.type !== "ImportDeclaration") continue;
+    const specifier = (node.source as Record<string, unknown> | undefined)?.value;
+    if (typeof specifier !== "string") continue;
+    const importedFile = resolveProjectImport(rootDir, file, specifier);
+    if (!importedFile) continue;
+    for (const rawSpec of (node.specifiers as Record<string, unknown>[]) ?? []) {
+      if (rawSpec.type !== "ImportSpecifier") continue;
+      const imported = identifierName(rawSpec.imported);
+      const local = identifierName(rawSpec.local);
+      if (!imported || !local) continue;
+      const members = catalog.get(`${importedFile}\0${imported}`);
+      if (members) result.set(local, members);
+    }
+  }
+  return result;
+}
+
 function propTypeText(source: string, member: Record<string, unknown> | undefined): string {
   const annotation = member?.typeAnnotation as Record<string, unknown> | undefined;
-  return annotation?.typeAnnotation ? nodeText(source, annotation.typeAnnotation) : "unknown";
+  const memberSource = typeof member?.__source === "string" ? member.__source : source;
+  return annotation?.typeAnnotation ? nodeText(memberSource, annotation.typeAnnotation) : "unknown";
 }
 
 function parameterPropNames(source: string, parameter: Record<string, unknown>): Map<string, { required: boolean; defaultValue?: string }> {
@@ -245,14 +343,15 @@ function parameterPropNames(source: string, parameter: Record<string, unknown>):
   return result;
 }
 
-function componentPropHints(source: string, body: unknown[]): Map<string, ComponentPropHint[]> {
+function componentPropHints(source: string, body: unknown[], externalPropTypes?: Map<string, PropTypeMembers>): Map<string, ComponentPropHint[]> {
   const declarations = new Map<string, Record<string, unknown>>();
   const propTypes = new Map<string, Record<string, Record<string, unknown>>>();
   for (const raw of body) {
     const node = raw as Record<string, unknown>;
-    if (node.type === "TSInterfaceDeclaration" || node.type === "TSTypeAliasDeclaration") {
-      const name = identifierName(node.id);
-      if (name) propTypes.set(name, typeMembers(node));
+    const typeDeclaration = node.type === "ExportNamedDeclaration" ? node.declaration as Record<string, unknown> | undefined : node;
+    if (typeDeclaration?.type === "TSInterfaceDeclaration" || typeDeclaration?.type === "TSTypeAliasDeclaration") {
+      const name = identifierName(typeDeclaration.id);
+      if (name) propTypes.set(name, typeMembers(typeDeclaration));
     }
     const declaration = node.type === "ExportNamedDeclaration" || node.type === "ExportDefaultDeclaration"
       ? node.declaration as Record<string, unknown> | undefined
@@ -274,7 +373,7 @@ function componentPropHints(source: string, body: unknown[]): Map<string, Compon
     const parameter = params[0];
     const parameterAnnotation = parameter.typeAnnotation as Record<string, unknown> | undefined;
     const referencedType = typeName(parameterAnnotation?.typeAnnotation);
-    const members = referencedType ? propTypes.get(referencedType) ?? {} : {};
+    const members = referencedType ? propTypes.get(referencedType) ?? externalPropTypes?.get(referencedType) ?? {} : {};
     const destructured = parameterPropNames(source, parameter);
     const names = new Set([...Object.keys(members), ...destructured.keys()]);
     const hints = [...names].map((propName) => {
@@ -308,7 +407,7 @@ export function relativeSpecifier(fromFile: string, toFile: string): string {
 /** Discovers exported components from an already-loaded source buffer. This
  * is the live-editor counterpart to `discoverComponents`; it never reads
  * from disk and therefore reflects unsaved exports immediately. */
-export function discoverComponentsInSource(source: string, file: string, fromFile?: string): DiscoveredComponent[] {
+export function discoverComponentsInSource(source: string, file: string, fromFile?: string, externalPropTypes?: Map<string, PropTypeMembers>): DiscoveredComponent[] {
   let ast: { program?: { body?: unknown[] } };
   try {
     ast = parserAdapter.parse(source) as { program?: { body?: unknown[] } };
@@ -317,7 +416,7 @@ export function discoverComponentsInSource(source: string, file: string, fromFil
   }
   const body = ast.program?.body ?? [];
   const sourceTags = collectJsxTagNames(ast);
-  const propHints = componentPropHints(source, body);
+  const propHints = componentPropHints(source, body, externalPropTypes);
   return exportedComponentNames(body).map(({ name, isDefault, deprecated, replacement }) => ({
     name,
     file,
@@ -388,8 +487,11 @@ export function discoverComponents(rootDir: string, fromFile?: string): Discover
     try {
       const source = readFileSync(file, "utf8");
       sources.set(file, source);
-      out.push(...discoverComponentsInSource(source, file, fromFile));
     } catch { /* skip unreadable files */ }
+  }
+  const typeCatalog = buildPropTypeCatalog(rootDir, sources);
+  for (const [file, source] of sources) {
+    out.push(...discoverComponentsInSource(source, file, fromFile, importedPropTypes(source, file, rootDir, typeCatalog)));
   }
   const usageByFile = new Map<string, Map<string, number>>();
   for (const [file, source] of sources) {

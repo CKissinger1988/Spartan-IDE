@@ -173,3 +173,27 @@ test("infers props from an exported arrow component and a type alias", () => {
     { name: "tone", type: '"quiet" | "loud"', required: false },
   ]);
 });
+
+test("resolves a relative imported props interface from a real TypeScript file", () => {
+  const root = fixture({
+    "types.ts": [
+      "export interface ButtonProps {",
+      "  label: string;",
+      "  tone?: \"quiet\" | \"loud\";",
+      "}",
+      "",
+    ].join("\n"),
+    "Button.tsx": [
+      "import type { ButtonProps as Props } from \"./types\";",
+      "export function Button({ label, tone }: Props) {",
+      "  return <button data-tone={tone}>{label}</button>;",
+      "}",
+      "",
+    ].join("\n"),
+  });
+  const button = discoverComponents(root).find((component) => component.name === "Button");
+  assert.deepEqual(button?.propHints, [
+    { name: "label", type: "string", required: true },
+    { name: "tone", type: '"quiet" | "loud"', required: false },
+  ]);
+});
