@@ -382,6 +382,37 @@ test("Delete refuses to remove a top-level component root", () => {
   );
 });
 
+test("DeleteMany removes independent subtrees in one edit and preserves unselected siblings", () => {
+  const source = `const X = () => <div><i id="keep" /><section><b /></section><em id="remove" /><strong /></div>;`;
+  const roots = parseComponent(source);
+  const children = roots[0].children;
+  const result = applyCanvasEdit(source, {
+    kind: "DeleteMany",
+    nodeIds: [children[2].id, children[1].id],
+  });
+  assert.match(result, /<i id="keep" \/>/);
+  assert.doesNotMatch(result, /<section>/);
+  assert.doesNotMatch(result, /<em id="remove" \/>/);
+  assert.match(result, /<strong \/>/);
+  assert.doesNotThrow(() => parseComponent(result));
+});
+
+test("DeleteMany refuses roots and overlapping ancestor/descendant selections", () => {
+  const source = `function A() { return <div><section><b /></section></div>; } function B() { return <aside />; }`;
+  const roots = parseComponent(source);
+  const outer = roots[0];
+  const section = outer.children[0];
+  const bold = section.children[0];
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "DeleteMany", nodeIds: [outer.id, roots[1].id] }),
+    /top-level component root/,
+  );
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "DeleteMany", nodeIds: [section.id, bold.id] }),
+    /one element contains another/,
+  );
+});
+
 test("Duplicate clones an element and its nested subtree immediately after the original", () => {
   const source = `const X = () => <main><article data-kind="card"><span>copy me</span></article><aside /></main>;`;
   const result = applyCanvasEdit(source, { kind: "Duplicate", nodeId: "n1" });

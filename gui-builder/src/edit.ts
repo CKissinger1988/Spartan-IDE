@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All fourteen members of the `CanvasEdit` union are real and implemented:
+ * All fifteen members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -403,6 +403,49 @@ function applyDelete(
   spliceOut(parent.children as AnyNode[], node);
 }
 
+function applyDeleteMany(
+  nodesById: Map<string, AnyNode>,
+  parentOf: Map<string, AnyNode | null>,
+  edit: Extract<CanvasEdit, { kind: "DeleteMany" }>,
+): void {
+  const ids = [...new Set(edit.nodeIds)];
+  if (ids.length === 0) throw new Error("DeleteMany requires at least one selected element.");
+  const nodes = ids.map((id) => {
+    const node = nodesById.get(id);
+    if (!node) throw new Error(`No element with id "${id}" found in the current source.`);
+    return { id, node };
+  });
+  for (const entry of nodes) {
+    const parent = parentOf.get(entry.id);
+    if (parent === undefined) throw new Error(`Internal error: no parent entry tracked for id "${entry.id}".`);
+    if (parent === null) {
+      throw new Error(`Element "${entry.id}" is a top-level component root -- deleting it would remove the component root.`);
+    }
+  }
+  for (let i = 0; i < nodes.length; i += 1) {
+    for (let j = i + 1; j < nodes.length; j += 1) {
+      if (isDescendant(nodes[i].node, nodes[j].node) || isDescendant(nodes[j].node, nodes[i].node)) {
+        throw new Error("DeleteMany refuses selections where one element contains another; select only independent subtrees.");
+      }
+    }
+  }
+  const byParent = new Map<AnyNode, AnyNode[]>();
+  for (const entry of nodes) {
+    const parent = parentOf.get(entry.id) as AnyNode;
+    const siblings = byParent.get(parent) ?? [];
+    siblings.push(entry.node);
+    byParent.set(parent, siblings);
+  }
+  for (const [parent, selectedChildren] of byParent) {
+    const children = parent.children as AnyNode[];
+    const indexes = selectedChildren.map((node) => children.indexOf(node));
+    if (indexes.some((index) => index === -1)) {
+      throw new Error("DeleteMany only supports direct JSX children, not elements nested inside expressions.");
+    }
+    for (const index of indexes.sort((a, b) => b - a)) children.splice(index, 1);
+  }
+}
+
 function applyDuplicate(
   nodesById: Map<string, AnyNode>,
   parentOf: Map<string, AnyNode | null>,
@@ -507,6 +550,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       break;
     case "Delete":
       applyDelete(nodesById, parentOf, edit);
+      break;
+    case "DeleteMany":
+      applyDeleteMany(nodesById, parentOf, edit);
       break;
     case "Duplicate":
       applyDuplicate(nodesById, parentOf, edit);

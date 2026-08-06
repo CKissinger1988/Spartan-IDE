@@ -210,6 +210,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Existing prop/style quick pickers with literal/expression seeding | Real |
 | Synchronized tree/canvas selection highlight across preview reloads | Real |
 | Shift-click multi-selection with synchronized multi-node canvas highlights | Real |
+| Multi-selection subtree deletion with overlap and root safety guards | Real |
 | Batch prop/style changes across selected nodes with structural-edit safety gates | Real |
 | Safe JSX tag renaming with paired closing-tag updates | Real |
 | Safe wrapping of direct selected elements in a new JSX container | Real |

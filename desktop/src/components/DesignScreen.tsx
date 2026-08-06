@@ -625,7 +625,7 @@ function StyleValueControl({
  * the exact same `edit` IPC call typing already uses, so a canvas edit
  * gets the same undo/dirty tracking as any other edit.
  *
- * All fourteen real `CanvasEdit` kinds `gui-builder` itself supports are now
+ * All fifteen real `CanvasEdit` kinds `gui-builder` itself supports are now
  * wired here: `PropChange`/`StyleChange` (mutate the selected node) and
  * `Reparent`/`ComponentInsert` (structural edits, closing the gap this
  * screen's own edit form used to leave unreachable even after
@@ -994,12 +994,17 @@ export default function DesignScreen({
   );
 
   const deleteSelected = useCallback(async () => {
-    if (!activeFile || !selectedId || !hasSingleSelection) return;
-    if (!window.confirm(`Delete <${selectedNode?.tagName ?? "element"}> and all of its children?`)) return;
-    await applyEditObject({ kind: "Delete", nodeId: selectedId });
+    if (!activeFile || selectedIds.length === 0) return;
+    const description = selectedIds.length === 1
+      ? `<${selectedNode?.tagName ?? "element"}> and all of its children`
+      : `${selectedIds.length} selected elements and all of their children`;
+    if (!window.confirm(`Delete ${description}?`)) return;
+    await applyEditObject(selectedIds.length === 1
+      ? { kind: "Delete", nodeId: selectedIds[0] }
+      : { kind: "DeleteMany", nodeIds: selectedIds });
     setSelectedId(null);
     setSelectedIds([]);
-  }, [activeFile, selectedId, hasSingleSelection, selectedNode?.tagName, applyEditObject]);
+  }, [activeFile, selectedIds, selectedNode?.tagName, applyEditObject]);
 
   const duplicateSelected = useCallback(async () => {
     if (!activeFile || !selectedId || !hasSingleSelection) return;
@@ -1075,7 +1080,7 @@ export default function DesignScreen({
         setSelectedIds([]);
         return;
       }
-      if ((event.key === "Delete" || event.key === "Backspace") && hasSingleSelection) {
+      if ((event.key === "Delete" || event.key === "Backspace") && selectionCount > 0) {
         event.preventDefault();
         void deleteSelected();
         return;
@@ -1862,8 +1867,8 @@ export default function DesignScreen({
                 </div>
               </div>
             )}
-            <button className="design-danger-action mono" onClick={deleteSelected} disabled={!hasSingleSelection}>
-              Delete selected element
+            <button className="design-danger-action mono" onClick={deleteSelected} disabled={selectionCount === 0}>
+              {selectionCount > 1 ? `Delete ${selectionCount} selected elements` : "Delete selected element"}
             </button>
             <button className="design-secondary-action mono" onClick={duplicateSelected} disabled={!hasSingleSelection}>
               Duplicate selected element
