@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All sixteen members of the `CanvasEdit` union are real and implemented:
+ * All seventeen members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -516,6 +516,48 @@ function applyDuplicateMany(
   }
 }
 
+function applyReorderMany(
+  nodesById: Map<string, AnyNode>,
+  parentOf: Map<string, AnyNode | null>,
+  edit: Extract<CanvasEdit, { kind: "ReorderMany" }>,
+): void {
+  const ids = [...new Set(edit.nodeIds)];
+  if (ids.length === 0) throw new Error("ReorderMany requires at least one selected element.");
+  const nodes = ids.map((id) => {
+    const node = nodesById.get(id);
+    if (!node) throw new Error(`No element with id "${id}" found in the current source.`);
+    return { id, node };
+  });
+  const parents = nodes.map((entry) => parentOf.get(entry.id));
+  if (parents.some((parent) => parent === undefined)) {
+    throw new Error("ReorderMany encountered an element without a tracked JSX parent.");
+  }
+  if (parents.some((parent) => parent === null)) {
+    throw new Error("ReorderMany cannot move a top-level component root.");
+  }
+  if (parents.some((parent) => parent !== parents[0])) {
+    throw new Error("ReorderMany requires all selected elements to share one direct JSX parent.");
+  }
+  const siblings = parents[0]!.children as AnyNode[];
+  const selected = new Set(nodes.map((entry) => entry.node));
+  if (nodes.some((entry) => siblings.indexOf(entry.node) === -1)) {
+    throw new Error("ReorderMany only supports direct JSX children, not elements nested inside expressions.");
+  }
+  if (edit.direction < 0) {
+    for (let index = 1; index < siblings.length; index += 1) {
+      if (selected.has(siblings[index]) && !selected.has(siblings[index - 1])) {
+        [siblings[index - 1], siblings[index]] = [siblings[index], siblings[index - 1]];
+      }
+    }
+  } else {
+    for (let index = siblings.length - 2; index >= 0; index -= 1) {
+      if (selected.has(siblings[index]) && !selected.has(siblings[index + 1])) {
+        [siblings[index], siblings[index + 1]] = [siblings[index + 1], siblings[index]];
+      }
+    }
+  }
+}
+
 function applyComponentInsert(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "ComponentInsert" }>): void {
   const parent = nodesById.get(edit.parentId);
   if (!parent) {
@@ -607,6 +649,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       break;
     case "DuplicateMany":
       applyDuplicateMany(nodesById, parentOf, edit);
+      break;
+    case "ReorderMany":
+      applyReorderMany(nodesById, parentOf, edit);
       break;
     case "Reparent":
       applyReparent(nodesById, parentOf, edit);

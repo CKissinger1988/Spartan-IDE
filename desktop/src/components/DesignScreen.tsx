@@ -625,7 +625,7 @@ function StyleValueControl({
  * the exact same `edit` IPC call typing already uses, so a canvas edit
  * gets the same undo/dirty tracking as any other edit.
  *
- * All sixteen real `CanvasEdit` kinds `gui-builder` itself supports are now
+ * All seventeen real `CanvasEdit` kinds `gui-builder` itself supports are now
  * wired here: `PropChange`/`StyleChange` (mutate the selected node) and
  * `Reparent`/`ComponentInsert` (structural edits, closing the gap this
  * screen's own edit form used to leave unreachable even after
@@ -703,6 +703,15 @@ export default function DesignScreen({
   const canWrapSelection = selectedParentEntries.length > 0
     && !!firstSelectedParentId
     && selectedParentEntries.every((entry) => entry?.parent.id === firstSelectedParentId);
+  const canReorderSelection = selectedParentEntries.length > 0
+    && !!firstSelectedParentId
+    && selectedParentEntries.every((entry) => entry?.parent.id === firstSelectedParentId);
+  const canMoveSelectionUp = canReorderSelection && selectedParentEntries.some(
+    (entry) => !!entry && entry.index > 0 && !selectedIds.includes(entry.parent.children[entry.index - 1].id),
+  );
+  const canMoveSelectionDown = canReorderSelection && selectedParentEntries.some(
+    (entry) => !!entry && entry.index < entry.parent.children.length - 1 && !selectedIds.includes(entry.parent.children[entry.index + 1].id),
+  );
   const filteredRoots = useMemo(() => filterTree(roots, treeFilter), [roots, treeFilter]);
 
   useEffect(() => {
@@ -1014,7 +1023,13 @@ export default function DesignScreen({
   }, [activeFile, selectedIds, applyEditObject]);
 
   const moveSelected = useCallback(async (direction: -1 | 1) => {
-    if (!activeFile || !selectedId || !hasSingleSelection) return;
+    if (!activeFile || selectedIds.length === 0) return;
+    if (selectedIds.length > 1) {
+      if (!canReorderSelection) return;
+      await applyEditObject({ kind: "ReorderMany", nodeIds: selectedIds, direction });
+      return;
+    }
+    if (!selectedId) return;
     const location = findParentEntry(roots, selectedId);
     if (!location) return;
     const nextIndex = location.index + direction;
@@ -1025,7 +1040,7 @@ export default function DesignScreen({
       newParentId: location.parent.id,
       index: nextIndex,
     });
-  }, [activeFile, selectedId, hasSingleSelection, roots, applyEditObject]);
+  }, [activeFile, selectedId, selectedIds, canReorderSelection, roots, applyEditObject]);
 
   const copyStyles = useCallback(() => {
     if (!selectedNode || !hasSingleSelection) return;
@@ -1879,18 +1894,18 @@ export default function DesignScreen({
               <button
                 className="design-secondary-action mono"
                 onClick={() => void moveSelected(-1)}
-                disabled={!selectedSibling || selectedSibling.index === 0}
-                title="Move the selected element before its previous sibling"
+                disabled={selectionCount > 1 ? !canMoveSelectionUp : !selectedSibling || selectedSibling.index === 0}
+                title={selectionCount > 1 ? "Move selected siblings up one position" : "Move the selected element before its previous sibling"}
               >
-                ↑ Move up
+                ↑ {selectionCount > 1 ? "Move selected up" : "Move up"}
               </button>
               <button
                 className="design-secondary-action mono"
                 onClick={() => void moveSelected(1)}
-                disabled={!selectedSibling || selectedSibling.index >= selectedSibling.parent.children.length - 1}
-                title="Move the selected element after its next sibling"
+                disabled={selectionCount > 1 ? !canMoveSelectionDown : !selectedSibling || selectedSibling.index >= selectedSibling.parent.children.length - 1}
+                title={selectionCount > 1 ? "Move selected siblings down one position" : "Move the selected element after its next sibling"}
               >
-                ↓ Move down
+                ↓ {selectionCount > 1 ? "Move selected down" : "Move down"}
               </button>
             </div>
             <div className="design-inspection-actions">

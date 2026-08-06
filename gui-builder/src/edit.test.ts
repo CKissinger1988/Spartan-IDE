@@ -322,6 +322,26 @@ test("Reparent can reorder within the same parent", () => {
   );
 });
 
+test("ReorderMany moves selected siblings one position while preserving their relative order", () => {
+  const source = `const X = () => <div><i id="a" /><i id="b" /><i id="c" /><i id="d" /></div>;`;
+  const roots = parseComponent(source);
+  const children = roots[0].children;
+  const selected = [children[2].id, children[0].id];
+  const movedUp = parseComponent(applyCanvasEdit(source, { kind: "ReorderMany", nodeIds: selected, direction: -1 }))[0].children;
+  assert.deepEqual(movedUp.map((node) => node.props.id?.kind === "string" && node.props.id.value), ["a", "c", "b", "d"]);
+  const movedDown = parseComponent(applyCanvasEdit(source, { kind: "ReorderMany", nodeIds: selected, direction: 1 }))[0].children;
+  assert.deepEqual(movedDown.map((node) => node.props.id?.kind === "string" && node.props.id.value), ["b", "a", "d", "c"]);
+});
+
+test("ReorderMany refuses mixed-parent selections", () => {
+  const source = `const X = () => <div><i /><section><b /></section></div>;`;
+  const roots = parseComponent(source);
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "ReorderMany", nodeIds: [roots[0].children[0].id, roots[0].children[1].children[0].id], direction: -1 }),
+    /share one direct JSX parent/,
+  );
+});
+
 test("Reparent refuses to move a top-level root (it has no parent JSXElement)", () => {
   // Two real, independent, unrelated roots -- distinct from the cycle
   // case below (moving a root into its *own* descendant is correctly a

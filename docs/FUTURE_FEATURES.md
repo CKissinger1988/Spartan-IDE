@@ -212,6 +212,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Shift-click multi-selection with synchronized multi-node canvas highlights | Real |
 | Multi-selection subtree deletion with overlap and root safety guards | Real |
 | Multi-selection subtree duplication with overlap and root safety guards | Real |
+| Multi-selection sibling reordering with stable relative order | Real |
 | Batch prop/style changes across selected nodes with structural-edit safety gates | Real |
 | Safe JSX tag renaming with paired closing-tag updates | Real |
 | Safe wrapping of direct selected elements in a new JSX container | Real |
