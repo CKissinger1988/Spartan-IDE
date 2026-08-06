@@ -3570,6 +3570,50 @@
   opacity: 0.45;
 }
 
+.design-interaction-presets {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border, #454545);
+}
+
+.design-interaction-save {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.design-interaction-save .design-input {
+  min-width: 0;
+  flex: 1;
+}
+
+.design-interaction-save .design-secondary-action {
+  width: auto;
+  white-space: nowrap;
+}
+
+.design-interaction-preset-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.design-interaction-preset {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.design-interaction-preset .design-secondary-action {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+}
+
+.design-interaction-preset .design-asset-action {
+  flex: 0 0 auto;
+}
+
 .design-preview-status {
   padding: 4px 12px 8px;
   color: var(--accent, #d68bff);

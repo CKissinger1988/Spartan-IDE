@@ -234,7 +234,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Relative image asset insertion as inline background images | Real |
 | Configurable string props and initial text for inserted elements | Real |
 | Desktop/Tablet/Mobile viewport presets and zoom | Real |
-| Reusable component state machines and interaction-state controls | Planned |
+| Reusable per-file interaction-state presets and preview controls | Real |
 
 ## Model management
 

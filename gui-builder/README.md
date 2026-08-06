@@ -38,7 +38,7 @@ summarizes.
 - `src/bundle.ts` — real esbuild bundling with `data-spartan-id` annotation and
   sandboxed-preview click/drag relays, including an in-memory source path for
   previews of unsaved editor changes.
-- `src/*.test.ts` — 99 real tests (Node's built-in `node:test` runner, no
+- `src/*.test.ts` — 101 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.
@@ -50,9 +50,11 @@ summarizes.
   bundle on file activation and after a real Canvas → Code edit, using the
   current in-memory source for correctness. A future incremental preview can
   add HMR after measuring rebuild cost.
-- **No font manager or reusable component state machine yet.** Font assets can
+- **No font manager or code-authored component state machine runtime yet.** Font assets can
   be discovered and copied, and CSS token definitions can be edited from the
-  desktop suite; reusable state/variant controls remain future work.
+  desktop suite; the desktop now provides reusable per-file interaction-state
+  presets for the live preview, while code-authored state-machine generation
+  remains future work.
 - **`PropChange` supports string, number, boolean, and parsed expression
   values.** Expressions are parsed as JavaScript/JSX and never injected as
   raw source fragments.

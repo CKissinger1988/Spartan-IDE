@@ -58,6 +58,14 @@ interface VariantPreset {
   updatedAt: number;
 }
 
+type PreviewInteractionState = "normal" | "focus" | "hover" | "active";
+
+interface InteractionPreset {
+  name: string;
+  state: PreviewInteractionState;
+  updatedAt: number;
+}
+
 interface PreviewInspection {
   nodeId: string;
   rect: { width: number; height: number };
@@ -641,6 +649,9 @@ export default function DesignScreen({
   const [previewSource, setPreviewSource] = useState<string | null>(null);
   const [variantName, setVariantName] = useState("");
   const [variantPresets, setVariantPresets] = useState<VariantPreset[]>([]);
+  const [interactionPresetName, setInteractionPresetName] = useState("");
+  const [interactionPresets, setInteractionPresets] = useState<InteractionPreset[]>([]);
+  const [previewInteractionState, setPreviewInteractionState] = useState<PreviewInteractionState>("normal");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [styleClipboard, setStyleClipboard] = useState<StyleClipboard | null>(null);
@@ -703,6 +714,7 @@ export default function DesignScreen({
   useEffect(() => {
     setPreviewInspection(null);
     setBoxModelVisible(false);
+    setPreviewInteractionState("normal");
     iframeRef.current?.contentWindow?.postMessage(
       { type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds },
       "*",
@@ -901,6 +913,7 @@ export default function DesignScreen({
   }, [activeFile, previewSource, refresh]);
 
   const variantStorageKey = activeFile ? `spartan.gui-builder.variants:${activeFile.path}` : null;
+  const interactionStorageKey = activeFile ? `spartan.gui-builder.interactions:${activeFile.path}` : null;
 
   const saveVariant = useCallback(() => {
     if (!variantStorageKey || !previewSource || !variantName.trim()) return;
@@ -939,6 +952,33 @@ export default function DesignScreen({
     },
     [variantStorageKey, variantPresets]
   );
+
+  const saveInteractionPreset = useCallback(() => {
+    if (!interactionStorageKey || !interactionPresetName.trim()) return;
+    const name = interactionPresetName.trim();
+    const next: InteractionPreset[] = [
+      { name, state: previewInteractionState, updatedAt: Date.now() },
+      ...interactionPresets.filter((preset) => preset.name !== name),
+    ];
+    setInteractionPresets(next);
+    setInteractionPresetName("");
+    try {
+      window.localStorage.setItem(interactionStorageKey, JSON.stringify(next));
+    } catch (e) {
+      setError(`Could not save interaction preset: ${(e as Error).message}`);
+    }
+  }, [interactionStorageKey, interactionPresetName, previewInteractionState, interactionPresets]);
+
+  const deleteInteractionPreset = useCallback((name: string) => {
+    if (!interactionStorageKey) return;
+    const next = interactionPresets.filter((preset) => preset.name !== name);
+    setInteractionPresets(next);
+    try {
+      window.localStorage.setItem(interactionStorageKey, JSON.stringify(next));
+    } catch (e) {
+      setError(`Could not delete interaction preset: ${(e as Error).message}`);
+    }
+  }, [interactionStorageKey, interactionPresets]);
 
   /** Real drag-to-reparent (task #279), shared by the canvas drop relay
    * and the "Move into" form. `gui-builder`'s own `Reparent` already
@@ -1055,17 +1095,26 @@ export default function DesignScreen({
     if (activeFile && isComponentFile(activeFile.path)) {
       setPreviewSource(null);
       setVariantName("");
+      setInteractionPresetName("");
       const key = `spartan.gui-builder.variants:${activeFile.path}`;
+      const interactionKey = `spartan.gui-builder.interactions:${activeFile.path}`;
       try {
         const saved = JSON.parse(window.localStorage.getItem(key) ?? "[]") as VariantPreset[];
         setVariantPresets(Array.isArray(saved) ? saved.filter((preset) => preset && typeof preset.source === "string") : []);
+        const savedInteractions = JSON.parse(window.localStorage.getItem(interactionKey) ?? "[]") as InteractionPreset[];
+        setInteractionPresets(Array.isArray(savedInteractions)
+          ? savedInteractions.filter((preset) => preset && typeof preset.name === "string" && ["normal", "focus", "hover", "active"].includes(preset.state))
+          : []);
       } catch {
         setVariantPresets([]);
+        setInteractionPresets([]);
       }
     } else {
       setRoots([]);
       setBundleCode(null);
       setVariantPresets([]);
+      setInteractionPresets([]);
+      setPreviewInteractionState("normal");
     }
   }, [activeFile?.path, refresh]);
 
@@ -1301,14 +1350,37 @@ export default function DesignScreen({
       { type: focused ? "spartan-canvas-focus" : "spartan-canvas-blur", nodeId: selectedId },
       "*",
     );
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "spartan-canvas-state", nodeId: selectedId, state: null },
+      "*",
+    );
+    setPreviewInteractionState(focused ? "focus" : "normal");
   }, [selectedId, hasSingleSelection]);
 
   const setPreviewState = useCallback((state: "hover" | "active" | null) => {
     if (!selectedId || !hasSingleSelection) return;
     iframeRef.current?.contentWindow?.postMessage(
+      { type: "spartan-canvas-blur", nodeId: selectedId },
+      "*",
+    );
+    iframeRef.current?.contentWindow?.postMessage(
       { type: "spartan-canvas-state", nodeId: selectedId, state },
       "*",
     );
+    setPreviewInteractionState(state ?? "normal");
+  }, [selectedId, hasSingleSelection]);
+
+  const applyInteractionPreset = useCallback((preset: InteractionPreset) => {
+    if (!selectedId || !hasSingleSelection) return;
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: preset.state === "focus" ? "spartan-canvas-focus" : "spartan-canvas-blur", nodeId: selectedId },
+      "*",
+    );
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "spartan-canvas-state", nodeId: selectedId, state: preset.state === "hover" || preset.state === "active" ? preset.state : null },
+      "*",
+    );
+    setPreviewInteractionState(preset.state);
   }, [selectedId, hasSingleSelection]);
 
   const setBoxModel = useCallback((visible: boolean) => {
@@ -1743,6 +1815,50 @@ export default function DesignScreen({
                   <button className="design-secondary-action mono" onClick={() => setBoxModel(!boxModelVisible)}>
                     {boxModelVisible ? "Hide box model" : "Show box model"}
                   </button>
+                </div>
+                <div className="design-interaction-presets" aria-label="Reusable interaction state presets">
+                  <div className="design-preview-status mono">
+                    Interaction state: {previewInteractionState}
+                  </div>
+                  <div className="design-interaction-save">
+                    <input
+                      className="design-input mono"
+                      aria-label="Interaction preset name"
+                      placeholder="save current state as…"
+                      value={interactionPresetName}
+                      onChange={(event) => setInteractionPresetName(event.target.value)}
+                    />
+                    <button
+                      className="design-secondary-action mono"
+                      onClick={saveInteractionPreset}
+                      disabled={!interactionPresetName.trim()}
+                    >
+                      Save state
+                    </button>
+                  </div>
+                  {interactionPresets.length > 0 && (
+                    <div className="design-interaction-preset-list">
+                      {interactionPresets.map((preset) => (
+                        <div className="design-interaction-preset" key={preset.name}>
+                          <button
+                            className="design-secondary-action mono"
+                            onClick={() => applyInteractionPreset(preset)}
+                            disabled={!hasSingleSelection}
+                            title={`Apply ${preset.state} preview state`}
+                          >
+                            {preset.name} · {preset.state}
+                          </button>
+                          <button
+                            className="design-asset-action mono"
+                            onClick={() => deleteInteractionPreset(preset.name)}
+                            title={`Delete ${preset.name} interaction preset`}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
