@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyTokenValue, discoverTokens } from "./tokens.js";
+import { applyTokenValue, defineTokenValue, discoverTokens } from "./tokens.js";
 
 test("discovers real CSS custom properties and preserves their source values", () => {
   const root = mkdtempSync(join(tmpdir(), "spartan-tokens-"));
@@ -41,4 +41,23 @@ test("applies one token value while preserving neighboring CSS source", () => {
 test("rejects unsafe or unknown token edits", () => {
   assert.throws(() => applyTokenValue(":root { --x: red; }", "--x", "red; --injected: blue"), /cannot contain/);
   assert.throws(() => applyTokenValue(":root { --x: red; }", "--missing", "blue"), /No declaration/);
+});
+
+test("defines a new token in a multiline root while preserving surrounding CSS", () => {
+  const source = ":root {\n  --brand: #d33;\n}\n.button { color: var(--brand); }\n";
+  const result = defineTokenValue(source, "--space-lg", "24px");
+  assert.match(result, /--brand: #d33;/);
+  assert.match(result, /  --space-lg: 24px;\n}/);
+  assert.match(result, /\.button \{ color: var\(--brand\); \}/);
+});
+
+test("creates a root block when a stylesheet has no root token scope", () => {
+  const result = defineTokenValue(".button { color: red; }\n", "--surface", "white");
+  assert.match(result, /^:root \{\n  --surface: white;\n\}\n\.button/);
+});
+
+test("defines existing tokens through the same safe update path", () => {
+  assert.equal(defineTokenValue(":root { --x: red; }", "--x", "blue"), ":root { --x: blue; }");
+  assert.throws(() => defineTokenValue(":root {}", "x", "red"), /Invalid CSS/);
+  assert.throws(() => defineTokenValue(":root {}", "--x", "red; --bad: blue"), /cannot contain/);
 });

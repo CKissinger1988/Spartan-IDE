@@ -3698,6 +3698,25 @@
   padding: 3px 6px;
 }
 
+.design-token-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 86px 86px auto;
+  gap: 4px;
+  align-items: center;
+  padding: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.design-token-file {
+  min-width: 0;
+  width: 100%;
+  padding: 4px 5px;
+  border: 1px solid var(--border);
+  background: var(--input, #151515);
+  color: var(--text);
+  font: inherit;
+}
+
 .design-token-use {
   min-width: 0;
 }

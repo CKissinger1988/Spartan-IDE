@@ -33,18 +33,49 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Replaces one real custom-property declaration while preserving the rest
- * of the CSS source exactly. Values cannot contain declaration delimiters in
- * this v1, preventing an edit from injecting a second property or rule. */
-export function applyTokenValue(source: string, name: string, value: string): string {
+function validateToken(name: string, value: string): string {
   if (!/^--[a-zA-Z0-9_-]+$/.test(name)) throw new Error(`Invalid CSS custom-property name "${name}".`);
   const trimmed = value.trim();
   if (!trimmed || /[;{}]/.test(trimmed)) {
     throw new Error("Token value must be non-empty and cannot contain ';', '{', or '}'.");
   }
+  return trimmed;
+}
+
+/** Replaces one real custom-property declaration while preserving the rest
+ * of the CSS source exactly. Values cannot contain declaration delimiters in
+ * this v1, preventing an edit from injecting a second property or rule. */
+export function applyTokenValue(source: string, name: string, value: string): string {
+  const trimmed = validateToken(name, value);
   const declaration = new RegExp(`(^|[;{\\s])(${escapeRegExp(name)})\\s*:\\s*([^;{}]+)`, "m");
   if (!declaration.test(source)) throw new Error(`No declaration for token "${name}" was found.`);
   return source.replace(declaration, (_match, prefix: string, tokenName: string) => `${prefix}${tokenName}: ${trimmed}`);
+}
+
+/** Creates a custom-property declaration in `:root`, or updates it when it
+ * already exists. The edit is deliberately limited to one declaration value
+ * and preserves the surrounding stylesheet source. */
+export function defineTokenValue(source: string, name: string, value: string): string {
+  const trimmed = validateToken(name, value);
+  const declaration = new RegExp(`(^|[;{\\s])(${escapeRegExp(name)})\\s*:\\s*([^;{}]+)`, "m");
+  if (declaration.test(source)) return applyTokenValue(source, name, trimmed);
+
+  const rootBlock = /(:root\s*\{)([\s\S]*?)(\})/m;
+  const match = rootBlock.exec(source);
+  if (!match) return `:root {\n  ${name}: ${trimmed};\n}\n${source}`;
+
+  const body = match[2];
+  if (!body.includes("\n")) {
+    const inlineBody = body.trim();
+    const separator = inlineBody ? " " : "";
+    const updated = `${match[1]}${body}${separator}${name}: ${trimmed};${inlineBody ? " " : ""}${match[3]}`;
+    return source.slice(0, match.index) + updated + source.slice(match.index + match[0].length);
+  }
+
+  const closingIndent = body.match(/\n([ \t]*)$/)?.[1] ?? "";
+  const content = body.endsWith("\n") ? body : `${body}\n`;
+  const updated = `${match[1]}${content}  ${name}: ${trimmed};\n${closingIndent}${match[3]}`;
+  return source.slice(0, match.index) + updated + source.slice(match.index + match[0].length);
 }
 
 /** Finds declarations such as `--color-accent: #e33;` without executing CSS. */

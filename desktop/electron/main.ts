@@ -417,6 +417,13 @@ app.whenReady().then(() => {
       return guiBuilder.applyTokenValue(params.path, params.name, params.value, params.source);
     }
   );
+  ipcMain.handle(
+    "spartan:design_token_define",
+    async (_event, params: { path: string; name: string; value: string; source: string }) => {
+      if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
+      return guiBuilder.defineTokenValue(params.path, params.name, params.value, params.source);
+    }
+  );
 
   // Two real, deliberately narrow main-process-only conveniences for the
   // new Settings "Diagnostics"/"About" section (§75.76) -- neither routes

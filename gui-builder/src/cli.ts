@@ -42,7 +42,7 @@ import { bundleComponent } from "./bundle.js";
 import { bundleComponentSource } from "./bundle.js";
 import { discoverComponents } from "./components.js";
 import { discoverAssets } from "./assets.js";
-import { applyTokenValue, discoverTokens } from "./tokens.js";
+import { applyTokenValue, defineTokenValue, discoverTokens } from "./tokens.js";
 import type { CanvasEdit } from "./types.js";
 
 function fail(message: string): never {
@@ -178,6 +178,15 @@ function runTokenApply(path: string | undefined, name: string | undefined, value
   }
 }
 
+function runTokenDefine(path: string | undefined, name: string | undefined, value: string | undefined): void {
+  if (!path || !name || value === undefined) fail("usage: cli.js token-define <css-file> <token-name> <value> (source read from stdin)");
+  try {
+    process.stdout.write(JSON.stringify({ source: defineTokenValue(readStdin(), name, value) }));
+  } catch (e) {
+    fail(`failed to define token: ${(e as Error).message}`);
+  }
+}
+
 async function main(): Promise<void> {
   const mode = process.argv[2];
   if (mode === "apply") {
@@ -196,6 +205,8 @@ async function main(): Promise<void> {
     runTokens(process.argv[3]);
   } else if (mode === "token-apply") {
     runTokenApply(process.argv[3], process.argv[4], process.argv[5]);
+  } else if (mode === "token-define") {
+    runTokenDefine(process.argv[3], process.argv[4], process.argv[5]);
   } else {
     runParse(mode);
   }

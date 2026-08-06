@@ -809,6 +809,9 @@ export default function DesignScreen({
   const [tokenDrafts, setTokenDrafts] = useState<Record<string, string>>({});
   const [tokensOpen, setTokensOpen] = useState(false);
   const [tokenFilter, setTokenFilter] = useState("");
+  const [newTokenName, setNewTokenName] = useState("");
+  const [newTokenValue, setNewTokenValue] = useState("");
+  const [newTokenFile, setNewTokenFile] = useState("");
   const [viewportId, setViewportId] = useState<DesignViewportId>("desktop");
   const [customViewportWidth, setCustomViewportWidth] = useState(1024);
   const [customViewportHeight, setCustomViewportHeight] = useState(768);
@@ -902,6 +905,10 @@ export default function DesignScreen({
     if (!query) return tokens;
     return tokens.filter((token) => `${token.name} ${token.value} ${token.file} ${token.relativePath}`.toLowerCase().includes(query));
   }, [tokens, tokenFilter]);
+  const openCssFiles = useMemo(
+    () => openFiles.filter((file) => /\.(css|scss|sass|less)$/i.test(file.path)),
+    [openFiles]
+  );
 
   useEffect(() => {
     setTextValue(selectedNode?.textContent ?? "");
@@ -1788,6 +1795,45 @@ export default function DesignScreen({
     [openFiles, tokenDrafts, onContentChange, activeFile, previewSource, refresh]
   );
 
+  const defineToken = useCallback(async () => {
+    const name = newTokenName.trim();
+    const value = newTokenValue.trim();
+    const cssFile = openCssFiles.find((file) => file.path === newTokenFile) ?? openCssFiles[0];
+    if (!cssFile) {
+      setError("Open a CSS file in the Editor before defining a token.");
+      return;
+    }
+    if (!name || !value) {
+      setError("Enter both a token name and value.");
+      return;
+    }
+    try {
+      const result = (await window.spartan.call("design_token_define", {
+        path: cssFile.path,
+        name,
+        value,
+        source: cssFile.content,
+      })) as { source: string };
+      await window.spartan.call("edit", {
+        doc_id: cssFile.docId,
+        start_char: 0,
+        end_char: [...cssFile.content].length,
+        text: result.source,
+      });
+      onContentChange(cssFile.path, result.source);
+      const discovered = (await window.spartan.call("design_tokens", { rootDir: projectRoot })) as {
+        tokens: DiscoveredToken[];
+      };
+      setTokens(discovered.tokens);
+      setTokenDrafts(Object.fromEntries(discovered.tokens.map((token) => [`${token.file}:${token.name}`, token.value])));
+      setNewTokenName("");
+      setNewTokenValue("");
+      if (activeFile) await refresh(activeFile.path, previewSource ?? activeFile.content);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [newTokenName, newTokenValue, newTokenFile, openCssFiles, onContentChange, projectRoot, activeFile, previewSource, refresh]);
+
   const applyEdit = useCallback(async () => {
     if (!activeFile || !selectedId) return;
     let edit: Record<string, unknown>;
@@ -2153,6 +2199,41 @@ export default function DesignScreen({
                   value={tokenFilter}
                   onChange={(event) => setTokenFilter(event.target.value)}
                 />
+                <div className="design-token-create">
+                  <select
+                    className="design-token-file mono"
+                    aria-label="CSS file for new token"
+                    value={newTokenFile || openCssFiles[0]?.path || ""}
+                    onChange={(event) => setNewTokenFile(event.target.value)}
+                    disabled={openCssFiles.length === 0}
+                  >
+                    {openCssFiles.length === 0 ? <option value="">Open a CSS file first</option> : openCssFiles.map((file) => (
+                      <option key={file.path} value={file.path}>{file.path}</option>
+                    ))}
+                  </select>
+                  <input
+                    className="design-token-value mono"
+                    aria-label="New token name"
+                    placeholder="--token-name"
+                    value={newTokenName}
+                    onChange={(event) => setNewTokenName(event.target.value)}
+                  />
+                  <input
+                    className="design-token-value mono"
+                    aria-label="New token value"
+                    placeholder="value"
+                    value={newTokenValue}
+                    onChange={(event) => setNewTokenValue(event.target.value)}
+                  />
+                  <button
+                    className="design-token-save mono"
+                    disabled={openCssFiles.length === 0 || !newTokenName.trim() || !newTokenValue.trim()}
+                    title="Define this CSS custom property in the selected file"
+                    onClick={() => void defineToken()}
+                  >
+                    Define
+                  </button>
+                </div>
                 {tokens.length === 0 ? (
                   <div className="design-palette-empty mono">No CSS custom properties found under the project root.</div>
                 ) : filteredTokens.length === 0 ? (
