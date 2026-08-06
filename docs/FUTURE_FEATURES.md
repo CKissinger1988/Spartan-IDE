@@ -196,6 +196,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Typed string/number/boolean prop editing | Real |
 | Open-tab component file switcher in Design mode | Real |
 | Design-mode undo/redo controls backed by document history | Real |
+| Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, and Ctrl/Cmd+Y design-history shortcuts | Real |
 | Unsaved-buffer-aware Design tree and live preview | Real |
 | Preview-only prop/style variant controls with reset/apply workflow | Real |
 | Named per-file variant preset save/load/delete | Real |

@@ -1164,12 +1164,22 @@ export default function DesignScreen({
 
   // Keep common canvas shortcuts scoped to the Design screen and out of the
   // inspector's own inputs. Escape clears any selection; Delete/Backspace and
-  // Ctrl/Cmd+D reuse the already-confirmed structural commands, so keyboard
-  // and pointer actions have exactly the same AST/undo behavior.
+  // Ctrl/Cmd+D reuse the already-confirmed structural commands, while
+  // Ctrl/Cmd+Z/Y reuse the document-history toolbar actions.
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       const target = event.target;
       if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable=\"true\"]")) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        void undoRedo(event.shiftKey ? "redo" : "undo");
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        void undoRedo("redo");
+        return;
+      }
       if (event.key === "Escape" && selectionCount > 0) {
         event.preventDefault();
         setSelectedIds([]);
@@ -1187,7 +1197,7 @@ export default function DesignScreen({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [selectionCount, hasSingleSelection, deleteSelected, duplicateSelected]);
+  }, [selectionCount, deleteSelected, duplicateSelected, undoRedo]);
 
   useEffect(() => {
     setSelectedId(null);
