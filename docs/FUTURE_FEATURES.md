@@ -216,6 +216,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Multi-selection sibling reordering with stable relative order | Real |
 | Batch prop/style changes across selected nodes with structural-edit safety gates | Real |
 | Safe JSX tag renaming with paired closing-tag updates | Real |
+| Multi-selection JSX tag renaming with paired closing-tag updates | Real |
 | Safe wrapping of direct selected elements in a new JSX container | Real |
 | Multi-selection grouping into one shared JSX wrapper | Real |
 | Component insertion as a sibling after the selected node | Real |

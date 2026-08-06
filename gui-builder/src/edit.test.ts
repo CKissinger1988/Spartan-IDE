@@ -213,6 +213,23 @@ test("TagChange renames self-closing JSX tags and rejects unsafe names", () => {
   );
 });
 
+test("TagChangeMany renames paired and self-closing selections atomically", () => {
+  const source = `const X = () => <main><div><span>One</span></div><Icon /><aside /></main>;`;
+  const result = applyCanvasEdit(source, { kind: "TagChangeMany", nodeIds: ["n1", "n3"], tagName: "Panel" });
+  assert.match(result, /<Panel><span>One<\/span><\/Panel>/);
+  assert.match(result, /<Panel \/>/);
+  assert.match(result, /<aside \/>/);
+});
+
+test("TagChangeMany refuses an invalid tag before changing any node", () => {
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <main><div /><span /></main>;`, {
+      kind: "TagChangeMany", nodeIds: ["n1", "n2"], tagName: "Foo.Bar",
+    }),
+    /single valid JSX identifier/,
+  );
+});
+
 test("Wrap places a direct child around a new container while preserving its subtree", () => {
   const source = `const X = () => <div><button id="save"><span>Save</span></button></div>;`;
   const result = applyCanvasEdit(source, { kind: "Wrap", nodeId: "n1", tagName: "section" });

@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All eighteen members of the `CanvasEdit` union are real and implemented:
+ * All nineteen members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -233,6 +233,23 @@ function applyTagChange(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdi
   const nextName = b.jsxIdentifier(edit.tagName);
   element.openingElement.name = nextName;
   if (element.closingElement) element.closingElement.name = b.jsxIdentifier(edit.tagName);
+}
+
+function applyTagChangeMany(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "TagChangeMany" }>): void {
+  if (!isValidIdentifierName(edit.tagName)) {
+    throw new Error(`TagChangeMany tag name "${edit.tagName}" must be a single valid JSX identifier.`);
+  }
+  const ids = [...new Set(edit.nodeIds)];
+  if (ids.length === 0) throw new Error("TagChangeMany requires at least one selected element.");
+  const elements = ids.map((id) => {
+    const element = nodesById.get(id);
+    if (!element) throw new Error(`No element with id "${id}" found in the current source.`);
+    return element;
+  });
+  for (const element of elements) {
+    element.openingElement.name = b.jsxIdentifier(edit.tagName);
+    if (element.closingElement) element.closingElement.name = b.jsxIdentifier(edit.tagName);
+  }
 }
 
 function applyWrap(
@@ -655,6 +672,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       break;
     case "TagChange":
       applyTagChange(nodesById, edit);
+      break;
+    case "TagChangeMany":
+      applyTagChangeMany(nodesById, edit);
       break;
     case "Wrap":
       applyWrap(nodesById, parentOf, edit);
