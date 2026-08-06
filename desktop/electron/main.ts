@@ -392,6 +392,10 @@ app.whenReady().then(() => {
       return guiBuilder.discoverAssets(params.rootDir, params.fromFile);
     }
   );
+  ipcMain.handle("spartan:design_tokens", async (_event, params: { rootDir: string }) => {
+    if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
+    return guiBuilder.discoverTokens(params.rootDir);
+  });
 
   // Two real, deliberately narrow main-process-only conveniences for the
   // new Settings "Diagnostics"/"About" section (§75.76) -- neither routes

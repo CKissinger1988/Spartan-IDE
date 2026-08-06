@@ -39,6 +39,13 @@ interface DiscoveredAsset {
   label: string;
 }
 
+interface DiscoveredToken {
+  name: string;
+  value: string;
+  file: string;
+  relativePath: string;
+}
+
 interface DesignScreenProps {
   activeFile: OpenFile | null;
   onContentChange: (path: string, content: string, saved?: boolean) => void;
@@ -448,6 +455,8 @@ export default function DesignScreen({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [assets, setAssets] = useState<DiscoveredAsset[]>([]);
   const [assetsOpen, setAssetsOpen] = useState(false);
+  const [tokens, setTokens] = useState<DiscoveredToken[]>([]);
+  const [tokensOpen, setTokensOpen] = useState(false);
   const [viewportId, setViewportId] = useState<(typeof DESIGN_VIEWPORTS)[number]["id"]>("desktop");
   const [previewZoom, setPreviewZoom] = useState(75);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -658,6 +667,37 @@ export default function DesignScreen({
     [activeFile, selectedId, applyEditObject]
   );
 
+  const toggleTokens = useCallback(async () => {
+    if (tokensOpen) {
+      setTokensOpen(false);
+      return;
+    }
+    setTokensOpen(true);
+    if (!projectRoot) return;
+    try {
+      const result = (await window.spartan.call("design_tokens", { rootDir: projectRoot })) as {
+        tokens: DiscoveredToken[];
+      };
+      setTokens(result.tokens);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [tokensOpen, projectRoot]);
+
+  const applyToken = useCallback(
+    async (token: DiscoveredToken) => {
+      if (!activeFile || !selectedId || editKind !== "StyleChange" || !propKey.trim()) return;
+      await applyEditObject({
+        kind: "StyleChange",
+        nodeId: selectedId,
+        property: propKey.trim(),
+        value: `var(${token.name})`,
+      });
+      setPropValue(`var(${token.name})`);
+    },
+    [activeFile, selectedId, editKind, propKey, applyEditObject]
+  );
+
   const applyEdit = useCallback(async () => {
     if (!activeFile || !selectedId) return;
     let edit: Record<string, unknown>;
@@ -787,6 +827,33 @@ export default function DesignScreen({
                     >
                       <span className="design-palette-name">▧ {asset.label}</span>
                       <span className="design-palette-from">{asset.relativePath}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+            <button className="design-palette-toggle mono" onClick={toggleTokens}>
+              {tokensOpen ? "▾" : "▸"} Design tokens{tokens.length > 0 ? ` (${tokens.length})` : ""}
+            </button>
+            {tokensOpen && (
+              <div className="design-palette">
+                {tokens.length === 0 ? (
+                  <div className="design-palette-empty mono">No CSS custom properties found under the project root.</div>
+                ) : (
+                  tokens.map((token, index) => (
+                    <button
+                      key={`${token.file}:${token.name}:${index}`}
+                      className="design-palette-item mono"
+                      disabled={!selectedId || editKind !== "StyleChange" || !propKey.trim()}
+                      title={
+                        selectedId && editKind === "StyleChange" && propKey.trim()
+                          ? `Set ${propKey} to var(${token.name})`
+                          : "Choose Style editing and a property first"
+                      }
+                      onClick={() => applyToken(token)}
+                    >
+                      <span className="design-palette-name">{token.name}</span>
+                      <span className="design-palette-from">{token.value} · {token.relativePath}</span>
                     </button>
                   ))
                 )}

@@ -40,6 +40,7 @@ const ALLOWED_METHODS = new Set([
   "design_apply_edit",
   "design_components",
   "design_assets",
+  "design_tokens",
   "leo_status",
   "leo_start_task",
   "leo_approve_plan",

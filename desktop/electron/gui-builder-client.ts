@@ -100,4 +100,9 @@ export class GuiBuilderClient {
     const stdout = await runCli(this.cliPath, args);
     return JSON.parse(stdout);
   }
+
+  async discoverTokens(rootDir: string): Promise<unknown> {
+    const stdout = await runCli(this.cliPath, ["tokens", rootDir]);
+    return JSON.parse(stdout);
+  }
 }

@@ -262,8 +262,9 @@ touching security, sandboxing, or approval flows (§9, §36).
 - **GUI Builder**: desktop-only visual JSX/TSX design mode with a structural component tree,
   sandboxed live React preview, click-to-select and drag-to-reparent, prop/style controls,
   responsive viewport presets and zoom, component-library discovery/imports, image asset
-  discovery/insertion, component insertion, reparenting, and two-way AST edits. The standalone
-  `gui-builder/` package has 64 focused and end-to-end tests and is built separately from the
+  discovery/insertion, CSS design-token discovery/application, component insertion, reparenting,
+  and two-way AST edits. The standalone `gui-builder/` package has 67 focused and end-to-end
+  tests and is built separately from the
   Rust workspace.
 - **Mobile companion**: Expo/React Native onboarding, private and cloud QR pairing,
   configurable endpoints, SecureStore pairing secrets, backend connectivity, session/inbox
