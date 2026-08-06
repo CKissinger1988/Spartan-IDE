@@ -684,6 +684,7 @@ export default function DesignScreen({
   const [tokens, setTokens] = useState<DiscoveredToken[]>([]);
   const [tokenDrafts, setTokenDrafts] = useState<Record<string, string>>({});
   const [tokensOpen, setTokensOpen] = useState(false);
+  const [tokenFilter, setTokenFilter] = useState("");
   const [viewportId, setViewportId] = useState<DesignViewportId>("desktop");
   const [customViewportWidth, setCustomViewportWidth] = useState(1024);
   const [customViewportHeight, setCustomViewportHeight] = useState(768);
@@ -730,6 +731,11 @@ export default function DesignScreen({
     if (!query) return assets;
     return assets.filter((asset) => `${asset.label} ${asset.file} ${asset.relativePath} ${asset.referencePath}`.toLowerCase().includes(query));
   }, [assets, assetFilter]);
+  const filteredTokens = useMemo(() => {
+    const query = tokenFilter.trim().toLowerCase();
+    if (!query) return tokens;
+    return tokens.filter((token) => `${token.name} ${token.value} ${token.file} ${token.relativePath}`.toLowerCase().includes(query));
+  }, [tokens, tokenFilter]);
 
   useEffect(() => {
     setTextValue(selectedNode?.textContent ?? "");
@@ -1140,6 +1146,7 @@ export default function DesignScreen({
       setInteractionPresetName("");
       setPaletteFilter("");
       setAssetFilter("");
+      setTokenFilter("");
       const key = `spartan.gui-builder.variants:${activeFile.path}`;
       const interactionKey = `spartan.gui-builder.interactions:${activeFile.path}`;
       try {
@@ -1816,10 +1823,19 @@ export default function DesignScreen({
             </button>
             {tokensOpen && (
               <div className="design-palette">
+                <input
+                  className="design-palette-filter mono"
+                  aria-label="Filter design tokens"
+                  placeholder="Filter tokens…"
+                  value={tokenFilter}
+                  onChange={(event) => setTokenFilter(event.target.value)}
+                />
                 {tokens.length === 0 ? (
                   <div className="design-palette-empty mono">No CSS custom properties found under the project root.</div>
+                ) : filteredTokens.length === 0 ? (
+                  <div className="design-palette-empty mono">No tokens match “{tokenFilter}”.</div>
                 ) : (
-                  tokens.map((token, index) => {
+                  filteredTokens.map((token, index) => {
                     const tokenKey = `${token.file}:${token.name}`;
                     const cssOpen = openFiles.some((file) => file.path === token.file);
                     return (
