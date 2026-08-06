@@ -652,7 +652,7 @@ export default function DesignScreen({
   const [propValue, setPropValue] = useState("");
   const [textValue, setTextValue] = useState("");
   const [propValueType, setPropValueType] = useState<"string" | "number" | "boolean" | "expression">("string");
-  const [editKind, setEditKind] = useState<"PropChange" | "PropRemove" | "StyleChange" | "StyleRemove" | "TextChange" | "TagChange" | "Wrap" | "Unwrap" | "Reparent" | "ComponentInsert">(
+  const [editKind, setEditKind] = useState<"PropChange" | "PropRemove" | "StyleChange" | "StyleRemove" | "TextChange" | "TagChange" | "Wrap" | "Unwrap" | "Reparent" | "ComponentInsert" | "ComponentInsertSibling">(
     "PropChange"
   );
   const [tagName, setTagName] = useState("");
@@ -1112,7 +1112,9 @@ export default function DesignScreen({
           ? canUnwrap
         : editKind === "Reparent"
           ? hasSingleSelection && !!reparentTargetId && reparentTargetId !== selectedId
-          : hasSingleSelection && !!insertTagName.trim());
+        : editKind === "ComponentInsertSibling"
+          ? hasSingleSelection && !!selectedSibling && !!insertTagName.trim()
+        : hasSingleSelection && !!insertTagName.trim());
 
   /** Picking a curated property seeds the value control from the node's
    * own real current style entry, so the form opens showing what's
@@ -1400,6 +1402,7 @@ export default function DesignScreen({
       edit = { kind: "Reparent", nodeId: selectedId, newParentId: reparentTargetId };
     } else {
       if (!insertTagName.trim()) return;
+      if (editKind === "ComponentInsertSibling" && !selectedSibling) return;
       let props: Record<string, string>;
       try {
         props = parseInsertProps(insertProps);
@@ -1407,7 +1410,12 @@ export default function DesignScreen({
         setError((e as Error).message);
         return;
       }
-      edit = { kind: "ComponentInsert", parentId: selectedId, tagName: insertTagName.trim() };
+      edit = {
+        kind: "ComponentInsert",
+        parentId: editKind === "ComponentInsertSibling" ? selectedSibling!.parent.id : selectedId,
+        tagName: insertTagName.trim(),
+      };
+      if (editKind === "ComponentInsertSibling") edit.index = selectedSibling!.index + 1;
       if (Object.keys(props).length > 0) edit.props = props;
       if (insertText !== "") edit.childrenText = insertText;
     }
@@ -1426,7 +1434,7 @@ export default function DesignScreen({
     setInsertTagName("");
     setInsertProps("");
     setInsertText("");
-  }, [activeFile, selectedId, selectedIds, propKey, propValue, propValueType, textValue, tagName, wrapTagName, editKind, reparentTargetId, insertTagName, insertProps, insertText, applyEditObject, applyEditBatch]);
+  }, [activeFile, selectedId, selectedIds, selectedSibling, propKey, propValue, propValueType, textValue, tagName, wrapTagName, editKind, reparentTargetId, insertTagName, insertProps, insertText, applyEditObject, applyEditBatch]);
 
   if (!activeFile || !isComponentFile(activeFile.path)) {
     return (
@@ -1850,6 +1858,14 @@ export default function DesignScreen({
                 />
                 Insert child
               </label>
+              <label>
+                <input
+                  type="radio"
+                  checked={editKind === "ComponentInsertSibling"}
+                  onChange={() => setEditKind("ComponentInsertSibling")}
+                />
+                Insert sibling
+              </label>
             </div>
             {editKind === "PropChange" && (
               <>
@@ -2011,11 +2027,11 @@ export default function DesignScreen({
                   ))}
               </select>
             )}
-            {editKind === "ComponentInsert" && (
+            {(editKind === "ComponentInsert" || editKind === "ComponentInsertSibling") && (
               <>
                 <input
                   className="design-input mono"
-                  placeholder="new tag name (e.g. Button)"
+                  placeholder={editKind === "ComponentInsertSibling" ? "sibling tag name (e.g. Button)" : "new tag name (e.g. Button)"}
                   value={insertTagName}
                   onChange={(e) => setInsertTagName(e.target.value)}
                 />

@@ -213,6 +213,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Safe JSX tag renaming with paired closing-tag updates | Real |
 | Safe wrapping of direct selected elements in a new JSX container | Real |
 | Multi-selection grouping into one shared JSX wrapper | Real |
+| Component insertion as a sibling after the selected node | Real |
 | Safe unwrapping of attribute-free direct wrappers | Real |
 | Same-parent sibling reordering with Move up/Move down controls | Real |
 | Keyboard canvas shortcuts (Escape clear, Delete remove, Ctrl/Cmd+D duplicate) | Real |
