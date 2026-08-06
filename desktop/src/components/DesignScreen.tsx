@@ -6,6 +6,7 @@ import { designClipboardShortcut } from "../../../gui-builder/src/shortcuts";
 import { buildDesignHandoffMarkdown } from "../../../gui-builder/src/handoff";
 import { buildComponentPlaygroundScaffold, buildComponentScaffold } from "../../../gui-builder/src/scaffold";
 import { buildPreviewDocument } from "../../../gui-builder/src/preview";
+import { LAYOUT_PRESETS } from "../../../gui-builder/src/layout";
 import type { ComponentPropDefinition } from "../../../gui-builder/src/scaffold";
 
 interface StyleEntryValue {
@@ -2211,6 +2212,12 @@ export default function DesignScreen({
     postPreviewMessage({ type: "spartan-canvas-box-model", nodeId: selectedId, visible });
   }, [postPreviewMessage, selectedId, hasSingleSelection]);
 
+  const applyLayoutPreset = useCallback(async (preset: (typeof LAYOUT_PRESETS)[number]) => {
+    if (!activeFile || selectedIds.length === 0) return;
+    const entries = Object.fromEntries(Object.entries(preset.entries).map(([property, value]) => [property, { value }]));
+    await applyEditObject({ kind: "StyleBatchMany", nodeIds: selectedIds, entries });
+  }, [activeFile, selectedIds, applyEditObject]);
+
   const toggleTokens = useCallback(async () => {
     if (tokensOpen) {
       setTokensOpen(false);
@@ -3249,6 +3256,22 @@ export default function DesignScreen({
                 Prop clipboard: {Object.keys(propClipboard.entries).length} props from &lt;{propClipboard.sourceTagName}&gt;
               </div>
             )}
+            <div className="design-layout-presets" aria-label="Layout presets">
+              <div className="design-preview-status mono">Auto-layout presets</div>
+              <div className="design-inspection-actions">
+                {LAYOUT_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    className="design-secondary-action mono"
+                    disabled={selectionCount === 0}
+                    title={`${preset.description}; applies to ${selectionCount === 1 ? "the selected element" : `${selectionCount} selected elements`}`}
+                    onClick={() => void applyLayoutPreset(preset)}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="design-edit-kind">
               <label>
                 <input

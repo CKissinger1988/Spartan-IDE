@@ -254,6 +254,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Searchable structure-tree filtering with ancestor preservation | Real |
 | Keyboard-accessible treeitem selection and Left/Right expansion controls | Real |
 | Guided layout, positioning, grid, overflow, and visual-effects style controls | Real |
+| One-click atomic Stack/Row/Grid/Center auto-layout presets | Real |
 | Debounced live editor-buffer parsing and visual preview refresh | Real |
 | Latest-refresh generation guard against stale async tree/preview results | Real |
 | Selected-element rendered geometry and computed-style inspection | Real |
