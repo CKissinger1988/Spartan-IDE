@@ -214,6 +214,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Lossless inline-style copy/paste across single or multiple selected nodes | Real |
 | Collapsible structure-tree navigation with accessible expand state | Real |
 | Searchable structure-tree filtering with ancestor preservation | Real |
+| Keyboard-accessible treeitem selection and Left/Right expansion controls | Real |
 | Guided layout, positioning, grid, overflow, and visual-effects style controls | Real |
 | Debounced live editor-buffer parsing and visual preview refresh | Real |
 | Selected-element rendered geometry and computed-style inspection | Real |

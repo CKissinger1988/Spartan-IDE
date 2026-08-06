@@ -137,6 +137,22 @@ function TreeNode({
       <div
         className={`design-tree-row ${selectedIds.includes(node.id) ? "design-tree-row-active" : ""}`}
         style={{ paddingLeft: 8 + depth * 14 }}
+        role="treeitem"
+        tabIndex={0}
+        aria-selected={selectedIds.includes(node.id)}
+        aria-expanded={hasChildren ? visibleExpanded : undefined}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onSelect(node.id, event.shiftKey);
+          } else if (event.key === "ArrowRight" && hasChildren) {
+            event.preventDefault();
+            if (!visibleExpanded && !filterActive) setExpanded(true);
+          } else if (event.key === "ArrowLeft" && hasChildren) {
+            event.preventDefault();
+            if (visibleExpanded && !filterActive) setExpanded(false);
+          }
+        }}
         onClick={(event) => onSelect(node.id, event.shiftKey)}
       >
         <button
@@ -156,9 +172,13 @@ function TreeNode({
           &lt;{node.tagName}&gt; <span className="design-tree-id">#{node.id}</span>
         </span>
       </div>
-      {visibleExpanded && node.children.map((child) => (
-          <TreeNode key={child.id} node={child} depth={depth + 1} selectedIds={selectedIds} onSelect={onSelect} filterActive={filterActive} />
-        ))}
+      {visibleExpanded && node.children.length > 0 && (
+        <div role="group">
+          {node.children.map((child) => (
+            <TreeNode key={child.id} node={child} depth={depth + 1} selectedIds={selectedIds} onSelect={onSelect} filterActive={filterActive} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1396,11 +1416,13 @@ export default function DesignScreen({
             onChange={(event) => setTreeFilter(event.target.value)}
           />
         </div>
-        {filteredRoots.length > 0 ? filteredRoots.map((root) => (
-          <TreeNode key={root.id} node={root} depth={0} selectedIds={selectedIds} onSelect={selectNodes} filterActive={treeFilter.trim().length > 0} />
-        )) : (
-          <div className="design-tree-empty mono">No matching elements.</div>
-        )}
+        <div role="tree" aria-label="Structure tree">
+          {filteredRoots.length > 0 ? filteredRoots.map((root) => (
+            <TreeNode key={root.id} node={root} depth={0} selectedIds={selectedIds} onSelect={selectNodes} filterActive={treeFilter.trim().length > 0} />
+          )) : (
+            <div className="design-tree-empty mono">No matching elements.</div>
+          )}
+        </div>
       </div>
       <div className="design-preview">
         <div className="design-preview-toolbar mono">
