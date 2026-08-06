@@ -212,6 +212,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Batch prop/style changes across selected nodes with structural-edit safety gates | Real |
 | Safe JSX tag renaming with paired closing-tag updates | Real |
 | Safe wrapping of direct selected elements in a new JSX container | Real |
+| Same-parent sibling reordering with Move up/Move down controls | Real |
 | Keyboard canvas shortcuts (Escape clear, Delete remove, Ctrl/Cmd+D duplicate) | Real |
 | Lossless inline-style copy/paste across single or multiple selected nodes | Real |
 | Collapsible structure-tree navigation with accessible expand state | Real |

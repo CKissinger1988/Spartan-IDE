@@ -196,6 +196,16 @@ function findNode(roots: ComponentNode[], id: string): ComponentNode | null {
   return null;
 }
 
+function findParentEntry(roots: ComponentNode[], id: string): { parent: ComponentNode; index: number } | null {
+  for (const root of roots) {
+    const index = root.children.findIndex((child) => child.id === id);
+    if (index !== -1) return { parent: root, index };
+    const nested = findParentEntry(root.children, id);
+    if (nested) return nested;
+  }
+  return null;
+}
+
 /** Flattens the real tree into one list for the Reparent/Insert target
  * dropdowns -- both operations need to name a node that isn't necessarily
  * the currently-selected one, so a simple id+tagName picker is the real,
@@ -675,6 +685,7 @@ export default function DesignScreen({
   const selectedNode = selectedId ? findNode(roots, selectedId) : null;
   const selectionCount = selectedIds.length;
   const hasSingleSelection = selectionCount === 1;
+  const selectedSibling = selectedId && hasSingleSelection ? findParentEntry(roots, selectedId) : null;
   const filteredRoots = useMemo(() => filterTree(roots, treeFilter), [roots, treeFilter]);
 
   useEffect(() => {
@@ -946,6 +957,20 @@ export default function DesignScreen({
     if (!activeFile || !selectedId || !hasSingleSelection) return;
     await applyEditObject({ kind: "Duplicate", nodeId: selectedId });
   }, [activeFile, selectedId, hasSingleSelection, applyEditObject]);
+
+  const moveSelected = useCallback(async (direction: -1 | 1) => {
+    if (!activeFile || !selectedId || !hasSingleSelection) return;
+    const location = findParentEntry(roots, selectedId);
+    if (!location) return;
+    const nextIndex = location.index + direction;
+    if (nextIndex < 0 || nextIndex >= location.parent.children.length) return;
+    await applyEditObject({
+      kind: "Reparent",
+      nodeId: selectedId,
+      newParentId: location.parent.id,
+      index: nextIndex,
+    });
+  }, [activeFile, selectedId, hasSingleSelection, roots, applyEditObject]);
 
   const copyStyles = useCallback(() => {
     if (!selectedNode || !hasSingleSelection) return;
@@ -1690,6 +1715,24 @@ export default function DesignScreen({
             <button className="design-secondary-action mono" onClick={duplicateSelected} disabled={!hasSingleSelection}>
               Duplicate selected element
             </button>
+            <div className="design-inspection-actions">
+              <button
+                className="design-secondary-action mono"
+                onClick={() => void moveSelected(-1)}
+                disabled={!selectedSibling || selectedSibling.index === 0}
+                title="Move the selected element before its previous sibling"
+              >
+                ↑ Move up
+              </button>
+              <button
+                className="design-secondary-action mono"
+                onClick={() => void moveSelected(1)}
+                disabled={!selectedSibling || selectedSibling.index >= selectedSibling.parent.children.length - 1}
+                title="Move the selected element after its next sibling"
+              >
+                ↓ Move down
+              </button>
+            </div>
             <div className="design-inspection-actions">
               <button
                 className="design-secondary-action mono"
