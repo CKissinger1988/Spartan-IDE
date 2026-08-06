@@ -113,6 +113,10 @@ test("a real bundle carries real data-spartan-id attributes for click-to-select 
         "the real bundle should include the real click-relay postMessage call",
       );
       assert.ok(
+        result.code.includes("shiftKey"),
+        "the real bundle should preserve Shift-click intent for additive selection",
+      );
+      assert.ok(
         result.code.includes("spartan-canvas-select"),
         "the real bundle should accept parent-driven selection messages",
       );

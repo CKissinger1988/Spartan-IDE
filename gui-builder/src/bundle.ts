@@ -79,7 +79,7 @@ try {
   var dragging = false;
   var suppressNextClick = false;
   var hoverEl = null;
-  var selectedEl = null;
+  var selectedEls = [];
   var focusedEl = null;
   var focusedHadTabIndex = false;
   var focusedPreviousTabIndex = null;
@@ -89,22 +89,25 @@ try {
   // restored when selection changes, so the user's own component CSS stays
   // authoritative after the builder moves on to another node.
   function clearSelection() {
-    if (!selectedEl) return;
-    selectedEl.style.outline = selectedEl.__spartanPrevSelectedOutline || "";
-    selectedEl.style.outlineOffset = selectedEl.__spartanPrevSelectedOutlineOffset || "";
-    selectedEl = null;
+    selectedEls.forEach(function (element) {
+      element.style.outline = element.__spartanPrevSelectedOutline || "";
+      element.style.outlineOffset = element.__spartanPrevSelectedOutlineOffset || "";
+    });
+    selectedEls = [];
   }
 
-  function highlightSelection(nodeId) {
+  function highlightSelection(nodeIds) {
     clearSelection();
-    if (!nodeId) return;
-    var candidate = document.querySelector('[data-spartan-id="' + nodeId + '"]');
-    if (!candidate) return;
-    selectedEl = candidate;
-    selectedEl.__spartanPrevSelectedOutline = selectedEl.style.outline;
-    selectedEl.__spartanPrevSelectedOutlineOffset = selectedEl.style.outlineOffset;
-    selectedEl.style.outline = "2px solid #2E7DFF";
-    selectedEl.style.outlineOffset = "2px";
+    var ids = Array.isArray(nodeIds) ? nodeIds : nodeIds ? [nodeIds] : [];
+    ids.forEach(function (nodeId) {
+      var candidate = document.querySelector('[data-spartan-id="' + nodeId + '"]');
+      if (!candidate) return;
+      candidate.__spartanPrevSelectedOutline = candidate.style.outline;
+      candidate.__spartanPrevSelectedOutlineOffset = candidate.style.outlineOffset;
+      candidate.style.outline = "2px solid #2E7DFF";
+      candidate.style.outlineOffset = "2px";
+      selectedEls.push(candidate);
+    });
   }
 
   function inspectSelection(nodeId) {
@@ -157,7 +160,7 @@ try {
   // sandboxed iframe; no same-origin escape hatch is assumed.
   window.addEventListener("message", function (event) {
     if (event.data && event.data.type === "spartan-canvas-select") {
-      highlightSelection(event.data.nodeId || null);
+      highlightSelection(event.data.nodeIds || event.data.nodeId || null);
     } else if (event.data && event.data.type === "spartan-canvas-inspect") {
       inspectSelection(event.data.nodeId || null);
     } else if (event.data && event.data.type === "spartan-canvas-focus") {
@@ -186,7 +189,7 @@ try {
     if (target) {
       highlightSelection(target.getAttribute("data-spartan-id"));
       window.parent.postMessage(
-        { type: "spartan-canvas-click", nodeId: target.getAttribute("data-spartan-id") },
+        { type: "spartan-canvas-click", nodeId: target.getAttribute("data-spartan-id"), shiftKey: event.shiftKey },
         "*"
       );
     }

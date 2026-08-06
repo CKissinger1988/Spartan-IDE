@@ -113,14 +113,14 @@ function filterTree(nodes: ComponentNode[], query: string): ComponentNode[] {
 function TreeNode({
   node,
   depth,
-  selectedId,
+  selectedIds,
   onSelect,
   filterActive,
 }: {
   node: ComponentNode;
   depth: number;
-  selectedId: string | null;
-  onSelect: (id: string) => void;
+  selectedIds: string[];
+  onSelect: (id: string, additive: boolean) => void;
   filterActive: boolean;
 }): React.ReactElement {
   const [expanded, setExpanded] = useState(true);
@@ -129,9 +129,9 @@ function TreeNode({
   return (
     <div>
       <div
-        className={`design-tree-row ${node.id === selectedId ? "design-tree-row-active" : ""}`}
+        className={`design-tree-row ${selectedIds.includes(node.id) ? "design-tree-row-active" : ""}`}
         style={{ paddingLeft: 8 + depth * 14 }}
-        onClick={() => onSelect(node.id)}
+        onClick={(event) => onSelect(node.id, event.shiftKey)}
       >
         <button
           type="button"
@@ -151,7 +151,7 @@ function TreeNode({
         </span>
       </div>
       {visibleExpanded && node.children.map((child) => (
-          <TreeNode key={child.id} node={child} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} filterActive={filterActive} />
+          <TreeNode key={child.id} node={child} depth={depth + 1} selectedIds={selectedIds} onSelect={onSelect} filterActive={filterActive} />
         ))}
     </div>
   );
@@ -602,6 +602,7 @@ export default function DesignScreen({
   const [variantName, setVariantName] = useState("");
   const [variantPresets, setVariantPresets] = useState<VariantPreset[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [previewInspection, setPreviewInspection] = useState<PreviewInspection | null>(null);
   const [copiedInspection, setCopiedInspection] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -638,6 +639,8 @@ export default function DesignScreen({
   // reads it -- a `const` referenced before its declaration is a real
   // TDZ ReferenceError at first render, not a hoisting no-op.
   const selectedNode = selectedId ? findNode(roots, selectedId) : null;
+  const selectionCount = selectedIds.length;
+  const hasSingleSelection = selectionCount === 1;
   const filteredRoots = useMemo(() => filterTree(roots, treeFilter), [roots, treeFilter]);
 
   useEffect(() => {
@@ -649,7 +652,7 @@ export default function DesignScreen({
   useEffect(() => {
     setPreviewInspection(null);
     iframeRef.current?.contentWindow?.postMessage(
-      { type: "spartan-canvas-select", nodeId: selectedId },
+      { type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds },
       "*",
     );
     if (selectedId) {
@@ -658,7 +661,22 @@ export default function DesignScreen({
         "*",
       );
     }
-  }, [selectedId, bundleCode]);
+  }, [selectedId, selectedIds, bundleCode]);
+
+  const selectNodes = useCallback((id: string, additive: boolean) => {
+    if (!additive) {
+      setSelectedIds([id]);
+      return;
+    }
+    setSelectedIds((current) => {
+      const next = current.includes(id) ? current.filter((value) => value !== id) : [...current, id];
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    setSelectedId(selectedIds[selectedIds.length - 1] ?? null);
+  }, [selectedIds]);
 
   // The curated definition for whatever style property is currently
   // named, or `undefined` for the Custom… path -- derived from `propKey`
@@ -715,6 +733,31 @@ export default function DesignScreen({
         setPreviewSource(null);
         onContentChange(activeFile.path, result.source);
         await refresh(activeFile.path, result.source);
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [activeFile, onContentChange, refresh]
+  );
+
+  const applyEditBatch = useCallback(
+    async (edits: Record<string, unknown>[]) => {
+      if (!activeFile || edits.length === 0) return;
+      try {
+        let source = activeFile.content;
+        for (const edit of edits) {
+          const result = (await window.spartan.call("design_apply_edit", { edit, source })) as { source: string };
+          source = result.source;
+        }
+        await window.spartan.call("edit", {
+          doc_id: activeFile.docId,
+          start_char: 0,
+          end_char: [...activeFile.content].length,
+          text: source,
+        });
+        setPreviewSource(null);
+        onContentChange(activeFile.path, source);
+        await refresh(activeFile.path, source);
       } catch (e) {
         setError((e as Error).message);
       }
@@ -841,18 +884,21 @@ export default function DesignScreen({
   );
 
   const deleteSelected = useCallback(async () => {
-    if (!activeFile || !selectedId) return;
+    if (!activeFile || !selectedId || !hasSingleSelection) return;
     if (!window.confirm(`Delete <${selectedNode?.tagName ?? "element"}> and all of its children?`)) return;
     await applyEditObject({ kind: "Delete", nodeId: selectedId });
     setSelectedId(null);
-  }, [activeFile, selectedId, selectedNode?.tagName, applyEditObject]);
+    setSelectedIds([]);
+  }, [activeFile, selectedId, hasSingleSelection, selectedNode?.tagName, applyEditObject]);
 
   const duplicateSelected = useCallback(async () => {
-    if (!activeFile || !selectedId) return;
+    if (!activeFile || !selectedId || !hasSingleSelection) return;
     await applyEditObject({ kind: "Duplicate", nodeId: selectedId });
-  }, [activeFile, selectedId, applyEditObject]);
+  }, [activeFile, selectedId, hasSingleSelection, applyEditObject]);
 
   useEffect(() => {
+    setSelectedId(null);
+    setSelectedIds([]);
     if (activeFile && isComponentFile(activeFile.path)) {
       setPreviewSource(null);
       setVariantName("");
@@ -890,7 +936,7 @@ export default function DesignScreen({
     const handler = (event: MessageEvent) => {
       if (event.source && iframeRef.current?.contentWindow && event.source !== iframeRef.current.contentWindow) return;
       if (event.data?.type === "spartan-canvas-click") {
-        setSelectedId(event.data.nodeId);
+        selectNodes(event.data.nodeId, Boolean(event.data.shiftKey));
       } else if (event.data?.type === "spartan-canvas-drop") {
         // Real drag-to-reparent from the live canvas (task #279). Routed
         // through the exact same `Reparent` edit the "Move into" form
@@ -903,7 +949,7 @@ export default function DesignScreen({
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [applyReparentEdit, selectedId]);
+  }, [applyReparentEdit, selectedId, selectNodes]);
 
   // Real, per-kind readiness check -- each structural kind names a
   // different second operand (`reparentTargetId` vs. `insertTagName`)
@@ -911,14 +957,14 @@ export default function DesignScreen({
   // single condition across all five inspector edit kinds.
   const canApply =
     !!activeFile &&
-    !!selectedId &&
+    selectionCount > 0 &&
     (editKind === "PropChange" || editKind === "PropRemove" || editKind === "StyleChange" || editKind === "StyleRemove"
       ? !!propKey.trim()
       : editKind === "TextChange"
-        ? true
+        ? hasSingleSelection
         : editKind === "Reparent"
-          ? !!reparentTargetId && reparentTargetId !== selectedId
-          : !!insertTagName.trim());
+          ? hasSingleSelection && !!reparentTargetId && reparentTargetId !== selectedId
+          : hasSingleSelection && !!insertTagName.trim());
 
   /** Picking a curated property seeds the value control from the node's
    * own real current style entry, so the form opens showing what's
@@ -1006,7 +1052,7 @@ export default function DesignScreen({
    * component. */
   const insertComponent = useCallback(
     async (component: DiscoveredComponent) => {
-      if (!activeFile || !selectedId) return;
+      if (!activeFile || !selectedId || !hasSingleSelection) return;
       const edit: Record<string, unknown> = {
         kind: "ComponentInsert",
         parentId: selectedId,
@@ -1018,7 +1064,7 @@ export default function DesignScreen({
       }
       await applyEditObject(edit);
     },
-    [activeFile, selectedId, applyEditObject]
+    [activeFile, selectedId, hasSingleSelection, applyEditObject]
   );
 
   const toggleAssets = useCallback(async () => {
@@ -1041,7 +1087,7 @@ export default function DesignScreen({
 
   const insertAsset = useCallback(
     async (asset: DiscoveredAsset) => {
-      if (!activeFile || !selectedId) return;
+      if (!activeFile || !selectedId || !hasSingleSelection) return;
       await applyEditObject({
         kind: "ComponentInsert",
         parentId: selectedId,
@@ -1049,12 +1095,12 @@ export default function DesignScreen({
         props: { src: asset.referencePath, alt: asset.label },
       });
     },
-    [activeFile, selectedId, applyEditObject]
+    [activeFile, selectedId, hasSingleSelection, applyEditObject]
   );
 
   const applyAssetBackground = useCallback(
     async (asset: DiscoveredAsset) => {
-      if (!activeFile || !selectedId) return;
+      if (!activeFile || !selectedId || !hasSingleSelection) return;
       const safeReference = asset.referencePath.replace(/["\\]/g, "\\$&");
       await applyEditObject({
         kind: "StyleChange",
@@ -1063,7 +1109,7 @@ export default function DesignScreen({
         value: `url("${safeReference}")`,
       });
     },
-    [activeFile, selectedId, applyEditObject]
+    [activeFile, selectedId, hasSingleSelection, applyEditObject]
   );
 
   const copyAssetPath = useCallback(async (asset: DiscoveredAsset) => {
@@ -1087,12 +1133,12 @@ export default function DesignScreen({
   }, [previewInspection, selectedNode]);
 
   const setPreviewFocus = useCallback((focused: boolean) => {
-    if (!selectedId) return;
+    if (!selectedId || !hasSingleSelection) return;
     iframeRef.current?.contentWindow?.postMessage(
       { type: focused ? "spartan-canvas-focus" : "spartan-canvas-blur", nodeId: selectedId },
       "*",
     );
-  }, [selectedId]);
+  }, [selectedId, hasSingleSelection]);
 
   const toggleTokens = useCallback(async () => {
     if (tokensOpen) {
@@ -1114,7 +1160,7 @@ export default function DesignScreen({
 
   const applyToken = useCallback(
     async (token: DiscoveredToken) => {
-      if (!activeFile || !selectedId || editKind !== "StyleChange" || !propKey.trim()) return;
+      if (!activeFile || !selectedId || !hasSingleSelection || editKind !== "StyleChange" || !propKey.trim()) return;
       await applyEditObject({
         kind: "StyleChange",
         nodeId: selectedId,
@@ -1123,7 +1169,7 @@ export default function DesignScreen({
       });
       setPropValue(`var(${token.name})`);
     },
-    [activeFile, selectedId, editKind, propKey, applyEditObject]
+    [activeFile, selectedId, hasSingleSelection, editKind, propKey, applyEditObject]
   );
 
   const applyTokenDefinition = useCallback(
@@ -1190,7 +1236,11 @@ export default function DesignScreen({
       if (Object.keys(props).length > 0) edit.props = props;
       if (insertText !== "") edit.childrenText = insertText;
     }
-    await applyEditObject(edit);
+    if (selectedIds.length > 1 && ["PropChange", "PropRemove", "StyleChange", "StyleRemove"].includes(editKind)) {
+      await applyEditBatch(selectedIds.map((nodeId) => ({ ...edit, nodeId })));
+    } else {
+      await applyEditObject(edit);
+    }
     setPropKey("");
     setPropValue("");
     setTextValue("");
@@ -1199,7 +1249,7 @@ export default function DesignScreen({
     setInsertTagName("");
     setInsertProps("");
     setInsertText("");
-  }, [activeFile, selectedId, propKey, propValue, propValueType, textValue, editKind, reparentTargetId, insertTagName, insertProps, insertText, applyEditObject]);
+  }, [activeFile, selectedId, selectedIds, propKey, propValue, propValueType, textValue, editKind, reparentTargetId, insertTagName, insertProps, insertText, applyEditObject, applyEditBatch]);
 
   if (!activeFile || !isComponentFile(activeFile.path)) {
     return (
@@ -1254,7 +1304,7 @@ export default function DesignScreen({
           />
         </div>
         {filteredRoots.length > 0 ? filteredRoots.map((root) => (
-          <TreeNode key={root.id} node={root} depth={0} selectedId={selectedId} onSelect={setSelectedId} filterActive={treeFilter.trim().length > 0} />
+          <TreeNode key={root.id} node={root} depth={0} selectedIds={selectedIds} onSelect={selectNodes} filterActive={treeFilter.trim().length > 0} />
         )) : (
           <div className="design-tree-empty mono">No matching elements.</div>
         )}
@@ -1291,7 +1341,7 @@ export default function DesignScreen({
               title="Live preview"
               onLoad={() => {
                 iframeRef.current?.contentWindow?.postMessage(
-                  { type: "spartan-canvas-select", nodeId: selectedId },
+                  { type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds },
                   "*",
                 );
                 if (selectedId) {
@@ -1325,9 +1375,9 @@ export default function DesignScreen({
                     <button
                       key={`${c.file}:${c.name}`}
                       className="design-palette-item mono"
-                      disabled={!selectedId}
+                      disabled={!selectedId || !hasSingleSelection}
                       title={
-                        selectedId
+                        selectedId && hasSingleSelection
                           ? `Insert <${c.name} /> into the selected element${
                               c.importFrom ? ` and import it from "${c.importFrom}"` : ""
                             }`
@@ -1359,8 +1409,8 @@ export default function DesignScreen({
                       <div key={asset.file} className="design-asset-row">
                         <button
                           className="design-palette-item mono"
-                          disabled={!selectedId}
-                          title={selectedId ? `Insert ${asset.label} into the selected element` : "Select an element in the tree first"}
+                          disabled={!selectedId || !hasSingleSelection}
+                          title={selectedId && hasSingleSelection ? `Insert ${asset.label} into the selected element` : "Select exactly one element in the tree first"}
                           onClick={() => insertAsset(asset)}
                         >
                           <span className="design-palette-name">▧ {asset.label}</span>
@@ -1368,8 +1418,8 @@ export default function DesignScreen({
                         </button>
                         <button
                           className="design-asset-action mono"
-                          disabled={!selectedId}
-                          title={selectedId ? `Use ${asset.label} as the selected element's background image` : "Select an element in the tree first"}
+                          disabled={!selectedId || !hasSingleSelection}
+                          title={selectedId && hasSingleSelection ? `Use ${asset.label} as the selected element's background image` : "Select exactly one element in the tree first"}
                           onClick={() => void applyAssetBackground(asset)}
                         >
                           BG
@@ -1406,9 +1456,9 @@ export default function DesignScreen({
                       <div key={`${token.file}:${token.name}:${index}`} className="design-token-row">
                         <button
                           className="design-palette-item mono design-token-use"
-                          disabled={!selectedId || editKind !== "StyleChange" || !propKey.trim()}
+                          disabled={!selectedId || !hasSingleSelection || editKind !== "StyleChange" || !propKey.trim()}
                           title={
-                            selectedId && editKind === "StyleChange" && propKey.trim()
+                            selectedId && hasSingleSelection && editKind === "StyleChange" && propKey.trim()
                               ? `Set ${propKey} to var(${token.name})`
                               : "Choose Style editing and a property first"
                           }
@@ -1442,9 +1492,11 @@ export default function DesignScreen({
         {selectedNode ? (
           <>
             <div className="design-selected mono">
-              &lt;{selectedNode.tagName}&gt; #{selectedNode.id}
+              {selectionCount > 1
+                ? `${selectionCount} elements selected · primary <${selectedNode.tagName}> #${selectedNode.id}`
+                : ` <${selectedNode.tagName}> #${selectedNode.id}`}
             </div>
-            {selectedNode.sourceLocation && (
+            {hasSingleSelection && selectedNode.sourceLocation && (
               <button
                 className="design-secondary-action mono design-reveal-source"
                 title="Open the source location in Editor"
@@ -1453,7 +1505,7 @@ export default function DesignScreen({
                 Reveal in Editor · line {selectedNode.sourceLocation.startLine}
               </button>
             )}
-            {previewInspection?.nodeId === selectedNode.id && (
+            {hasSingleSelection && previewInspection?.nodeId === selectedNode.id && (
               <div className="design-inspection mono" aria-label="Rendered element inspection">
                 <div className="design-inspection-title">Rendered preview</div>
                 <div className="design-inspection-grid">
@@ -1475,10 +1527,10 @@ export default function DesignScreen({
                 </div>
               </div>
             )}
-            <button className="design-danger-action mono" onClick={deleteSelected}>
+            <button className="design-danger-action mono" onClick={deleteSelected} disabled={!hasSingleSelection}>
               Delete selected element
             </button>
-            <button className="design-secondary-action mono" onClick={duplicateSelected}>
+            <button className="design-secondary-action mono" onClick={duplicateSelected} disabled={!hasSingleSelection}>
               Duplicate selected element
             </button>
             <div className="design-edit-kind">
@@ -1706,7 +1758,7 @@ export default function DesignScreen({
               Apply
             </button>
             {(editKind === "PropChange" || editKind === "PropRemove" || editKind === "StyleChange" || editKind === "StyleRemove" || editKind === "TextChange") && (
-              <button className="design-secondary-action mono" onClick={() => void previewFormEdit()} disabled={!canApply}>
+              <button className="design-secondary-action mono" onClick={() => void previewFormEdit()} disabled={!canApply || !hasSingleSelection}>
                 Preview variant
               </button>
             )}

@@ -208,6 +208,8 @@ palette that applies existing `var(--token)` values to selected style properties
 | Inline style-property removal with safe empty-style cleanup | Real |
 | Existing prop/style quick pickers with literal/expression seeding | Real |
 | Synchronized tree/canvas selection highlight across preview reloads | Real |
+| Shift-click multi-selection with synchronized multi-node canvas highlights | Real |
+| Batch prop/style changes across selected nodes with structural-edit safety gates | Real |
 | Collapsible structure-tree navigation with accessible expand state | Real |
 | Searchable structure-tree filtering with ancestor preservation | Real |
 | Guided layout, positioning, grid, overflow, and visual-effects style controls | Real |
