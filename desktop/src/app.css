@@ -593,6 +593,39 @@
   position: relative;
 }
 
+/* Real compact document overview. It is deliberately a navigator, not a
+ * second syntax renderer: each source line remains visible as a proportional
+ * bar, and clicking the overview seeks the existing textarea scroll range. */
+.editor-minimap {
+  position: relative;
+  width: 88px;
+  flex: 0 0 88px;
+  overflow: hidden;
+  padding: 8px 6px;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.editor-minimap-line {
+  height: 2px;
+  margin: 1px 0;
+  border-radius: 1px;
+  background: var(--text-dim);
+  opacity: 0.48;
+}
+
+.editor-minimap-viewport {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  z-index: 1;
+  min-height: 8px;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  pointer-events: none;
+}
+
 /* Real LSP hover tooltip (task #134) -- `position: fixed` + real
  * viewport-relative coordinates from the triggering mouse event, so it
  * renders correctly next to the cursor regardless of scroll position.

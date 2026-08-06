@@ -1553,6 +1553,7 @@ export default function Editor({
   const highlightRef = useRef<HTMLPreElement>(null);
   const symbolHighlightRef = useRef<HTMLDivElement>(null);
   const [lineCount, setLineCount] = useState(1);
+  const [minimapScrollTop, setMinimapScrollTop] = useState(0);
   const prevContentRef = useRef(file.content);
 
   /** Real, shared breakpoint-shift step (a real, confirmed follow-up gap
@@ -1821,6 +1822,7 @@ export default function Editor({
   const triggerCompletion = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
+    setMinimapScrollTop(el.scrollTop);
     const pos = el.selectionStart;
     const before = el.value.slice(0, pos);
     const lines = before.split("\n");
@@ -4009,6 +4011,7 @@ export default function Editor({
         </div>
         <textarea
           ref={textareaRef}
+          id={`spartan-editor-textarea-${file.docId}`}
           className="editor-textarea editor-textarea-overlay mono"
           value={file.content}
           spellCheck={false}
@@ -4021,6 +4024,31 @@ export default function Editor({
           onSelect={handleSelectionChange}
           style={textStyle}
         />
+      </div>
+      <div
+        className="editor-minimap mono"
+        role="scrollbar"
+        aria-label="Document minimap"
+        aria-controls={`spartan-editor-textarea-${file.docId}`}
+        onClick={(event) => {
+          const el = textareaRef.current;
+          if (!el) return;
+          const rect = event.currentTarget.getBoundingClientRect();
+          const ratio = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+          el.scrollTop = ratio * Math.max(0, el.scrollHeight - el.clientHeight);
+          syncScroll();
+        }}
+      >
+        <div
+          className="editor-minimap-viewport"
+          style={{
+            top: `${(minimapScrollTop / Math.max(1, textareaRef.current?.scrollHeight ?? 1)) * 100}%`,
+            height: `${Math.max(8, ((textareaRef.current?.clientHeight ?? 1) / Math.max(1, textareaRef.current?.scrollHeight ?? 1)) * 100)}%`,
+          }}
+        />
+        {file.content.split("\n").map((line, index) => (
+          <div key={index} className="editor-minimap-line" style={{ width: `${Math.min(100, Math.max(4, line.length * 2))}%` }} />
+        ))}
       </div>
       {hoverState?.text && (
         <div

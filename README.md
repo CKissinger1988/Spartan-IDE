@@ -218,59 +218,64 @@ touching security, sandboxing, or approval flows (§9, §36).
 
 ## What's actually real right now
 
-- **Real, working, tested code**: everything under [Architecture](#architecture) above.
-  Several hundred Rust tests across 18 real crates + 7 Tier 0 spikes + `xtask`, all
-  passing; clippy and `cargo fmt` clean — see `CLAUDE.md`'s own "Build & test" section
-  for the exact, continuously-updated count (fabricating a fixed number here would go
-  stale immediately, so this file deliberately doesn't). The Electron shell's own
-  TypeScript typechecks and builds clean, and every increment of it has been verified via
-  a live, screenshotted Playwright pass driving a real Vite dev server against a
-  test-only mock of the Electron preload bridge — see [Screenshots](#screenshots) above
-  for real captures.
-- **`web/` — a real, separate browser IDE, now with two editing paths**: a
-  vscode.dev-inspired Vite+React app. Its original path is fully client-side (a real WASM
-  compilation of `spartan-buffer` against the File System Access API, no backend needed).
-  A second, newer path connects to a real local `spartan-devserver` process over
-  WebSocket and gets real LSP diagnostics/hover/completion, real DAP breakpoint
-  debugging, a real Git panel, and real Android device/build tooling — see
-  [`web/README.md`](web/README.md) for exactly which path has which capability.
-- **A separate, optional multi-tenant backend — Spartan Cloud (`cloud/`)**: its own,
-  separate Cargo workspace (not part of `cargo build --workspace` at the repo root),
-  offering per-user container allocation over a real axum control plane, WebAuthn admin
-  auth, an encrypted-at-rest secrets vault, and per-tenant resource caps/audit logging.
-  Billing is deliberately stubbed behind a real `EntitlementProvider` trait. See
-  [`cloud/README.md`](cloud/README.md) for what's verified here vs. what needs a real
-  KVM-capable target this environment doesn't have.
-- **One honest, standing gap**: the *actual* Electron window has never been launched from
-  inside this project's own development sessions, because Electron's postinstall script
-  downloads its runtime binary from `github.com/electron/electron/releases`, and every
-  sandboxed session used to build this repo so far has had that host blocked by its own
-  network policy. Everything else — the real Rust backend, the full IPC protocol, every
-  React component — is built and tested; it needs a real `npm install` (no
-  `ELECTRON_SKIP_BINARY_DOWNLOAD`) run somewhere with normal internet access to actually
-  see the window. This project's own CI now runs real `electron-builder` packaging jobs
-  for Windows/macOS/Linux on hosted runners with real internet access — see
-  [Beta downloads](#beta-downloads--live-documentation) above for the resulting
-  installers, and [`desktop/README.md`](desktop/README.md) for the full account of this
-  gap and what's still unverified about the packaged output (unsigned, first CI-built
-  attempt, not yet hand-tested on a real machine of each OS).
-- **Reference-only**: [`prototypes/*.jsx`](prototypes/) are early React mockups of the
-  intended UI, not wired to anything. [`legacy/agent-deck-console/`](legacy/agent-deck-console/)
-  is this repo's prior, different product, kept for feature-parity reference (§55).
-- **Android (§21) is a real, narrow first increment, not first-class yet**: `crates/
-  spartan-android` does real SDK/toolchain detection (`ANDROID_HOME`/`ANDROID_SDK_ROOT`,
-  `adb`/`sdkmanager`/`avdmanager`/`emulator`) and real Android-project detection (the
-  standard Gradle module layout), wired into `spartan-backend` as `android_detect`. No SDK
-  install flow, emulator/device management, Compose LSP/preview, JDWP debugging, or UI
-  surface yet — §35.9 itself names Android as Tier 1's biggest scope risk and explicitly
-  sanctions shipping without it, which is exactly where this stands.
-- **Not yet built**: a *signed* Electron installer (the unsigned one is real — see above), a
-  Leo chat UI in `web/` specifically (every `leo_*` backend method is already reachable
-  there over the real WebSocket transport, `web/` just has no chat panel calling them yet —
-  LSP/DAP/git *are* real in `web/`'s backend-connected path, see
-  [`web/README.md`](web/README.md)), and the larger design-stage surface (§35 is the
-  prioritized roadmap). Local-first crash reporting now has a real, user-triggered
-  *upload* path too (never automatic) — see `crates/spartan-crash`.
+- **Desktop IDE**: Electron + React shell with onboarding, native File/View/Window/Help
+  menus, project/folder open, tabs, dirty-state protection, file tree, real text editing,
+  syntax highlighting, tree-sitter parsing, bracket matching and rainbow bracket colors,
+  minimap navigation, find/replace, go-to-line, snippets and tab stops, line comment toggle,
+  indent/outdent, duplicate/move/delete/join lines, zoom, auto-closing pairs, format-on-save,
+  semantic tokens, inlay hints, document symbols, workspace symbols, hover, completion,
+  signature help, definition/type-definition/implementation, references, call hierarchy,
+  rename, code actions/quick fixes, diagnostics, and real backend-backed LSP sessions.
+- **Debugging**: real DAP sessions with launch, breakpoints, conditional breakpoints,
+  logpoints, breakpoint shifting after edits, continue/pause/step in/out/over, stack frames,
+  scopes, variables, editable locals, watch expressions, evaluate/REPL, debuggee output,
+  debug console state, and adapters for the configured language profiles.
+- **Git and collaboration**: status, stage/unstage, whole-hunk and per-line staging, diffs,
+  word-level and split diffs, discard, stash/apply/pop/drop, branches, remote branches,
+  fetch/pull/push, clone, GitHub pull-request listing, blame, commit history/details,
+  amend, revert, tags, cherry-pick, merge/conflict resolution, and GitHub HTTPS personal
+  access tokens restricted to GitHub remotes (with SSH-agent support retained).
+- **Terminal and operations**: real PTY terminal sessions, concurrent CLI sessions for
+  Claude/Codex/Gemini or arbitrary commands, UTF-8 boundary-safe output, resize handling,
+  bounded terminal execution, Dev Containers using the containers.dev shape, Android SDK and
+  project detection, debug APK builds, ADB install/device operations, and logcat streaming.
+- **Leo agent**: plan → approve/reject → execute → verify workflow; risk-classified tool
+  calls; path-jailed file and terminal tools; project memory; bounded session history;
+  retry/recovery; cooperative cancellation; configurable verification commands; voice input
+  and optional spoken status; Ollama, Claude, LiteLLM, LM Studio, and llama.cpp providers;
+  native grammar-constrained tool calling for llama.cpp; and model health/download/proxy
+  management with cancellation and proxy crash restart.
+- **Security and reliability**: path-jailing with traversal/symlink checks, destructive-action
+  approval invariants, secrets detection and redaction, untrusted-repository boundaries,
+  local-first redacted crash reports with explicit upload only, update checks, signed-release
+  hooks, no automatic data upload, and no VS Code/Monaco/CodeMirror code.
+- **Web IDE**: a real Vite + React browser app with a pure client-side File System Access
+  + WASM editor (rope buffer, save, undo/redo, tabs, tree-sitter highlighting) and a separate
+  backend-connected mode with LSP, DAP, Git, Leo chat, Android tooling, model management,
+  pairing, and WebSocket transport. Chromium is the supported client for the File System
+  Access path.
+- **Web Studio**: template-driven HTML/CSS/JavaScript editing, sandboxed live preview,
+  viewport/device emulation, portrait/landscape switching, zoom, console capture, local
+  persistence, standalone HTML export, and complete `index.html`/`style.css`/`script.js`
+  project export.
+- **Mobile companion**: Expo/React Native onboarding, private and cloud QR pairing,
+  configurable endpoints, SecureStore pairing secrets, backend connectivity, session/inbox
+  views, release discovery, Android packaging, and safe first-run guidance for WAN and SSH
+  forwarding.
+- **Spartan Cloud**: separate axum control plane, tenant/resource accounting, WebAuthn admin
+  authentication, encrypted vault, audit logging, health endpoint, operator-controlled update
+  checks, and container allocation behind the EntitlementProvider seam. Stronger gVisor or
+  microVM isolation and real billing remain deployment prerequisites rather than claims.
+- **What remains intentionally incomplete**: code folding and multi-cursor editing require
+  replacing the textarea editor surface; type hierarchy and data breakpoints depend on adapter
+  capability; full rebase UI, minimap parity in every shell, AT-SPI text reading, Compose
+  preview/JDWP, emulator management without KVM, signed production identities, macOS/iOS
+  builds, Firefox/Safari File System Access fallback, plugin marketplace, team memory tiers,
+  and several Cloud production services remain future work. See
+  [`docs/FUTURE_FEATURES.md`](docs/FUTURE_FEATURES.md) for the prioritized, honest backlog.
+- **Reference-only**: [`prototypes/*.jsx`](prototypes/) are early UI mockups, and
+  [`legacy/agent-deck-console/`](legacy/agent-deck-console/) is the prior product preserved
+  for feature-parity reference. Neither is part of the shipped runtime.
 
 This project's own history includes real bugs found only by actually running code and
 adversarially testing it — a UTF-8 char-boundary panic, a cross-adapter DAP deadlock, an
