@@ -184,6 +184,27 @@ test("TagChange renames self-closing JSX tags and rejects unsafe names", () => {
   );
 });
 
+test("Wrap places a direct child around a new container while preserving its subtree", () => {
+  const source = `const X = () => <div><button id="save"><span>Save</span></button></div>;`;
+  const result = applyCanvasEdit(source, { kind: "Wrap", nodeId: "n1", tagName: "section" });
+  assert.match(result, /<div><section><button id="save"><span>Save<\/span><\/button><\/section><\/div>/);
+});
+
+test("Wrap refuses roots, expression-indirect children, and unsafe wrapper names", () => {
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <div />;`, { kind: "Wrap", nodeId: "n0", tagName: "section" }),
+    /top-level component root/,
+  );
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <div>{ok && <button />}</div>;`, { kind: "Wrap", nodeId: "n1", tagName: "section" }),
+    /nested inside an expression/,
+  );
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <div><span /></div>;`, { kind: "Wrap", nodeId: "n1", tagName: "Foo.Bar" }),
+    /single valid JSX identifier/,
+  );
+});
+
 test("TextChange appends text to a childless element and refuses ambiguous fragments", () => {
   const empty = applyCanvasEdit(`const X = () => <div />;`, { kind: "TextChange", nodeId: "n0", text: "Added" });
   assert.match(empty, /<div>Added<\/div>/);

@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All ten members of the `CanvasEdit` union are real and implemented:
+ * All eleven members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -198,6 +198,34 @@ function applyTagChange(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdi
   if (element.closingElement) element.closingElement.name = b.jsxIdentifier(edit.tagName);
 }
 
+function applyWrap(
+  nodesById: Map<string, AnyNode>,
+  parentOf: Map<string, AnyNode | null>,
+  edit: Extract<CanvasEdit, { kind: "Wrap" }>,
+): void {
+  if (!isValidIdentifierName(edit.tagName)) {
+    throw new Error(`Wrap tag name "${edit.tagName}" must be a single valid JSX identifier.`);
+  }
+  const node = nodesById.get(edit.nodeId);
+  if (!node) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
+  const parent = parentOf.get(edit.nodeId);
+  if (parent === undefined) throw new Error(`Internal error: no parent entry tracked for id "${edit.nodeId}".`);
+  if (parent === null) {
+    throw new Error(`Element "${edit.nodeId}" is a top-level component root -- wrap a child element instead.`);
+  }
+  const siblings = parent.children as AnyNode[];
+  const index = siblings.indexOf(node);
+  if (index === -1) {
+    throw new Error(`Element "${edit.nodeId}" is nested inside an expression -- wrap only a direct JSX child.`);
+  }
+  const wrapper = b.jsxElement(
+    b.jsxOpeningElement(b.jsxIdentifier(edit.tagName), [], false),
+    b.jsxClosingElement(b.jsxIdentifier(edit.tagName)),
+    [node],
+  );
+  siblings.splice(index, 1, wrapper);
+}
+
 /** True if `target` is `ancestor` itself or lives anywhere in its real
  * `JSXElement` children subtree -- `Reparent`'s cycle guard walks *down*
  * from the node being moved rather than *up* from the target parent,
@@ -383,6 +411,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       break;
     case "TagChange":
       applyTagChange(nodesById, edit);
+      break;
+    case "Wrap":
+      applyWrap(nodesById, parentOf, edit);
       break;
     case "Delete":
       applyDelete(nodesById, parentOf, edit);

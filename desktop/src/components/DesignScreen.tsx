@@ -607,7 +607,7 @@ function StyleValueControl({
  * the exact same `edit` IPC call typing already uses, so a canvas edit
  * gets the same undo/dirty tracking as any other edit.
  *
- * All ten real `CanvasEdit` kinds `gui-builder` itself supports are now
+ * All eleven real `CanvasEdit` kinds `gui-builder` itself supports are now
  * wired here: `PropChange`/`StyleChange` (mutate the selected node) and
  * `Reparent`/`ComponentInsert` (structural edits, closing the gap this
  * screen's own edit form used to leave unreachable even after
@@ -642,10 +642,11 @@ export default function DesignScreen({
   const [propValue, setPropValue] = useState("");
   const [textValue, setTextValue] = useState("");
   const [propValueType, setPropValueType] = useState<"string" | "number" | "boolean" | "expression">("string");
-  const [editKind, setEditKind] = useState<"PropChange" | "PropRemove" | "StyleChange" | "StyleRemove" | "TextChange" | "TagChange" | "Reparent" | "ComponentInsert">(
+  const [editKind, setEditKind] = useState<"PropChange" | "PropRemove" | "StyleChange" | "StyleRemove" | "TextChange" | "TagChange" | "Wrap" | "Reparent" | "ComponentInsert">(
     "PropChange"
   );
   const [tagName, setTagName] = useState("");
+  const [wrapTagName, setWrapTagName] = useState("");
   const [reparentTargetId, setReparentTargetId] = useState("");
   const [insertTagName, setInsertTagName] = useState("");
   const [insertProps, setInsertProps] = useState("");
@@ -851,8 +852,12 @@ export default function DesignScreen({
       if (!isValidTagName(tagName)) return null;
       return { kind: "TagChange", nodeId: selectedId, tagName: tagName.trim() };
     }
+    if (editKind === "Wrap") {
+      if (!isValidTagName(wrapTagName)) return null;
+      return { kind: "Wrap", nodeId: selectedId, tagName: wrapTagName.trim() };
+    }
     return null;
-  }, [selectedId, editKind, propKey, propValue, propValueType, textValue, tagName]);
+  }, [selectedId, editKind, propKey, propValue, propValueType, textValue, tagName, wrapTagName]);
 
   const previewFormEdit = useCallback(async () => {
     if (!activeFile) return;
@@ -1069,6 +1074,8 @@ export default function DesignScreen({
         ? hasSingleSelection
         : editKind === "TagChange"
           ? hasSingleSelection && isValidTagName(tagName)
+        : editKind === "Wrap"
+          ? hasSingleSelection && isValidTagName(wrapTagName)
         : editKind === "Reparent"
           ? hasSingleSelection && !!reparentTargetId && reparentTargetId !== selectedId
           : hasSingleSelection && !!insertTagName.trim());
@@ -1347,6 +1354,9 @@ export default function DesignScreen({
     } else if (editKind === "TagChange") {
       if (!isValidTagName(tagName)) return;
       edit = { kind: "TagChange", nodeId: selectedId, tagName: tagName.trim() };
+    } else if (editKind === "Wrap") {
+      if (!isValidTagName(wrapTagName)) return;
+      edit = { kind: "Wrap", nodeId: selectedId, tagName: wrapTagName.trim() };
     } else if (editKind === "Reparent") {
       if (!reparentTargetId || reparentTargetId === selectedId) return;
       edit = { kind: "Reparent", nodeId: selectedId, newParentId: reparentTargetId };
@@ -1372,12 +1382,13 @@ export default function DesignScreen({
     setPropValue("");
     setTextValue("");
     setTagName("");
+    setWrapTagName("");
     setPropValueType("string");
     setReparentTargetId("");
     setInsertTagName("");
     setInsertProps("");
     setInsertText("");
-  }, [activeFile, selectedId, selectedIds, propKey, propValue, propValueType, textValue, tagName, editKind, reparentTargetId, insertTagName, insertProps, insertText, applyEditObject, applyEditBatch]);
+  }, [activeFile, selectedId, selectedIds, propKey, propValue, propValueType, textValue, tagName, wrapTagName, editKind, reparentTargetId, insertTagName, insertProps, insertText, applyEditObject, applyEditBatch]);
 
   if (!activeFile || !isComponentFile(activeFile.path)) {
     return (
@@ -1722,6 +1733,14 @@ export default function DesignScreen({
               <label>
                 <input
                   type="radio"
+                  checked={editKind === "Wrap"}
+                  onChange={() => setEditKind("Wrap")}
+                />
+                Wrap
+              </label>
+              <label>
+                <input
+                  type="radio"
                   checked={editKind === "PropChange"}
                   onChange={() => setEditKind("PropChange")}
                 />
@@ -1896,6 +1915,15 @@ export default function DesignScreen({
                 placeholder={`new tag name (current: ${selectedNode.tagName})`}
                 value={tagName}
                 onChange={(event) => setTagName(event.target.value)}
+              />
+            )}
+            {editKind === "Wrap" && (
+              <input
+                className="design-input mono"
+                aria-label="Wrapper JSX tag name"
+                placeholder="wrapper tag name (e.g. div or section)"
+                value={wrapTagName}
+                onChange={(event) => setWrapTagName(event.target.value)}
               />
             )}
             {editKind === "Reparent" && (
