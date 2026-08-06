@@ -203,6 +203,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Font asset discovery with relative-path copy action | Real |
 | CSS token definition value editing with document-history integration | Real |
 | Custom responsive viewport width/height controls | Real |
+| Parsed JSX/JavaScript expression prop editing | Real |
 | Desktop/Tablet/Mobile viewport presets and zoom | Real |
 | Font asset management, token definition editing, component state machines, and multi-file visual workspace | Planned |
 

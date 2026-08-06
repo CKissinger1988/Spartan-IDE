@@ -62,7 +62,7 @@ export type CanvasEdit =
       nodeId: string;
       prop: string;
       value: string;
-      valueType?: "string" | "number" | "boolean";
+      valueType?: "string" | "number" | "boolean" | "expression";
     }
   /** Replaces the direct JSX text content of an element. If the element has
    * no direct text child, a new text child is appended. */

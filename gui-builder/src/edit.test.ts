@@ -81,6 +81,23 @@ test("PropChange rejects malformed typed values instead of emitting broken JSX",
   );
 });
 
+test("PropChange writes a real parsed JSX expression value", () => {
+  const source = `const X = () => <Button />;`;
+  const result = applyCanvasEdit(source, {
+    kind: "PropChange", nodeId: "n0", prop: "onClick", value: "() => submit()", valueType: "expression",
+  });
+  assert.match(result, /onClick=\{\(\(\) => submit\(\)\)\}/);
+});
+
+test("PropChange rejects invalid expression input", () => {
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <Button />;`, {
+      kind: "PropChange", nodeId: "n0", prop: "onClick", value: "() =>", valueType: "expression",
+    }),
+    /expression is not valid/,
+  );
+});
+
 test("TextChange updates direct JSX text and preserves the surrounding element", () => {
   const source = `const X = () => <button className="cta">Before</button>;`;
   const result = applyCanvasEdit(source, { kind: "TextChange", nodeId: "n0", text: "After" });

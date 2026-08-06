@@ -78,7 +78,19 @@ function applyStyleChange(element: AnyNode, property: string, value: string): vo
   }
 }
 
-function propLiteral(value: string, valueType: "string" | "number" | "boolean" = "string"): AnyNode {
+function parsePropExpression(value: string): AnyNode {
+  try {
+    const wrapped = recast.parse(`const __spartanProp = (${value});`, { parser: parserAdapter }) as AnyNode;
+    return wrapped.program.body[0].declarations[0].init;
+  } catch (e) {
+    throw new Error(`PropChange expression is not valid JSX/JavaScript: ${(e as Error).message}`);
+  }
+}
+
+function propValueNode(
+  value: string,
+  valueType: "string" | "number" | "boolean" | "expression" = "string",
+): AnyNode {
   if (valueType === "number") {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) throw new Error(`PropChange number value "${value}" is not finite.`);
@@ -90,6 +102,7 @@ function propLiteral(value: string, valueType: "string" | "number" | "boolean" =
     }
     return b.booleanLiteral(value === "true");
   }
+  if (valueType === "expression") return parsePropExpression(value);
   return b.stringLiteral(value);
 }
 
@@ -97,16 +110,17 @@ function applyPropChange(
   element: AnyNode,
   prop: string,
   value: string,
-  valueType: "string" | "number" | "boolean" = "string",
+  valueType: "string" | "number" | "boolean" | "expression" = "string",
 ): void {
   const existing = findAttribute(element, prop);
+  const expression = valueType === "string" ? null : propValueNode(value, valueType);
   if (existing) {
-    existing.value = valueType === "string" ? b.stringLiteral(value) : b.jsxExpressionContainer(propLiteral(value, valueType));
+    existing.value = expression === null ? b.stringLiteral(value) : b.jsxExpressionContainer(expression);
   } else {
     element.openingElement.attributes.push(
       b.jsxAttribute(
         b.jsxIdentifier(prop),
-        valueType === "string" ? b.stringLiteral(value) : b.jsxExpressionContainer(propLiteral(value, valueType)),
+        expression === null ? b.stringLiteral(value) : b.jsxExpressionContainer(expression),
       ),
     );
   }

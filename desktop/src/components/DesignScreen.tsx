@@ -461,7 +461,7 @@ export default function DesignScreen({
   const [propKey, setPropKey] = useState("");
   const [propValue, setPropValue] = useState("");
   const [textValue, setTextValue] = useState("");
-  const [propValueType, setPropValueType] = useState<"string" | "number" | "boolean">("string");
+  const [propValueType, setPropValueType] = useState<"string" | "number" | "boolean" | "expression">("string");
   const [editKind, setEditKind] = useState<"PropChange" | "StyleChange" | "TextChange" | "Reparent" | "ComponentInsert">(
     "PropChange"
   );
@@ -1188,7 +1188,7 @@ export default function DesignScreen({
                   onChange={(e) => setPropKey(e.target.value)}
                 />
                 <input
-                  className="design-input mono"
+                  className={`design-input mono ${propValueType === "expression" ? "design-expression-input" : ""}`}
                   placeholder="value"
                   value={propValue}
                   onChange={(e) => setPropValue(e.target.value)}
@@ -1202,6 +1202,7 @@ export default function DesignScreen({
                   <option value="string">String</option>
                   <option value="number">Number</option>
                   <option value="boolean">Boolean</option>
+                  <option value="expression">Expression</option>
                 </select>
               </>
             )}
