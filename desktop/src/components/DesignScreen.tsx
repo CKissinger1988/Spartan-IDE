@@ -861,6 +861,7 @@ export default function DesignScreen({
   const [assetFilter, setAssetFilter] = useState("");
   const [copiedAsset, setCopiedAsset] = useState<string | null>(null);
   const [copiedFontCss, setCopiedFontCss] = useState<string | null>(null);
+  const [fontCssFile, setFontCssFile] = useState("");
   const [tokens, setTokens] = useState<DiscoveredToken[]>([]);
   const [tokenDrafts, setTokenDrafts] = useState<Record<string, string>>({});
   const [tokensOpen, setTokensOpen] = useState(false);
@@ -1809,6 +1810,42 @@ export default function DesignScreen({
     }
   }, []);
 
+  const addFontFace = useCallback(async (asset: DiscoveredAsset) => {
+    if (!projectRoot || asset.kind !== "font") return;
+    const cssFile = openCssFiles.find((file) => file.path === fontCssFile) ?? openCssFiles[0];
+    if (!cssFile) {
+      setError("Open a CSS file in the Editor before adding a font face.");
+      return;
+    }
+    try {
+      const result = (await window.spartan.call("design_assets", {
+        rootDir: projectRoot,
+        fromFile: cssFile.path,
+      })) as { assets: DiscoveredAsset[] };
+      const cssAsset = result.assets.find((item) => item.file === asset.file && item.kind === "font");
+      if (!cssAsset?.fontFaceSnippet) {
+        setError("Could not create a stylesheet-relative @font-face snippet for this asset.");
+        return;
+      }
+      if (cssFile.content.includes(`url("${cssAsset.referencePath}")`) || cssFile.content.includes(`font-family: "${cssAsset.fontFamily}"`)) {
+        setError(`${cssAsset.fontFamily ?? asset.label} already appears in ${cssFile.path}.`);
+        return;
+      }
+      const separator = cssFile.content.length === 0 || cssFile.content.endsWith("\n") ? "\n" : "\n\n";
+      const text = `${separator}${cssAsset.fontFaceSnippet}\n`;
+      await window.spartan.call("edit", {
+        doc_id: cssFile.docId,
+        start_char: [...cssFile.content].length,
+        end_char: [...cssFile.content].length,
+        text,
+      });
+      onContentChange(cssFile.path, cssFile.content + text);
+      setError(null);
+    } catch (e) {
+      setError(`Could not add @font-face: ${(e as Error).message}`);
+    }
+  }, [projectRoot, openCssFiles, fontCssFile, onContentChange]);
+
   const applyFontFamily = useCallback(async (asset: DiscoveredAsset) => {
     if (!asset.fontFamily || selectedIds.length === 0) return;
     await applyEditObject(selectedIds.length === 1
@@ -2377,6 +2414,19 @@ export default function DesignScreen({
                   value={assetFilter}
                   onChange={(event) => setAssetFilter(event.target.value)}
                 />
+                {openCssFiles.length > 0 && filteredAssets.some((asset) => asset.kind === "font") && (
+                  <div className="design-palette-placement mono" aria-label="Font face stylesheet target">
+                    <span>Add @font-face to</span>
+                    <select
+                      className="design-input mono"
+                      aria-label="Stylesheet for font face"
+                      value={fontCssFile || openCssFiles[0].path}
+                      onChange={(event) => setFontCssFile(event.target.value)}
+                    >
+                      {openCssFiles.map((file) => <option key={file.path} value={file.path}>{file.path}</option>)}
+                    </select>
+                  </div>
+                )}
                 {assets.length === 0 ? (
                   <div className="design-palette-empty mono">
                     No image or font assets found under the project root.
@@ -2433,6 +2483,14 @@ export default function DesignScreen({
                           onClick={() => void copyFontCss(asset)}
                         >
                           {copiedFontCss === asset.file ? "CSS ✓" : "CSS"}
+                        </button>
+                        <button
+                          className="design-asset-action mono"
+                          disabled={openCssFiles.length === 0}
+                          title={openCssFiles.length > 0 ? `Add a stylesheet-relative @font-face declaration to ${fontCssFile || openCssFiles[0].path}` : "Open a CSS file first"}
+                          onClick={() => void addFontFace(asset)}
+                        >
+                          CSS +
                         </button>
                       </div>
                     ))}

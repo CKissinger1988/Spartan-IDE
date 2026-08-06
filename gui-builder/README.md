@@ -47,6 +47,9 @@ summarizes.
   when clipboard permission is unavailable, the Design screen keeps a
   session-local fallback. Imported snapshots retain their source path so the
   UI can warn when relative imports may need adjustment.
+- The desktop font palette can request a stylesheet-relative font snippet for
+  the selected open CSS file and append it through the normal editor history
+  path, refusing an existing matching family or URL.
 - The sandbox inspection relay includes viewport-relative `x`, `y`, `right`,
   and `bottom` bounds alongside width and height, so the desktop inspector and
   copied handoff snapshots describe the element's actual rendered position.
