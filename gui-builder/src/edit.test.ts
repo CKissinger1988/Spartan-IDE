@@ -205,6 +205,27 @@ test("Wrap refuses roots, expression-indirect children, and unsafe wrapper names
   );
 });
 
+test("WrapMany groups selected siblings in source order and keeps unselected siblings outside", () => {
+  const source = `const X = () => <div><i id="a" /><b id="keep" /><em id="c" /></div>;`;
+  const result = applyCanvasEdit(source, { kind: "WrapMany", nodeIds: ["n3", "n1"], tagName: "section" });
+  assert.match(result, /<div><section><i id="a" \/><em id="c" \/><\/section><b id="keep" \/><\/div>/);
+});
+
+test("WrapMany refuses different parents, roots, and expression-indirect nodes", () => {
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <div><i /><section><b /></section></div>;`, { kind: "WrapMany", nodeIds: ["n1", "n3"], tagName: "div" }),
+    /share one direct JSX parent/,
+  );
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <div><i /></div>;`, { kind: "WrapMany", nodeIds: ["n0", "n1"], tagName: "div" }),
+    /top-level component root/,
+  );
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <div>{ok && <i />}{yes && <b />}</div>;`, { kind: "WrapMany", nodeIds: ["n1", "n2"], tagName: "section" }),
+    /direct JSX children/,
+  );
+});
+
 test("Unwrap promotes an attribute-free wrapper's children without losing their order", () => {
   const source = `const X = () => <div><section><i>A</i><b>B</b></section><em>C</em></div>;`;
   const result = applyCanvasEdit(source, { kind: "Unwrap", nodeId: "n1" });

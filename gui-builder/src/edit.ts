@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All twelve members of the `CanvasEdit` union are real and implemented:
+ * All thirteen members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -226,6 +226,47 @@ function applyWrap(
   siblings.splice(index, 1, wrapper);
 }
 
+function applyWrapMany(
+  nodesById: Map<string, AnyNode>,
+  parentOf: Map<string, AnyNode | null>,
+  edit: Extract<CanvasEdit, { kind: "WrapMany" }>,
+): void {
+  if (!isValidIdentifierName(edit.tagName)) {
+    throw new Error(`WrapMany tag name "${edit.tagName}" must be a single valid JSX identifier.`);
+  }
+  if (edit.nodeIds.length < 2 || new Set(edit.nodeIds).size !== edit.nodeIds.length) {
+    throw new Error("WrapMany requires at least two distinct selected elements.");
+  }
+  const nodes = edit.nodeIds.map((nodeId) => {
+    const node = nodesById.get(nodeId);
+    if (!node) throw new Error(`No element with id "${nodeId}" found in the current source.`);
+    return node;
+  });
+  const parents = nodes.map((node, index) => {
+    const parent = parentOf.get(edit.nodeIds[index]);
+    if (parent === undefined) throw new Error(`Internal error: no parent entry tracked for id "${edit.nodeIds[index]}".`);
+    if (parent === null) throw new Error(`Element "${edit.nodeIds[index]}" is a top-level component root -- group child elements instead.`);
+    return parent;
+  });
+  if (parents.some((parent) => parent !== parents[0])) {
+    throw new Error("WrapMany requires all selected elements to share one direct JSX parent.");
+  }
+  const siblings = parents[0].children as AnyNode[];
+  const ordered = nodes.map((node, index) => ({ node, nodeId: edit.nodeIds[index], index: siblings.indexOf(node) }));
+  if (ordered.some((entry) => entry.index === -1)) {
+    throw new Error("WrapMany only supports direct JSX children, not elements nested inside expressions.");
+  }
+  ordered.sort((a, b) => a.index - b.index);
+  const firstIndex = ordered[0].index;
+  for (const entry of [...ordered].sort((a, b) => b.index - a.index)) siblings.splice(entry.index, 1);
+  const wrapper = b.jsxElement(
+    b.jsxOpeningElement(b.jsxIdentifier(edit.tagName), [], false),
+    b.jsxClosingElement(b.jsxIdentifier(edit.tagName)),
+    ordered.map((entry) => entry.node),
+  );
+  siblings.splice(firstIndex, 0, wrapper);
+}
+
 function applyUnwrap(
   nodesById: Map<string, AnyNode>,
   parentOf: Map<string, AnyNode | null>,
@@ -438,6 +479,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       break;
     case "Wrap":
       applyWrap(nodesById, parentOf, edit);
+      break;
+    case "WrapMany":
+      applyWrapMany(nodesById, parentOf, edit);
       break;
     case "Unwrap":
       applyUnwrap(nodesById, parentOf, edit);

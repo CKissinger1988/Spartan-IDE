@@ -617,7 +617,7 @@ function StyleValueControl({
  * the exact same `edit` IPC call typing already uses, so a canvas edit
  * gets the same undo/dirty tracking as any other edit.
  *
- * All twelve real `CanvasEdit` kinds `gui-builder` itself supports are now
+ * All thirteen real `CanvasEdit` kinds `gui-builder` itself supports are now
  * wired here: `PropChange`/`StyleChange` (mutate the selected node) and
  * `Reparent`/`ComponentInsert` (structural edits, closing the gap this
  * screen's own edit form used to leave unreachable even after
@@ -687,6 +687,11 @@ export default function DesignScreen({
   const hasSingleSelection = selectionCount === 1;
   const selectedSibling = selectedId && hasSingleSelection ? findParentEntry(roots, selectedId) : null;
   const canUnwrap = hasSingleSelection && !!selectedSibling && !!selectedNode && Object.keys(selectedNode.props).length === 0;
+  const selectedParentEntries = selectedIds.map((id) => findParentEntry(roots, id));
+  const firstSelectedParentId = selectedParentEntries[0]?.parent.id;
+  const canWrapSelection = selectedParentEntries.length > 0
+    && !!firstSelectedParentId
+    && selectedParentEntries.every((entry) => entry?.parent.id === firstSelectedParentId);
   const filteredRoots = useMemo(() => filterTree(roots, treeFilter), [roots, treeFilter]);
 
   useEffect(() => {
@@ -1102,7 +1107,7 @@ export default function DesignScreen({
         : editKind === "TagChange"
           ? hasSingleSelection && isValidTagName(tagName)
         : editKind === "Wrap"
-          ? hasSingleSelection && isValidTagName(wrapTagName)
+          ? canWrapSelection && isValidTagName(wrapTagName)
         : editKind === "Unwrap"
           ? canUnwrap
         : editKind === "Reparent"
@@ -1385,7 +1390,9 @@ export default function DesignScreen({
       edit = { kind: "TagChange", nodeId: selectedId, tagName: tagName.trim() };
     } else if (editKind === "Wrap") {
       if (!isValidTagName(wrapTagName)) return;
-      edit = { kind: "Wrap", nodeId: selectedId, tagName: wrapTagName.trim() };
+      edit = selectedIds.length > 1
+        ? { kind: "WrapMany", nodeIds: selectedIds, tagName: wrapTagName.trim() }
+        : { kind: "Wrap", nodeId: selectedId, tagName: wrapTagName.trim() };
     } else if (editKind === "Unwrap") {
       edit = { kind: "Unwrap", nodeId: selectedId };
     } else if (editKind === "Reparent") {
