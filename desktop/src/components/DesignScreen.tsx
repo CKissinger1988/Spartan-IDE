@@ -52,6 +52,12 @@ interface VariantPreset {
   updatedAt: number;
 }
 
+interface PreviewInspection {
+  nodeId: string;
+  rect: { width: number; height: number };
+  styles: Record<string, string>;
+}
+
 interface DesignScreenProps {
   activeFile: OpenFile | null;
   openFiles: OpenFile[];
@@ -575,6 +581,7 @@ export default function DesignScreen({
   const [variantName, setVariantName] = useState("");
   const [variantPresets, setVariantPresets] = useState<VariantPreset[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [previewInspection, setPreviewInspection] = useState<PreviewInspection | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [propKey, setPropKey] = useState("");
   const [propValue, setPropValue] = useState("");
@@ -618,10 +625,17 @@ export default function DesignScreen({
   // Keep the real visual canvas selection highlight synchronized when the
   // tree selects a node, and when a fresh bundle replaces the iframe DOM.
   useEffect(() => {
+    setPreviewInspection(null);
     iframeRef.current?.contentWindow?.postMessage(
       { type: "spartan-canvas-select", nodeId: selectedId },
       "*",
     );
+    if (selectedId) {
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: "spartan-canvas-inspect", nodeId: selectedId },
+        "*",
+      );
+    }
   }, [selectedId, bundleCode]);
 
   // The curated definition for whatever style property is currently
@@ -852,6 +866,7 @@ export default function DesignScreen({
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
+      if (event.source && iframeRef.current?.contentWindow && event.source !== iframeRef.current.contentWindow) return;
       if (event.data?.type === "spartan-canvas-click") {
         setSelectedId(event.data.nodeId);
       } else if (event.data?.type === "spartan-canvas-drop") {
@@ -860,11 +875,13 @@ export default function DesignScreen({
         // already uses -- including its own real refusals (moving a root,
         // or into a descendant), which surface here as a normal error.
         void applyReparentEdit(event.data.nodeId, event.data.newParentId);
+      } else if (event.data?.type === "spartan-canvas-inspect-result" && event.data.nodeId === selectedId) {
+        setPreviewInspection(event.data as PreviewInspection);
       }
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [applyReparentEdit]);
+  }, [applyReparentEdit, selectedId]);
 
   // Real, per-kind readiness check -- each structural kind names a
   // different second operand (`reparentTargetId` vs. `insertTagName`)
@@ -1222,6 +1239,12 @@ export default function DesignScreen({
                   { type: "spartan-canvas-select", nodeId: selectedId },
                   "*",
                 );
+                if (selectedId) {
+                  iframeRef.current?.contentWindow?.postMessage(
+                    { type: "spartan-canvas-inspect", nodeId: selectedId },
+                    "*",
+                  );
+                }
               }}
             />
           </div>
@@ -1357,6 +1380,19 @@ export default function DesignScreen({
             <div className="design-selected mono">
               &lt;{selectedNode.tagName}&gt; #{selectedNode.id}
             </div>
+            {previewInspection?.nodeId === selectedNode.id && (
+              <div className="design-inspection mono" aria-label="Rendered element inspection">
+                <div className="design-inspection-title">Rendered preview</div>
+                <div className="design-inspection-grid">
+                  <span>size</span><strong>{Math.round(previewInspection.rect.width)} × {Math.round(previewInspection.rect.height)} px</strong>
+                  <span>display</span><strong>{previewInspection.styles.display}</strong>
+                  <span>position</span><strong>{previewInspection.styles.position}</strong>
+                  <span>font</span><strong>{previewInspection.styles.fontSize}</strong>
+                  <span>padding</span><strong>{previewInspection.styles.padding}</strong>
+                  <span>margin</span><strong>{previewInspection.styles.margin}</strong>
+                </div>
+              </div>
+            )}
             <button className="design-danger-action mono" onClick={deleteSelected}>
               Delete selected element
             </button>

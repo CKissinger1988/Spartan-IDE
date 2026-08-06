@@ -3212,6 +3212,39 @@
   font-size: 10px;
 }
 
+.design-inspection {
+  margin: 6px 0 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.design-inspection-title {
+  margin-bottom: 5px;
+  color: var(--accent);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.design-inspection-grid {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 3px 7px;
+}
+
+.design-inspection-grid strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .design-preview {
   grid-column: 2;
   grid-row: 2;

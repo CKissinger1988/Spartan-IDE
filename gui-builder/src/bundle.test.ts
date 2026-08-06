@@ -120,6 +120,14 @@ test("a real bundle carries real data-spartan-id attributes for click-to-select 
         result.code.includes("highlightSelection"),
         "the real bundle should visibly highlight the selected canvas node",
       );
+      assert.ok(
+        result.code.includes("spartan-canvas-inspect-result"),
+        "the real bundle should report rendered geometry and computed styles",
+      );
+      assert.ok(
+        result.code.includes("getComputedStyle"),
+        "the real bundle should inspect styles inside the sandbox where the DOM is readable",
+      );
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

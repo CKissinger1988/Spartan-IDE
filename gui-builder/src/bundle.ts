@@ -104,12 +104,37 @@ try {
     selectedEl.style.outlineOffset = "2px";
   }
 
+  function inspectSelection(nodeId) {
+    var candidate = nodeId
+      ? document.querySelector('[data-spartan-id="' + nodeId + '"]')
+      : null;
+    if (!candidate) return;
+    var style = window.getComputedStyle(candidate);
+    var rect = candidate.getBoundingClientRect();
+    window.parent.postMessage({
+      type: "spartan-canvas-inspect-result",
+      nodeId: nodeId,
+      rect: { width: rect.width, height: rect.height },
+      styles: {
+        display: style.display,
+        position: style.position,
+        color: style.color,
+        backgroundColor: style.backgroundColor,
+        fontSize: style.fontSize,
+        padding: style.padding,
+        margin: style.margin,
+      },
+    }, "*");
+  }
+
   // The parent Design screen uses this same message when a tree row is
   // selected. The message event is the correct cross-origin channel for the
   // sandboxed iframe; no same-origin escape hatch is assumed.
   window.addEventListener("message", function (event) {
     if (event.data && event.data.type === "spartan-canvas-select") {
       highlightSelection(event.data.nodeId || null);
+    } else if (event.data && event.data.type === "spartan-canvas-inspect") {
+      inspectSelection(event.data.nodeId || null);
     }
   });
 
