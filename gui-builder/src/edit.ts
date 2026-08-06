@@ -54,11 +54,12 @@ function findAttribute(element: AnyNode, name: string): AnyNode | undefined {
   );
 }
 
-function applyStyleChange(element: AnyNode, property: string, value: string): void {
+function applyStyleChange(element: AnyNode, property: string, value: string, valueType: "string" | "expression" = "string"): void {
+  const valueNode = valueType === "expression" ? parsePropExpression(value) : b.stringLiteral(value);
   let styleAttr = findAttribute(element, "style");
 
   if (!styleAttr) {
-    const objectExpr = b.objectExpression([b.objectProperty(makeKey(property), b.stringLiteral(value))]);
+    const objectExpr = b.objectExpression([b.objectProperty(makeKey(property), valueNode)]);
     styleAttr = b.jsxAttribute(b.jsxIdentifier("style"), b.jsxExpressionContainer(objectExpr));
     element.openingElement.attributes.push(styleAttr);
     return;
@@ -76,9 +77,9 @@ function applyStyleChange(element: AnyNode, property: string, value: string): vo
     (prop) => prop.type === "ObjectProperty" && !prop.computed && propertyKeyName(prop) === property,
   );
   if (existing) {
-    existing.value = b.stringLiteral(value);
+    existing.value = valueNode;
   } else {
-    objectExpr.properties.push(b.objectProperty(makeKey(property), b.stringLiteral(value)));
+    objectExpr.properties.push(b.objectProperty(makeKey(property), valueNode));
   }
 }
 
@@ -348,7 +349,7 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
     case "StyleChange": {
       const element = nodesById.get(edit.nodeId);
       if (!element) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
-      applyStyleChange(element, edit.property, edit.value);
+      applyStyleChange(element, edit.property, edit.value, edit.valueType);
       break;
     }
     case "StyleRemove": {

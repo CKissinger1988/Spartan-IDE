@@ -64,6 +64,12 @@ interface PreviewInspection {
   styles: Record<string, string>;
 }
 
+interface StyleClipboard {
+  sourcePath: string;
+  sourceTagName: string;
+  entries: Record<string, StyleEntryValue>;
+}
+
 interface DesignScreenProps {
   activeFile: OpenFile | null;
   openFiles: OpenFile[];
@@ -603,6 +609,7 @@ export default function DesignScreen({
   const [variantPresets, setVariantPresets] = useState<VariantPreset[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [styleClipboard, setStyleClipboard] = useState<StyleClipboard | null>(null);
   const [previewInspection, setPreviewInspection] = useState<PreviewInspection | null>(null);
   const [copiedInspection, setCopiedInspection] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -895,6 +902,38 @@ export default function DesignScreen({
     if (!activeFile || !selectedId || !hasSingleSelection) return;
     await applyEditObject({ kind: "Duplicate", nodeId: selectedId });
   }, [activeFile, selectedId, hasSingleSelection, applyEditObject]);
+
+  const copyStyles = useCallback(() => {
+    if (!selectedNode || !hasSingleSelection) return;
+    const style = selectedNode.props.style;
+    if (!style || style.kind !== "style" || Object.keys(style.entries).length === 0) {
+      setError("The selected element has no plain inline styles to copy.");
+      return;
+    }
+    setStyleClipboard({
+      sourcePath: activeFile?.path ?? "",
+      sourceTagName: selectedNode.tagName,
+      entries: Object.fromEntries(Object.entries(style.entries).map(([name, entry]) => [name, { ...entry }])),
+    });
+    setError(null);
+  }, [activeFile?.path, selectedNode, hasSingleSelection]);
+
+  const pasteStyles = useCallback(async () => {
+    if (!styleClipboard || !activeFile || selectedIds.length === 0) return;
+    const hasExpressions = Object.values(styleClipboard.entries).some((entry) => entry.kind === "expression");
+    if (styleClipboard.sourcePath !== activeFile.path && hasExpressions) {
+      setError("Expression-valued styles can only be pasted within their source component file; copy literal styles separately for cross-file use.");
+      return;
+    }
+    const edits = selectedIds.flatMap((nodeId) => Object.entries(styleClipboard.entries).map(([property, entry]) => ({
+      kind: "StyleChange",
+      nodeId,
+      property,
+      value: entry.kind === "literal" ? entry.value ?? "" : entry.source ?? "",
+      valueType: entry.kind,
+    })));
+    await applyEditBatch(edits);
+  }, [styleClipboard, activeFile, selectedIds, applyEditBatch]);
 
   // Keep common canvas shortcuts scoped to the Design screen and out of the
   // inspector's own inputs. Escape clears any selection; Delete/Backspace and
@@ -1560,6 +1599,29 @@ export default function DesignScreen({
             <button className="design-secondary-action mono" onClick={duplicateSelected} disabled={!hasSingleSelection}>
               Duplicate selected element
             </button>
+            <div className="design-inspection-actions">
+              <button
+                className="design-secondary-action mono"
+                onClick={copyStyles}
+                disabled={!hasSingleSelection || selectedNode.props.style?.kind !== "style" || Object.keys(selectedNode.props.style.entries).length === 0}
+                title={hasSingleSelection ? "Copy every plain inline style entry from the selected element" : "Select exactly one styled element first"}
+              >
+                Copy styles
+              </button>
+              <button
+                className="design-secondary-action mono"
+                onClick={() => void pasteStyles()}
+                disabled={!styleClipboard || selectionCount === 0}
+                title={styleClipboard ? `Paste ${Object.keys(styleClipboard.entries).length} copied styles onto the selection` : "Copy styles from an element first"}
+              >
+                Paste styles{styleClipboard ? ` (${Object.keys(styleClipboard.entries).length})` : ""}
+              </button>
+            </div>
+            {styleClipboard && (
+              <div className="design-preview-status mono">
+                Clipboard: {Object.keys(styleClipboard.entries).length} styles from &lt;{styleClipboard.sourceTagName}&gt;
+              </div>
+            )}
             <div className="design-edit-kind">
               <label>
                 <input

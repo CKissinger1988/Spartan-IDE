@@ -67,7 +67,15 @@ export interface SourceLocation {
 }
 
 export type CanvasEdit =
-  | { kind: "StyleChange"; nodeId: string; property: string; value: string }
+  | {
+      kind: "StyleChange";
+      nodeId: string;
+      property: string;
+      value: string;
+      /** Preserve a copied style expression such as `C.text` instead of
+       * coercing it into a string literal. */
+      valueType?: "string" | "expression";
+    }
   /** Removes one property from a plain inline style object. */
   | { kind: "StyleRemove"; nodeId: string; property: string }
   | {

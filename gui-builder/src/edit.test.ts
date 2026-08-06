@@ -36,6 +36,22 @@ test("StyleChange creates a style attribute when the element has none yet", () =
   assert.match(result, /style=\{\{\s*color:\s*"blue"\s*\}\}/);
 });
 
+test("StyleChange preserves a copied JavaScript expression instead of stringifying it", () => {
+  const source = `const X = () => <div style={{ color: "red" }} />;`;
+  const result = applyCanvasEdit(source, {
+    kind: "StyleChange", nodeId: "n0", property: "color", value: "C.text", valueType: "expression",
+  });
+  assert.match(result, /color:\s*\(C\.text\)/);
+  assert.doesNotMatch(result, /"C\.text"/);
+});
+
+test("StyleChange can create a new expression-valued style property", () => {
+  const result = applyCanvasEdit(`const X = () => <div />;`, {
+    kind: "StyleChange", nodeId: "n0", property: "color", value: "theme.primary", valueType: "expression",
+  });
+  assert.match(result, /style=\{\{[\s\S]*color:\s*\(theme\.primary\)[\s\S]*\}\}/);
+});
+
 test("StyleChange refuses to overwrite a non-plain-object style value", () => {
   const source = `const X = () => <div style={dynamicStyles} />;`;
   assert.throws(
