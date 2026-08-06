@@ -85,6 +85,8 @@ function TreeNode({
   selectedId: string | null;
   onSelect: (id: string) => void;
 }): React.ReactElement {
+  const [expanded, setExpanded] = useState(true);
+  const hasChildren = node.children.length > 0;
   return (
     <div>
       <div
@@ -92,13 +94,26 @@ function TreeNode({
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={() => onSelect(node.id)}
       >
+        <button
+          type="button"
+          className="design-tree-toggle"
+          aria-label={hasChildren ? `${expanded ? "Collapse" : "Expand"} ${node.tagName}` : `${node.tagName} has no children`}
+          aria-expanded={hasChildren ? expanded : undefined}
+          disabled={!hasChildren}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (hasChildren) setExpanded((value) => !value);
+          }}
+        >
+          {hasChildren ? (expanded ? "▾" : "▸") : "·"}
+        </button>
         <span className="mono">
           &lt;{node.tagName}&gt; <span className="design-tree-id">#{node.id}</span>
         </span>
       </div>
-      {node.children.map((child) => (
-        <TreeNode key={child.id} node={child} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} />
-      ))}
+      {expanded && node.children.map((child) => (
+          <TreeNode key={child.id} node={child} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} />
+        ))}
     </div>
   );
 }
