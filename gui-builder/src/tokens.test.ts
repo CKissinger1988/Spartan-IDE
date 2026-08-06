@@ -4,6 +4,12 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyTokenValue, defineTokenValue, discoverTokens, discoverTokensInSource, removeTokenValue } from "./tokens.js";
+import { buildTokenReference } from "./token-reference.js";
+
+test("builds safe CSS token references for prop and style binding", () => {
+  assert.equal(buildTokenReference("--brand"), "var(--brand)");
+  assert.throws(() => buildTokenReference("brand"), /Invalid CSS/);
+});
 
 test("discovers real CSS custom properties and preserves their source values", () => {
   const root = mkdtempSync(join(tmpdir(), "spartan-tokens-"));

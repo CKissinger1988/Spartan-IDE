@@ -8,6 +8,7 @@ import { buildComponentPlaygroundScaffold, buildComponentScaffold } from "../../
 import { buildPreviewDocument } from "../../../gui-builder/src/preview";
 import { LAYOUT_PRESETS } from "../../../gui-builder/src/layout";
 import { buildThemeOverride } from "../../../gui-builder/src/theme";
+import { buildTokenReference } from "../../../gui-builder/src/token-reference";
 import type { ComponentPropDefinition } from "../../../gui-builder/src/scaffold";
 
 interface StyleEntryValue {
@@ -2318,16 +2319,23 @@ export default function DesignScreen({
 
   const applyToken = useCallback(
     async (token: DiscoveredToken) => {
-      if (!activeFile || !selectedId || !hasSingleSelection || editKind !== "StyleChange" || !propKey.trim()) return;
-      await applyEditObject({
-        kind: "StyleChange",
-        nodeId: selectedId,
-        property: propKey.trim(),
-        value: `var(${token.name})`,
-      });
-      setPropValue(`var(${token.name})`);
+      if (!activeFile || selectedIds.length === 0 || !propKey.trim()) return;
+      const value = buildTokenReference(token.name);
+      if (editKind === "StyleChange") {
+        await applyEditObject(selectedIds.length === 1
+          ? { kind: "StyleChange", nodeId: selectedIds[0], property: propKey.trim(), value }
+          : { kind: "StyleChangeMany", nodeIds: selectedIds, property: propKey.trim(), value });
+      } else if (editKind === "PropChange") {
+        await applyEditObject(selectedIds.length === 1
+          ? { kind: "PropChange", nodeId: selectedIds[0], prop: propKey.trim(), value, valueType: "string" }
+          : { kind: "PropChangeMany", nodeIds: selectedIds, prop: propKey.trim(), value, valueType: "string" });
+      } else {
+        return;
+      }
+      setPropValue(value);
+      setPropValueType("string");
     },
-    [activeFile, selectedId, hasSingleSelection, editKind, propKey, applyEditObject]
+    [activeFile, selectedIds, editKind, propKey, applyEditObject]
   );
 
   const applyTokenDefinition = useCallback(
@@ -3052,16 +3060,16 @@ export default function DesignScreen({
                       <div key={`${token.file}:${token.name}:${index}`} className="design-token-row">
                         <button
                           className="design-palette-item mono design-token-use"
-                          disabled={!selectedId || !hasSingleSelection || editKind !== "StyleChange" || !propKey.trim()}
+                          disabled={!selectedId || selectedIds.length === 0 || !["StyleChange", "PropChange"].includes(editKind) || !propKey.trim()}
                           title={
-                            selectedId && hasSingleSelection && editKind === "StyleChange" && propKey.trim()
-                              ? `Set ${propKey} to var(${token.name})`
-                              : "Choose Style editing and a property first"
+                            selectedId && selectedIds.length > 0 && ["StyleChange", "PropChange"].includes(editKind) && propKey.trim()
+                              ? `${editKind === "PropChange" ? "Bind" : "Set"} ${propKey} to var(${token.name})`
+                              : "Choose Style or Prop editing and a property first"
                           }
                           onClick={() => applyToken(token)}
                         >
                           <span className="design-palette-name">{token.name}</span>
-                          <span className="design-palette-from">{token.value} · {token.relativePath}</span>
+                          <span className="design-palette-from">{editKind === "PropChange" ? "Bind · " : "Use · "}{token.value} · {token.relativePath}</span>
                         </button>
                         <input
                           className="design-token-value mono"
