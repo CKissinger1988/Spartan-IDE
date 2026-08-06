@@ -38,7 +38,7 @@ summarizes.
 - `src/bundle.ts` — real esbuild bundling with `data-spartan-id` annotation and
   sandboxed-preview click/drag relays, including an in-memory source path for
   previews of unsaved editor changes.
-- `src/*.test.ts` — 120 real tests (Node's built-in `node:test` runner, no
+- `src/*.test.ts` — 121 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.

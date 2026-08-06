@@ -622,6 +622,22 @@ test("ComponentInsertMany rejects a root sibling target before mutating any targ
   );
 });
 
+test("ComponentInsertMany validates typed props before opening any child target", () => {
+  const source = `const X = () => <main><section /><article /></main>;`;
+  assert.throws(
+    () => applyCanvasEdit(source, {
+      kind: "ComponentInsertMany",
+      nodeIds: ["n1", "n2"],
+      placement: "child",
+      tagName: "Badge",
+      propValues: { count: { value: "not-a-number", valueType: "number" } },
+    }),
+    /not finite/,
+  );
+  assert.doesNotMatch(source, /Badge/);
+  assert.match(source, /<section \/><article \/>/);
+});
+
 test("ComponentInsert rejects an invalid string prop name", () => {
   assert.throws(
     () => applyCanvasEdit(`const X = () => <main />;`, {

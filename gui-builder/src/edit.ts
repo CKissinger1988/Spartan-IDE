@@ -723,7 +723,12 @@ function applyComponentInsertMany(
     if (!node) throw new Error(`No element with id "${id}" found in the current source.`);
     return { id, node, parent: parentOf.get(id) };
   });
-  const makeElement = () => makeInsertedElement(edit.tagName, edit.props, edit.propValues, edit.childrenText);
+  // Build and validate one template before changing any target. Each target
+  // receives a deep clone because a single AST node cannot have multiple
+  // parents, while the template itself has no source `original` metadata to
+  // preserve or accidentally share between insertions.
+  const template = makeInsertedElement(edit.tagName, edit.props, edit.propValues, edit.childrenText);
+  const makeElement = () => JSON.parse(JSON.stringify(template)) as AnyNode;
   if (edit.placement === "child") {
     for (const target of targets) {
       ensureOpenForChildren(target.node);
