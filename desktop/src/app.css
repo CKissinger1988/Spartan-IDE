@@ -3473,6 +3473,16 @@
   color: var(--text, #d8d8d8);
 }
 
+.design-palette-filter {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 4px;
+  padding: 5px 6px;
+  border: 1px solid var(--border, #454545);
+  background: var(--surface, #202020);
+  color: var(--text, #d8d8d8);
+}
+
 .design-palette-item {
   display: flex;
   justify-content: space-between;

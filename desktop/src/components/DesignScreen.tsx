@@ -676,6 +676,7 @@ export default function DesignScreen({
   const [palette, setPalette] = useState<DiscoveredComponent[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteInsertPlacement, setPaletteInsertPlacement] = useState<ComponentInsertPlacement>("child");
+  const [paletteFilter, setPaletteFilter] = useState("");
   const [assets, setAssets] = useState<DiscoveredAsset[]>([]);
   const [assetsOpen, setAssetsOpen] = useState(false);
   const [copiedAsset, setCopiedAsset] = useState<string | null>(null);
@@ -718,6 +719,11 @@ export default function DesignScreen({
   const canClearSelectionStyles = selectedStyleNodes.length > 0
     && selectedStyleNodes.every((node) => node?.props.style?.kind === "style");
   const filteredRoots = useMemo(() => filterTree(roots, treeFilter), [roots, treeFilter]);
+  const filteredPalette = useMemo(() => {
+    const query = paletteFilter.trim().toLowerCase();
+    if (!query) return palette;
+    return palette.filter((component) => `${component.name} ${component.file} ${component.importFrom ?? ""}`.toLowerCase().includes(query));
+  }, [palette, paletteFilter]);
 
   useEffect(() => {
     setTextValue(selectedNode?.textContent ?? "");
@@ -1126,6 +1132,7 @@ export default function DesignScreen({
       setPreviewSource(null);
       setVariantName("");
       setInteractionPresetName("");
+      setPaletteFilter("");
       const key = `spartan.gui-builder.variants:${activeFile.path}`;
       const interactionKey = `spartan.gui-builder.interactions:${activeFile.path}`;
       try {
@@ -1700,12 +1707,23 @@ export default function DesignScreen({
                     sibling
                   </label>
                 </div>
+                <input
+                  className="design-palette-filter mono"
+                  aria-label="Filter discovered components"
+                  placeholder="Filter components…"
+                  value={paletteFilter}
+                  onChange={(event) => setPaletteFilter(event.target.value)}
+                />
                 {palette.length === 0 ? (
                   <div className="design-palette-empty mono">
                     No exported components found under the project root.
                   </div>
+                ) : filteredPalette.length === 0 ? (
+                  <div className="design-palette-empty mono">
+                    No components match “{paletteFilter}”.
+                  </div>
                 ) : (
-                  palette.map((c) => (
+                  filteredPalette.map((c) => (
                     <button
                       key={`${c.file}:${c.name}`}
                       className="design-palette-item mono"

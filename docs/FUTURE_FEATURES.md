@@ -220,6 +220,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Multi-selection grouping into one shared JSX wrapper | Real |
 | Component insertion as a sibling after the selected node | Real |
 | Component palette child/sibling placement control | Real |
+| Searchable component palette by name or source path | Real |
 | Safe unwrapping of attribute-free direct wrappers | Real |
 | Same-parent sibling reordering with Move up/Move down controls | Real |
 | Keyboard canvas shortcuts (Escape clear, Delete remove, Ctrl/Cmd+D duplicate) | Real |
