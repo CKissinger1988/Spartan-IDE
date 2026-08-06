@@ -38,7 +38,7 @@ summarizes.
 - `src/bundle.ts` — real esbuild bundling with `data-spartan-id` annotation and
   sandboxed-preview click/drag relays, including an in-memory source path for
   previews of unsaved editor changes.
-- `src/*.test.ts` — 113 real tests (Node's built-in `node:test` runner, no
+- `src/*.test.ts` — 117 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.
@@ -46,10 +46,9 @@ summarizes.
 ## What this is not (real, honest scope cuts)
 
 - **No HMR or per-keystroke rebuild.** The desktop Design screen refreshes the
-- **No HMR or per-keystroke rebuild.** The desktop Design screen refreshes the
-  bundle on file activation and after a real Canvas → Code edit, using the
-  current in-memory source for correctness. A future incremental preview can
-  add HMR after measuring rebuild cost.
+  bundle after a debounced edit or a real Canvas → Code edit, using the current
+  in-memory source for correctness. A future incremental preview can add HMR
+  after measuring rebuild cost.
 - **No font manager or code-authored component state machine runtime yet.** Font assets can
   be discovered and copied, and CSS token definitions can be edited from the
   desktop suite; the desktop now provides reusable per-file interaction-state
