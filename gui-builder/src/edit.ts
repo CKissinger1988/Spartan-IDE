@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All eight members of the `CanvasEdit` union are real and implemented:
+ * All nine members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -79,6 +79,30 @@ function applyStyleChange(element: AnyNode, property: string, value: string): vo
     existing.value = b.stringLiteral(value);
   } else {
     objectExpr.properties.push(b.objectProperty(makeKey(property), b.stringLiteral(value)));
+  }
+}
+
+function applyStyleRemove(element: AnyNode, property: string): void {
+  const styleAttr = findAttribute(element, "style");
+  if (!styleAttr) {
+    throw new Error(`StyleRemove could not find a style attribute on the selected element.`);
+  }
+  const container = styleAttr.value;
+  if (!container || container.type !== "JSXExpressionContainer" || container.expression.type !== "ObjectExpression") {
+    throw new Error(
+      `StyleRemove targets an element whose "style" attribute isn't a plain object expression this package can safely edit -- refusing to overwrite a variable/expression reference.`,
+    );
+  }
+  const objectExpr = container.expression;
+  const properties = objectExpr.properties as AnyNode[];
+  const index = properties.findIndex(
+    (prop) => prop.type === "ObjectProperty" && !prop.computed && propertyKeyName(prop) === property,
+  );
+  if (index === -1) throw new Error(`StyleRemove could not find style property "${property}".`);
+  properties.splice(index, 1);
+  if (properties.length === 0) {
+    const attributes = element.openingElement.attributes as AnyNode[];
+    attributes.splice(attributes.indexOf(styleAttr), 1);
   }
 }
 
@@ -325,6 +349,12 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       const element = nodesById.get(edit.nodeId);
       if (!element) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
       applyStyleChange(element, edit.property, edit.value);
+      break;
+    }
+    case "StyleRemove": {
+      const element = nodesById.get(edit.nodeId);
+      if (!element) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
+      applyStyleRemove(element, edit.property);
       break;
     }
     case "PropChange": {

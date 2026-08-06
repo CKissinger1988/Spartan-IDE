@@ -44,6 +44,36 @@ test("StyleChange refuses to overwrite a non-plain-object style value", () => {
   );
 });
 
+test("StyleRemove removes one inline style property and preserves its sibling", () => {
+  const source = `const X = () => <div style={{ color: "red", padding: 4 }} />;`;
+  const result = applyCanvasEdit(source, { kind: "StyleRemove", nodeId: "n0", property: "color" });
+  assert.doesNotMatch(result, /color:/);
+  assert.match(result, /padding: 4/);
+  assert.doesNotThrow(() => parseComponent(result));
+});
+
+test("StyleRemove deletes the style attribute when its last property is removed", () => {
+  const result = applyCanvasEdit(`const X = () => <div style={{ color: "red" }} />;`, {
+    kind: "StyleRemove", nodeId: "n0", property: "color",
+  });
+  assert.equal(result, `const X = () => <div />;`);
+});
+
+test("StyleRemove refuses missing properties and non-object style expressions", () => {
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <div style={{ color: "red" }} />;`, {
+      kind: "StyleRemove", nodeId: "n0", property: "padding",
+    }),
+    /could not find style property/,
+  );
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <div style={styles.card} />;`, {
+      kind: "StyleRemove", nodeId: "n0", property: "color",
+    }),
+    /isn't a plain object expression/,
+  );
+});
+
 test("PropChange updates an existing string prop", () => {
   const source = `const X = () => <button className="btn">Go</button>;`;
   const result = applyCanvasEdit(source, { kind: "PropChange", nodeId: "n0", prop: "className", value: "btn-primary" });
