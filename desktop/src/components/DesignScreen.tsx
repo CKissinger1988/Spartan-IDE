@@ -446,6 +446,7 @@ export default function DesignScreen({
   const [error, setError] = useState<string | null>(null);
   const [propKey, setPropKey] = useState("");
   const [propValue, setPropValue] = useState("");
+  const [propValueType, setPropValueType] = useState<"string" | "number" | "boolean">("string");
   const [editKind, setEditKind] = useState<"PropChange" | "StyleChange" | "Reparent" | "ComponentInsert">(
     "PropChange"
   );
@@ -715,7 +716,7 @@ export default function DesignScreen({
     let edit: Record<string, unknown>;
     if (editKind === "PropChange") {
       if (!propKey.trim()) return;
-      edit = { kind: "PropChange", nodeId: selectedId, prop: propKey, value: propValue };
+      edit = { kind: "PropChange", nodeId: selectedId, prop: propKey, value: propValue, valueType: propValueType };
     } else if (editKind === "StyleChange") {
       if (!propKey.trim()) return;
       edit = { kind: "StyleChange", nodeId: selectedId, property: propKey, value: propValue };
@@ -729,9 +730,10 @@ export default function DesignScreen({
     await applyEditObject(edit);
     setPropKey("");
     setPropValue("");
+    setPropValueType("string");
     setReparentTargetId("");
     setInsertTagName("");
-  }, [activeFile, selectedId, propKey, propValue, editKind, reparentTargetId, insertTagName, applyEditObject]);
+  }, [activeFile, selectedId, propKey, propValue, propValueType, editKind, reparentTargetId, insertTagName, applyEditObject]);
 
   if (!activeFile || !isComponentFile(activeFile.path)) {
     return (
@@ -932,6 +934,16 @@ export default function DesignScreen({
                   value={propValue}
                   onChange={(e) => setPropValue(e.target.value)}
                 />
+                <select
+                  className="design-input mono"
+                  aria-label="Prop value type"
+                  value={propValueType}
+                  onChange={(e) => setPropValueType(e.target.value as typeof propValueType)}
+                >
+                  <option value="string">String</option>
+                  <option value="number">Number</option>
+                  <option value="boolean">Boolean</option>
+                </select>
               </>
             )}
             {editKind === "StyleChange" && (

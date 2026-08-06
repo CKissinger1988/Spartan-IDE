@@ -36,7 +36,7 @@ summarizes.
   design tokens as `var(--token)` values in inline styles.
 - `src/bundle.ts` — real esbuild bundling with `data-spartan-id` annotation and
   sandboxed-preview click/drag relays.
-- `src/*.test.ts` — 71 real tests (Node's built-in `node:test` runner, no
+- `src/*.test.ts` — 73 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.
@@ -50,8 +50,8 @@ summarizes.
   properties can be discovered and applied as `var(--token)` values; editing
   token definitions, fonts, and reusable state/variant controls remain the
   next feature increments in the desktop suite.
-- **`PropChange` always sets a plain string literal.** Setting a non-string
-  (number/boolean/expression) prop value isn't supported yet.
+- **`PropChange` supports string, number, and boolean literals.** Arbitrary
+  expression values remain intentionally unsupported.
 - **No Figma import, no screenshot-to-component.** Separate §6.4 items,
   unrelated to two-way sync itself.
 

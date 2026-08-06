@@ -78,12 +78,37 @@ function applyStyleChange(element: AnyNode, property: string, value: string): vo
   }
 }
 
-function applyPropChange(element: AnyNode, prop: string, value: string): void {
+function propLiteral(value: string, valueType: "string" | "number" | "boolean" = "string"): AnyNode {
+  if (valueType === "number") {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) throw new Error(`PropChange number value "${value}" is not finite.`);
+    return b.numericLiteral(parsed);
+  }
+  if (valueType === "boolean") {
+    if (value !== "true" && value !== "false") {
+      throw new Error(`PropChange boolean value must be "true" or "false", received "${value}".`);
+    }
+    return b.booleanLiteral(value === "true");
+  }
+  return b.stringLiteral(value);
+}
+
+function applyPropChange(
+  element: AnyNode,
+  prop: string,
+  value: string,
+  valueType: "string" | "number" | "boolean" = "string",
+): void {
   const existing = findAttribute(element, prop);
   if (existing) {
-    existing.value = b.stringLiteral(value);
+    existing.value = valueType === "string" ? b.stringLiteral(value) : b.jsxExpressionContainer(propLiteral(value, valueType));
   } else {
-    element.openingElement.attributes.push(b.jsxAttribute(b.jsxIdentifier(prop), b.stringLiteral(value)));
+    element.openingElement.attributes.push(
+      b.jsxAttribute(
+        b.jsxIdentifier(prop),
+        valueType === "string" ? b.stringLiteral(value) : b.jsxExpressionContainer(propLiteral(value, valueType)),
+      ),
+    );
   }
 }
 
@@ -247,7 +272,7 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
     case "PropChange": {
       const element = nodesById.get(edit.nodeId);
       if (!element) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
-      applyPropChange(element, edit.prop, edit.value);
+      applyPropChange(element, edit.prop, edit.value, edit.valueType);
       break;
     }
     case "Delete":

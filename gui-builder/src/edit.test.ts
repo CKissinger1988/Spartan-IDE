@@ -57,6 +57,30 @@ test("PropChange creates a new prop when none existed", () => {
   assert.match(result, /placeholder="Name"/);
 });
 
+test("PropChange writes real numeric and boolean JSX expression values", () => {
+  const source = `const X = () => <Widget />;`;
+  const numberResult = applyCanvasEdit(source, {
+    kind: "PropChange", nodeId: "n0", prop: "count", value: "3", valueType: "number",
+  });
+  const booleanResult = applyCanvasEdit(numberResult, {
+    kind: "PropChange", nodeId: "n0", prop: "enabled", value: "true", valueType: "boolean",
+  });
+  assert.match(booleanResult, /count=\{3\}/);
+  assert.match(booleanResult, /enabled=\{true\}/);
+});
+
+test("PropChange rejects malformed typed values instead of emitting broken JSX", () => {
+  const source = `const X = () => <Widget />;`;
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "PropChange", nodeId: "n0", prop: "count", value: "NaN", valueType: "number" }),
+    /not finite/,
+  );
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "PropChange", nodeId: "n0", prop: "enabled", value: "yes", valueType: "boolean" }),
+    /must be "true" or "false"/,
+  );
+});
+
 test("Reparent moves an element from one parent to another, appended at the end by default", () => {
   const source = `const X = () => (<div><section id="a"><span id="s" /></section><section id="b" /></div>);`;
   const roots = parseComponent(source);

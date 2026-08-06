@@ -57,7 +57,13 @@ export interface ComponentNode {
 
 export type CanvasEdit =
   | { kind: "StyleChange"; nodeId: string; property: string; value: string }
-  | { kind: "PropChange"; nodeId: string; prop: string; value: string }
+  | {
+      kind: "PropChange";
+      nodeId: string;
+      prop: string;
+      value: string;
+      valueType?: "string" | "number" | "boolean";
+    }
   /** Removes an existing non-root element and its complete JSX subtree. */
   | { kind: "Delete"; nodeId: string }
   /** Clones an existing non-root element, including its JSX subtree, and
