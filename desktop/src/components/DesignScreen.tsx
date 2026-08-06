@@ -44,6 +44,7 @@ interface DiscoveredAsset {
   referencePath: string;
   kind: "image" | "font";
   label: string;
+  fontFaceSnippet?: string;
 }
 
 interface DiscoveredToken {
@@ -803,6 +804,7 @@ export default function DesignScreen({
   const [assetsOpen, setAssetsOpen] = useState(false);
   const [assetFilter, setAssetFilter] = useState("");
   const [copiedAsset, setCopiedAsset] = useState<string | null>(null);
+  const [copiedFontCss, setCopiedFontCss] = useState<string | null>(null);
   const [tokens, setTokens] = useState<DiscoveredToken[]>([]);
   const [tokenDrafts, setTokenDrafts] = useState<Record<string, string>>({});
   const [tokensOpen, setTokensOpen] = useState(false);
@@ -1644,6 +1646,16 @@ export default function DesignScreen({
     }
   }, []);
 
+  const copyFontCss = useCallback(async (asset: DiscoveredAsset) => {
+    if (!asset.fontFaceSnippet) return;
+    try {
+      await navigator.clipboard.writeText(asset.fontFaceSnippet);
+      setCopiedFontCss(asset.file);
+    } catch (e) {
+      setError(`Could not copy @font-face snippet: ${(e as Error).message}`);
+    }
+  }, []);
+
   const copyInspection = useCallback(async () => {
     if (!previewInspection || !selectedNode) return;
     try {
@@ -2106,15 +2118,24 @@ export default function DesignScreen({
                       </div>
                     ))}
                     {filteredAssets.filter((asset) => asset.kind === "font").map((asset) => (
-                      <button
-                        key={asset.file}
-                        className="design-palette-item mono"
-                        title={`Copy the relative font path ${asset.referencePath}`}
-                        onClick={() => void copyAssetPath(asset)}
-                      >
-                        <span className="design-palette-name">Aa {asset.label}</span>
-                        <span className="design-palette-from">{copiedAsset === asset.file ? "Copied · " : "Copy · "}{asset.referencePath}</span>
-                      </button>
+                      <div key={asset.file} className="design-asset-row">
+                        <button
+                          className="design-palette-item mono"
+                          title={`Copy the relative font path ${asset.referencePath}`}
+                          onClick={() => void copyAssetPath(asset)}
+                        >
+                          <span className="design-palette-name">Aa {asset.label}</span>
+                          <span className="design-palette-from">{copiedAsset === asset.file ? "Copied · " : "Copy · "}{asset.referencePath}</span>
+                        </button>
+                        <button
+                          className="design-asset-action mono"
+                          disabled={!asset.fontFaceSnippet}
+                          title="Copy a format-aware @font-face CSS snippet"
+                          onClick={() => void copyFontCss(asset)}
+                        >
+                          {copiedFontCss === asset.file ? "CSS ✓" : "CSS"}
+                        </button>
+                      </div>
                     ))}
                   </>
                 )}

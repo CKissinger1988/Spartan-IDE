@@ -17,6 +17,8 @@ export interface DiscoveredAsset {
   referencePath: string;
   kind: "image" | "font";
   label: string;
+  /** Ready-to-copy CSS for font assets; omitted for images. */
+  fontFaceSnippet?: string;
 }
 
 const SKIP_DIRS = new Set([
@@ -67,16 +69,40 @@ function relativeReference(fromFile: string | undefined, file: string): string {
   return result;
 }
 
+function fontFormat(file: string): string {
+  switch (extname(file).toLowerCase()) {
+    case ".eot": return "embedded-opentype";
+    case ".otf": return "opentype";
+    case ".ttf": return "truetype";
+    case ".woff": return "woff";
+    case ".woff2": return "woff2";
+    default: return "truetype";
+  }
+}
+
+/** Builds a format-aware, ready-to-paste @font-face declaration without
+ * reading or executing the font file. */
+export function fontFaceSnippet(asset: Pick<DiscoveredAsset, "kind" | "label" | "referencePath">): string | undefined {
+  if (asset.kind !== "font") return undefined;
+  const family = asset.label.replace(/\.[^.]+$/, "").replace(/["\\]/g, "");
+  return `@font-face {\n  font-family: "${family}";\n  src: url("${asset.referencePath.replace(/["\\]/g, "\\$&")}") format("${fontFormat(asset.label)}");\n  font-style: normal;\n  font-weight: 400;\n}`;
+}
+
 /** Discovers image and font assets under `rootDir`, ignoring dependency/build trees. */
 export function discoverAssets(rootDir: string, fromFile?: string): DiscoveredAsset[] {
   const files: string[] = [];
   collectFiles(rootDir, 0, files);
   files.sort();
-  return files.map((file) => ({
+  return files.map((file) => {
+    const kind = IMAGE_EXTENSIONS.has(extname(file).toLowerCase()) ? "image" as const : "font" as const;
+    const asset: DiscoveredAsset = {
     file,
     relativePath: posixPath(relative(rootDir, file)),
     referencePath: relativeReference(fromFile, file),
-    kind: IMAGE_EXTENSIONS.has(extname(file).toLowerCase()) ? "image" as const : "font" as const,
+    kind,
     label: file.slice(file.lastIndexOf(sep) + 1),
-  }));
+    };
+    asset.fontFaceSnippet = fontFaceSnippet(asset);
+    return asset;
+  });
 }

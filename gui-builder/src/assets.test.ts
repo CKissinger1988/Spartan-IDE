@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverAssets } from "./assets.js";
+import { discoverAssets, fontFaceSnippet } from "./assets.js";
 
 function fixture(files: string[]): string {
   const root = mkdtempSync(join(tmpdir(), "spartan-assets-"));
@@ -36,6 +36,14 @@ test("discovers font assets with a real relative reference path", () => {
   const fonts = discoverAssets(root, fromFile).filter((asset) => asset.kind === "font");
   assert.deepEqual(fonts.map((font) => font.relativePath), ["src/fonts/Inter.ttf", "src/fonts/Inter.woff2"]);
   assert.equal(fonts[0].referencePath, "../fonts/Inter.ttf");
+});
+
+test("generates a format-aware @font-face snippet for a discovered font", () => {
+  const root = fixture(["src/pages/Home.tsx", "src/fonts/Inter.woff2"]);
+  const font = discoverAssets(root, join(root, "src/pages/Home.tsx")).find((asset) => asset.kind === "font");
+  assert.ok(font);
+  assert.equal(fontFaceSnippet(font), `@font-face {\n  font-family: "Inter";\n  src: url("../fonts/Inter.woff2") format("woff2");\n  font-style: normal;\n  font-weight: 400;\n}`);
+  assert.equal(font.fontFaceSnippet, fontFaceSnippet(font));
 });
 
 test("never walks dependency or build output", () => {
