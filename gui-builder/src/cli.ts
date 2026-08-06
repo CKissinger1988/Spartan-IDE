@@ -11,6 +11,8 @@
  *   node dist/cli.js <path-to-jsx-or-tsx-file>       (Code -> Canvas, §75.41)
  *   node dist/cli.js apply <editJson>                (Canvas -> Code, §75.42)
  *   node dist/cli.js bundle <path-to-jsx-or-tsx-file> (live visual render, §75.52)
+ *   node dist/cli.js parse-source <path-to-jsx-or-tsx-file> (source from stdin)
+ *   node dist/cli.js bundle-source <path-to-jsx-or-tsx-file> (source from stdin)
  *   node dist/cli.js components <project-dir> [from-file] (component browser, task #278)
  *   node dist/cli.js assets <project-dir> [from-file] (image asset browser)
  *   node dist/cli.js tokens <project-dir> (CSS custom-property browser)
@@ -37,6 +39,7 @@ import { readFileSync } from "node:fs";
 import { parseComponent } from "./parse.js";
 import { applyCanvasEdit } from "./edit.js";
 import { bundleComponent } from "./bundle.js";
+import { bundleComponentSource } from "./bundle.js";
 import { discoverComponents } from "./components.js";
 import { discoverAssets } from "./assets.js";
 import { discoverTokens } from "./tokens.js";
@@ -109,6 +112,27 @@ async function runBundle(path: string | undefined): Promise<void> {
   process.stdout.write(JSON.stringify({ code: result.code }));
 }
 
+async function runBundleSource(path: string | undefined): Promise<void> {
+  if (!path) fail("usage: cli.js bundle-source <path-to-jsx-or-tsx-file> (source read from stdin)");
+  try {
+    const result = await bundleComponentSource(path, readStdin());
+    if ("error" in result) fail(result.error);
+    process.stdout.write(JSON.stringify({ code: result.code }));
+  } catch (e) {
+    fail(`failed to bundle ${path}: ${(e as Error).message}`);
+  }
+}
+
+function runParseSource(path: string | undefined): void {
+  if (!path) fail("usage: cli.js parse-source <path-to-jsx-or-tsx-file> (source read from stdin)");
+  try {
+    const roots = parseComponent(readStdin());
+    process.stdout.write(JSON.stringify({ roots }));
+  } catch (e) {
+    fail(`failed to parse ${path}: ${(e as Error).message}`);
+  }
+}
+
 /** Real component-library discovery (task #278). `fromFile` is optional
  * but strongly wanted by a real caller: with it, each result carries the
  * relative module specifier an import in that file would actually need. */
@@ -151,6 +175,10 @@ async function main(): Promise<void> {
     runApply(process.argv[3]);
   } else if (mode === "bundle") {
     await runBundle(process.argv[3]);
+  } else if (mode === "bundle-source") {
+    await runBundleSource(process.argv[3]);
+  } else if (mode === "parse-source") {
+    runParseSource(process.argv[3]);
   } else if (mode === "components") {
     runComponents(process.argv[3], process.argv[4]);
   } else if (mode === "assets") {

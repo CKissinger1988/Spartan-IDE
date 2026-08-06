@@ -80,6 +80,16 @@ export class GuiBuilderClient {
     return JSON.parse(stdout);
   }
 
+  async parseComponentSource(path: string, source: string): Promise<unknown> {
+    const stdout = await runCli(this.cliPath, ["parse-source", path], source);
+    return JSON.parse(stdout);
+  }
+
+  async bundleComponentSource(path: string, source: string): Promise<unknown> {
+    const stdout = await runCli(this.cliPath, ["bundle-source", path], source);
+    return JSON.parse(stdout);
+  }
+
   async applyEdit(editJson: string, source: string): Promise<unknown> {
     const stdout = await runCli(this.cliPath, ["apply", editJson], source);
     return JSON.parse(stdout);

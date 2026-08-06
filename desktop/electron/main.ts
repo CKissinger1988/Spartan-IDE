@@ -367,10 +367,24 @@ app.whenReady().then(() => {
     if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
     return guiBuilder.parseComponent(params.path);
   });
+  ipcMain.handle(
+    "spartan:design_parse_source",
+    async (_event, params: { path: string; source: string }) => {
+      if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
+      return guiBuilder.parseComponentSource(params.path, params.source);
+    }
+  );
   ipcMain.handle("spartan:design_bundle", async (_event, params: { path: string }) => {
     if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
     return guiBuilder.bundleComponent(params.path);
   });
+  ipcMain.handle(
+    "spartan:design_bundle_source",
+    async (_event, params: { path: string; source: string }) => {
+      if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
+      return guiBuilder.bundleComponentSource(params.path, params.source);
+    }
+  );
   ipcMain.handle(
     "spartan:design_apply_edit",
     async (_event, params: { edit: unknown; source: string }) => {

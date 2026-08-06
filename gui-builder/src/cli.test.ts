@@ -37,6 +37,15 @@ test("real subprocess: CLI parses a real file and prints a real ComponentNode tr
   assert.deepEqual(parsed.roots[0].props.className, { kind: "string", value: "app" });
 });
 
+test("real subprocess: CLI parse-source reads the live source from stdin", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gui-builder-cli-source-test-"));
+  const file = path.join(dir, "App.jsx");
+  const { stdout, status } = runCli(["parse-source", file], `const X = () => <button>unsaved</button>;`);
+  rmSync(dir, { recursive: true, force: true });
+  assert.equal(status, 0);
+  assert.equal(JSON.parse(stdout).roots[0].tagName, "button");
+});
+
 test("real subprocess: CLI reports a real error (non-zero exit) for a missing file", () => {
   const { status } = runCli(["/nonexistent/path/does/not/exist.jsx"]);
   assert.equal(status, 1);

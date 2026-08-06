@@ -35,8 +35,9 @@ summarizes.
 - `src/tokens.ts` — real CSS custom-property discovery for applying existing
   design tokens as `var(--token)` values in inline styles.
 - `src/bundle.ts` — real esbuild bundling with `data-spartan-id` annotation and
-  sandboxed-preview click/drag relays.
-- `src/*.test.ts` — 73 real tests (Node's built-in `node:test` runner, no
+  sandboxed-preview click/drag relays, including an in-memory source path for
+  previews of unsaved editor changes.
+- `src/*.test.ts` — 75 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.
@@ -44,8 +45,10 @@ summarizes.
 ## What this is not (real, honest scope cuts)
 
 - **No HMR or per-keystroke rebuild.** The desktop Design screen refreshes the
-  bundle on file activation and after a real Canvas → Code edit. A future
-  incremental preview can add HMR after measuring rebuild cost.
+- **No HMR or per-keystroke rebuild.** The desktop Design screen refreshes the
+  bundle on file activation and after a real Canvas → Code edit, using the
+  current in-memory source for correctness. A future incremental preview can
+  add HMR after measuring rebuild cost.
 - **No token definition editor or font manager yet.** Existing CSS custom
   properties can be discovered and applied as `var(--token)` values; editing
   token definitions, fonts, and reusable state/variant controls remain the

@@ -480,10 +480,13 @@ export default function DesignScreen({
   // name, which correctly upgrades it to the typed control).
   const styleDef = STYLE_PROPERTIES.find((d) => d.name === propKey);
 
-  const refresh = useCallback(async (path: string) => {
+  const refresh = useCallback(async (path: string, source?: string) => {
     setError(null);
     try {
-      const parseResult = (await window.spartan.call("design_parse", { path })) as {
+      const parseResult = (await window.spartan.call(
+        source === undefined ? "design_parse" : "design_parse_source",
+        source === undefined ? { path } : { path, source },
+      )) as {
         roots: ComponentNode[];
       };
       setRoots(parseResult.roots);
@@ -491,7 +494,10 @@ export default function DesignScreen({
       setError((e as Error).message);
     }
     try {
-      const bundleResult = (await window.spartan.call("design_bundle", { path })) as {
+      const bundleResult = (await window.spartan.call(
+        source === undefined ? "design_bundle" : "design_bundle_source",
+        source === undefined ? { path } : { path, source },
+      )) as {
         code: string;
       };
       setBundleCode(bundleResult.code);
@@ -520,7 +526,7 @@ export default function DesignScreen({
           text: result.source,
         });
         onContentChange(activeFile.path, result.source);
-        await refresh(activeFile.path);
+        await refresh(activeFile.path, result.source);
       } catch (e) {
         setError((e as Error).message);
       }
@@ -538,7 +544,7 @@ export default function DesignScreen({
         };
         if (!result.changed) return;
         onContentChange(activeFile.path, result.content);
-        await refresh(activeFile.path);
+        await refresh(activeFile.path, result.content);
       } catch (e) {
         setError((e as Error).message);
       }
@@ -573,7 +579,7 @@ export default function DesignScreen({
 
   useEffect(() => {
     if (activeFile && isComponentFile(activeFile.path)) {
-      refresh(activeFile.path);
+      refresh(activeFile.path, activeFile.content);
     } else {
       setRoots([]);
       setBundleCode(null);

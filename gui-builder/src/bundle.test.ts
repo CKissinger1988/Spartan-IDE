@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
-import { bundleComponent } from "./bundle.js";
+import { bundleComponent, bundleComponentSource } from "./bundle.js";
 
 /**
  * A real fixture project with real `react`/`react-dom` actually
@@ -58,6 +58,29 @@ test("bundles a real component with real react/react-dom resolved from the targe
       // A real bundle including React/ReactDOM is never tiny -- a real,
       // rough sanity floor that this isn't an empty/near-empty output.
       assert.ok(result.code.length > 1000, "a real react bundle should not be tiny");
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bundles the unsaved source override instead of stale disk contents", async (t) => {
+  const dir = realFixtureWithReactInstalled();
+  if (!dir) {
+    t.skip("could not npm install a real react/react-dom fixture (no network?)");
+    return;
+  }
+  try {
+    const componentPath = path.join(dir, "Unsaved.jsx");
+    writeFileSync(componentPath, `export default function Unsaved() { return <div>disk version</div>; }`);
+    const result = await bundleComponentSource(
+      componentPath,
+      `export default function Unsaved() { return <div>unsaved version</div>; }`,
+    );
+    assert.ok("code" in result, `expected a real bundle, got: ${JSON.stringify(result)}`);
+    if ("code" in result) {
+      assert.ok(result.code.includes("unsaved version"));
+      assert.ok(!result.code.includes("disk version"));
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

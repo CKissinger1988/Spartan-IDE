@@ -38,7 +38,7 @@
  */
 import * as esbuild from "esbuild";
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, extname, resolve } from "node:path";
 import { injectNodeIds } from "./annotate.js";
 
 export interface BundleResult {
@@ -183,12 +183,12 @@ try {
 `;
 }
 
-function annotateTargetFilePlugin(absPath: string): esbuild.Plugin {
+function annotateTargetFilePlugin(absPath: string, sourceOverride?: string): esbuild.Plugin {
   return {
     name: "spartan-annotate-target-file",
     setup(build) {
       build.onLoad({ filter: new RegExp(`^${absPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }, () => {
-        const original = readFileSync(absPath, "utf8");
+        const original = sourceOverride ?? readFileSync(absPath, "utf8");
         let contents = original;
         try {
           contents = injectNodeIds(original);
@@ -199,22 +199,27 @@ function annotateTargetFilePlugin(absPath: string): esbuild.Plugin {
           // only concern -- the component still renders, it just isn't
           // clickable.
         }
-        return { contents, loader: "jsx" };
+        const extension = extname(absPath).toLowerCase();
+        const loader = extension === ".tsx" ? "tsx" : extension === ".ts" ? "ts" : "jsx";
+        return { contents, loader };
       });
     },
   };
 }
 
-export async function bundleComponent(
+async function bundleComponentInternal(
   filePath: string,
+  sourceOverride?: string,
 ): Promise<BundleResult | BundleError> {
   const absPath = resolve(filePath);
   try {
+    const extension = extname(absPath).toLowerCase();
+    const loader = extension === ".tsx" ? "tsx" : extension === ".ts" ? "ts" : "jsx";
     const result = await esbuild.build({
       stdin: {
         contents: buildEntrySource(absPath),
         resolveDir: dirname(absPath),
-        loader: "jsx",
+        loader: "js",
       },
       bundle: true,
       write: false,
@@ -222,7 +227,7 @@ export async function bundleComponent(
       platform: "browser",
       jsx: "automatic",
       logLevel: "silent",
-      plugins: [annotateTargetFilePlugin(absPath)],
+      plugins: [annotateTargetFilePlugin(absPath, sourceOverride)],
     });
     const output = result.outputFiles?.[0];
     if (!output) {
@@ -232,4 +237,18 @@ export async function bundleComponent(
   } catch (e) {
     return { error: (e as Error).message };
   }
+}
+
+export async function bundleComponent(filePath: string): Promise<BundleResult | BundleError> {
+  return bundleComponentInternal(filePath);
+}
+
+/** Bundles an unsaved in-memory component while resolving imports relative to
+ * the real file path. This keeps the preview synchronized with the editor's
+ * live document rather than silently falling back to stale disk contents. */
+export async function bundleComponentSource(
+  filePath: string,
+  source: string,
+): Promise<BundleResult | BundleError> {
+  return bundleComponentInternal(filePath, source);
 }
