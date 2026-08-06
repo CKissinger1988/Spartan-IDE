@@ -4,6 +4,7 @@ export { screenReaderPreview } from "./accessibility.js";
 export { designClipboardShortcut } from "./shortcuts.js";
 export { buildDesignHandoffMarkdown } from "./handoff.js";
 export { buildComponentScaffold } from "./scaffold.js";
+export { buildPreviewDocument } from "./preview.js";
 export type { ComponentNode, PropSummary, SourceLocation, CanvasEdit } from "./types.js";
 export type { ScreenReaderNode, ScreenReaderPreview, ScreenReaderPropSummary } from "./accessibility.js";
 export type { DesignClipboardShortcut } from "./shortcuts.js";

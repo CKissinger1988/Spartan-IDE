@@ -5,6 +5,7 @@ import type { ScreenReaderNode } from "../../../gui-builder/src/accessibility";
 import { designClipboardShortcut } from "../../../gui-builder/src/shortcuts";
 import { buildDesignHandoffMarkdown } from "../../../gui-builder/src/handoff";
 import { buildComponentScaffold } from "../../../gui-builder/src/scaffold";
+import { buildPreviewDocument } from "../../../gui-builder/src/preview";
 import type { ComponentPropDefinition } from "../../../gui-builder/src/scaffold";
 
 interface StyleEntryValue {
@@ -2420,8 +2421,19 @@ export default function DesignScreen({
   }
 
   const srcDoc = bundleCode
-    ? `<!doctype html><html><head><style>body{margin:0;background:#fff;color:#111;font-family:sans-serif;}</style></head><body><div id="spartan-root"></div><script>${bundleCode}</script></body></html>`
+    ? buildPreviewDocument(bundleCode, `${activeFile.path.split(/[\\/]/).pop() ?? "Component"} preview`)
     : "";
+
+  const downloadPreviewHtml = () => {
+    if (!srcDoc) return;
+    const filename = `${(activeFile.path.split(/[\\/]/).pop() ?? "spartan-preview").replace(/\.(jsx|tsx)$/i, "")}.preview.html`;
+    const url = URL.createObjectURL(new Blob([srcDoc], { type: "text/html;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
 
   return (
     <div className="design-screen">
@@ -2542,6 +2554,14 @@ export default function DesignScreen({
             onClick={() => setPreviewMatrix((open) => !open)}
           >
             {previewMatrix ? "Single viewport" : "Compare viewports"}
+          </button>
+          <button
+            className="design-toolbar-button mono"
+            disabled={!bundleCode}
+            title="Download the current live preview as a standalone HTML file"
+            onClick={downloadPreviewHtml}
+          >
+            Download HTML
           </button>
         </div>
         {bundleCode ? (
