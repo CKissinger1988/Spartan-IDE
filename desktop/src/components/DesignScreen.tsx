@@ -46,6 +46,12 @@ interface DiscoveredToken {
   relativePath: string;
 }
 
+interface VariantPreset {
+  name: string;
+  source: string;
+  updatedAt: number;
+}
+
 interface DesignScreenProps {
   activeFile: OpenFile | null;
   openFiles: OpenFile[];
@@ -447,6 +453,8 @@ export default function DesignScreen({
   const [roots, setRoots] = useState<ComponentNode[]>([]);
   const [bundleCode, setBundleCode] = useState<string | null>(null);
   const [previewSource, setPreviewSource] = useState<string | null>(null);
+  const [variantName, setVariantName] = useState("");
+  const [variantPresets, setVariantPresets] = useState<VariantPreset[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [propKey, setPropKey] = useState("");
@@ -590,6 +598,46 @@ export default function DesignScreen({
     await refresh(activeFile.path, activeFile.content);
   }, [activeFile, previewSource, refresh]);
 
+  const variantStorageKey = activeFile ? `spartan.gui-builder.variants:${activeFile.path}` : null;
+
+  const saveVariant = useCallback(() => {
+    if (!variantStorageKey || !previewSource || !variantName.trim()) return;
+    const next: VariantPreset[] = [
+      { name: variantName.trim(), source: previewSource, updatedAt: Date.now() },
+      ...variantPresets.filter((preset) => preset.name !== variantName.trim()),
+    ];
+    setVariantPresets(next);
+    setVariantName("");
+    try {
+      window.localStorage.setItem(variantStorageKey, JSON.stringify(next));
+    } catch (e) {
+      setError(`Could not save variant preset: ${(e as Error).message}`);
+    }
+  }, [variantStorageKey, previewSource, variantName, variantPresets]);
+
+  const loadVariant = useCallback(
+    async (preset: VariantPreset) => {
+      if (!activeFile) return;
+      setPreviewSource(preset.source);
+      await refresh(activeFile.path, preset.source);
+    },
+    [activeFile, refresh]
+  );
+
+  const deleteVariant = useCallback(
+    (name: string) => {
+      if (!variantStorageKey) return;
+      const next = variantPresets.filter((preset) => preset.name !== name);
+      setVariantPresets(next);
+      try {
+        window.localStorage.setItem(variantStorageKey, JSON.stringify(next));
+      } catch (e) {
+        setError(`Could not delete variant preset: ${(e as Error).message}`);
+      }
+    },
+    [variantStorageKey, variantPresets]
+  );
+
   /** Real drag-to-reparent (task #279), shared by the canvas drop relay
    * and the "Move into" form. `gui-builder`'s own `Reparent` already
    * refuses a root move, a self-move, and a move into a descendant with
@@ -618,10 +666,19 @@ export default function DesignScreen({
   useEffect(() => {
     if (activeFile && isComponentFile(activeFile.path)) {
       setPreviewSource(null);
+      setVariantName("");
+      const key = `spartan.gui-builder.variants:${activeFile.path}`;
+      try {
+        const saved = JSON.parse(window.localStorage.getItem(key) ?? "[]") as VariantPreset[];
+        setVariantPresets(Array.isArray(saved) ? saved.filter((preset) => preset && typeof preset.source === "string") : []);
+      } catch {
+        setVariantPresets([]);
+      }
       refresh(activeFile.path, activeFile.content);
     } else {
       setRoots([]);
       setBundleCode(null);
+      setVariantPresets([]);
     }
   }, [activeFile?.path, refresh]);
 
@@ -1119,9 +1176,37 @@ export default function DesignScreen({
             {previewSource !== null && (
               <div className="design-preview-status mono">Preview-only changes active</div>
             )}
+            {previewSource !== null && (
+              <div className="design-variant-save">
+                <input
+                  className="design-input mono"
+                  placeholder="variant name"
+                  value={variantName}
+                  onChange={(event) => setVariantName(event.target.value)}
+                />
+                <button className="design-secondary-action mono" onClick={saveVariant} disabled={!variantName.trim()}>
+                  Save variant
+                </button>
+              </div>
+            )}
           </>
         ) : (
           <div className="leo-status-message mono">Click a node in the tree or preview to select it.</div>
+        )}
+        {variantPresets.length > 0 && (
+          <div className="design-variant-list">
+            <div className="design-panel-label">Saved variants</div>
+            {variantPresets.map((preset) => (
+              <div className="design-variant-row" key={preset.name}>
+                <button className="design-variant-load mono" onClick={() => void loadVariant(preset)}>
+                  {preset.name}
+                </button>
+                <button className="design-variant-delete mono" title={`Delete ${preset.name}`} onClick={() => deleteVariant(preset.name)}>
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
         )}
         {error && <div className="leo-error mono">{error}</div>}
       </div>

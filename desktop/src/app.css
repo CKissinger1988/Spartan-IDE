@@ -3409,6 +3409,50 @@
   font-size: 11px;
 }
 
+.design-variant-save {
+  padding: 0 12px 8px;
+}
+
+.design-variant-save .design-input {
+  margin-bottom: 6px;
+}
+
+.design-variant-list {
+  border-top: 1px solid var(--border);
+}
+
+.design-variant-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+}
+
+.design-variant-load {
+  flex: 1;
+  overflow: hidden;
+  padding: 5px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.design-variant-load:hover {
+  background: var(--accent-hover);
+}
+
+.design-variant-delete {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 16px;
+}
+
 .design-edit-panel .leo-btn {
   margin: 10px 12px 0;
   align-self: flex-start;
