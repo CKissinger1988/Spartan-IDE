@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { OpenFile } from "./Editor";
 
 interface StyleEntryValue {
@@ -74,19 +74,45 @@ function isComponentFile(path: string): boolean {
   return path.endsWith(".jsx") || path.endsWith(".tsx");
 }
 
+function searchableNodeText(node: ComponentNode): string {
+  const propText = Object.entries(node.props).flatMap(([name, summary]) => {
+    if (summary.kind === "string") return [name, summary.value];
+    if (summary.kind === "expression") return [name, summary.source];
+    return [name, ...Object.keys(summary.entries)];
+  });
+  return [node.id, node.tagName, node.textContent ?? "", ...propText].join(" ").toLowerCase();
+}
+
+/** Keeps a matching node and every ancestor needed to reach it. The returned
+ * nodes are shallow views with filtered child arrays; the real source-backed
+ * node objects and ids remain untouched for selection/edit operations. */
+function filterTree(nodes: ComponentNode[], query: string): ComponentNode[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return nodes;
+  return nodes.flatMap((node) => {
+    const children = filterTree(node.children, normalized);
+    return searchableNodeText(node).includes(normalized) || children.length > 0
+      ? [{ ...node, children }]
+      : [];
+  });
+}
+
 function TreeNode({
   node,
   depth,
   selectedId,
   onSelect,
+  filterActive,
 }: {
   node: ComponentNode;
   depth: number;
   selectedId: string | null;
   onSelect: (id: string) => void;
+  filterActive: boolean;
 }): React.ReactElement {
   const [expanded, setExpanded] = useState(true);
   const hasChildren = node.children.length > 0;
+  const visibleExpanded = filterActive || expanded;
   return (
     <div>
       <div
@@ -97,22 +123,22 @@ function TreeNode({
         <button
           type="button"
           className="design-tree-toggle"
-          aria-label={hasChildren ? `${expanded ? "Collapse" : "Expand"} ${node.tagName}` : `${node.tagName} has no children`}
-          aria-expanded={hasChildren ? expanded : undefined}
-          disabled={!hasChildren}
+          aria-label={hasChildren ? `${visibleExpanded ? "Collapse" : "Expand"} ${node.tagName}` : `${node.tagName} has no children`}
+          aria-expanded={hasChildren ? visibleExpanded : undefined}
+          disabled={!hasChildren || filterActive}
           onClick={(event) => {
             event.stopPropagation();
             if (hasChildren) setExpanded((value) => !value);
           }}
         >
-          {hasChildren ? (expanded ? "▾" : "▸") : "·"}
+          {hasChildren ? (visibleExpanded ? "▾" : "▸") : "·"}
         </button>
         <span className="mono">
           &lt;{node.tagName}&gt; <span className="design-tree-id">#{node.id}</span>
         </span>
       </div>
-      {expanded && node.children.map((child) => (
-          <TreeNode key={child.id} node={child} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} />
+      {visibleExpanded && node.children.map((child) => (
+          <TreeNode key={child.id} node={child} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} filterActive={filterActive} />
         ))}
     </div>
   );
@@ -491,6 +517,7 @@ export default function DesignScreen({
   projectRoot,
 }: DesignScreenProps): React.ReactElement {
   const [roots, setRoots] = useState<ComponentNode[]>([]);
+  const [treeFilter, setTreeFilter] = useState("");
   const [bundleCode, setBundleCode] = useState<string | null>(null);
   const [previewSource, setPreviewSource] = useState<string | null>(null);
   const [variantName, setVariantName] = useState("");
@@ -530,6 +557,7 @@ export default function DesignScreen({
   // reads it -- a `const` referenced before its declaration is a real
   // TDZ ReferenceError at first render, not a hoisting no-op.
   const selectedNode = selectedId ? findNode(roots, selectedId) : null;
+  const filteredRoots = useMemo(() => filterTree(roots, treeFilter), [roots, treeFilter]);
 
   useEffect(() => {
     setTextValue(selectedNode?.textContent ?? "");
@@ -1076,10 +1104,21 @@ export default function DesignScreen({
         )}
       </div>
       <div className="design-tree-panel">
-        <div className="design-panel-label">Structure</div>
-        {roots.map((root) => (
-          <TreeNode key={root.id} node={root} depth={0} selectedId={selectedId} onSelect={setSelectedId} />
-        ))}
+        <div className="design-tree-header">
+          <div className="design-panel-label">Structure</div>
+          <input
+            className="design-tree-filter mono"
+            aria-label="Filter structure tree"
+            placeholder="Filter…"
+            value={treeFilter}
+            onChange={(event) => setTreeFilter(event.target.value)}
+          />
+        </div>
+        {filteredRoots.length > 0 ? filteredRoots.map((root) => (
+          <TreeNode key={root.id} node={root} depth={0} selectedId={selectedId} onSelect={setSelectedId} filterActive={treeFilter.trim().length > 0} />
+        )) : (
+          <div className="design-tree-empty mono">No matching elements.</div>
+        )}
       </div>
       <div className="design-preview">
         <div className="design-preview-toolbar mono">

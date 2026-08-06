@@ -3136,6 +3136,36 @@
   border-bottom: 1px solid var(--border);
 }
 
+.design-tree-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.design-tree-header .design-panel-label {
+  border-bottom: 0;
+}
+
+.design-tree-filter {
+  box-sizing: border-box;
+  width: calc(100% - 16px);
+  margin: 0 8px 8px;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.design-tree-filter:focus {
+  outline: 1px solid var(--accent);
+}
+
+.design-tree-empty {
+  padding: 14px 10px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
 .design-tree-row {
   padding: 4px 8px;
   font-size: 12px;
