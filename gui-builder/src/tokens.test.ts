@@ -16,7 +16,7 @@ test("discovers real CSS custom properties and preserves their source values", (
   mkdirSync(join(root, "styles"), { recursive: true });
   writeFileSync(join(root, "styles/theme.css"), ":root { --brand-red: #d33; --space-md: 16px; }\n");
   const tokens = discoverTokens(root);
-  assert.deepEqual(tokens.map((token) => [token.name, token.value]), [["--brand-red", "#d33"], ["--space-md", "16px"]]);
+  assert.deepEqual(tokens.map((token) => [token.name, token.value, token.tier]), [["--brand-red", "#d33", "primitive"], ["--space-md", "16px", "primitive"]]);
   assert.equal(tokens[0].relativePath, "styles/theme.css");
 });
 
@@ -30,7 +30,7 @@ test("discovers tokens from an unsaved source buffer with the real project-relat
   const root = "/workspace/project";
   const file = "/workspace/project/src/theme.css";
   const tokens = discoverTokensInSource(":root { --live: 18px; }", file, root);
-  assert.deepEqual(tokens, [{ name: "--live", value: "18px", file, relativePath: "src/theme.css" }]);
+  assert.deepEqual(tokens, [{ name: "--live", value: "18px", file, relativePath: "src/theme.css", tier: "primitive", references: [] }]);
 });
 
 test("never walks dependency or build output", () => {

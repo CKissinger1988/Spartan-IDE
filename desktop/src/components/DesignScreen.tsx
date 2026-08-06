@@ -12,6 +12,8 @@ import { buildTokenReference } from "../../../gui-builder/src/token-reference";
 import { buildPreviewBreakpoints, normalizeResponsiveBreakpoints } from "../../../gui-builder/src/breakpoints";
 import type { ResponsiveBreakpoint } from "../../../gui-builder/src/breakpoints";
 import { describeResponsiveDiff } from "../../../gui-builder/src/responsive-diff";
+import { describeToken } from "../../../gui-builder/src/token-model";
+import type { TokenTier } from "../../../gui-builder/src/token-model";
 import type { ComponentPropDefinition } from "../../../gui-builder/src/scaffold";
 
 interface StyleEntryValue {
@@ -66,6 +68,8 @@ interface DiscoveredToken {
   value: string;
   file: string;
   relativePath: string;
+  tier: TokenTier;
+  references: string[];
 }
 
 interface VariantPreset {
@@ -947,6 +951,7 @@ export default function DesignScreen({
   const [tokenDrafts, setTokenDrafts] = useState<Record<string, string>>({});
   const [tokensOpen, setTokensOpen] = useState(false);
   const [tokenFilter, setTokenFilter] = useState("");
+  const [tokenTierFilter, setTokenTierFilter] = useState<"all" | TokenTier>("all");
   const [previewThemes, setPreviewThemes] = useState<PreviewTheme[]>([]);
   const [previewThemeName, setPreviewThemeName] = useState("");
   const [activePreviewTheme, setActivePreviewTheme] = useState<string | null>(null);
@@ -1114,9 +1119,9 @@ export default function DesignScreen({
   }, [assets, assetFilter]);
   const filteredTokens = useMemo(() => {
     const query = tokenFilter.trim().toLowerCase();
-    if (!query) return tokens;
-    return tokens.filter((token) => `${token.name} ${token.value} ${token.file} ${token.relativePath}`.toLowerCase().includes(query));
-  }, [tokens, tokenFilter]);
+    return tokens.filter((token) => (tokenTierFilter === "all" || token.tier === tokenTierFilter)
+      && (!query || `${token.name} ${token.value} ${token.file} ${token.relativePath} ${token.references.join(" ")}`.toLowerCase().includes(query)));
+  }, [tokens, tokenFilter, tokenTierFilter]);
   const openCssFiles = useMemo(
     () => openFiles.filter((file) => /\.(css|scss|sass|less)$/i.test(file.path)),
     [openFiles]
@@ -1704,7 +1709,8 @@ export default function DesignScreen({
       setInteractionPresetName("");
       setPaletteFilter("");
       setAssetFilter("");
-      setTokenFilter("");
+        setTokenFilter("");
+        setTokenTierFilter("all");
       const key = `spartan.gui-builder.variants:${activeFile.path}`;
       const interactionKey = `spartan.gui-builder.interactions:${activeFile.path}`;
       try {
@@ -2421,7 +2427,9 @@ export default function DesignScreen({
           text: result.source,
         });
         onContentChange(cssFile.path, result.source);
-        setTokens((current) => current.map((item) => item.file === token.file && item.name === token.name ? { ...item, value: draft.trim() } : item));
+        setTokens((current) => current.map((item) => item.file === token.file && item.name === token.name
+          ? { ...item, value: draft.trim(), ...describeToken(item.name, draft) }
+          : item));
         if (activeFile) await refresh(activeFile.path, previewSource ?? activeFile.content);
       } catch (e) {
         setError((e as Error).message);
@@ -2500,6 +2508,7 @@ export default function DesignScreen({
         value: value.trim(),
         file: cssFile.path,
         relativePath,
+        ...describeToken(name, value),
       };
       setTokens((current) => {
         const existing = current.findIndex((token) => token.file === createdToken.file && token.name === createdToken.name);
@@ -3069,6 +3078,17 @@ export default function DesignScreen({
                   value={tokenFilter}
                   onChange={(event) => setTokenFilter(event.target.value)}
                 />
+                <select
+                  className="design-input mono"
+                  aria-label="Filter design tokens by tier"
+                  value={tokenTierFilter}
+                  onChange={(event) => setTokenTierFilter(event.target.value as typeof tokenTierFilter)}
+                >
+                  <option value="all">All token tiers</option>
+                  <option value="primitive">Primitive · raw values</option>
+                  <option value="semantic">Semantic · aliases/themes</option>
+                  <option value="component">Component · component API</option>
+                </select>
                 <div className="design-token-create">
                   <select
                     className="design-token-file mono"
@@ -3167,8 +3187,8 @@ export default function DesignScreen({
                           }
                           onClick={() => applyToken(token)}
                         >
-                          <span className="design-palette-name">{token.name}</span>
-                          <span className="design-palette-from">{editKind === "PropChange" ? "Bind · " : "Use · "}{token.value} · {token.relativePath}</span>
+                          <span className="design-palette-name">{token.name} · {token.tier}</span>
+                          <span className="design-palette-from">{editKind === "PropChange" ? "Bind · " : "Use · "}{token.value}{token.references.length > 0 ? ` → ${token.references.join(", ")}` : ""} · {token.relativePath}</span>
                         </button>
                         <input
                           className="design-token-value mono"

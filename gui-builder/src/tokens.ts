@@ -1,12 +1,15 @@
 /** Real CSS custom-property discovery for the GUI Builder token palette. */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, relative, sep } from "node:path";
+import { describeToken, type TokenTier } from "./token-model.js";
 
 export interface DiscoveredToken {
   name: string;
   value: string;
   file: string;
   relativePath: string;
+  tier: TokenTier;
+  references: string[];
 }
 
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", "out", ".cache"]);
@@ -99,7 +102,7 @@ export function discoverTokensInSource(source: string, file: string, rootDir: st
     const name = match[1];
     const value = match[2].trim();
     if (!value) continue;
-    result.push({ name, value, file, relativePath: posixPath(relative(rootDir, file)) });
+    result.push({ name, value, file, relativePath: posixPath(relative(rootDir, file)), ...describeToken(name, value) });
   }
   return result;
 }
