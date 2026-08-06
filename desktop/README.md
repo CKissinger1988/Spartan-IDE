@@ -45,6 +45,15 @@ deleted).
   user's explicit request -- the screen, its Electron-side client, and the
   `design_*` IPC methods are all gone, recoverable only from git history.
 
+  `Web Studio` is the desktop web-development suite: edit HTML, CSS, and
+  JavaScript in separate source tabs; start from responsive templates; run the
+  result in a sandboxed live iframe; inspect captured console output; switch
+  between phone, tablet, and desktop CSS viewports; rotate and zoom the device
+  frame; and export a standalone `index.html` or the source files. Draft source
+  is retained in local browser storage for the current project profile. The
+  preview is intentionally browser-focused; native sensors and OS behavior
+  still require a real emulator or device.
+
 ## Known feature gaps vs. the original wgpu shell (`crates/spartan-editor-core`)
 
 A real audit (§75.62) originally found several real, working wgpu-shell

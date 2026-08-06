@@ -16,6 +16,7 @@
 export type ScreenId =
   | "editor"
   | "device-preview"
+  | "web-suite"
   | "console"
   | "sessions"
   | "review"
@@ -50,6 +51,7 @@ export const NAV: NavGroup[] = [
     items: [
       { id: "editor", label: "Editor" },
       { id: "device-preview", label: "Device Preview" },
+      { id: "web-suite", label: "Web Studio" },
       { id: "console", label: "Console" },
       { id: "sessions", label: "Sessions" },
       { id: "review", label: "Review" },
