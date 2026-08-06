@@ -483,6 +483,15 @@ export default function App(): React.ReactElement {
     [files]
   );
 
+  const createDesignComponent = useCallback(async (relativePath: string, source: string) => {
+    const result = (await window.spartan.call("design_create_component", {
+      relativePath,
+      source,
+    })) as { path: string };
+    if (!result.path) throw new Error("The component creation response did not include a path.");
+    await openFile(result.path);
+  }, [openFile]);
+
   /** Real cross-file go-to-definition landing: opens (or activates, via
    * `openFile`'s own existing dedup) the real target file, then hands the
    * real jump position down once that file is active -- `Editor.tsx`'s own
@@ -1055,6 +1064,7 @@ export default function App(): React.ReactElement {
                   onOpenFile={openFile}
                   onRevealSource={handleRevealDesignSource}
                   onContentChange={handleContentChange}
+                  onCreateComponent={createDesignComponent}
                   projectRoot={ROOT}
                 />
               )}

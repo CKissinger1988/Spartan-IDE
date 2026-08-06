@@ -71,6 +71,7 @@ function resolveGuiBuilderCliPath(): string {
 
 let backend: BackendClient | null = null;
 let guiBuilder: GuiBuilderClient | null = null;
+let activeProjectRoot: string | null = null;
 // The one real main window. Tracked so a second launch attempt (see the
 // single-instance lock below) can focus/restore it rather than spawning a
 // second full instance (a second `spartan-backend` subprocess + a second
@@ -91,6 +92,7 @@ const closeAllowed = new WeakSet<BrowserWindow>();
 // both by the New Project wizard (open the just-created project) and
 // could equally back a future "Open Folder" picker.
 function loadRootIntoWindow(win: BrowserWindow, rootDir: string): void {
+  activeProjectRoot = path.resolve(rootDir);
   const query = `?root=${encodeURIComponent(rootDir)}`;
   if (isDev) {
     win.loadURL(`http://localhost:5173/${query}`);
@@ -417,6 +419,29 @@ app.whenReady().then(() => {
     if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
     return guiBuilder.discoverTokens(params.rootDir);
   });
+  ipcMain.handle(
+    "spartan:design_create_component",
+    async (_event, params: { relativePath: string; source: string }) => {
+      if (!activeProjectRoot) throw new Error("No active project root is available.");
+      if (typeof params.relativePath !== "string" || typeof params.source !== "string") {
+        throw new Error("Component path and source are required.");
+      }
+      const relativePath = params.relativePath.trim();
+      if (!relativePath || !/\.(jsx|tsx)$/i.test(relativePath)) {
+        throw new Error("New components must use a .jsx or .tsx path.");
+      }
+      if (params.source.length > 1024 * 1024) throw new Error("Generated component source is too large.");
+      const target = path.resolve(activeProjectRoot, relativePath);
+      const relativeTarget = path.relative(activeProjectRoot, target);
+      if (!relativeTarget || relativeTarget.startsWith("..") || path.isAbsolute(relativeTarget)) {
+        throw new Error("New component path must stay inside the active project.");
+      }
+      if (fs.existsSync(target)) throw new Error(`A component already exists at ${relativePath}.`);
+      await fs.promises.mkdir(path.dirname(target), { recursive: true });
+      await fs.promises.writeFile(target, params.source, { encoding: "utf8", flag: "wx" });
+      return { path: target };
+    },
+  );
   ipcMain.handle(
     "spartan:design_tokens_source",
     async (_event, params: { path: string; rootDir: string; source: string }) => {

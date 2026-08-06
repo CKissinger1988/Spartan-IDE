@@ -4,6 +4,8 @@ import { screenReaderPreview as sharedScreenReaderPreview } from "../../../gui-b
 import type { ScreenReaderNode } from "../../../gui-builder/src/accessibility";
 import { designClipboardShortcut } from "../../../gui-builder/src/shortcuts";
 import { buildDesignHandoffMarkdown } from "../../../gui-builder/src/handoff";
+import { buildComponentScaffold } from "../../../gui-builder/src/scaffold";
+import type { ComponentPropDefinition } from "../../../gui-builder/src/scaffold";
 
 interface StyleEntryValue {
   kind: "literal" | "expression";
@@ -168,6 +170,7 @@ interface DesignScreenProps {
   onOpenFile: (path: string) => void;
   onRevealSource: (path: string, line: number, character: number) => void;
   onContentChange: (path: string, content: string, saved?: boolean) => void;
+  onCreateComponent: (relativePath: string, source: string) => Promise<void>;
   /** Real project root, used to scan for the component palette. Absent
    * means the palette simply isn't offered -- there's nothing honest to
    * scan without it. */
@@ -196,6 +199,18 @@ function isComponentFile(path: string): boolean {
 function isValidTagName(name: string): boolean {
   const parts = name.trim().split(".");
   return parts.length > 0 && parts.every((part) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(part));
+}
+
+function parseComponentPropSchema(input: string): ComponentPropDefinition[] {
+  return input.split("\n").flatMap((rawLine, index) => {
+    const line = rawLine.trim();
+    if (!line) return [];
+    const match = line.match(/^([A-Za-z_$][A-Za-z0-9_$]*):(string|number|boolean|slot|enum\(([^)]*)\))$/);
+    if (!match) throw new Error(`Prop schema line ${index + 1} must use name:string, name:number, name:boolean, name:slot, or name:enum(a|b).`);
+    const kind = match[2].startsWith("enum") ? "enum" : match[2] as ComponentPropDefinition["kind"];
+    const enumValues = kind === "enum" ? match[3].split("|").map((value) => value.trim()).filter(Boolean) : undefined;
+    return [{ name: match[1], kind, enumValues }];
+  });
 }
 
 function searchableNodeText(node: ComponentNode): string {
@@ -854,6 +869,7 @@ export default function DesignScreen({
   onOpenFile,
   onRevealSource,
   onContentChange,
+  onCreateComponent,
   projectRoot,
 }: DesignScreenProps): React.ReactElement {
   const [roots, setRoots] = useState<ComponentNode[]>([]);
@@ -895,6 +911,12 @@ export default function DesignScreen({
   const [insertText, setInsertText] = useState("");
   const [palette, setPalette] = useState<DiscoveredComponent[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [createComponentOpen, setCreateComponentOpen] = useState(false);
+  const [newComponentName, setNewComponentName] = useState("");
+  const [newComponentPath, setNewComponentPath] = useState("");
+  const [newComponentProps, setNewComponentProps] = useState("");
+  const [newComponentVariant, setNewComponentVariant] = useState("default");
+  const [creatingComponent, setCreatingComponent] = useState(false);
   const [paletteInsertPlacement, setPaletteInsertPlacement] = useState<ComponentInsertPlacement>("child");
   const [paletteFilter, setPaletteFilter] = useState("");
   const [assets, setAssets] = useState<DiscoveredAsset[]>([]);
@@ -1762,6 +1784,34 @@ export default function DesignScreen({
     }
   }, [paletteOpen, projectRoot, activeFile?.path]);
 
+  const createComponent = useCallback(async () => {
+    if (!newComponentName.trim()) {
+      setError("Enter a component name first.");
+      return;
+    }
+    setCreatingComponent(true);
+    try {
+      const props = parseComponentPropSchema(newComponentProps);
+      const source = buildComponentScaffold({
+        componentName: newComponentName,
+        props,
+        defaultVariant: newComponentVariant,
+      });
+      const relativePath = newComponentPath.trim() || `${newComponentName.trim()}.tsx`;
+      await onCreateComponent(relativePath, source);
+      setError(null);
+      setCreateComponentOpen(false);
+      setNewComponentName("");
+      setNewComponentPath("");
+      setNewComponentProps("");
+      setNewComponentVariant("default");
+    } catch (e) {
+      setError(`Could not create component: ${(e as Error).message}`);
+    } finally {
+      setCreatingComponent(false);
+    }
+  }, [newComponentName, newComponentPath, newComponentProps, newComponentVariant, onCreateComponent]);
+
   /** Inserts a discovered component at the palette's selected child/sibling
    * placement, carrying its import along when it lives in another file -- the whole
    * point of a component browser over the plain tag-name field, which
@@ -2539,6 +2589,48 @@ export default function DesignScreen({
         <div className="design-panel-label">Edit</div>
         {projectRoot && (
           <>
+            <button className="design-palette-toggle mono" onClick={() => setCreateComponentOpen((open) => !open)}>
+              {createComponentOpen ? "▾" : "▸"} Create component
+            </button>
+            {createComponentOpen && (
+              <div className="design-palette" aria-label="Create component wizard">
+                <input
+                  className="design-input mono"
+                  aria-label="New component name"
+                  placeholder="Component name, e.g. StatusCard"
+                  value={newComponentName}
+                  onChange={(event) => setNewComponentName(event.target.value)}
+                />
+                <input
+                  className="design-input mono"
+                  aria-label="New component path"
+                  placeholder="components/StatusCard.tsx"
+                  value={newComponentPath}
+                  onChange={(event) => setNewComponentPath(event.target.value)}
+                />
+                <input
+                  className="design-input mono"
+                  aria-label="Default component variant"
+                  placeholder="default variant"
+                  value={newComponentVariant}
+                  onChange={(event) => setNewComponentVariant(event.target.value)}
+                />
+                <textarea
+                  className="design-input mono"
+                  aria-label="Component prop schema"
+                  rows={5}
+                  placeholder={"title:string\ncount:number\nactive:boolean\ntone:enum(primary|secondary)\nchildren:slot"}
+                  value={newComponentProps}
+                  onChange={(event) => setNewComponentProps(event.target.value)}
+                />
+                <button className="design-secondary-action mono" onClick={() => void createComponent()} disabled={creatingComponent || !newComponentName.trim()}>
+                  {creatingComponent ? "Creating…" : "Create typed component"}
+                </button>
+                <div className="design-palette-empty mono">
+                  Schema lines use name:string, number, boolean, slot, or enum(a|b). The new file opens in the Editor.
+                </div>
+              </div>
+            )}
             <button className="design-palette-toggle mono" onClick={togglePalette}>
               {paletteOpen ? "▾" : "▸"} Components{palette.length > 0 ? ` (${palette.length})` : ""}
             </button>

@@ -68,7 +68,11 @@ summarizes.
 - The inspector can also download the selected live inspection as a portable
   Markdown design spec containing source JSX, rendered styles/bounds, audit
   findings, and the estimated screen-reader announcement.
-- `src/*.test.ts` — 155 real tests (Node's built-in `node:test` runner, no
+- Design mode can generate a typed TSX component scaffold from a name, default
+  variant, and line-based prop schema (`string`, `number`, `boolean`, `enum`, or
+  `slot`); the desktop shell creates the file only inside the active project and
+  opens it in the Editor.
+- `src/*.test.ts` — 157 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.
