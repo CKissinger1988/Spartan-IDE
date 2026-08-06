@@ -867,6 +867,7 @@ export default function DesignScreen({
   const [propClipboard, setPropClipboard] = useState<PropClipboard | null>(null);
   const [subtreeClipboard, setSubtreeClipboard] = useState<SubtreeClipboard | null>(null);
   const [copiedSubtree, setCopiedSubtree] = useState(false);
+  const [subtreePastePlacement, setSubtreePastePlacement] = useState<ComponentInsertPlacement>("child");
   const [variantClipboard, setVariantClipboard] = useState<VariantClipboard | null>(null);
   const [copiedVariant, setCopiedVariant] = useState<string | null>(null);
   const [previewInspection, setPreviewInspection] = useState<PreviewInspection | null>(null);
@@ -2017,8 +2018,18 @@ export default function DesignScreen({
       setError("Subtree paste is limited to the same component file so imported bindings cannot silently break the preview.");
       return;
     }
-    await applyEditObject({ kind: "SubtreeInsert", parentId: selectedIds[0], source: clipboard.source });
-  }, [activeFile, hasSingleSelection, selectedIds, subtreeClipboard, applyEditObject]);
+    const target = subtreePastePlacement === "sibling" ? findParentEntry(roots, selectedIds[0]) : null;
+    if (subtreePastePlacement === "sibling" && !target) {
+      setError("A top-level component root cannot receive a subtree as a sibling.");
+      return;
+    }
+    await applyEditObject({
+      kind: "SubtreeInsert",
+      parentId: target?.parent.id ?? selectedIds[0],
+      index: target ? target.index + 1 : undefined,
+      source: clipboard.source,
+    });
+  }, [activeFile, hasSingleSelection, selectedIds, subtreeClipboard, subtreePastePlacement, roots, applyEditObject]);
 
   const setPreviewFocus = useCallback((focused: boolean) => {
     if (!selectedId || !hasSingleSelection) return;
@@ -2769,6 +2780,28 @@ export default function DesignScreen({
                   {copiedSubtree ? "Copied subtree" : "Copy subtree"}
                 </button>
               </>
+            )}
+            {hasSingleSelection && (
+              <div className="design-palette-placement mono" aria-label="Subtree paste placement">
+                <span>Paste subtree as</span>
+                <label>
+                  <input
+                    type="radio"
+                    checked={subtreePastePlacement === "child"}
+                    onChange={() => setSubtreePastePlacement("child")}
+                  />
+                  child
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    checked={subtreePastePlacement === "sibling"}
+                    disabled={!findParentEntry(roots, selectedIds[0])}
+                    onChange={() => setSubtreePastePlacement("sibling")}
+                  />
+                  sibling
+                </label>
+              </div>
             )}
             <button
               className="design-secondary-action mono design-reveal-source"

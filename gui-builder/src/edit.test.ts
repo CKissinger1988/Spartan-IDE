@@ -528,6 +528,17 @@ test("SubtreeInsert pastes one nested JSX subtree and keeps its children", () =>
   assert.doesNotThrow(() => parseComponent(result));
 });
 
+test("SubtreeInsert honors an explicit sibling insertion index", () => {
+  const source = `const X = () => <main><a /><b /></main>;`;
+  const result = applyCanvasEdit(source, {
+    kind: "SubtreeInsert",
+    parentId: "n0",
+    index: 1,
+    source: `<span />`,
+  });
+  assert.match(result, /<a \/>[\s\S]*<span \/>[\s\S]*<b \/>/);
+});
+
 test("SubtreeInsert refuses fragments and multiple roots", () => {
   const source = `const X = () => <main />;`;
   assert.throws(

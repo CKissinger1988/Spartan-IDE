@@ -53,6 +53,8 @@ summarizes.
 - The sandbox inspection relay includes viewport-relative `x`, `y`, `right`,
   and `bottom` bounds alongside width and height, so the desktop inspector and
   copied handoff snapshots describe the element's actual rendered position.
+- The Design screen can paste a copied subtree as either a child or the next
+  sibling of the selected element; root sibling targets are refused safely.
 - `src/*.test.ts` — 141 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
