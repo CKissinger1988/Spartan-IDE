@@ -3316,6 +3316,21 @@
   white-space: nowrap;
 }
 
+.design-danger-action {
+  width: 100%;
+  margin: 6px 0 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--danger, #b64b4b);
+  background: transparent;
+  color: var(--danger, #d47777);
+  cursor: pointer;
+  text-align: left;
+}
+
+.design-danger-action:hover {
+  background: color-mix(in srgb, var(--danger, #b64b4b) 14%, transparent);
+}
+
 .design-edit-panel .leo-btn {
   margin: 10px 12px 0;
   align-self: flex-start;

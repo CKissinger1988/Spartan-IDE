@@ -8,7 +8,7 @@
  * real JS/JSX AST work actually happens, per §6.1's own "lightweight
  * dev-server bridge" description).
  *
- * All four members of the full spec's `CanvasEdit` union are now real and
+ * All five members of the full spec's `CanvasEdit` union are now real and
  * implemented by `applyCanvasEdit`: `StyleChange`/`PropChange` (original
  * v1), and `Reparent`/`ComponentInsert` (closing the gap this file's own
  * doc comment used to name as unattempted -- see edit.ts's doc comment
@@ -58,6 +58,8 @@ export interface ComponentNode {
 export type CanvasEdit =
   | { kind: "StyleChange"; nodeId: string; property: string; value: string }
   | { kind: "PropChange"; nodeId: string; prop: string; value: string }
+  /** Removes an existing non-root element and its complete JSX subtree. */
+  | { kind: "Delete"; nodeId: string }
   /** Moves an existing element to become a child of a different (or the
    * same, for reordering) parent element. `index` is the position within
    * the *target* parent's children array after the move (default:

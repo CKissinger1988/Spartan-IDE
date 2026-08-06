@@ -177,7 +177,7 @@ Priority key:
 
 The GUI Builder has been reintroduced at the user's explicit request. The AST-sync,
 esbuild preview, component palette, click-to-select, drag-to-reparent, prop/style controls,
-structural edit operations, image asset discovery/insertion, and CSS custom-property token
+structural edit operations including safe subtree deletion, image asset discovery/insertion, and CSS custom-property token
 application are wired back into the desktop
 shell. The first increments add responsive viewport preview with Desktop/Tablet/Mobile presets,
 zoom control, a project image-asset palette that inserts relative JSX references, and a token
@@ -191,6 +191,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Prop/style controls and component-library discovery/imports | Real |
 | Image asset discovery and insertion with relative JSX references | Real |
 | CSS custom-property discovery and application to selected style properties | Real |
+| Safe selected-element deletion with subtree removal | Real |
 | Desktop/Tablet/Mobile viewport presets and zoom | Real |
 | Font asset management, token definition editing, component variants, and multi-file visual workspace | Planned |
 

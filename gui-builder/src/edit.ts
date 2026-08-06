@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All four members of the `CanvasEdit` union are real and implemented:
+ * All five members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -169,6 +169,23 @@ function applyReparent(
   spliceIn(newParent, node, edit.index);
 }
 
+function applyDelete(
+  nodesById: Map<string, AnyNode>,
+  parentOf: Map<string, AnyNode | null>,
+  edit: Extract<CanvasEdit, { kind: "Delete" }>,
+): void {
+  const node = nodesById.get(edit.nodeId);
+  if (!node) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
+  const parent = parentOf.get(edit.nodeId);
+  if (parent === undefined) throw new Error(`Internal error: no parent entry tracked for id "${edit.nodeId}".`);
+  if (parent === null) {
+    throw new Error(
+      `Element "${edit.nodeId}" is a top-level component root -- deleting it would remove the component root.`,
+    );
+  }
+  spliceOut(parent.children as AnyNode[], node);
+}
+
 function applyComponentInsert(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "ComponentInsert" }>): void {
   const parent = nodesById.get(edit.parentId);
   if (!parent) {
@@ -211,6 +228,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       applyPropChange(element, edit.prop, edit.value);
       break;
     }
+    case "Delete":
+      applyDelete(nodesById, parentOf, edit);
+      break;
     case "Reparent":
       applyReparent(nodesById, parentOf, edit);
       break;

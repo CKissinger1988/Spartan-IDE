@@ -154,6 +154,21 @@ test("ComponentInsert creates a new self-closing element as a child of the targe
   assert.match(result, /<div>\s*<span \/>\s*<Button \/>\s*<\/div>/);
 });
 
+test("Delete removes the selected element and its complete JSX subtree", () => {
+  const source = `const X = () => <main><section><span>gone</span></section><aside /></main>;`;
+  const result = applyCanvasEdit(source, { kind: "Delete", nodeId: "n1" });
+  assert.ok(!result.includes("section"));
+  assert.ok(result.includes("<aside />"));
+});
+
+test("Delete refuses to remove a top-level component root", () => {
+  const source = `const X = () => <main><span /></main>;`;
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "Delete", nodeId: "n0" }),
+    /top-level component root/,
+  );
+});
+
 test("ComponentInsert applies real string-literal props to the new element", () => {
   const source = `const X = () => <div />;`;
   const result = applyCanvasEdit(source, {

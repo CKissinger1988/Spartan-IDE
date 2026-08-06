@@ -263,8 +263,8 @@ touching security, sandboxing, or approval flows (§9, §36).
   sandboxed live React preview, click-to-select and drag-to-reparent, prop/style controls,
   responsive viewport presets and zoom, component-library discovery/imports, image asset
   discovery/insertion, CSS design-token discovery/application, component insertion, reparenting,
-  and two-way AST edits. The standalone `gui-builder/` package has 67 focused and end-to-end
-  tests and is built separately from the
+  deletion, and two-way AST edits. The standalone `gui-builder/` package has 69 focused and
+  end-to-end tests and is built separately from the
   Rust workspace.
 - **Mobile companion**: Expo/React Native onboarding, private and cloud QR pairing,
   configurable endpoints, SecureStore pairing secrets, backend connectivity, session/inbox

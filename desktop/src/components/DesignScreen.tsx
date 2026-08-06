@@ -425,7 +425,7 @@ function StyleValueControl({
  * the exact same `edit` IPC call typing already uses, so a canvas edit
  * gets the same undo/dirty tracking as any other edit.
  *
- * All four real `CanvasEdit` kinds `gui-builder` itself supports are now
+ * All five real `CanvasEdit` kinds `gui-builder` itself supports are now
  * wired here: `PropChange`/`StyleChange` (mutate the selected node) and
  * `Reparent`/`ComponentInsert` (structural edits, closing the gap this
  * screen's own edit form used to leave unreachable even after
@@ -535,6 +535,13 @@ export default function DesignScreen({
     },
     [applyEditObject]
   );
+
+  const deleteSelected = useCallback(async () => {
+    if (!activeFile || !selectedId) return;
+    if (!window.confirm(`Delete <${selectedNode?.tagName ?? "element"}> and all of its children?`)) return;
+    await applyEditObject({ kind: "Delete", nodeId: selectedId });
+    setSelectedId(null);
+  }, [activeFile, selectedId, selectedNode?.tagName, applyEditObject]);
 
   useEffect(() => {
     if (activeFile && isComponentFile(activeFile.path)) {
@@ -866,6 +873,9 @@ export default function DesignScreen({
             <div className="design-selected mono">
               &lt;{selectedNode.tagName}&gt; #{selectedNode.id}
             </div>
+            <button className="design-danger-action mono" onClick={deleteSelected}>
+              Delete selected element
+            </button>
             <div className="design-edit-kind">
               <label>
                 <input
