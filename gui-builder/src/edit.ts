@@ -36,6 +36,10 @@ function isValidIdentifierName(name: string): boolean {
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name);
 }
 
+function isValidJsxAttributeName(name: string): boolean {
+  return /^[A-Za-z_:][A-Za-z0-9:._-]*$/.test(name);
+}
+
 function propertyKeyName(prop: AnyNode): string {
   return prop.key.type === "Identifier" ? prop.key.name : prop.key.value;
 }
@@ -289,11 +293,19 @@ function applyComponentInsert(nodesById: Map<string, AnyNode>, edit: Extract<Can
       `"${edit.tagName}" is not a supported JSX tag name for ComponentInsert -- must be a single valid identifier (member-expression tags like "Foo.Bar" are a real, deliberate v1 scope cut).`,
     );
   }
-  const attributes = Object.entries(edit.props ?? {}).map(([name, value]) =>
-    b.jsxAttribute(b.jsxIdentifier(name), b.stringLiteral(value)),
+  const attributes = Object.entries(edit.props ?? {}).map(([name, value]) => {
+    if (!isValidJsxAttributeName(name)) {
+      throw new Error(`"${name}" is not a supported JSX prop name for ComponentInsert -- must be a valid identifier.`);
+    }
+    return b.jsxAttribute(b.jsxIdentifier(name), b.stringLiteral(value));
+  });
+  const hasText = edit.childrenText !== undefined;
+  const opening = b.jsxOpeningElement(b.jsxIdentifier(edit.tagName), attributes, !hasText);
+  const newElement = b.jsxElement(
+    opening,
+    hasText ? b.jsxClosingElement(b.jsxIdentifier(edit.tagName)) : null,
+    hasText ? [b.jsxText(edit.childrenText ?? "")] : [],
   );
-  const opening = b.jsxOpeningElement(b.jsxIdentifier(edit.tagName), attributes, true);
-  const newElement = b.jsxElement(opening, null, []);
   spliceIn(parent, newElement, edit.index);
 }
 

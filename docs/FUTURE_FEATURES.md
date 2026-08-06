@@ -205,8 +205,9 @@ palette that applies existing `var(--token)` values to selected style properties
 | Custom responsive viewport width/height controls | Real |
 | Parsed JSX/JavaScript expression prop editing | Real |
 | JSX prop removal | Real |
+| Configurable string props and initial text for inserted elements | Real |
 | Desktop/Tablet/Mobile viewport presets and zoom | Real |
-| Font asset management, token definition editing, component state machines, and multi-file visual workspace | Planned |
+| Reusable component state machines and interaction-state controls | Planned |
 
 ## Model management
 

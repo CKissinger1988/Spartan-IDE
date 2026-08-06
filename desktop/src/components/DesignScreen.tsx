@@ -125,6 +125,28 @@ function flattenNodes(roots: ComponentNode[], depth = 0): { id: string; tagName:
   ]);
 }
 
+/** Parses the inspector's deliberately small, readable prop format:
+ * one `name=value` pair per line. ComponentInsert keeps these values as
+ * string literals, while the existing Prop editor remains available for
+ * numbers, booleans, and expressions after insertion. */
+function parseInsertProps(input: string): Record<string, string> {
+  const props: Record<string, string> = {};
+  for (const [index, rawLine] of input.split("\n").entries()) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const separator = line.indexOf("=");
+    if (separator <= 0) {
+      throw new Error(`Inserted prop line ${index + 1} must use name=value format.`);
+    }
+    const name = line.slice(0, separator).trim();
+    if (!/^[A-Za-z_:][A-Za-z0-9:._-]*$/.test(name)) {
+      throw new Error(`Inserted prop "${name}" must be a valid JSX attribute name.`);
+    }
+    props[name] = line.slice(separator + 1).trim();
+  }
+  return props;
+}
+
 /** What kind of real input widget a curated style property deserves.
  * `text` is the honest fallback for anything whose real value space is
  * too open to constrain (a shadow, a transform, a font stack). */
@@ -467,6 +489,8 @@ export default function DesignScreen({
   );
   const [reparentTargetId, setReparentTargetId] = useState("");
   const [insertTagName, setInsertTagName] = useState("");
+  const [insertProps, setInsertProps] = useState("");
+  const [insertText, setInsertText] = useState("");
   const [palette, setPalette] = useState<DiscoveredComponent[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [assets, setAssets] = useState<DiscoveredAsset[]>([]);
@@ -916,7 +940,16 @@ export default function DesignScreen({
       edit = { kind: "Reparent", nodeId: selectedId, newParentId: reparentTargetId };
     } else {
       if (!insertTagName.trim()) return;
+      let props: Record<string, string>;
+      try {
+        props = parseInsertProps(insertProps);
+      } catch (e) {
+        setError((e as Error).message);
+        return;
+      }
       edit = { kind: "ComponentInsert", parentId: selectedId, tagName: insertTagName.trim() };
+      if (Object.keys(props).length > 0) edit.props = props;
+      if (insertText !== "") edit.childrenText = insertText;
     }
     await applyEditObject(edit);
     setPropKey("");
@@ -925,7 +958,9 @@ export default function DesignScreen({
     setPropValueType("string");
     setReparentTargetId("");
     setInsertTagName("");
-  }, [activeFile, selectedId, propKey, propValue, propValueType, textValue, editKind, reparentTargetId, insertTagName, applyEditObject]);
+    setInsertProps("");
+    setInsertText("");
+  }, [activeFile, selectedId, propKey, propValue, propValueType, textValue, editKind, reparentTargetId, insertTagName, insertProps, insertText, applyEditObject]);
 
   if (!activeFile || !isComponentFile(activeFile.path)) {
     return (
@@ -1299,12 +1334,30 @@ export default function DesignScreen({
               </select>
             )}
             {editKind === "ComponentInsert" && (
-              <input
-                className="design-input mono"
-                placeholder="new tag name (e.g. Button)"
-                value={insertTagName}
-                onChange={(e) => setInsertTagName(e.target.value)}
-              />
+              <>
+                <input
+                  className="design-input mono"
+                  placeholder="new tag name (e.g. Button)"
+                  value={insertTagName}
+                  onChange={(e) => setInsertTagName(e.target.value)}
+                />
+                <textarea
+                  className="design-input mono design-text-input"
+                  aria-label="Inserted string props"
+                  placeholder="props: name=value (one per line)"
+                  value={insertProps}
+                  onChange={(e) => setInsertProps(e.target.value)}
+                  rows={3}
+                />
+                <textarea
+                  className="design-input mono design-text-input"
+                  aria-label="Inserted text content"
+                  placeholder="initial direct text (optional)"
+                  value={insertText}
+                  onChange={(e) => setInsertText(e.target.value)}
+                  rows={2}
+                />
+              </>
             )}
             <button className="leo-btn leo-btn-approve" onClick={applyEdit} disabled={!canApply}>
               Apply

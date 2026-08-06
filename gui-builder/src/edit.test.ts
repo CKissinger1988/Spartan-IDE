@@ -269,6 +269,31 @@ test("ComponentInsert applies real string-literal props to the new element", () 
   assert.match(result, /<Button label="Click me" variant="primary"\s*\/>/);
 });
 
+test("ComponentInsert creates a content-bearing element with string props", () => {
+  const source = `const X = () => <main />;`;
+  const result = applyCanvasEdit(source, {
+    kind: "ComponentInsert",
+    parentId: "n0",
+    tagName: "Button",
+    props: { type: "button", className: "primary", "aria-label": "Save action" },
+    childrenText: "Save",
+  });
+  assert.match(result, /<Button type="button" className="primary" aria-label="Save action">Save<\/Button>/);
+  assert.doesNotThrow(() => parseComponent(result));
+});
+
+test("ComponentInsert rejects an invalid string prop name", () => {
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <main />;`, {
+      kind: "ComponentInsert",
+      parentId: "n0",
+      tagName: "Button",
+    props: { "not valid": "x" },
+    }),
+    /not a supported JSX prop name/,
+  );
+});
+
 test("ComponentInsert honors an explicit index among existing children", () => {
   const source = `const X = () => (<div><i id="1" /><i id="2" /></div>);`;
   const result = applyCanvasEdit(source, { kind: "ComponentInsert", parentId: "n0", tagName: "Mid", index: 1 });

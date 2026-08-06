@@ -92,15 +92,16 @@ export type CanvasEdit =
    * (`Foo.Bar`) are a real, deliberate v1 scope cut, refused with a
    * clear error rather than silently mishandled. `props`, if given, are
    * always inserted as plain string-literal JSX attributes (the same
-   * real limitation `PropChange` already has). The new element is
-   * always self-closing (`<Tag />`); giving it real children is a
-   * separate, unstarted future increment. */
+   * real limitation `PropChange` already has). `childrenText`, when given,
+   * creates one direct JSX text child so the inspector can create useful
+   * content-bearing elements without an immediate editor switch. */
   | {
       kind: "ComponentInsert";
       parentId: string;
       tagName: string;
       index?: number;
       props?: Record<string, string>;
+      childrenText?: string;
       /** Module specifier to import `tagName` from, when the component
        * being inserted lives in another file (task #278's real
        * component-library browser supplies this). Omitted for a plain

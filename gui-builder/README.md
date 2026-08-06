@@ -16,7 +16,7 @@ summarizes.
   click on.
 - `src/edit.ts` (`applyCanvasEdit`) — real "Canvas → Code": takes a
   structured `CanvasEdit` (`StyleChange`, `PropChange`, `Reparent`, or
-  `ComponentInsert`, `Delete`, `Duplicate`, `TextChange`, and `PropRemove`, matching the shape
+  `ComponentInsert` (including string props and optional direct text), `Delete`, `Duplicate`, `TextChange`, and `PropRemove`, matching the shape
   §6.2 already sketched in Rust) and mutates the *real AST node* it targets
   directly, then regenerates source via `recast.print`, which reuses the
   original source text for every node the edit didn't touch. This is the
@@ -38,7 +38,7 @@ summarizes.
 - `src/bundle.ts` — real esbuild bundling with `data-spartan-id` annotation and
   sandboxed-preview click/drag relays, including an in-memory source path for
   previews of unsaved editor changes.
-- `src/*.test.ts` — 84 real tests (Node's built-in `node:test` runner, no
+- `src/*.test.ts` — 86 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.
@@ -50,10 +50,9 @@ summarizes.
   bundle on file activation and after a real Canvas → Code edit, using the
   current in-memory source for correctness. A future incremental preview can
   add HMR after measuring rebuild cost.
-- **No token definition editor or font manager yet.** Existing CSS custom
-  properties can be discovered and applied as `var(--token)` values; editing
-  token definitions, fonts, and reusable state/variant controls remain the
-  next feature increments in the desktop suite.
+- **No font manager or reusable component state machine yet.** Font assets can
+  be discovered and copied, and CSS token definitions can be edited from the
+  desktop suite; reusable state/variant controls remain future work.
 - **`PropChange` supports string, number, boolean, and parsed expression
   values.** Expressions are parsed as JavaScript/JSX and never injected as
   raw source fragments.
