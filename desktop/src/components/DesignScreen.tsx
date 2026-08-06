@@ -55,6 +55,13 @@ function componentPropSummary(component: DiscoveredComponent): string {
   return ` · props ${shown}${hints.length > 4 ? `, +${hints.length - 4}` : ""}`;
 }
 
+function displayUsagePath(projectRoot: string | undefined, file: string): string {
+  if (!projectRoot) return file.split(/[\\/]/).pop() ?? file;
+  const root = projectRoot.replace(/[\\/]$/, "").replace(/\\/g, "/");
+  const normalized = file.replace(/\\/g, "/");
+  return normalized.startsWith(`${root}/`) ? normalized.slice(root.length + 1) : normalized;
+}
+
 interface DiscoveredAsset {
   file: string;
   relativePath: string;
@@ -2983,6 +2990,21 @@ export default function DesignScreen({
                         Cancel
                       </button>
                     </div>
+                    {paletteComponent.usageFiles && paletteComponent.usageFiles.length > 0 && (
+                      <div className="design-palette-usage mono">
+                        <span>Used in</span>
+                        {paletteComponent.usageFiles.map((file) => (
+                          <button
+                            className="design-palette-usage-file mono"
+                            key={file}
+                            onClick={() => onOpenFile(file)}
+                            title={`Open ${file}`}
+                          >
+                            {displayUsagePath(projectRoot, file)}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     {(paletteComponent.propHints ?? []).map((hint) => {
                       const control = componentPropControl(hint.type);
                       const value = palettePropDrafts[hint.name] ?? "";
@@ -3038,27 +3060,35 @@ export default function DesignScreen({
                   </div>
                 ) : (
                   filteredPalette.map((c) => (
-                    <button
-                      key={`${c.file}:${c.name}`}
-                      className="design-palette-item mono"
-                          disabled={!selectedId || selectedIds.length === 0}
-                          title={
-                        selectedId && selectedIds.length > 0
-                          ? `${c.propHints?.length ? "Configure and insert" : "Insert"} <${c.name} /> as a ${paletteInsertPlacement} of ${selectedIds.length > 1 ? `${selectedIds.length} selected elements` : "the selected element"}${
-                              c.importFrom ? ` and import it from "${c.importFrom}"` : ""
-                            }`
-                          : "Select one or more elements in the tree first"
-                      }
-                      onClick={() => c.propHints?.length ? configurePaletteComponent(c) : void insertComponent(c)}
-                    >
-                      <span className="design-palette-name">{c.deprecated ? "⚠ " : ""}&lt;{c.name} /&gt;</span>
-                      <span className="design-palette-from">
-                        {c.importFrom ?? "this file"}
-                        {typeof c.usageCount === "number" ? ` · ${c.usageCount} usage${c.usageCount === 1 ? "" : "s"}` : ""}
-                        {c.deprecated ? ` · deprecated${c.replacement ? ` → ${c.replacement}` : ""}` : ""}
-                        {componentPropSummary(c)}
-                      </span>
-                    </button>
+                    <div key={`${c.file}:${c.name}`} className="design-palette-item mono">
+                      <button
+                        className="design-palette-insert"
+                        disabled={!selectedId || selectedIds.length === 0}
+                        title={
+                          selectedId && selectedIds.length > 0
+                            ? `${c.propHints?.length ? "Configure and insert" : "Insert"} <${c.name} /> as a ${paletteInsertPlacement} of ${selectedIds.length > 1 ? `${selectedIds.length} selected elements` : "the selected element"}${
+                                c.importFrom ? ` and import it from "${c.importFrom}"` : ""
+                              }`
+                            : "Select one or more elements in the tree first"
+                        }
+                        onClick={() => c.propHints?.length ? configurePaletteComponent(c) : void insertComponent(c)}
+                      >
+                        <span className="design-palette-name">{c.deprecated ? "⚠ " : ""}&lt;{c.name} /&gt;</span>
+                        <span className="design-palette-from">
+                          {c.importFrom ?? "this file"}
+                          {typeof c.usageCount === "number" ? ` · ${c.usageCount} usage${c.usageCount === 1 ? "" : "s"}` : ""}
+                          {c.deprecated ? ` · deprecated${c.replacement ? ` → ${c.replacement}` : ""}` : ""}
+                          {componentPropSummary(c)}
+                        </span>
+                      </button>
+                      <button
+                        className="design-asset-action mono"
+                        onClick={() => configurePaletteComponent(c)}
+                        title={`Inspect ${c.name} usage files and API`}
+                      >
+                        Info
+                      </button>
+                    </div>
                   ))
                 )}
               </div>
