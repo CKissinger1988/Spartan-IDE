@@ -6,6 +6,7 @@ export { buildDesignHandoffMarkdown } from "./handoff.js";
 export { buildComponentScaffold, buildComponentPlaygroundScaffold } from "./scaffold.js";
 export { sanitizeSvgMarkup } from "./assets.js";
 export { LAYOUT_PRESETS } from "./layout.js";
+export { buildThemeOverride } from "./theme.js";
 export { buildPreviewDocument } from "./preview.js";
 export type { ComponentNode, PropSummary, SourceLocation, CanvasEdit } from "./types.js";
 export type { ScreenReaderNode, ScreenReaderPreview, ScreenReaderPropSummary } from "./accessibility.js";
@@ -14,3 +15,4 @@ export type { DesignHandoffFinding, DesignHandoffInput, HandoffFindingSeverity }
 export type { ComponentPropDefinition, ComponentPropKind, ComponentScaffoldInput, ComponentPlaygroundInput } from "./scaffold.js";
 export type { DiscoveredAsset } from "./assets.js";
 export type { LayoutPreset } from "./layout.js";
+export type { ThemeTokenValue } from "./theme.js";

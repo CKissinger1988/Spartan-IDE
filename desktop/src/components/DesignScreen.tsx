@@ -7,6 +7,7 @@ import { buildDesignHandoffMarkdown } from "../../../gui-builder/src/handoff";
 import { buildComponentPlaygroundScaffold, buildComponentScaffold } from "../../../gui-builder/src/scaffold";
 import { buildPreviewDocument } from "../../../gui-builder/src/preview";
 import { LAYOUT_PRESETS } from "../../../gui-builder/src/layout";
+import { buildThemeOverride } from "../../../gui-builder/src/theme";
 import type { ComponentPropDefinition } from "../../../gui-builder/src/scaffold";
 
 interface StyleEntryValue {
@@ -82,6 +83,12 @@ type PreviewDataState = "normal" | "loading" | "empty" | "error" | "populated" |
 interface InteractionPreset {
   name: string;
   state: PreviewInteractionState;
+  updatedAt: number;
+}
+
+interface PreviewTheme {
+  name: string;
+  cssText: string;
   updatedAt: number;
 }
 
@@ -935,6 +942,9 @@ export default function DesignScreen({
   const [tokenDrafts, setTokenDrafts] = useState<Record<string, string>>({});
   const [tokensOpen, setTokensOpen] = useState(false);
   const [tokenFilter, setTokenFilter] = useState("");
+  const [previewThemes, setPreviewThemes] = useState<PreviewTheme[]>([]);
+  const [previewThemeName, setPreviewThemeName] = useState("");
+  const [activePreviewTheme, setActivePreviewTheme] = useState<string | null>(null);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [newTokenName, setNewTokenName] = useState("");
   const [newTokenValue, setNewTokenValue] = useState("");
@@ -951,6 +961,7 @@ export default function DesignScreen({
   const previewMatrixRefs = useRef<Record<string, HTMLIFrameElement | null>>({});
   const refreshGenerationRef = useRef(0);
   const viewportStorageKey = projectRoot ? `spartan.gui-builder.viewports:${projectRoot}` : null;
+  const themeStorageKey = projectRoot ? `spartan.gui-builder.themes:${projectRoot}` : null;
   const baseViewport = DESIGN_VIEWPORTS.find((item) => item.id === viewportId) ?? DESIGN_VIEWPORTS[0];
   const viewport = viewportId === "custom"
     ? { id: "custom", label: "Custom", width: customViewportWidth, height: customViewportHeight }
@@ -1608,6 +1619,23 @@ export default function DesignScreen({
   }, [viewportStorageKey]);
 
   useEffect(() => {
+    if (!themeStorageKey) {
+      setPreviewThemes([]);
+      setActivePreviewTheme(null);
+      return;
+    }
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(themeStorageKey) ?? "[]") as PreviewTheme[];
+      setPreviewThemes(Array.isArray(saved)
+        ? saved.filter((theme) => theme && typeof theme.name === "string" && typeof theme.cssText === "string" && theme.cssText.length <= 256 * 1024)
+        : []);
+    } catch {
+      setPreviewThemes([]);
+    }
+    setActivePreviewTheme(null);
+  }, [themeStorageKey]);
+
+  useEffect(() => {
     // Invalidate any parse/bundle already in flight when switching files or
     // leaving Design mode, so an older response cannot repaint the new file.
     refreshGenerationRef.current += 1;
@@ -2248,6 +2276,46 @@ export default function DesignScreen({
     }
   }, [tokensOpen, projectRoot, openCssFiles]);
 
+  const applyPreviewTheme = useCallback((theme: PreviewTheme | null) => {
+    setActivePreviewTheme(theme?.name ?? null);
+    postPreviewMessage({ type: "spartan-canvas-theme", cssText: theme?.cssText ?? "" });
+  }, [postPreviewMessage]);
+
+  const savePreviewTheme = useCallback(() => {
+    if (!themeStorageKey || !previewThemeName.trim() || tokens.length === 0) return;
+    const cssText = buildThemeOverride(tokens.map((token) => ({
+      name: token.name,
+      value: tokenDrafts[`${token.file}:${token.name}`] ?? token.value,
+    })));
+    if (!cssText) {
+      setError("The current token set has no safe values to preview.");
+      return;
+    }
+    const theme: PreviewTheme = { name: previewThemeName.trim(), cssText, updatedAt: Date.now() };
+    const next = [theme, ...previewThemes.filter((item) => item.name !== theme.name)];
+    setPreviewThemes(next);
+    setPreviewThemeName("");
+    try {
+      window.localStorage.setItem(themeStorageKey, JSON.stringify(next));
+      applyPreviewTheme(theme);
+      setError(null);
+    } catch (e) {
+      setError(`Could not save preview theme: ${(e as Error).message}`);
+    }
+  }, [themeStorageKey, previewThemeName, tokens, tokenDrafts, previewThemes, applyPreviewTheme]);
+
+  const deletePreviewTheme = useCallback((name: string) => {
+    if (!themeStorageKey) return;
+    const next = previewThemes.filter((theme) => theme.name !== name);
+    setPreviewThemes(next);
+    if (activePreviewTheme === name) applyPreviewTheme(null);
+    try {
+      window.localStorage.setItem(themeStorageKey, JSON.stringify(next));
+    } catch (e) {
+      setError(`Could not delete preview theme: ${(e as Error).message}`);
+    }
+  }, [themeStorageKey, previewThemes, activePreviewTheme, applyPreviewTheme]);
+
   const applyToken = useCallback(
     async (token: DiscoveredToken) => {
       if (!activeFile || !selectedId || !hasSingleSelection || editKind !== "StyleChange" || !propKey.trim()) return;
@@ -2630,6 +2698,7 @@ export default function DesignScreen({
                         title={`${item.label} live preview`}
                         onLoad={() => {
                           postPreviewMessage({ type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds });
+                          postPreviewMessage({ type: "spartan-canvas-theme", cssText: previewThemes.find((theme) => theme.name === activePreviewTheme)?.cssText ?? "" });
                           postPreviewMessage({ type: "spartan-canvas-data-state", nodeId: selectedId, state: previewDataState });
                           postPreviewMessage({ type: "spartan-canvas-box-model", nodeId: selectedId, visible: boxModelVisible });
                           if (selectedId) postPreviewMessage({ type: "spartan-canvas-inspect", nodeId: selectedId });
@@ -2651,6 +2720,7 @@ export default function DesignScreen({
                 title="Live preview"
                 onLoad={() => {
                   postPreviewMessage({ type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds });
+                  postPreviewMessage({ type: "spartan-canvas-theme", cssText: previewThemes.find((theme) => theme.name === activePreviewTheme)?.cssText ?? "" });
                   postPreviewMessage({ type: "spartan-canvas-data-state", nodeId: selectedId, state: previewDataState });
                   postPreviewMessage({ type: "spartan-canvas-box-model", nodeId: selectedId, visible: boxModelVisible });
                   if (selectedId) postPreviewMessage({ type: "spartan-canvas-inspect", nodeId: selectedId });
@@ -2926,6 +2996,49 @@ export default function DesignScreen({
                   >
                     Define
                   </button>
+                </div>
+                <div className="design-interaction-presets" aria-label="Preview themes">
+                  <div className="design-preview-status mono">Preview themes · source tokens stay unchanged</div>
+                  <div className="design-interaction-save">
+                    <input
+                      className="design-input mono"
+                      aria-label="Preview theme name"
+                      placeholder="save current tokens as…"
+                      value={previewThemeName}
+                      onChange={(event) => setPreviewThemeName(event.target.value)}
+                    />
+                    <button
+                      className="design-secondary-action mono"
+                      disabled={!previewThemeName.trim() || tokens.length === 0}
+                      onClick={savePreviewTheme}
+                    >
+                      Save theme
+                    </button>
+                    <button
+                      className="design-secondary-action mono"
+                      disabled={!activePreviewTheme}
+                      onClick={() => applyPreviewTheme(null)}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  {previewThemes.map((theme) => (
+                    <div className="design-interaction-preset" key={theme.name}>
+                      <button
+                        className="design-secondary-action mono"
+                        onClick={() => applyPreviewTheme(theme)}
+                      >
+                        {theme.name}{activePreviewTheme === theme.name ? " · active" : ""}
+                      </button>
+                      <button
+                        className="design-asset-action mono"
+                        title={`Delete preview theme ${theme.name}`}
+                        onClick={() => deletePreviewTheme(theme.name)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
                 </div>
                 {tokens.length === 0 ? (
                   <div className="design-palette-empty mono">No CSS custom properties found under the project root.</div>

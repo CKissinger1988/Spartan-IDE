@@ -85,6 +85,7 @@ try {
   var previewDataStateEl = null;
   var previewDataStateOriginalHtml = null;
   var previewDataStateOriginalBusy = null;
+  var previewThemeStyle = null;
   var boxModelOverlay = null;
   var boxModelNode = null;
   var focusedEl = null;
@@ -295,6 +296,20 @@ try {
     }
   }
 
+  function clearPreviewTheme() {
+    if (previewThemeStyle) previewThemeStyle.remove();
+    previewThemeStyle = null;
+  }
+
+  function previewTheme(cssText) {
+    clearPreviewTheme();
+    if (typeof cssText !== "string" || !cssText.trim()) return;
+    previewThemeStyle = document.createElement("style");
+    previewThemeStyle.setAttribute("data-spartan-preview-theme", "true");
+    previewThemeStyle.textContent = cssText;
+    document.head.appendChild(previewThemeStyle);
+  }
+
   function inspectSelection(nodeId) {
     var candidate = nodeId
       ? document.querySelector('[data-spartan-id="' + nodeId + '"]')
@@ -380,6 +395,8 @@ try {
       previewInteractionState(event.data.nodeId || null, event.data.state || null);
     } else if (event.data && event.data.type === "spartan-canvas-data-state") {
       previewDataState(event.data.nodeId || null, event.data.state || null);
+    } else if (event.data && event.data.type === "spartan-canvas-theme") {
+      previewTheme(event.data.cssText || "");
     } else if (event.data && event.data.type === "spartan-canvas-box-model") {
       if (event.data.visible) renderBoxModel(event.data.nodeId || null);
       else clearBoxModel();

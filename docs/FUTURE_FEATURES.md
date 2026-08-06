@@ -191,6 +191,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Prop/style controls and component-library discovery/imports | Real |
 | Image asset discovery and atomic single/multi-selection insertion with relative JSX references | Real |
 | CSS custom-property discovery and application to selected style properties | Real |
+| Project-scoped named preview themes built from CSS token values | Real |
 | Safe selected-element deletion with subtree removal | Real |
 | Selected-element duplication with nested subtree cloning | Real |
 | Typed string/number/boolean prop editing | Real |
