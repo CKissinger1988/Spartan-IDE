@@ -78,6 +78,18 @@ interface StyleClipboard {
   entries: Record<string, StyleEntryValue>;
 }
 
+interface PropClipboardEntry {
+  kind: "string" | "expression";
+  value?: string;
+  source?: string;
+}
+
+interface PropClipboard {
+  sourcePath: string;
+  sourceTagName: string;
+  entries: Record<string, PropClipboardEntry>;
+}
+
 interface DesignScreenProps {
   activeFile: OpenFile | null;
   openFiles: OpenFile[];
@@ -656,6 +668,7 @@ export default function DesignScreen({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [styleClipboard, setStyleClipboard] = useState<StyleClipboard | null>(null);
+  const [propClipboard, setPropClipboard] = useState<PropClipboard | null>(null);
   const [previewInspection, setPreviewInspection] = useState<PreviewInspection | null>(null);
   const [boxModelVisible, setBoxModelVisible] = useState(false);
   const [copiedInspection, setCopiedInspection] = useState(false);
@@ -1080,6 +1093,28 @@ export default function DesignScreen({
     setError(null);
   }, [activeFile?.path, selectedNode, hasSingleSelection]);
 
+  const copyProps = useCallback(() => {
+    if (!selectedNode || !hasSingleSelection) return;
+    const entries: Record<string, PropClipboardEntry> = {};
+    for (const [name, summary] of Object.entries(selectedNode.props)) {
+      if (summary.kind === "string") {
+        entries[name] = { kind: "string", value: summary.value };
+      } else if (summary.kind === "expression") {
+        entries[name] = { kind: "expression", source: summary.source };
+      }
+    }
+    if (Object.keys(entries).length === 0) {
+      setError("The selected element has no literal or expression props to copy.");
+      return;
+    }
+    setPropClipboard({
+      sourcePath: activeFile?.path ?? "",
+      sourceTagName: selectedNode.tagName,
+      entries,
+    });
+    setError(null);
+  }, [activeFile?.path, selectedNode, hasSingleSelection]);
+
   const clearStylesSelected = useCallback(async () => {
     if (!activeFile || selectedIds.length === 0) return;
     if (!canClearSelectionStyles) {
@@ -1109,6 +1144,23 @@ export default function DesignScreen({
     })));
     await applyEditBatch(edits);
   }, [styleClipboard, activeFile, selectedIds, applyEditBatch]);
+
+  const pasteProps = useCallback(async () => {
+    if (!propClipboard || !activeFile || selectedIds.length === 0) return;
+    const hasExpressions = Object.values(propClipboard.entries).some((entry) => entry.kind === "expression");
+    if (propClipboard.sourcePath !== activeFile.path && hasExpressions) {
+      setError("Expression-valued props can only be pasted within their source component file; copy literal props separately for cross-file use.");
+      return;
+    }
+    const edits = selectedIds.flatMap((nodeId) => Object.entries(propClipboard.entries).map(([prop, entry]) => ({
+      kind: "PropChange",
+      nodeId,
+      prop,
+      value: entry.kind === "string" ? entry.value ?? "" : entry.source ?? "",
+      valueType: entry.kind,
+    })));
+    await applyEditBatch(edits);
+  }, [propClipboard, activeFile, selectedIds, applyEditBatch]);
 
   // Keep common canvas shortcuts scoped to the Design screen and out of the
   // inspector's own inputs. Escape clears any selection; Delete/Backspace and
@@ -2013,6 +2065,22 @@ export default function DesignScreen({
                 title={styleClipboard ? `Paste ${Object.keys(styleClipboard.entries).length} copied styles onto the selection` : "Copy styles from an element first"}
               >
                 Paste styles{styleClipboard ? ` (${Object.keys(styleClipboard.entries).length})` : ""}
+              </button>
+              <button
+                className="design-secondary-action mono"
+                onClick={copyProps}
+                disabled={!hasSingleSelection || !selectedNode || Object.keys(selectedNode.props).every((name) => selectedNode.props[name].kind === "style")}
+                title={hasSingleSelection ? "Copy literal and expression JSX props from the selected element" : "Select exactly one element first"}
+              >
+                Copy props
+              </button>
+              <button
+                className="design-secondary-action mono"
+                onClick={() => void pasteProps()}
+                disabled={!propClipboard || selectionCount === 0}
+                title={propClipboard ? `Paste ${Object.keys(propClipboard.entries).length} copied props onto the selection` : "Copy props from an element first"}
+              >
+                Paste props{propClipboard ? ` (${Object.keys(propClipboard.entries).length})` : ""}
               </button>
               <button
                 className="design-danger-action mono"
