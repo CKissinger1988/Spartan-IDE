@@ -123,6 +123,10 @@ test("indexes real direct JSX usages and deprecation replacement metadata", () =
   assert.equal(button?.replacement, "PrimaryButton");
   assert.equal(button?.usageCount, 2);
   assert.ok(button?.usageFiles?.some((file) => file.endsWith("App.jsx")));
+  assert.deepEqual(button?.usageLocations?.map(({ file, line }) => ({ file: file.split("/").pop(), line })), [
+    { file: "App.jsx", line: 2 },
+    { file: "App.jsx", line: 2 },
+  ]);
 });
 
 test("usage indexing ignores dependency and build output", () => {

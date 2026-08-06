@@ -198,7 +198,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Component palette TypeScript prop API hints | Real |
 | Relative imported TypeScript prop API hint resolution | Real |
 | API-aware component insertion with typed required/optional prop controls | Real |
-| Component palette usage inspection with one-click Editor navigation | Real |
+| Component palette usage inspection with line-level Editor navigation | Real |
 | Project-wide design-token usage counts and line-level source navigation | Real |
 | Project-scoped named preview themes built from CSS token values | Real |
 | Safe selected-element deletion with subtree removal | Real |

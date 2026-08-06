@@ -2998,10 +2998,21 @@ export default function DesignScreen({
                         Cancel
                       </button>
                     </div>
-                    {paletteComponent.usageFiles && paletteComponent.usageFiles.length > 0 && (
+                    {((paletteComponent.usageLocations ?? []).length > 0 || (paletteComponent.usageFiles ?? []).length > 0) && (
                       <div className="design-palette-usage mono">
                         <span>Used in</span>
-                        {paletteComponent.usageFiles.map((file) => (
+                        {(paletteComponent.usageLocations ?? []).length > 0
+                          ? (paletteComponent.usageLocations ?? []).map((location) => (
+                            <button
+                              className="design-palette-usage-file mono"
+                              key={`${location.file}:${location.line}:${location.column}`}
+                              onClick={() => onRevealSource(location.file, location.line, location.column)}
+                              title={`Reveal ${location.file} at line ${location.line}`}
+                            >
+                              {displayUsagePath(projectRoot, location.file)}:{location.line}
+                            </button>
+                          ))
+                          : (paletteComponent.usageFiles ?? []).map((file) => (
                           <button
                             className="design-palette-usage-file mono"
                             key={file}
@@ -3010,7 +3021,7 @@ export default function DesignScreen({
                           >
                             {displayUsagePath(projectRoot, file)}
                           </button>
-                        ))}
+                          ))}
                       </div>
                     )}
                     {(paletteComponent.propHints ?? []).map((hint) => {

@@ -54,6 +54,7 @@ export interface DiscoveredComponent {
   /** Project-wide direct JSX usage scan; absent for source-only discovery. */
   usageCount?: number;
   usageFiles?: string[];
+  usageLocations?: Array<{ file: string; line: number; column: number }>;
   /** Parsed from a real leading `@deprecated` JSDoc tag, when present. */
   deprecated?: boolean;
   replacement?: string;
@@ -76,6 +77,11 @@ const SKIP_DIRS = new Set([
 ]);
 
 const COMPONENT_EXTENSIONS = new Set([".jsx", ".tsx"]);
+
+interface JsxUsage {
+  count: number;
+  locations: Array<{ line: number; column: number }>;
+}
 
 /** Depth-bounded so a pathologically deep (or symlink-looped) tree can
  * never hang the caller -- the same bounded-walk discipline
@@ -422,8 +428,9 @@ export function discoverComponentsInSource(source: string, file: string, fromFil
     file,
     isDefault,
     importFrom: fromFile && file === fromFile ? null : fromFile ? relativeSpecifier(fromFile, file) : null,
-    usageCount: sourceTags.get(name) ?? 0,
+    usageCount: sourceTags.get(name)?.count ?? 0,
     usageFiles: sourceTags.has(name) ? [file] : [],
+    usageLocations: sourceTags.get(name)?.locations.map((location) => ({ file, ...location })) ?? [],
     ...(deprecated ? { deprecated: true } : {}),
     ...(replacement ? { replacement } : {}),
     ...(propHints.get(name)?.length ? { propHints: propHints.get(name) } : {}),
@@ -443,8 +450,8 @@ function jsxName(node: unknown): string | null {
 }
 
 /** Counts real JSX opening tags in a parsed source buffer without regex false positives. */
-function collectJsxTagNames(ast: unknown): Map<string, number> {
-  const result = new Map<string, number>();
+function collectJsxTagNames(ast: unknown): Map<string, JsxUsage> {
+  const result = new Map<string, JsxUsage>();
   const seen = new Set<object>();
   const visit = (value: unknown): void => {
     if (!value || typeof value !== "object") return;
@@ -453,7 +460,19 @@ function collectJsxTagNames(ast: unknown): Map<string, number> {
     seen.add(object);
     if (object.type === "JSXElement" || object.type === "JSXOpeningElement" || object.type === "JSXClosingElement") {
       const name = jsxName(object.type === "JSXElement" ? (object.openingElement as Record<string, unknown> | undefined)?.name : object.name);
-      if (name) result.set(name, (result.get(name) ?? 0) + (object.type === "JSXElement" ? 1 : 0));
+      if (name) {
+        const usage = result.get(name) ?? { count: 0, locations: [] };
+        if (object.type === "JSXElement") {
+          usage.count += 1;
+          const opening = object.openingElement as Record<string, unknown> | undefined;
+          const loc = (opening?.loc ?? object.loc) as Record<string, unknown> | undefined;
+          const start = loc?.start as Record<string, unknown> | undefined;
+          if (typeof start?.line === "number" && typeof start.column === "number") {
+            usage.locations.push({ line: start.line, column: start.column });
+          }
+        }
+        result.set(name, usage);
+      }
     }
     for (const child of Object.values(object)) {
       if (Array.isArray(child)) child.forEach(visit);
@@ -493,7 +512,7 @@ export function discoverComponents(rootDir: string, fromFile?: string): Discover
   for (const [file, source] of sources) {
     out.push(...discoverComponentsInSource(source, file, fromFile, importedPropTypes(source, file, rootDir, typeCatalog)));
   }
-  const usageByFile = new Map<string, Map<string, number>>();
+  const usageByFile = new Map<string, Map<string, JsxUsage>>();
   for (const [file, source] of sources) {
     try {
       usageByFile.set(file, collectJsxTagNames(parserAdapter.parse(source)));
@@ -503,10 +522,12 @@ export function discoverComponents(rootDir: string, fromFile?: string): Discover
   }
   return out.map((component) => {
     const usageFiles = [...usageByFile.entries()]
-      .filter(([, tags]) => (tags.get(component.name) ?? 0) > 0)
+      .filter(([, tags]) => (tags.get(component.name)?.count ?? 0) > 0)
       .map(([file]) => file);
     const usageCount = [...usageByFile.values()]
-      .reduce((count, tags) => count + (tags.get(component.name) ?? 0), 0);
-    return { ...component, usageCount, usageFiles };
+      .reduce((count, tags) => count + (tags.get(component.name)?.count ?? 0), 0);
+    const usageLocations = [...usageByFile.entries()]
+      .flatMap(([file, tags]) => (tags.get(component.name)?.locations ?? []).map((location) => ({ file, ...location })));
+    return { ...component, usageCount, usageFiles, usageLocations };
   });
 }
