@@ -1833,11 +1833,21 @@ export default function DesignScreen({
         text: result.source,
       });
       onContentChange(cssFile.path, result.source);
-      const discovered = (await window.spartan.call("design_tokens", { rootDir: projectRoot })) as {
-        tokens: DiscoveredToken[];
+      const relativePath = projectRoot && cssFile.path.startsWith(projectRoot)
+        ? cssFile.path.slice(projectRoot.length).replace(/^[/\\]/, "")
+        : cssFile.path;
+      const createdToken: DiscoveredToken = {
+        name,
+        value: value.trim(),
+        file: cssFile.path,
+        relativePath,
       };
-      setTokens(discovered.tokens);
-      setTokenDrafts(Object.fromEntries(discovered.tokens.map((token) => [`${token.file}:${token.name}`, token.value])));
+      setTokens((current) => {
+        const existing = current.findIndex((token) => token.file === createdToken.file && token.name === createdToken.name);
+        if (existing < 0) return [...current, createdToken];
+        return current.map((token, index) => index === existing ? { ...token, value: createdToken.value } : token);
+      });
+      setTokenDrafts((current) => ({ ...current, [`${cssFile.path}:${name}`]: value.trim() }));
       setNewTokenName("");
       setNewTokenValue("");
       if (activeFile) await refresh(activeFile.path, previewSource ?? activeFile.content);
