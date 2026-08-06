@@ -827,13 +827,28 @@ export default function DesignScreen({
       } catch {
         setVariantPresets([]);
       }
-      refresh(activeFile.path, activeFile.content);
     } else {
       setRoots([]);
       setBundleCode(null);
       setVariantPresets([]);
     }
   }, [activeFile?.path, refresh]);
+
+  // Keep Code -> Canvas live while the user types in the active editor. A
+  // short debounce avoids spawning a real parse/bundle subprocess for every
+  // keystroke, while still making the unsaved buffer the authoritative
+  // source without requiring a mode/file switch. Any pending refresh is
+  // canceled when another edit arrives or the active file changes.
+  useEffect(() => {
+    if (!activeFile || !isComponentFile(activeFile.path)) return;
+    const path = activeFile.path;
+    const source = activeFile.content;
+    const timer = window.setTimeout(() => {
+      setPreviewSource(null);
+      void refresh(path, source);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [activeFile?.path, activeFile?.content, refresh]);
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
