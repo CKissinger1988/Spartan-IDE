@@ -838,6 +838,7 @@ export default function DesignScreen({
   const [boxModelVisible, setBoxModelVisible] = useState(false);
   const [copiedInspection, setCopiedInspection] = useState(false);
   const [copiedAccessibility, setCopiedAccessibility] = useState(false);
+  const [copiedHandoff, setCopiedHandoff] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [propKey, setPropKey] = useState("");
   const [propValue, setPropValue] = useState("");
@@ -1892,6 +1893,37 @@ export default function DesignScreen({
     }
   }, [selectedNode, previewInspection, accessibilityFindings]);
 
+  const copyDesignHandoff = useCallback(async () => {
+    if (!selectedNode || !previewInspection) return;
+    const sourceLocation = selectedNode.sourceLocation
+      ? `${activeFile?.path ?? "(unknown file)"}:${selectedNode.sourceLocation.startLine}:${selectedNode.sourceLocation.startColumn}`
+      : activeFile?.path ?? "(unknown file)";
+    const findings = accessibilityFindings.length > 0
+      ? accessibilityFindings.map((finding) => `- ${finding.severity.toUpperCase()}: ${finding.message}`).join("\n")
+      : "- INFO: No audit findings were produced.";
+    const report = [
+      "# Spartan GUI Builder design handoff",
+      `Element: <${selectedNode.tagName}> #${selectedNode.id}`,
+      `Source: ${sourceLocation}`,
+      "",
+      "## JSX source",
+      selectedNode.sourceText ?? "(exact JSX source unavailable)",
+      "",
+      "## Rendered inspection",
+      inspectionCssSnapshot(previewInspection, selectedNode.tagName),
+      "",
+      "## Accessibility audit",
+      findings,
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(report);
+      setCopiedHandoff(true);
+      window.setTimeout(() => setCopiedHandoff(false), 1600);
+    } catch (e) {
+      setError(`Could not copy design handoff: ${(e as Error).message}`);
+    }
+  }, [activeFile?.path, selectedNode, previewInspection, accessibilityFindings]);
+
   const copySelectedJsx = useCallback(async () => {
     if (!selectedNode?.sourceText || !hasSingleSelection) return;
     try {
@@ -2652,6 +2684,9 @@ export default function DesignScreen({
                 </div>
                 <button className="design-secondary-action mono design-inspection-copy" onClick={() => void copyInspection()}>
                   {copiedInspection ? "Copied CSS snapshot" : "Copy CSS snapshot"}
+                </button>
+                <button className="design-secondary-action mono design-inspection-copy" onClick={() => void copyDesignHandoff()}>
+                  {copiedHandoff ? "Copied design handoff" : "Copy design handoff"}
                 </button>
                 <div className="design-preview-status mono" aria-label="Accessibility audit">
                   Accessibility audit
