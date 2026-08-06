@@ -472,6 +472,7 @@ export default function DesignScreen({
   const [assetsOpen, setAssetsOpen] = useState(false);
   const [copiedAsset, setCopiedAsset] = useState<string | null>(null);
   const [tokens, setTokens] = useState<DiscoveredToken[]>([]);
+  const [tokenDrafts, setTokenDrafts] = useState<Record<string, string>>({});
   const [tokensOpen, setTokensOpen] = useState(false);
   const [viewportId, setViewportId] = useState<(typeof DESIGN_VIEWPORTS)[number]["id"]>("desktop");
   const [previewZoom, setPreviewZoom] = useState(75);
@@ -836,6 +837,7 @@ export default function DesignScreen({
         tokens: DiscoveredToken[];
       };
       setTokens(result.tokens);
+      setTokenDrafts(Object.fromEntries(result.tokens.map((token) => [`${token.file}:${token.name}`, token.value])));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -853,6 +855,37 @@ export default function DesignScreen({
       setPropValue(`var(${token.name})`);
     },
     [activeFile, selectedId, editKind, propKey, applyEditObject]
+  );
+
+  const applyTokenDefinition = useCallback(
+    async (token: DiscoveredToken) => {
+      const cssFile = openFiles.find((file) => file.path === token.file);
+      if (!cssFile) {
+        setError("Open the token's CSS file in the Editor before changing its definition.");
+        return;
+      }
+      const draft = tokenDrafts[`${token.file}:${token.name}`] ?? token.value;
+      try {
+        const result = (await window.spartan.call("design_token_apply", {
+          path: token.file,
+          name: token.name,
+          value: draft,
+          source: cssFile.content,
+        })) as { source: string };
+        await window.spartan.call("edit", {
+          doc_id: cssFile.docId,
+          start_char: 0,
+          end_char: [...cssFile.content].length,
+          text: result.source,
+        });
+        onContentChange(cssFile.path, result.source);
+        setTokens((current) => current.map((item) => item.file === token.file && item.name === token.name ? { ...item, value: draft.trim() } : item));
+        if (activeFile) await refresh(activeFile.path, previewSource ?? activeFile.content);
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [openFiles, tokenDrafts, onContentChange, activeFile, previewSource, refresh]
   );
 
   const applyEdit = useCallback(async () => {
@@ -1041,22 +1074,41 @@ export default function DesignScreen({
                 {tokens.length === 0 ? (
                   <div className="design-palette-empty mono">No CSS custom properties found under the project root.</div>
                 ) : (
-                  tokens.map((token, index) => (
-                    <button
-                      key={`${token.file}:${token.name}:${index}`}
-                      className="design-palette-item mono"
-                      disabled={!selectedId || editKind !== "StyleChange" || !propKey.trim()}
-                      title={
-                        selectedId && editKind === "StyleChange" && propKey.trim()
-                          ? `Set ${propKey} to var(${token.name})`
-                          : "Choose Style editing and a property first"
-                      }
-                      onClick={() => applyToken(token)}
-                    >
-                      <span className="design-palette-name">{token.name}</span>
-                      <span className="design-palette-from">{token.value} · {token.relativePath}</span>
-                    </button>
-                  ))
+                  tokens.map((token, index) => {
+                    const tokenKey = `${token.file}:${token.name}`;
+                    const cssOpen = openFiles.some((file) => file.path === token.file);
+                    return (
+                      <div key={`${token.file}:${token.name}:${index}`} className="design-token-row">
+                        <button
+                          className="design-palette-item mono design-token-use"
+                          disabled={!selectedId || editKind !== "StyleChange" || !propKey.trim()}
+                          title={
+                            selectedId && editKind === "StyleChange" && propKey.trim()
+                              ? `Set ${propKey} to var(${token.name})`
+                              : "Choose Style editing and a property first"
+                          }
+                          onClick={() => applyToken(token)}
+                        >
+                          <span className="design-palette-name">{token.name}</span>
+                          <span className="design-palette-from">{token.value} · {token.relativePath}</span>
+                        </button>
+                        <input
+                          className="design-token-value mono"
+                          aria-label={`Value for ${token.name}`}
+                          value={tokenDrafts[tokenKey] ?? token.value}
+                          onChange={(event) => setTokenDrafts((current) => ({ ...current, [tokenKey]: event.target.value }))}
+                        />
+                        <button
+                          className="design-token-save mono"
+                          disabled={!cssOpen}
+                          title={cssOpen ? `Update ${token.name}` : "Open this CSS file in the Editor first"}
+                          onClick={() => void applyTokenDefinition(token)}
+                        >
+                          Save
+                        </button>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             )}

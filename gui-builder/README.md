@@ -33,11 +33,12 @@ summarizes.
 - `src/assets.ts` — real depth-bounded image/font asset discovery with
   project-relative paths and JSX references computed from the open component file.
 - `src/tokens.ts` — real CSS custom-property discovery for applying existing
-  design tokens as `var(--token)` values in inline styles.
+  design tokens as `var(--token)` values in inline styles, plus safe source-
+  preserving value edits.
 - `src/bundle.ts` — real esbuild bundling with `data-spartan-id` annotation and
   sandboxed-preview click/drag relays, including an in-memory source path for
   previews of unsaved editor changes.
-- `src/*.test.ts` — 78 real tests (Node's built-in `node:test` runner, no
+- `src/*.test.ts` — 80 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.

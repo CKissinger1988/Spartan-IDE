@@ -115,4 +115,9 @@ export class GuiBuilderClient {
     const stdout = await runCli(this.cliPath, ["tokens", rootDir]);
     return JSON.parse(stdout);
   }
+
+  async applyTokenValue(path: string, name: string, value: string, source: string): Promise<unknown> {
+    const stdout = await runCli(this.cliPath, ["token-apply", path, name, value], source);
+    return JSON.parse(stdout);
+  }
 }

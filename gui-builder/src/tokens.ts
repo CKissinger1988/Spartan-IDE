@@ -29,6 +29,24 @@ function collectFiles(dir: string, depth: number, out: string[]): void {
 
 function posixPath(value: string): string { return value.split(sep).join("/"); }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Replaces one real custom-property declaration while preserving the rest
+ * of the CSS source exactly. Values cannot contain declaration delimiters in
+ * this v1, preventing an edit from injecting a second property or rule. */
+export function applyTokenValue(source: string, name: string, value: string): string {
+  if (!/^--[a-zA-Z0-9_-]+$/.test(name)) throw new Error(`Invalid CSS custom-property name "${name}".`);
+  const trimmed = value.trim();
+  if (!trimmed || /[;{}]/.test(trimmed)) {
+    throw new Error("Token value must be non-empty and cannot contain ';', '{', or '}'.");
+  }
+  const declaration = new RegExp(`(^|[;{\\s])(${escapeRegExp(name)})\\s*:\\s*([^;{}]+)`, "m");
+  if (!declaration.test(source)) throw new Error(`No declaration for token "${name}" was found.`);
+  return source.replace(declaration, (_match, prefix: string, tokenName: string) => `${prefix}${tokenName}: ${trimmed}`);
+}
+
 /** Finds declarations such as `--color-accent: #e33;` without executing CSS. */
 export function discoverTokens(rootDir: string): DiscoveredToken[] {
   const files: string[] = [];

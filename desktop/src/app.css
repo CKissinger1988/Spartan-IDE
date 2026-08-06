@@ -3458,6 +3458,43 @@
   font-size: 16px;
 }
 
+.design-token-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 86px auto;
+  gap: 4px;
+  align-items: center;
+  padding: 3px 6px;
+}
+
+.design-token-use {
+  min-width: 0;
+}
+
+.design-token-value {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 4px 5px;
+  border: 1px solid var(--border);
+  background: var(--input, #151515);
+  color: var(--text);
+  font: inherit;
+}
+
+.design-token-save {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.design-token-save:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .design-edit-panel .leo-btn {
   margin: 10px 12px 0;
   align-self: flex-start;
