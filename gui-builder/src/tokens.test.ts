@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyTokenValue, defineTokenValue, discoverTokens, discoverTokensInSource } from "./tokens.js";
+import { applyTokenValue, defineTokenValue, discoverTokens, discoverTokensInSource, removeTokenValue } from "./tokens.js";
 
 test("discovers real CSS custom properties and preserves their source values", () => {
   const root = mkdtempSync(join(tmpdir(), "spartan-tokens-"));
@@ -67,4 +67,14 @@ test("defines existing tokens through the same safe update path", () => {
   assert.equal(defineTokenValue(":root { --x: red; }", "--x", "blue"), ":root { --x: blue; }");
   assert.throws(() => defineTokenValue(":root {}", "x", "red"), /Invalid CSS/);
   assert.throws(() => defineTokenValue(":root {}", "--x", "red; --bad: blue"), /cannot contain/);
+});
+
+test("removes one token declaration while preserving neighboring CSS", () => {
+  const source = ":root {\n  --brand: #d33;\n  --gap: 8px;\n}\n.button { color: var(--brand); }\n";
+  const result = removeTokenValue(source, "--brand");
+  assert.doesNotMatch(result, /--brand: #d33/);
+  assert.match(result, /--gap: 8px;/);
+  assert.match(result, /color: var\(--brand\)/);
+  assert.throws(() => removeTokenValue(source, "--missing"), /No declaration/);
+  assert.throws(() => removeTokenValue(source, "brand"), /Invalid CSS/);
 });

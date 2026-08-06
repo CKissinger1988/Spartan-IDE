@@ -3692,7 +3692,7 @@
 
 .design-token-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 86px auto auto;
+  grid-template-columns: minmax(0, 1fr) 86px auto auto auto;
   gap: 4px;
   align-items: center;
   padding: 3px 6px;
@@ -3744,6 +3744,10 @@
 .design-token-save:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+.design-token-remove {
+  color: var(--danger, #d47777);
 }
 
 .design-edit-panel .leo-btn {

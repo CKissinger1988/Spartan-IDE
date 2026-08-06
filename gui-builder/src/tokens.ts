@@ -33,8 +33,12 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function validateToken(name: string, value: string): string {
+function validateTokenName(name: string): void {
   if (!/^--[a-zA-Z0-9_-]+$/.test(name)) throw new Error(`Invalid CSS custom-property name "${name}".`);
+}
+
+function validateToken(name: string, value: string): string {
+  validateTokenName(name);
   const trimmed = value.trim();
   if (!trimmed || /[;{}]/.test(trimmed)) {
     throw new Error("Token value must be non-empty and cannot contain ';', '{', or '}'.");
@@ -50,6 +54,15 @@ export function applyTokenValue(source: string, name: string, value: string): st
   const declaration = new RegExp(`(^|[;{\\s])(${escapeRegExp(name)})\\s*:\\s*([^;{}]+)`, "m");
   if (!declaration.test(source)) throw new Error(`No declaration for token "${name}" was found.`);
   return source.replace(declaration, (_match, prefix: string, tokenName: string) => `${prefix}${tokenName}: ${trimmed}`);
+}
+
+/** Removes one custom-property declaration while leaving surrounding CSS
+ * source and neighboring declarations intact. */
+export function removeTokenValue(source: string, name: string): string {
+  validateTokenName(name);
+  const declaration = new RegExp(`(^|[;{\\s])${escapeRegExp(name)}\\s*:\\s*[^;{}]+;?`, "m");
+  if (!declaration.test(source)) throw new Error(`No declaration for token "${name}" was found.`);
+  return source.replace(declaration, (_match, prefix: string) => prefix);
 }
 
 /** Creates a custom-property declaration in `:root`, or updates it when it

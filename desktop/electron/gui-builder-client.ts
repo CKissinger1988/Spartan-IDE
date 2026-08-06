@@ -130,4 +130,9 @@ export class GuiBuilderClient {
     const stdout = await runCli(this.cliPath, ["token-define", path, name, value], source);
     return JSON.parse(stdout);
   }
+
+  async removeTokenValue(path: string, name: string, source: string): Promise<unknown> {
+    const stdout = await runCli(this.cliPath, ["token-remove", path, name], source);
+    return JSON.parse(stdout);
+  }
 }

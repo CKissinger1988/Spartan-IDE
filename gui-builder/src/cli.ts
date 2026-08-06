@@ -42,7 +42,7 @@ import { bundleComponent } from "./bundle.js";
 import { bundleComponentSource } from "./bundle.js";
 import { discoverComponents } from "./components.js";
 import { discoverAssets } from "./assets.js";
-import { applyTokenValue, defineTokenValue, discoverTokens, discoverTokensInSource } from "./tokens.js";
+import { applyTokenValue, defineTokenValue, discoverTokens, discoverTokensInSource, removeTokenValue } from "./tokens.js";
 import type { CanvasEdit } from "./types.js";
 
 function fail(message: string): never {
@@ -196,6 +196,15 @@ function runTokenDefine(path: string | undefined, name: string | undefined, valu
   }
 }
 
+function runTokenRemove(path: string | undefined, name: string | undefined): void {
+  if (!path || !name) fail("usage: cli.js token-remove <css-file> <token-name> (source read from stdin)");
+  try {
+    process.stdout.write(JSON.stringify({ source: removeTokenValue(readStdin(), name) }));
+  } catch (e) {
+    fail(`failed to remove token: ${(e as Error).message}`);
+  }
+}
+
 async function main(): Promise<void> {
   const mode = process.argv[2];
   if (mode === "apply") {
@@ -218,6 +227,8 @@ async function main(): Promise<void> {
     runTokenApply(process.argv[3], process.argv[4], process.argv[5]);
   } else if (mode === "token-define") {
     runTokenDefine(process.argv[3], process.argv[4], process.argv[5]);
+  } else if (mode === "token-remove") {
+    runTokenRemove(process.argv[3], process.argv[4]);
   } else {
     runParse(mode);
   }

@@ -1819,6 +1819,42 @@ export default function DesignScreen({
     [openFiles, tokenDrafts, onContentChange, activeFile, previewSource, refresh]
   );
 
+  const removeTokenDefinition = useCallback(
+    async (token: DiscoveredToken) => {
+      const cssFile = openFiles.find((file) => file.path === token.file);
+      if (!cssFile) {
+        setError("Open the token's CSS file in the Editor before removing its definition.");
+        return;
+      }
+      if (!window.confirm(`Remove ${token.name} from ${token.relativePath}? References to it will remain unchanged.`)) return;
+      try {
+        const result = (await window.spartan.call("design_token_remove", {
+          path: token.file,
+          name: token.name,
+          source: cssFile.content,
+        })) as { source: string };
+        await window.spartan.call("edit", {
+          doc_id: cssFile.docId,
+          start_char: 0,
+          end_char: [...cssFile.content].length,
+          text: result.source,
+        });
+        onContentChange(cssFile.path, result.source);
+        const tokenKey = `${token.file}:${token.name}`;
+        setTokens((current) => current.filter((item) => `${item.file}:${item.name}` !== tokenKey));
+        setTokenDrafts((current) => {
+          const next = { ...current };
+          delete next[tokenKey];
+          return next;
+        });
+        if (activeFile) await refresh(activeFile.path, previewSource ?? activeFile.content);
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [openFiles, onContentChange, activeFile, previewSource, refresh]
+  );
+
   const defineToken = useCallback(async () => {
     const name = newTokenName.trim();
     const value = newTokenValue.trim();
@@ -2311,6 +2347,14 @@ export default function DesignScreen({
                           onClick={() => void copyTokenReference(token)}
                         >
                           {copiedToken === tokenKey ? "Copied" : "Copy"}
+                        </button>
+                        <button
+                          className="design-token-save mono design-token-remove"
+                          disabled={!cssOpen}
+                          title={cssOpen ? `Remove ${token.name}` : "Open this CSS file in the Editor first"}
+                          onClick={() => void removeTokenDefinition(token)}
+                        >
+                          Delete
                         </button>
                       </div>
                     );
