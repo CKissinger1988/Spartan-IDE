@@ -194,6 +194,19 @@ function parseInsertProps(input: string): Record<string, string> {
   return props;
 }
 
+function cssPropertyName(name: string): string {
+  return name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+}
+
+function inspectionCssSnapshot(inspection: PreviewInspection, tagName: string): string {
+  const lines = Object.entries(inspection.styles)
+    .filter(([, value]) => value)
+    .map(([name, value]) => `  ${cssPropertyName(name)}: ${value};`);
+  lines.push(`  width: ${Math.round(inspection.rect.width)}px;`);
+  lines.push(`  height: ${Math.round(inspection.rect.height)}px;`);
+  return `/* Rendered <${tagName}> ${inspection.nodeId} snapshot */\n${tagName} {\n${lines.join("\n")}\n}`;
+}
+
 /** What kind of real input widget a curated style property deserves.
  * `text` is the honest fallback for anything whose real value space is
  * too open to constrain (a shadow, a transform, a font stack). */
@@ -582,6 +595,7 @@ export default function DesignScreen({
   const [variantPresets, setVariantPresets] = useState<VariantPreset[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [previewInspection, setPreviewInspection] = useState<PreviewInspection | null>(null);
+  const [copiedInspection, setCopiedInspection] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [propKey, setPropKey] = useState("");
   const [propValue, setPropValue] = useState("");
@@ -1039,6 +1053,17 @@ export default function DesignScreen({
     }
   }, []);
 
+  const copyInspection = useCallback(async () => {
+    if (!previewInspection || !selectedNode) return;
+    try {
+      await navigator.clipboard.writeText(inspectionCssSnapshot(previewInspection, selectedNode.tagName));
+      setCopiedInspection(true);
+      window.setTimeout(() => setCopiedInspection(false), 1600);
+    } catch (e) {
+      setError(`Could not copy rendered style snapshot: ${(e as Error).message}`);
+    }
+  }, [previewInspection, selectedNode]);
+
   const toggleTokens = useCallback(async () => {
     if (tokensOpen) {
       setTokensOpen(false);
@@ -1388,9 +1413,14 @@ export default function DesignScreen({
                   <span>display</span><strong>{previewInspection.styles.display}</strong>
                   <span>position</span><strong>{previewInspection.styles.position}</strong>
                   <span>font</span><strong>{previewInspection.styles.fontSize}</strong>
+                  <span>color</span><strong>{previewInspection.styles.color}</strong>
+                  <span>background</span><strong>{previewInspection.styles.backgroundColor}</strong>
                   <span>padding</span><strong>{previewInspection.styles.padding}</strong>
                   <span>margin</span><strong>{previewInspection.styles.margin}</strong>
                 </div>
+                <button className="design-secondary-action mono design-inspection-copy" onClick={() => void copyInspection()}>
+                  {copiedInspection ? "Copied CSS snapshot" : "Copy CSS snapshot"}
+                </button>
               </div>
             )}
             <button className="design-danger-action mono" onClick={deleteSelected}>
