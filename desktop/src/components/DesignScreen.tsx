@@ -896,6 +896,33 @@ export default function DesignScreen({
     await applyEditObject({ kind: "Duplicate", nodeId: selectedId });
   }, [activeFile, selectedId, hasSingleSelection, applyEditObject]);
 
+  // Keep common canvas shortcuts scoped to the Design screen and out of the
+  // inspector's own inputs. Escape clears any selection; Delete/Backspace and
+  // Ctrl/Cmd+D reuse the already-confirmed structural commands, so keyboard
+  // and pointer actions have exactly the same AST/undo behavior.
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable=\"true\"]")) return;
+      if (event.key === "Escape" && selectionCount > 0) {
+        event.preventDefault();
+        setSelectedIds([]);
+        return;
+      }
+      if ((event.key === "Delete" || event.key === "Backspace") && hasSingleSelection) {
+        event.preventDefault();
+        void deleteSelected();
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d" && hasSingleSelection) {
+        event.preventDefault();
+        void duplicateSelected();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [selectionCount, hasSingleSelection, deleteSelected, duplicateSelected]);
+
   useEffect(() => {
     setSelectedId(null);
     setSelectedIds([]);

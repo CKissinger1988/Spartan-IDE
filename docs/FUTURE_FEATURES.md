@@ -210,6 +210,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Synchronized tree/canvas selection highlight across preview reloads | Real |
 | Shift-click multi-selection with synchronized multi-node canvas highlights | Real |
 | Batch prop/style changes across selected nodes with structural-edit safety gates | Real |
+| Keyboard canvas shortcuts (Escape clear, Delete remove, Ctrl/Cmd+D duplicate) | Real |
 | Collapsible structure-tree navigation with accessible expand state | Real |
 | Searchable structure-tree filtering with ancestor preservation | Real |
 | Guided layout, positioning, grid, overflow, and visual-effects style controls | Real |
