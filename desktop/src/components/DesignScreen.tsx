@@ -9,6 +9,8 @@ import { buildPreviewDocument } from "../../../gui-builder/src/preview";
 import { LAYOUT_PRESETS } from "../../../gui-builder/src/layout";
 import { buildThemeOverride } from "../../../gui-builder/src/theme";
 import { buildTokenReference } from "../../../gui-builder/src/token-reference";
+import { buildPreviewBreakpoints, normalizeResponsiveBreakpoints } from "../../../gui-builder/src/breakpoints";
+import type { ResponsiveBreakpoint } from "../../../gui-builder/src/breakpoints";
 import type { ComponentPropDefinition } from "../../../gui-builder/src/scaffold";
 
 interface StyleEntryValue {
@@ -956,12 +958,15 @@ export default function DesignScreen({
   const [customViewportHeight, setCustomViewportHeight] = useState(768);
   const [viewportPresetName, setViewportPresetName] = useState("");
   const [viewportPresets, setViewportPresets] = useState<ViewportPreset[]>([]);
+  const [breakpointName, setBreakpointName] = useState("");
+  const [breakpoints, setBreakpoints] = useState<ResponsiveBreakpoint[]>([]);
   const [previewZoom, setPreviewZoom] = useState(75);
   const [previewMatrix, setPreviewMatrix] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const previewMatrixRefs = useRef<Record<string, HTMLIFrameElement | null>>({});
   const refreshGenerationRef = useRef(0);
   const viewportStorageKey = projectRoot ? `spartan.gui-builder.viewports:${projectRoot}` : null;
+  const breakpointStorageKey = projectRoot ? `spartan.gui-builder.breakpoints:${projectRoot}` : null;
   const themeStorageKey = projectRoot ? `spartan.gui-builder.themes:${projectRoot}` : null;
   const baseViewport = DESIGN_VIEWPORTS.find((item) => item.id === viewportId) ?? DESIGN_VIEWPORTS[0];
   const viewport = viewportId === "custom"
@@ -976,6 +981,10 @@ export default function DesignScreen({
         height: swap ? baseViewport.width : baseViewport.height,
       };
     })();
+  const previewMatrixViewports = useMemo(
+    () => buildPreviewBreakpoints(DESIGN_VIEWPORTS, breakpoints),
+    [breakpoints],
+  );
 
   const postPreviewMessage = useCallback((message: Record<string, unknown>) => {
     const frames = [iframeRef.current, ...Object.values(previewMatrixRefs.current)];
@@ -1035,6 +1044,38 @@ export default function DesignScreen({
       setError(`Could not delete viewport preset: ${(e as Error).message}`);
     }
   }, [viewportStorageKey, viewportPresets]);
+
+  const saveBreakpoint = useCallback(() => {
+    if (!breakpointStorageKey || !breakpointName.trim()) return;
+    const next = normalizeResponsiveBreakpoints([
+      { name: breakpointName, width: viewport.width, height: viewport.height },
+      ...breakpoints,
+    ]);
+    setBreakpoints(next);
+    setBreakpointName("");
+    try {
+      window.localStorage.setItem(breakpointStorageKey, JSON.stringify(next));
+    } catch (e) {
+      setError(`Could not save responsive breakpoint: ${(e as Error).message}`);
+    }
+  }, [breakpointStorageKey, breakpointName, viewport.width, viewport.height, breakpoints]);
+
+  const applyBreakpoint = useCallback((breakpoint: ResponsiveBreakpoint) => {
+    setViewportId("custom");
+    setCustomViewportWidth(breakpoint.width);
+    setCustomViewportHeight(breakpoint.height);
+  }, []);
+
+  const deleteBreakpoint = useCallback((name: string) => {
+    if (!breakpointStorageKey) return;
+    const next = breakpoints.filter((breakpoint) => breakpoint.name !== name);
+    setBreakpoints(next);
+    try {
+      window.localStorage.setItem(breakpointStorageKey, JSON.stringify(next));
+    } catch (e) {
+      setError(`Could not delete responsive breakpoint: ${(e as Error).message}`);
+    }
+  }, [breakpointStorageKey, breakpoints]);
   const selectionCount = selectedIds.length;
   const hasSingleSelection = selectionCount === 1;
   const selectedSibling = selectedId && hasSingleSelection ? findParentEntry(roots, selectedId) : null;
@@ -1618,6 +1659,18 @@ export default function DesignScreen({
       setViewportPresets([]);
     }
   }, [viewportStorageKey]);
+
+  useEffect(() => {
+    if (!breakpointStorageKey) {
+      setBreakpoints([]);
+      return;
+    }
+    try {
+      setBreakpoints(normalizeResponsiveBreakpoints(JSON.parse(window.localStorage.getItem(breakpointStorageKey) ?? "[]")));
+    } catch {
+      setBreakpoints([]);
+    }
+  }, [breakpointStorageKey]);
 
   useEffect(() => {
     if (!themeStorageKey) {
@@ -2666,15 +2719,53 @@ export default function DesignScreen({
               ))}
             </span>
           )}
+          <span className="design-custom-viewport" aria-label="Responsive breakpoint manager">
+            <input
+              className="design-input mono"
+              aria-label="Responsive breakpoint name"
+              placeholder="save breakpoint…"
+              value={breakpointName}
+              onChange={(event) => setBreakpointName(event.target.value)}
+            />
+            <button
+              className="design-secondary-action mono"
+              disabled={!breakpointName.trim() || !breakpointStorageKey}
+              title={`Save the current ${viewport.width}×${viewport.height} viewport as a project breakpoint`}
+              onClick={saveBreakpoint}
+            >
+              Save breakpoint
+            </button>
+          </span>
+          {breakpoints.length > 0 && (
+            <span className="design-custom-viewport">
+              <select
+                className="design-input mono"
+                aria-label="Saved responsive breakpoints"
+                value=""
+                onChange={(event) => {
+                  const breakpoint = breakpoints.find((item) => item.name === event.target.value);
+                  if (breakpoint) applyBreakpoint(breakpoint);
+                }}
+              >
+                <option value="">Saved breakpoints…</option>
+                {breakpoints.map((breakpoint) => <option key={breakpoint.name} value={breakpoint.name}>{breakpoint.name} · {breakpoint.width}×{breakpoint.height}</option>)}
+              </select>
+              {breakpoints.map((breakpoint) => (
+                <button key={`delete-breakpoint-${breakpoint.name}`} className="design-asset-action mono" title={`Delete responsive breakpoint ${breakpoint.name}`} onClick={() => deleteBreakpoint(breakpoint.name)}>
+                  ×
+                </button>
+              ))}
+            </span>
+          )}
           <label>
             Zoom {previewZoom}%
             <input type="range" min={25} max={100} step={5} value={previewZoom} disabled={previewMatrix} onChange={(event) => setPreviewZoom(Number(event.target.value))} />
           </label>
-          <span>{previewMatrix ? "1280×800 · 768×1024 · 390×844" : `${viewport.width} × ${viewport.height}`}</span>
+          <span>{previewMatrix ? `${previewMatrixViewports.length} responsive breakpoints` : `${viewport.width} × ${viewport.height}`}</span>
           <button
             className={`design-toolbar-button mono${previewMatrix ? " active" : ""}`}
             aria-pressed={previewMatrix}
-            title="Compare the standard Desktop, Tablet, and Mobile breakpoints"
+            title="Compare the built-in and project-saved responsive breakpoints"
             onClick={() => setPreviewMatrix((open) => !open)}
           >
             {previewMatrix ? "Single viewport" : "Compare viewports"}
@@ -2691,7 +2782,7 @@ export default function DesignScreen({
         {bundleCode ? (
           previewMatrix ? (
             <div className="design-preview-stage design-preview-matrix" aria-label="Responsive viewport comparison">
-              {DESIGN_VIEWPORTS.map((item) => {
+              {previewMatrixViewports.map((item) => {
                 const matrixScale = Math.min(0.32, Math.max(0.2, (window.innerWidth - 620) / 3 / item.width));
                 return (
                   <div className="design-preview-tile" key={item.id}>

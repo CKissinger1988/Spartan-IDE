@@ -214,6 +214,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Safe CSS token definition removal with reference-preserving behavior | Real |
 | Custom responsive viewport width/height controls | Real |
 | Project-scoped named viewport presets with persistence and deletion | Real |
+| Project-scoped named responsive breakpoints included in the comparison matrix | Real |
 | Parsed JSX/JavaScript expression prop editing | Real |
 | JSX prop removal | Real |
 | Inline style-property removal with safe empty-style cleanup | Real |
