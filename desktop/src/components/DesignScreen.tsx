@@ -163,6 +163,7 @@ const DESIGN_VIEWPORTS = [
   { id: "mobile", label: "Mobile", width: 390, height: 844 },
 ] as const;
 type DesignViewportId = (typeof DESIGN_VIEWPORTS)[number]["id"] | "custom";
+type DesignOrientation = "auto" | "portrait" | "landscape";
 type ComponentInsertPlacement = "child" | "sibling";
 
 interface ViewportPreset {
@@ -872,6 +873,7 @@ export default function DesignScreen({
   const [newTokenValue, setNewTokenValue] = useState("");
   const [newTokenFile, setNewTokenFile] = useState("");
   const [viewportId, setViewportId] = useState<DesignViewportId>("desktop");
+  const [viewportOrientation, setViewportOrientation] = useState<DesignOrientation>("auto");
   const [customViewportWidth, setCustomViewportWidth] = useState(1024);
   const [customViewportHeight, setCustomViewportHeight] = useState(768);
   const [viewportPresetName, setViewportPresetName] = useState("");
@@ -880,9 +882,19 @@ export default function DesignScreen({
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const refreshGenerationRef = useRef(0);
   const viewportStorageKey = projectRoot ? `spartan.gui-builder.viewports:${projectRoot}` : null;
+  const baseViewport = DESIGN_VIEWPORTS.find((item) => item.id === viewportId) ?? DESIGN_VIEWPORTS[0];
   const viewport = viewportId === "custom"
     ? { id: "custom", label: "Custom", width: customViewportWidth, height: customViewportHeight }
-    : DESIGN_VIEWPORTS.find((item) => item.id === viewportId) ?? DESIGN_VIEWPORTS[0];
+    : (() => {
+      const wantsLandscape = viewportOrientation === "landscape";
+      const isLandscape = baseViewport.width >= baseViewport.height;
+      const swap = viewportOrientation !== "auto" && wantsLandscape !== isLandscape;
+      return {
+        ...baseViewport,
+        width: swap ? baseViewport.height : baseViewport.width,
+        height: swap ? baseViewport.width : baseViewport.height,
+      };
+    })();
 
   // Declared up here, not down beside the other render-time derivations,
   // because `selectStyleProperty`'s own `useCallback` dependency array
@@ -2291,6 +2303,19 @@ export default function DesignScreen({
             <select value={viewportId} onChange={(event) => setViewportId(event.target.value as typeof viewportId)}>
               {DESIGN_VIEWPORTS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
               <option value="custom">Custom</option>
+            </select>
+          </label>
+          <label>
+            Orientation
+            <select
+              aria-label="Preview orientation"
+              value={viewportOrientation}
+              disabled={viewportId === "custom"}
+              onChange={(event) => setViewportOrientation(event.target.value as DesignOrientation)}
+            >
+              <option value="auto">Auto</option>
+              <option value="portrait">Portrait</option>
+              <option value="landscape">Landscape</option>
             </select>
           </label>
           {viewportId === "custom" && (

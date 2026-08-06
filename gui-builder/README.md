@@ -64,11 +64,12 @@ summarizes.
   bundle after a debounced edit or a real Canvas → Code edit, using the current
   in-memory source for correctness. A future incremental preview can add HMR
   after measuring rebuild cost.
-- **No font manager or code-authored component state machine runtime yet.** Font assets can
-  be discovered and copied, and CSS token definitions can be edited from the
-  desktop suite; the desktop now provides reusable per-file interaction-state
-  presets for the live preview, while code-authored state-machine generation
-  remains future work.
+- **No full font manager or code-authored component state machine runtime yet.** Font assets can
+  be discovered, applied to selected elements, and added to an open stylesheet
+  with a generated `@font-face` declaration; CSS token definitions can be
+  edited from the desktop suite. The desktop also provides reusable per-file
+  interaction-state presets for the live preview, while code-authored
+  state-machine generation remains future work.
 - **`PropChange` supports string, number, boolean, and parsed expression
   values.** Expressions are parsed as JavaScript/JSX and never injected as
   raw source fragments.

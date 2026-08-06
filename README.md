@@ -269,6 +269,7 @@ touching security, sandboxing, or approval flows (§9, §36).
 - GUI Builder preview variants support versioned system-clipboard export/import with a session-local fallback when clipboard permissions are unavailable.
 - GUI Builder live inspection also reports viewport-relative selected-element bounds in the inspector and copied CSS/accessibility handoff data.
 - GUI Builder can copy a combined selected-element design handoff containing source JSX, source location, rendered styles/bounds, and accessibility findings.
+- GUI Builder viewport presets support Auto, Portrait, and Landscape orientation switching; custom viewports retain their explicit width and height.
 - GUI Builder font assets can apply their derived family name to one or many selected elements while retaining the copyable `@font-face` snippet action.
 - GUI Builder can also add a stylesheet-relative `@font-face` declaration to a selected open CSS buffer, with duplicate protection and editor undo history.
 - The GUI Builder also supports batch direct-text replacement across selected elements, with ambiguous mixed text/expression fragments rejected atomically.
