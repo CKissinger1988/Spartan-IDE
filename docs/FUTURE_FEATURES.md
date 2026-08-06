@@ -215,6 +215,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Selected-element rendered geometry and computed-style inspection | Real |
 | Copyable rendered CSS snapshots from the selected preview element | Real |
 | Focus-state preview controls for authored `:focus` styles | Real |
+| Source-location reveal from selected Design nodes into the Editor | Real |
 | Configurable string props and initial text for inserted elements | Real |
 | Desktop/Tablet/Mobile viewport presets and zoom | Real |
 | Reusable component state machines and interaction-state controls | Planned |

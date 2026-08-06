@@ -8,7 +8,7 @@
  * drift apart from each other by construction, not by coincidence between
  * two separately-written traversals.
  */
-import type { ComponentNode, PropSummary, StyleEntryValue } from "./types.js";
+import type { ComponentNode, PropSummary, SourceLocation, StyleEntryValue } from "./types.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyNode = any;
@@ -123,6 +123,17 @@ function textContentOf(node: AnyNode): string | null {
   return parts.length > 0 ? parts.join(" ") : null;
 }
 
+function sourceLocationOf(node: AnyNode): SourceLocation | undefined {
+  const loc = node.loc;
+  if (!loc?.start || !loc?.end) return undefined;
+  return {
+    startLine: loc.start.line,
+    startColumn: loc.start.column,
+    endLine: loc.end.line,
+    endColumn: loc.end.column,
+  };
+}
+
 function walk(
   node: AnyNode,
   ctx: { source: string; counter: { next: number }; nodesById: Map<string, AnyNode>; parentOf: Map<string, AnyNode | null> },
@@ -154,6 +165,7 @@ function walk(
       {
         id,
         tagName: tagNameOf(node),
+        sourceLocation: sourceLocationOf(node),
         props: propsOf(ctx.source, node),
         children,
         textContent: textContentOf(node),

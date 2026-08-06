@@ -45,6 +45,10 @@ export interface ComponentNode {
    * doc comment for the real, named limitation this implies. */
   id: string;
   tagName: string;
+  /** 1-based source lines and 0-based columns from Babel's real AST
+   * location metadata. Optional only for parser nodes that genuinely lack
+   * location data (for example a synthetic AST supplied by a caller). */
+  sourceLocation?: SourceLocation;
   props: Record<string, PropSummary>;
   children: ComponentNode[];
   /** Direct text children only, concatenated; `null` if this element has
@@ -53,6 +57,13 @@ export interface ComponentNode {
    * element children (`<p>Hello <b>world</b></p>`) is not reconstructed
    * as a single ordered sequence in this v1 tree. */
   textContent: string | null;
+}
+
+export interface SourceLocation {
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
 }
 
 export type CanvasEdit =

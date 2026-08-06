@@ -15,6 +15,12 @@ type PropSummary =
 interface ComponentNode {
   id: string;
   tagName: string;
+  sourceLocation?: {
+    startLine: number;
+    startColumn: number;
+    endLine: number;
+    endColumn: number;
+  };
   props: Record<string, PropSummary>;
   children: ComponentNode[];
   textContent: string | null;
@@ -62,6 +68,7 @@ interface DesignScreenProps {
   activeFile: OpenFile | null;
   openFiles: OpenFile[];
   onOpenFile: (path: string) => void;
+  onRevealSource: (path: string, line: number, character: number) => void;
   onContentChange: (path: string, content: string, saved?: boolean) => void;
   /** Real project root, used to scan for the component palette. Absent
    * means the palette simply isn't offered -- there's nothing honest to
@@ -584,6 +591,7 @@ export default function DesignScreen({
   activeFile,
   openFiles,
   onOpenFile,
+  onRevealSource,
   onContentChange,
   projectRoot,
 }: DesignScreenProps): React.ReactElement {
@@ -1413,6 +1421,15 @@ export default function DesignScreen({
             <div className="design-selected mono">
               &lt;{selectedNode.tagName}&gt; #{selectedNode.id}
             </div>
+            {selectedNode.sourceLocation && (
+              <button
+                className="design-secondary-action mono design-reveal-source"
+                title="Open the source location in Editor"
+                onClick={() => onRevealSource(activeFile.path, selectedNode.sourceLocation!.startLine, selectedNode.sourceLocation!.startColumn)}
+              >
+                Reveal in Editor · line {selectedNode.sourceLocation.startLine}
+              </button>
+            )}
             {previewInspection?.nodeId === selectedNode.id && (
               <div className="design-inspection mono" aria-label="Rendered element inspection">
                 <div className="design-inspection-title">Rendered preview</div>

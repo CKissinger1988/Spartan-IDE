@@ -499,6 +499,11 @@ export default function App(): React.ReactElement {
     [openFile]
   );
 
+  const handleRevealDesignSource = useCallback((path: string, line: number, character: number) => {
+    setScreen("editor");
+    setPendingJump({ path, line: Math.max(0, line - 1), character });
+  }, []);
+
   const handleContentChange = useCallback((path: string, content: string, saved = false) => {
     setFiles((prev) =>
       prev.map((f) => (f.path === path ? { ...f, content, dirty: saved ? false : true } : f))
@@ -1048,6 +1053,7 @@ export default function App(): React.ReactElement {
                   activeFile={activeFile}
                   openFiles={files}
                   onOpenFile={openFile}
+                  onRevealSource={handleRevealDesignSource}
                   onContentChange={handleContentChange}
                   projectRoot={ROOT}
                 />

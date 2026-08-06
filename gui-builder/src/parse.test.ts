@@ -14,6 +14,7 @@ test("parses a simple element's tag, string prop, and text content", () => {
   assert.deepEqual(root.props.className, { kind: "string", value: "btn" });
   assert.equal(root.textContent, "Click me");
   assert.equal(root.children.length, 0);
+  assert.deepEqual(root.sourceLocation, { startLine: 1, startColumn: 16, endLine: 1, endColumn: 57 });
 });
 
 test("nests children in document order with distinct, stable ids", () => {
