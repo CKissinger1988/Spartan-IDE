@@ -8,7 +8,7 @@
  * real JS/JSX AST work actually happens, per §6.1's own "lightweight
  * dev-server bridge" description).
  *
- * All twenty members of the full spec's `CanvasEdit` union are now real and
+ * All twenty-one members of the full spec's `CanvasEdit` union are now real and
  * implemented by `applyCanvasEdit`: `StyleChange`/`PropChange` (original
  * v1), and `Reparent`/`ComponentInsert` (closing the gap this file's own
  * doc comment used to name as unattempted -- see edit.ts's doc comment
@@ -161,5 +161,23 @@ export type CanvasEdit =
       importFrom?: string;
       /** Whether `tagName` is that module's default export -- decides
        * `import Card from "..."` vs. `import { Card } from "..."`. */
+      importIsDefault?: boolean;
+    }
+  /** Inserts one identical component into every selected element, either as
+   * a child or immediately after each selected direct child. The operation
+   * validates every target before mutating the AST, so a stale or invalid
+   * multi-selection cannot leave a partial result. */
+  | {
+      kind: "ComponentInsertMany";
+      nodeIds: string[];
+      placement: "child" | "sibling";
+      tagName: string;
+      props?: Record<string, string>;
+      propValues?: Record<string, {
+        value: string;
+        valueType: "number" | "boolean" | "expression";
+      }>;
+      childrenText?: string;
+      importFrom?: string;
       importIsDefault?: boolean;
     };

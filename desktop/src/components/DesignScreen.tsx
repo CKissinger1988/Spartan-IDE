@@ -1405,20 +1405,26 @@ export default function DesignScreen({
 
   /** Inserts a discovered component at the palette's selected child/sibling
    * placement, carrying its import along when it lives in another file -- the whole
-   * carrying its import along when it lives in another file -- the whole
    * point of a component browser over the plain tag-name field, which
    * could only ever produce an undefined binding for a cross-file
    * component. */
   const insertComponent = useCallback(
     async (component: DiscoveredComponent) => {
-      if (!activeFile || !selectedId || !hasSingleSelection) return;
-      const sibling = paletteInsertPlacement === "sibling" ? findParentEntry(roots, selectedId) : null;
-      if (paletteInsertPlacement === "sibling" && !sibling) return;
-      const edit: Record<string, unknown> = {
-        kind: "ComponentInsert",
-        parentId: sibling?.parent.id ?? selectedId,
-        tagName: component.name,
-      };
+      if (!activeFile || !selectedId || selectedIds.length === 0) return;
+      const edit: Record<string, unknown> = selectedIds.length === 1
+        ? {
+            kind: "ComponentInsert",
+            parentId: paletteInsertPlacement === "child" ? selectedId : findParentEntry(roots, selectedId)?.parent.id,
+            tagName: component.name,
+          }
+        : {
+            kind: "ComponentInsertMany",
+            nodeIds: selectedIds,
+            placement: paletteInsertPlacement,
+            tagName: component.name,
+          };
+      const sibling = paletteInsertPlacement === "sibling" && selectedIds.length === 1 ? findParentEntry(roots, selectedId) : null;
+      if (paletteInsertPlacement === "sibling" && selectedIds.length === 1 && !sibling) return;
       if (sibling) edit.index = sibling.index + 1;
       if (component.importFrom) {
         edit.importFrom = component.importFrom;
@@ -1426,7 +1432,7 @@ export default function DesignScreen({
       }
       await applyEditObject(edit);
     },
-    [activeFile, selectedId, hasSingleSelection, paletteInsertPlacement, roots, applyEditObject]
+    [activeFile, selectedId, selectedIds, paletteInsertPlacement, roots, applyEditObject]
   );
 
   const toggleAssets = useCallback(async () => {
@@ -1841,13 +1847,13 @@ export default function DesignScreen({
                     <button
                       key={`${c.file}:${c.name}`}
                       className="design-palette-item mono"
-                      disabled={!selectedId || !hasSingleSelection}
-                      title={
-                        selectedId && hasSingleSelection
-                          ? `Insert <${c.name} /> as a ${paletteInsertPlacement} of the selected element${
+                          disabled={!selectedId || selectedIds.length === 0}
+                          title={
+                        selectedId && selectedIds.length > 0
+                          ? `Insert <${c.name} /> as a ${paletteInsertPlacement} of ${selectedIds.length > 1 ? `${selectedIds.length} selected elements` : "the selected element"}${
                               c.importFrom ? ` and import it from "${c.importFrom}"` : ""
                             }`
-                          : "Select an element in the tree first"
+                          : "Select one or more elements in the tree first"
                       }
                       onClick={() => insertComponent(c)}
                     >

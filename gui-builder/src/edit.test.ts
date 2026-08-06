@@ -584,6 +584,44 @@ test("ComponentInsert refuses duplicate string and typed prop values", () => {
   );
 });
 
+test("ComponentInsertMany adds one component to every selected child target atomically", () => {
+  const source = `const X = () => <main><section /><article /></main>;`;
+  const result = applyCanvasEdit(source, {
+    kind: "ComponentInsertMany",
+    nodeIds: ["n1", "n2"],
+    placement: "child",
+    tagName: "Badge",
+    props: { tone: "info" },
+  });
+  const roots = parseComponent(result);
+  assert.equal(roots[0].children[0].children[0].tagName, "Badge");
+  assert.equal(roots[0].children[1].children[0].tagName, "Badge");
+  assert.equal(roots[0].children[1].children[0].props.tone?.kind, "string");
+});
+
+test("ComponentInsertMany inserts siblings after selected nodes in stable order", () => {
+  const source = `const X = () => <main><a /><b /><c /></main>;`;
+  const result = applyCanvasEdit(source, {
+    kind: "ComponentInsertMany",
+    nodeIds: ["n1", "n3"],
+    placement: "sibling",
+    tagName: "Marker",
+  });
+  assert.deepEqual(parseComponent(result)[0].children.map((node) => node.tagName), ["a", "Marker", "b", "c", "Marker"]);
+});
+
+test("ComponentInsertMany rejects a root sibling target before mutating any target", () => {
+  assert.throws(
+    () => applyCanvasEdit(`const A = () => <main />; const B = () => <aside />;`, {
+      kind: "ComponentInsertMany",
+      nodeIds: ["n0", "n1"],
+      placement: "sibling",
+      tagName: "Marker",
+    }),
+    /cannot target top-level root/,
+  );
+});
+
 test("ComponentInsert rejects an invalid string prop name", () => {
   assert.throws(
     () => applyCanvasEdit(`const X = () => <main />;`, {

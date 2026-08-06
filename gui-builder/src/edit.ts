@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All twenty members of the `CanvasEdit` union are real and implemented:
+ * All twenty-one members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -676,6 +676,79 @@ function applyComponentInsert(nodesById: Map<string, AnyNode>, edit: Extract<Can
   spliceIn(parent, newElement, edit.index);
 }
 
+function makeInsertedElement(
+  tagName: string,
+  props: Record<string, string> | undefined,
+  propValues: Extract<CanvasEdit, { kind: "ComponentInsert" }>['propValues'],
+  childrenText: string | undefined,
+): AnyNode {
+  if (!isValidJsxTagName(tagName)) {
+    throw new Error(
+      `"${tagName}" is not a supported JSX tag name for ComponentInsertMany -- use dot-separated valid JSX identifiers (for example "Button" or "UI.Button").`,
+    );
+  }
+  const attributes = Object.entries(props ?? {}).map(([name, value]) => {
+    if (!isValidJsxAttributeName(name)) {
+      throw new Error(`"${name}" is not a supported JSX prop name for ComponentInsertMany -- must be a valid identifier.`);
+    }
+    return b.jsxAttribute(b.jsxIdentifier(name), b.stringLiteral(value));
+  });
+  for (const [name, typed] of Object.entries(propValues ?? {})) {
+    if (!isValidJsxAttributeName(name)) {
+      throw new Error(`"${name}" is not a supported JSX prop name for ComponentInsertMany -- must be a valid identifier.`);
+    }
+    if (Object.prototype.hasOwnProperty.call(props ?? {}, name)) {
+      throw new Error(`ComponentInsertMany received duplicate values for prop "${name}".`);
+    }
+    attributes.push(b.jsxAttribute(b.jsxIdentifier(name), b.jsxExpressionContainer(propValueNode(typed.value, typed.valueType))));
+  }
+  const hasText = childrenText !== undefined;
+  const jsxName = jsxTagNameNode(tagName);
+  return b.jsxElement(
+    b.jsxOpeningElement(jsxName, attributes, !hasText),
+    hasText ? b.jsxClosingElement(jsxName) : null,
+    hasText ? [b.jsxText(childrenText ?? "")] : [],
+  );
+}
+
+function applyComponentInsertMany(
+  nodesById: Map<string, AnyNode>,
+  parentOf: Map<string, AnyNode | null>,
+  edit: Extract<CanvasEdit, { kind: "ComponentInsertMany" }>,
+): void {
+  const ids = [...new Set(edit.nodeIds)];
+  if (ids.length === 0) throw new Error("ComponentInsertMany requires at least one selected element.");
+  const targets = ids.map((id) => {
+    const node = nodesById.get(id);
+    if (!node) throw new Error(`No element with id "${id}" found in the current source.`);
+    return { id, node, parent: parentOf.get(id) };
+  });
+  const makeElement = () => makeInsertedElement(edit.tagName, edit.props, edit.propValues, edit.childrenText);
+  if (edit.placement === "child") {
+    for (const target of targets) {
+      ensureOpenForChildren(target.node);
+      (target.node.children as AnyNode[]).push(makeElement());
+    }
+    return;
+  }
+  const placements = targets.map((target) => {
+    if (!target.parent) {
+      throw new Error(`ComponentInsertMany sibling placement cannot target top-level root "${target.id}".`);
+    }
+    const siblings = target.parent.children as AnyNode[];
+    const index = siblings.indexOf(target.node);
+    if (index === -1) throw new Error(`ComponentInsertMany sibling placement requires direct JSX children; "${target.id}" is nested inside an expression.`);
+    return { parent: target.parent, index };
+  });
+  const grouped = new Map<AnyNode, { parent: AnyNode; index: number }[]>();
+  for (const placement of placements) grouped.set(placement.parent, [...(grouped.get(placement.parent) ?? []), placement]);
+  for (const entries of grouped.values()) {
+    for (const placement of entries.sort((a, b) => b.index - a.index)) {
+      (placement.parent.children as AnyNode[]).splice(placement.index + 1, 0, makeElement());
+    }
+  }
+}
+
 /** Parses `source`, locates the element(s) `edit` refers to (using the
  * exact same id-assignment traversal `parseComponent` uses, run fresh
  * against this parse -- see tree.ts), mutates the AST in place, and
@@ -763,6 +836,12 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       // edit if its import comes with it -- otherwise the regenerated
       // source references an undefined binding and the live preview
       // breaks on the very next bundle (task #278).
+      if (edit.importFrom) {
+        ensureImport(ast, edit.tagName.split(".")[0], edit.importFrom, edit.importIsDefault ?? false);
+      }
+      break;
+    case "ComponentInsertMany":
+      applyComponentInsertMany(nodesById, parentOf, edit);
       if (edit.importFrom) {
         ensureImport(ast, edit.tagName.split(".")[0], edit.importFrom, edit.importIsDefault ?? false);
       }

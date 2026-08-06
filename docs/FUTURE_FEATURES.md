@@ -224,6 +224,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Component insertion as a sibling after the selected node | Real |
 | Component insertion with dot-separated JSX member-expression tags and root-binding imports | Real |
 | Typed prop values for inserted components (number, boolean, and parsed expression) | Real |
+| Atomic component-palette insertion across multi-selection (child or sibling placement) | Real |
 | Component palette child/sibling placement control | Real |
 | Searchable component palette by name or source path | Real |
 | Searchable image/font asset palette by label or project path | Real |
