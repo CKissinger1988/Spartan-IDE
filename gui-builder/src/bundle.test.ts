@@ -128,6 +128,8 @@ test("a real bundle carries real data-spartan-id attributes for click-to-select 
         result.code.includes("getComputedStyle"),
         "the real bundle should inspect styles inside the sandbox where the DOM is readable",
       );
+      assert.ok(result.code.includes("spartan-canvas-focus"), "the real bundle should support preview focus state");
+      assert.ok(result.code.includes("spartan-canvas-blur"), "the real bundle should support leaving preview focus state");
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

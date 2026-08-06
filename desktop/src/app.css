@@ -3250,6 +3250,18 @@
   margin-top: 7px;
 }
 
+.design-inspection-actions {
+  display: flex;
+  gap: 5px;
+  margin-top: 5px;
+}
+
+.design-inspection-actions .design-secondary-action {
+  flex: 1;
+  min-width: 0;
+  padding-inline: 4px;
+}
+
 .design-preview {
   grid-column: 2;
   grid-row: 2;

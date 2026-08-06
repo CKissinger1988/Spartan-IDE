@@ -80,6 +80,9 @@ try {
   var suppressNextClick = false;
   var hoverEl = null;
   var selectedEl = null;
+  var focusedEl = null;
+  var focusedHadTabIndex = false;
+  var focusedPreviousTabIndex = null;
 
   // Real persistent selection feedback for the visual canvas. The outline
   // is layered through inline style only, with the exact previous values
@@ -127,6 +130,28 @@ try {
     }, "*");
   }
 
+  function blurSelection() {
+    if (!focusedEl) return;
+    if (document.activeElement === focusedEl) focusedEl.blur();
+    if (focusedHadTabIndex) focusedEl.setAttribute("tabindex", focusedPreviousTabIndex);
+    else focusedEl.removeAttribute("tabindex");
+    focusedEl = null;
+    focusedPreviousTabIndex = null;
+  }
+
+  function focusSelection(nodeId) {
+    blurSelection();
+    var candidate = nodeId
+      ? document.querySelector('[data-spartan-id="' + nodeId + '"]')
+      : null;
+    if (!candidate) return;
+    focusedEl = candidate;
+    focusedHadTabIndex = candidate.hasAttribute("tabindex");
+    focusedPreviousTabIndex = candidate.getAttribute("tabindex");
+    if (!focusedHadTabIndex) candidate.setAttribute("tabindex", "-1");
+    candidate.focus();
+  }
+
   // The parent Design screen uses this same message when a tree row is
   // selected. The message event is the correct cross-origin channel for the
   // sandboxed iframe; no same-origin escape hatch is assumed.
@@ -135,6 +160,10 @@ try {
       highlightSelection(event.data.nodeId || null);
     } else if (event.data && event.data.type === "spartan-canvas-inspect") {
       inspectSelection(event.data.nodeId || null);
+    } else if (event.data && event.data.type === "spartan-canvas-focus") {
+      focusSelection(event.data.nodeId || null);
+    } else if (event.data && event.data.type === "spartan-canvas-blur") {
+      blurSelection();
     }
   });
 

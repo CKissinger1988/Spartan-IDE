@@ -1064,6 +1064,14 @@ export default function DesignScreen({
     }
   }, [previewInspection, selectedNode]);
 
+  const setPreviewFocus = useCallback((focused: boolean) => {
+    if (!selectedId) return;
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: focused ? "spartan-canvas-focus" : "spartan-canvas-blur", nodeId: selectedId },
+      "*",
+    );
+  }, [selectedId]);
+
   const toggleTokens = useCallback(async () => {
     if (tokensOpen) {
       setTokensOpen(false);
@@ -1421,6 +1429,10 @@ export default function DesignScreen({
                 <button className="design-secondary-action mono design-inspection-copy" onClick={() => void copyInspection()}>
                   {copiedInspection ? "Copied CSS snapshot" : "Copy CSS snapshot"}
                 </button>
+                <div className="design-inspection-actions">
+                  <button className="design-secondary-action mono" onClick={() => setPreviewFocus(true)}>Focus preview</button>
+                  <button className="design-secondary-action mono" onClick={() => setPreviewFocus(false)}>Blur preview</button>
+                </div>
               </div>
             )}
             <button className="design-danger-action mono" onClick={deleteSelected}>
