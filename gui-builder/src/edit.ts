@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All eleven members of the `CanvasEdit` union are real and implemented:
+ * All twelve members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -226,6 +226,30 @@ function applyWrap(
   siblings.splice(index, 1, wrapper);
 }
 
+function applyUnwrap(
+  nodesById: Map<string, AnyNode>,
+  parentOf: Map<string, AnyNode | null>,
+  edit: Extract<CanvasEdit, { kind: "Unwrap" }>,
+): void {
+  const node = nodesById.get(edit.nodeId);
+  if (!node) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
+  const parent = parentOf.get(edit.nodeId);
+  if (parent === undefined) throw new Error(`Internal error: no parent entry tracked for id "${edit.nodeId}".`);
+  if (parent === null) {
+    throw new Error(`Element "${edit.nodeId}" is a top-level component root -- unwrap a child wrapper instead.`);
+  }
+  const attributes = node.openingElement.attributes as AnyNode[];
+  if (attributes.length > 0) {
+    throw new Error(`Unwrap refuses wrapper "${edit.nodeId}" because it has attributes that would be discarded.`);
+  }
+  const siblings = parent.children as AnyNode[];
+  const index = siblings.indexOf(node);
+  if (index === -1) {
+    throw new Error(`Element "${edit.nodeId}" is nested inside an expression -- unwrap only a direct JSX child.`);
+  }
+  siblings.splice(index, 1, ...(node.children as AnyNode[]));
+}
+
 /** True if `target` is `ancestor` itself or lives anywhere in its real
  * `JSXElement` children subtree -- `Reparent`'s cycle guard walks *down*
  * from the node being moved rather than *up* from the target parent,
@@ -414,6 +438,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       break;
     case "Wrap":
       applyWrap(nodesById, parentOf, edit);
+      break;
+    case "Unwrap":
+      applyUnwrap(nodesById, parentOf, edit);
       break;
     case "Delete":
       applyDelete(nodesById, parentOf, edit);

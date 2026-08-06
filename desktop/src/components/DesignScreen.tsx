@@ -617,7 +617,7 @@ function StyleValueControl({
  * the exact same `edit` IPC call typing already uses, so a canvas edit
  * gets the same undo/dirty tracking as any other edit.
  *
- * All eleven real `CanvasEdit` kinds `gui-builder` itself supports are now
+ * All twelve real `CanvasEdit` kinds `gui-builder` itself supports are now
  * wired here: `PropChange`/`StyleChange` (mutate the selected node) and
  * `Reparent`/`ComponentInsert` (structural edits, closing the gap this
  * screen's own edit form used to leave unreachable even after
@@ -652,7 +652,7 @@ export default function DesignScreen({
   const [propValue, setPropValue] = useState("");
   const [textValue, setTextValue] = useState("");
   const [propValueType, setPropValueType] = useState<"string" | "number" | "boolean" | "expression">("string");
-  const [editKind, setEditKind] = useState<"PropChange" | "PropRemove" | "StyleChange" | "StyleRemove" | "TextChange" | "TagChange" | "Wrap" | "Reparent" | "ComponentInsert">(
+  const [editKind, setEditKind] = useState<"PropChange" | "PropRemove" | "StyleChange" | "StyleRemove" | "TextChange" | "TagChange" | "Wrap" | "Unwrap" | "Reparent" | "ComponentInsert">(
     "PropChange"
   );
   const [tagName, setTagName] = useState("");
@@ -686,6 +686,7 @@ export default function DesignScreen({
   const selectionCount = selectedIds.length;
   const hasSingleSelection = selectionCount === 1;
   const selectedSibling = selectedId && hasSingleSelection ? findParentEntry(roots, selectedId) : null;
+  const canUnwrap = hasSingleSelection && !!selectedSibling && !!selectedNode && Object.keys(selectedNode.props).length === 0;
   const filteredRoots = useMemo(() => filterTree(roots, treeFilter), [roots, treeFilter]);
 
   useEffect(() => {
@@ -867,6 +868,7 @@ export default function DesignScreen({
       if (!isValidTagName(wrapTagName)) return null;
       return { kind: "Wrap", nodeId: selectedId, tagName: wrapTagName.trim() };
     }
+    if (editKind === "Unwrap") return { kind: "Unwrap", nodeId: selectedId };
     return null;
   }, [selectedId, editKind, propKey, propValue, propValueType, textValue, tagName, wrapTagName]);
 
@@ -1101,6 +1103,8 @@ export default function DesignScreen({
           ? hasSingleSelection && isValidTagName(tagName)
         : editKind === "Wrap"
           ? hasSingleSelection && isValidTagName(wrapTagName)
+        : editKind === "Unwrap"
+          ? canUnwrap
         : editKind === "Reparent"
           ? hasSingleSelection && !!reparentTargetId && reparentTargetId !== selectedId
           : hasSingleSelection && !!insertTagName.trim());
@@ -1382,6 +1386,8 @@ export default function DesignScreen({
     } else if (editKind === "Wrap") {
       if (!isValidTagName(wrapTagName)) return;
       edit = { kind: "Wrap", nodeId: selectedId, tagName: wrapTagName.trim() };
+    } else if (editKind === "Unwrap") {
+      edit = { kind: "Unwrap", nodeId: selectedId };
     } else if (editKind === "Reparent") {
       if (!reparentTargetId || reparentTargetId === selectedId) return;
       edit = { kind: "Reparent", nodeId: selectedId, newParentId: reparentTargetId };
@@ -1784,6 +1790,14 @@ export default function DesignScreen({
               <label>
                 <input
                   type="radio"
+                  checked={editKind === "Unwrap"}
+                  onChange={() => setEditKind("Unwrap")}
+                />
+                Unwrap
+              </label>
+              <label>
+                <input
+                  type="radio"
                   checked={editKind === "PropChange"}
                   onChange={() => setEditKind("PropChange")}
                 />
@@ -1968,6 +1982,11 @@ export default function DesignScreen({
                 value={wrapTagName}
                 onChange={(event) => setWrapTagName(event.target.value)}
               />
+            )}
+            {editKind === "Unwrap" && (
+              <div className="design-preview-status mono">
+                Promotes this attribute-free wrapper&apos;s children into its parent.
+              </div>
             )}
             {editKind === "Reparent" && (
               <select

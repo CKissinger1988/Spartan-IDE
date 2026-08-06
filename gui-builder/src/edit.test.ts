@@ -205,6 +205,27 @@ test("Wrap refuses roots, expression-indirect children, and unsafe wrapper names
   );
 });
 
+test("Unwrap promotes an attribute-free wrapper's children without losing their order", () => {
+  const source = `const X = () => <div><section><i>A</i><b>B</b></section><em>C</em></div>;`;
+  const result = applyCanvasEdit(source, { kind: "Unwrap", nodeId: "n1" });
+  assert.match(result, /<div><i>A<\/i><b>B<\/b><em>C<\/em><\/div>/);
+});
+
+test("Unwrap refuses roots, attributed wrappers, and expression-indirect wrappers", () => {
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <div />;`, { kind: "Unwrap", nodeId: "n0" }),
+    /top-level component root/,
+  );
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <div><section className="keep"><span /></section></div>;`, { kind: "Unwrap", nodeId: "n1" }),
+    /attributes that would be discarded/,
+  );
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <div>{ok && <section><span /></section>}</div>;`, { kind: "Unwrap", nodeId: "n1" }),
+    /nested inside an expression/,
+  );
+});
+
 test("TextChange appends text to a childless element and refuses ambiguous fragments", () => {
   const empty = applyCanvasEdit(`const X = () => <div />;`, { kind: "TextChange", nodeId: "n0", text: "Added" });
   assert.match(empty, /<div>Added<\/div>/);
