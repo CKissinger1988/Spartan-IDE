@@ -447,9 +447,10 @@ function StyleValueControl({
  * showing `gui-builder`'s own real esbuild bundle output, which already
  * includes a real click-to-select `postMessage` relay
  * (`data-spartan-id` + a delegated click listener, see `bundle.ts`'s own
- * doc comment) -- this component just listens for that message and
- * routes it through the same `selectedId` state a tree-row click uses,
- * so a canvas click and a tree click are indistinguishable.
+ * doc comment) and a persistent selection outline -- this component just
+ * listens for that message and routes it through the same `selectedId` state
+ * a tree-row click uses, then sends tree selections back to the iframe so a
+ * canvas click and a tree click are visually indistinguishable.
  *
  * `parse`/`bundle` both read from disk (matching the CLI's own
  * documented v1 contract); `apply` reads the real live, possibly-unsaved
@@ -518,6 +519,15 @@ export default function DesignScreen({
   useEffect(() => {
     setTextValue(selectedNode?.textContent ?? "");
   }, [selectedId, selectedNode?.textContent]);
+
+  // Keep the real visual canvas selection highlight synchronized when the
+  // tree selects a node, and when a fresh bundle replaces the iframe DOM.
+  useEffect(() => {
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "spartan-canvas-select", nodeId: selectedId },
+      "*",
+    );
+  }, [selectedId, bundleCode]);
 
   // The curated definition for whatever style property is currently
   // named, or `undefined` for the Custom… path -- derived from `propKey`
@@ -1086,6 +1096,12 @@ export default function DesignScreen({
               sandbox="allow-scripts"
               srcDoc={srcDoc}
               title="Live preview"
+              onLoad={() => {
+                iframeRef.current?.contentWindow?.postMessage(
+                  { type: "spartan-canvas-select", nodeId: selectedId },
+                  "*",
+                );
+              }}
             />
           </div>
         ) : (

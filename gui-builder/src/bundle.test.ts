@@ -112,6 +112,14 @@ test("a real bundle carries real data-spartan-id attributes for click-to-select 
         result.code.includes("spartan-canvas-click"),
         "the real bundle should include the real click-relay postMessage call",
       );
+      assert.ok(
+        result.code.includes("spartan-canvas-select"),
+        "the real bundle should accept parent-driven selection messages",
+      );
+      assert.ok(
+        result.code.includes("highlightSelection"),
+        "the real bundle should visibly highlight the selected canvas node",
+      );
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

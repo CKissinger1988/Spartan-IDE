@@ -79,6 +79,39 @@ try {
   var dragging = false;
   var suppressNextClick = false;
   var hoverEl = null;
+  var selectedEl = null;
+
+  // Real persistent selection feedback for the visual canvas. The outline
+  // is layered through inline style only, with the exact previous values
+  // restored when selection changes, so the user's own component CSS stays
+  // authoritative after the builder moves on to another node.
+  function clearSelection() {
+    if (!selectedEl) return;
+    selectedEl.style.outline = selectedEl.__spartanPrevSelectedOutline || "";
+    selectedEl.style.outlineOffset = selectedEl.__spartanPrevSelectedOutlineOffset || "";
+    selectedEl = null;
+  }
+
+  function highlightSelection(nodeId) {
+    clearSelection();
+    if (!nodeId) return;
+    var candidate = document.querySelector('[data-spartan-id="' + nodeId + '"]');
+    if (!candidate) return;
+    selectedEl = candidate;
+    selectedEl.__spartanPrevSelectedOutline = selectedEl.style.outline;
+    selectedEl.__spartanPrevSelectedOutlineOffset = selectedEl.style.outlineOffset;
+    selectedEl.style.outline = "2px solid #2E7DFF";
+    selectedEl.style.outlineOffset = "2px";
+  }
+
+  // The parent Design screen uses this same message when a tree row is
+  // selected. The message event is the correct cross-origin channel for the
+  // sandboxed iframe; no same-origin escape hatch is assumed.
+  window.addEventListener("message", function (event) {
+    if (event.data && event.data.type === "spartan-canvas-select") {
+      highlightSelection(event.data.nodeId || null);
+    }
+  });
 
   // Real §75.53 click-to-select relay: this iframe is sandboxed
   // ("allow-scripts" only, no "allow-same-origin"), so it has an opaque
@@ -97,6 +130,7 @@ try {
       ? event.target.closest("[data-spartan-id]")
       : null;
     if (target) {
+      highlightSelection(target.getAttribute("data-spartan-id"));
       window.parent.postMessage(
         { type: "spartan-canvas-click", nodeId: target.getAttribute("data-spartan-id") },
         "*"
