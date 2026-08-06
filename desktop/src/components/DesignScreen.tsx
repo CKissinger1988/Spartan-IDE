@@ -14,6 +14,14 @@ import type { ResponsiveBreakpoint } from "../../../gui-builder/src/breakpoints"
 import { describeResponsiveDiff } from "../../../gui-builder/src/responsive-diff";
 import { describeToken } from "../../../gui-builder/src/token-model";
 import type { TokenTier } from "../../../gui-builder/src/token-model";
+import {
+  INTERACTION_CLIPBOARD_KIND,
+  INTERACTION_CLIPBOARD_VERSION,
+  buildInteractionClipboard,
+  normalizeInteractionPresets,
+  parseInteractionClipboard,
+} from "../../../gui-builder/src/interaction-presets";
+import type { InteractionClipboard, InteractionPreset, PreviewDataState, PreviewInteractionState } from "../../../gui-builder/src/interaction-presets";
 import { suggestAccessibilityFixes } from "../../../gui-builder/src/accessibility-fixes";
 import type { AccessibilityFix } from "../../../gui-builder/src/accessibility-fixes";
 import type { ComponentPropDefinition } from "../../../gui-builder/src/scaffold";
@@ -102,15 +110,6 @@ interface VariantClipboard {
   updatedAt: number;
 }
 
-type PreviewInteractionState = "normal" | "focus" | "hover" | "active";
-type PreviewDataState = "normal" | "loading" | "empty" | "error" | "populated" | "long";
-
-interface InteractionPreset {
-  name: string;
-  state: PreviewInteractionState;
-  updatedAt: number;
-}
-
 interface PreviewTheme {
   name: string;
   cssText: string;
@@ -157,7 +156,9 @@ function parseDesignClipboard(raw: string, kind: typeof STYLE_CLIPBOARD_KIND): S
 function parseDesignClipboard(raw: string, kind: typeof PROP_CLIPBOARD_KIND): PropClipboard | null;
 function parseDesignClipboard(raw: string, kind: typeof VARIANT_CLIPBOARD_KIND): VariantClipboard | null;
 function parseDesignClipboard(raw: string, kind: typeof SUBTREE_CLIPBOARD_KIND): SubtreeClipboard | null;
-function parseDesignClipboard(raw: string, kind: string): StyleClipboard | PropClipboard | VariantClipboard | SubtreeClipboard | null {
+function parseDesignClipboard(raw: string, kind: typeof INTERACTION_CLIPBOARD_KIND): InteractionClipboard | null;
+function parseDesignClipboard(raw: string, kind: string): StyleClipboard | PropClipboard | VariantClipboard | SubtreeClipboard | InteractionClipboard | null {
+  if (kind === INTERACTION_CLIPBOARD_KIND) return parseInteractionClipboard(raw);
   try {
     const value = JSON.parse(raw) as Record<string, unknown>;
     if (value.kind !== kind || value.version !== CLIPBOARD_VERSION || typeof value.sourcePath !== "string") return null;
@@ -925,6 +926,7 @@ export default function DesignScreen({
   const [copiedSubtree, setCopiedSubtree] = useState(false);
   const [subtreePastePlacement, setSubtreePastePlacement] = useState<ComponentInsertPlacement>("child");
   const [variantClipboard, setVariantClipboard] = useState<VariantClipboard | null>(null);
+  const [interactionClipboard, setInteractionClipboard] = useState<InteractionClipboard | null>(null);
   const [copiedVariant, setCopiedVariant] = useState<string | null>(null);
   const [previewInspection, setPreviewInspection] = useState<PreviewInspection | null>(null);
   const [matrixInspections, setMatrixInspections] = useState<Record<string, PreviewInspection>>({});
@@ -1436,7 +1438,7 @@ export default function DesignScreen({
     if (!interactionStorageKey || !interactionPresetName.trim()) return;
     const name = interactionPresetName.trim();
     const next: InteractionPreset[] = [
-      { name, state: previewInteractionState, updatedAt: Date.now() },
+      { name, state: previewInteractionState, dataState: previewDataState, updatedAt: Date.now() },
       ...interactionPresets.filter((preset) => preset.name !== name),
     ];
     setInteractionPresets(next);
@@ -1446,7 +1448,52 @@ export default function DesignScreen({
     } catch (e) {
       setError(`Could not save interaction preset: ${(e as Error).message}`);
     }
-  }, [interactionStorageKey, interactionPresetName, previewInteractionState, interactionPresets]);
+  }, [interactionStorageKey, interactionPresetName, previewInteractionState, previewDataState, interactionPresets]);
+
+  const copyInteractionPreset = useCallback(async (preset: InteractionPreset) => {
+    const clipboard = buildInteractionClipboard(activeFile?.path ?? "", preset);
+    setInteractionClipboard(clipboard);
+    try {
+      await navigator.clipboard.writeText(JSON.stringify({
+        kind: INTERACTION_CLIPBOARD_KIND,
+        version: INTERACTION_CLIPBOARD_VERSION,
+        ...clipboard,
+      }));
+      setError(null);
+    } catch (e) {
+      setError(`Could not copy interaction preset: ${(e as Error).message}`);
+    }
+  }, [activeFile?.path]);
+
+  const importInteractionPreset = useCallback(async () => {
+    if (!interactionStorageKey) return;
+    let clipboard: InteractionClipboard | null = interactionClipboard;
+    try {
+      const systemClipboard = parseDesignClipboard(await navigator.clipboard.readText(), INTERACTION_CLIPBOARD_KIND);
+      if (systemClipboard) {
+        clipboard = systemClipboard;
+        setInteractionClipboard(systemClipboard);
+      }
+    } catch {
+      // Fall back to the session-local interaction clipboard.
+    }
+    if (!clipboard) {
+      setError("Place a Spartan GUI Builder interaction preset on the system clipboard first.");
+      return;
+    }
+    const preset: InteractionPreset = { ...clipboard, updatedAt: Date.now() };
+    const next = [preset, ...interactionPresets.filter((item) => item.name !== preset.name)];
+    setInteractionPresets(next);
+    try {
+      window.localStorage.setItem(interactionStorageKey, JSON.stringify(next));
+    } catch (e) {
+      setError(`Could not save imported interaction preset: ${(e as Error).message}`);
+      return;
+    }
+    setError(clipboard.sourcePath && clipboard.sourcePath !== activeFile?.path
+      ? `Imported “${preset.name}” from ${clipboard.sourcePath}.`
+      : null);
+  }, [activeFile?.path, interactionClipboard, interactionStorageKey, interactionPresets]);
 
   const deleteInteractionPreset = useCallback((name: string) => {
     if (!interactionStorageKey) return;
@@ -1738,6 +1785,8 @@ export default function DesignScreen({
     setSelectedIds([]);
     if (activeFile && isComponentFile(activeFile.path)) {
       setPreviewSource(null);
+      setPreviewInteractionState("normal");
+      setPreviewDataState("normal");
       setVariantName("");
       setInteractionPresetName("");
       setPaletteFilter("");
@@ -1751,10 +1800,7 @@ export default function DesignScreen({
       try {
         const saved = JSON.parse(window.localStorage.getItem(key) ?? "[]") as VariantPreset[];
         setVariantPresets(Array.isArray(saved) ? saved.filter((preset) => preset && typeof preset.source === "string") : []);
-        const savedInteractions = JSON.parse(window.localStorage.getItem(interactionKey) ?? "[]") as InteractionPreset[];
-        setInteractionPresets(Array.isArray(savedInteractions)
-          ? savedInteractions.filter((preset) => preset && typeof preset.name === "string" && ["normal", "focus", "hover", "active"].includes(preset.state))
-          : []);
+        setInteractionPresets(normalizeInteractionPresets(JSON.parse(window.localStorage.getItem(interactionKey) ?? "[]")));
       } catch {
         setVariantPresets([]);
         setInteractionPresets([]);
@@ -1765,6 +1811,7 @@ export default function DesignScreen({
       setVariantPresets([]);
       setInteractionPresets([]);
       setPreviewInteractionState("normal");
+      setPreviewDataState("normal");
     }
   }, [activeFile?.path, refresh]);
 
@@ -2380,7 +2427,9 @@ export default function DesignScreen({
     if (!selectedId || !hasSingleSelection) return;
     postPreviewMessage({ type: preset.state === "focus" ? "spartan-canvas-focus" : "spartan-canvas-blur", nodeId: selectedId });
     postPreviewMessage({ type: "spartan-canvas-state", nodeId: selectedId, state: preset.state === "hover" || preset.state === "active" ? preset.state : null });
+    postPreviewMessage({ type: "spartan-canvas-data-state", nodeId: selectedId, state: preset.dataState });
     setPreviewInteractionState(preset.state);
+    setPreviewDataState(preset.dataState);
   }, [postPreviewMessage, selectedId, hasSingleSelection]);
 
   const setBoxModel = useCallback((visible: boolean) => {
@@ -3673,6 +3722,13 @@ export default function DesignScreen({
                     >
                       Save state
                     </button>
+                    <button
+                      className="design-secondary-action mono"
+                      onClick={() => void importInteractionPreset()}
+                      title="Import a versioned interaction and data-state preset from the system clipboard"
+                    >
+                      Import state
+                    </button>
                   </div>
                   {interactionPresets.length > 0 && (
                     <div className="design-interaction-preset-list">
@@ -3684,7 +3740,14 @@ export default function DesignScreen({
                             disabled={!hasSingleSelection}
                             title={`Apply ${preset.state} preview state`}
                           >
-                            {preset.name} · {preset.state}
+                            {preset.name} · {preset.state} · {preset.dataState}
+                          </button>
+                          <button
+                            className="design-asset-action mono"
+                            onClick={() => void copyInteractionPreset(preset)}
+                            title={`Copy ${preset.name} as a portable interaction preset`}
+                          >
+                            Copy
                           </button>
                           <button
                             className="design-asset-action mono"
