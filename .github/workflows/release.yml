@@ -26,6 +26,12 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Create or update the GitHub prerelease after all required artifacts succeed"
+        required: true
+        default: false
+        type: boolean
 
 env:
   CARGO_TERM_COLOR: always
@@ -458,13 +464,22 @@ jobs:
         web-build,
         server-linux-package,
       ]
-    # Real, deliberate: run even if the three `continue-on-error` desktop
-    # jobs above genuinely failed (never-before-verified electron-builder
-    # packaging) -- a failure there must not block the release of this
-    # workflow's other, already-proven artifacts. `!cancelled()` still
-    # skips this job if the *workflow itself* was cancelled, just not on
-    # an individual job failure.
-    if: ${{ !cancelled() }}
+    # A beta must never publish without every required artifact. The three
+    # Electron installer jobs remain best-effort while their platform
+    # packaging is maturing, but Linux reference, Windows reference,
+    # Android, Web, and both server binaries are release gates. Manual runs
+    # build and preserve artifacts by default; only a tag push or an
+    # explicit `publish` choice creates a public prerelease.
+    if: >-
+      ${{
+        !cancelled() &&
+        (github.event_name == 'push' || inputs.publish == true) &&
+        needs.linux-package.result == 'success' &&
+        needs.windows-package.result == 'success' &&
+        needs.android-package.result == 'success' &&
+        needs.web-build.result == 'success' &&
+        needs.server-linux-package.result == 'success'
+      }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

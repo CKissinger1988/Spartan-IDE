@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { SettingsScreen } from '../SettingsScreen';
 import { getConnectivitySnapshot } from '../../lib/network';
 import { requestNotificationPermission } from '../../lib/notifications';
@@ -35,7 +35,14 @@ jest.mock('expo-camera', () => {
 
 jest.mock('@react-navigation/native', () => ({
   ...jest.requireActual('@react-navigation/native'),
-  useFocusEffect: (cb: () => void) => cb(),
+  // Focus effects run after commit in the real navigator. Calling the
+  // callback during render made this mock trigger SettingsScreen state
+  // updates before mount under React 19, which is neither production
+  // behavior nor a valid component test lifecycle.
+  useFocusEffect: (cb: () => void) => {
+    const React = require('react');
+    React.useEffect(cb, [cb]);
+  },
 }));
 
 jest.mock('../../lib/network', () => ({
@@ -174,11 +181,17 @@ describe('SettingsScreen', () => {
 
     await act(async () => {
       fireEvent.changeText(getByTestId('backend-endpoint-input'), 'http://192.168.1.33:4400');
+    });
+    await act(async () => {
       fireEvent.changeText(getByTestId('backend-pairing-token-input'), 'paired-secret');
+    });
+    await act(async () => {
       fireEvent.press(getByText('Save and reconnect'));
     });
 
-    expect(mockUpdateEndpoint).toHaveBeenCalledWith('http://192.168.1.33:4400', 'paired-secret');
+    await waitFor(() => {
+      expect(mockUpdateEndpoint).toHaveBeenCalledWith('http://192.168.1.33:4400', 'paired-secret');
+    });
   });
 
   test('retries the current Linux devserver connection', async () => {
@@ -196,10 +209,14 @@ describe('SettingsScreen', () => {
         getByTestId('pairing-payload-input'),
         'spartan://pair/v1?kind=private&endpoint=http%3A%2F%2F192.168.1.33%3A4400&pairing=paired'
       );
+    });
+    await act(async () => {
       fireEvent.press(getByText('Import pairing code'));
     });
-    expect(getByTestId('backend-endpoint-input').props.value).toBe('http://192.168.1.33:4400');
-    expect(getByTestId('backend-pairing-token-input').props.value).toBe('paired');
+    await waitFor(() => {
+      expect(getByTestId('backend-endpoint-input').props.value).toBe('http://192.168.1.33:4400');
+      expect(getByTestId('backend-pairing-token-input').props.value).toBe('paired');
+    });
   });
 
   test('opens the QR scanner and imports a scanned private pairing payload', async () => {

@@ -132,15 +132,31 @@ fn lsp_implementation_reports_a_real_rust_analyzer_impl_target() {
             "result must be unwrapped from its JSON-RPC envelope, not the raw response: {event}"
         );
 
-        let arr = result
-            .as_array()
-            .unwrap_or_else(|| panic!("expected a real Location[] result, got: {event}"));
-        if !arr.is_empty() {
-            target_uri = arr[0]
-                .get("uri")
-                .and_then(|u| u.as_str())
-                .map(str::to_string);
-            break;
+        match result {
+            serde_json::Value::Array(arr) if !arr.is_empty() => {
+                if !arr.iter().all(|location| {
+                    location
+                        .get("uri")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some()
+                }) {
+                    std::thread::sleep(Duration::from_secs(3));
+                    continue;
+                }
+                target_uri = arr[0]
+                    .get("uri")
+                    .and_then(|u| u.as_str())
+                    .expect("a validated implementation URI")
+                    .to_string();
+                break;
+            }
+            // rust-analyzer can report either `[]` or `null` while its
+            // initial workspace index is incomplete. Neither response is a
+            // completed negative answer for this fixture, so keep the
+            // bounded real-server retry instead of treating that transient
+            // state as a product failure.
+            serde_json::Value::Array(_) | serde_json::Value::Null => {}
+            _ => panic!("expected a Location[] or transient null result, got: {event}"),
         }
         std::thread::sleep(Duration::from_secs(3));
     }
