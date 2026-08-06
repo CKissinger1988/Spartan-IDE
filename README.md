@@ -35,34 +35,18 @@ chrome, backed by the real Rust buffer over IPC, not a vendored component.
 
 ## Screenshots
 
-Real, unedited Playwright + Chromium captures of the actual running React components
-against a real running `spartan-backend`/`spartan-devserver` process and a real git
-project fixture — not mockups, not fabricated data. The desktop shots use this
-project's own established real-WebSocket-shim technique (see `desktop/README.md`),
-a technique that remains useful since a real Electron launch depends on a real,
-environment-specific network condition not guaranteed in every session (a genuine
-native window *has* been launched, screenshotted, and verified end-to-end in one
-session — see `desktop/README.md`'s own "environment-specific network condition"
-section, which also documents a real preload-script bug that launch uncovered and
-fixed); the shim only stands in for Electron's `contextBridge` preload hop, every
-IPC call and response is real. The web shots run
-directly against `web/`'s own genuine `BackendClient.connect()` — no shim needed at
-all — in the backend-connected mode added since the GUI Builder removal, which also
-gave `web/` real tree-sitter syntax highlighting, a Git panel, a Leo chat panel, and
-LSP diagnostics (see `web/README.md`'s own screenshot captions for exactly what each
-of the four captures below shows).
+Current visual captures are produced from live served builds with Playwright + Chromium — never
+from mockups or edited pixels. The Web first-open state and public site homepage below are
+automatically refreshed when the visual surface changes.
 
 | | |
 |---|---|
-| ![Editor screen](docs/screenshots/desktop/01-editor-main-screen.png) | ![Git panel](docs/screenshots/desktop/02-git-panel.png) |
-| Desktop: Editor screen — 3-tier nav, file tree, tabs, real tree-sitter syntax highlighting + bracket-pair colors, Leo panel | Desktop: real Source Control panel — staged/unstaged split, commit history |
-| ![Web app editor](docs/screenshots/web/03-editor-with-syntax-highlighting.png) | ![Workflows screen](docs/screenshots/desktop/04-workflows-screen.png) |
-| Web: the browser-based editor (`web/`) connected to a local devserver, real syntax highlighting | Desktop: Workflows — a real `@xyflow/react` multi-CLI node graph |
+| ![Spartan Web first-open state](docs/screenshots/web/01-initial-empty-state.png) | ![Spartan IDE public site](docs/screenshots/site/home.png) |
+| Spartan Web: current client-side first-open state with the Spartan emblem and red/steel theme | Public landing page: current emblem, visual system, downloads, and browser-IDE entry point |
 
-More screens (Settings, Dev Containers, editing with Leo panel, the web app's file
-tree and live-editing states) are in `docs/screenshots/desktop/` and
-`docs/screenshots/web/`, and embedded with full captions in `desktop/README.md` and
-`web/README.md`.
+The desktop gallery and the backend-connected Web feature images are retained as real historical
+verification evidence, not represented as current branding. Their capture conditions and refresh
+rules are documented in [`docs/SCREENSHOTS.md`](docs/SCREENSHOTS.md).
 
 ## Beta downloads & live documentation
 
@@ -99,9 +83,10 @@ desktop/                    Real Electron + React desktop shell — the current,
 
 crates/spartan-backend/     Real Rust IPC service the Electron shell drives — wraps every
                              other crate below behind a newline-delimited JSON-RPC protocol
-crates/spartan-devserver/   Real localhost-only wrapper around spartan-backend for web/ —
-                             adds WebSocket transport + a few devserver-only methods, falls
-                             through to spartan-backend for everything else
+crates/spartan-devserver/   Real private-server wrapper around spartan-backend for web/ — loopback
+                             by default; an explicit paired LAN/WAN bind is available with a
+                             pairing secret. Adds WebSocket transport + devserver methods and
+                             falls through to spartan-backend for everything else
 crates/spartan-buffer/      Real rope-based document/buffer model — branching undo tree,
                              bounded checkpoint ring, char-indexed edits
 crates/spartan-buffer-wasm/ Real wasm-bindgen wrapper around spartan-buffer — the exact same
@@ -136,8 +121,9 @@ web/                        Real, separate Vite+React npm project — a vscode.d
                              browser IDE with two real editing paths: fully client-side
                              (File System Access API + a real WASM-compiled spartan-buffer,
                              no backend needed) and backend-connected (a real spartan-devserver
-                             over WebSocket, adding real LSP/DAP/git — no Leo chat UI here yet)
-mobile/                     Real Expo/React Native companion app — Spartan Mobile IDE
+                             over WebSocket, adding real LSP/DAP/git and Leo chat)
+mobile/                     Real Expo/React Native companion app — first-run onboarding, private
+                             and cloud QR pairing, secure private-token storage, release checks
 spikes/                     Real Tier 0 risk-gate spikes (rope perf, LSP/DAP clients, GPU
                              rendering, local-model tool-call parsing) — not the product itself
 legacy/agent-deck-console/  This repo's prior product, preserved for feature-parity reference
@@ -368,7 +354,8 @@ spikes/                      Real, tested Tier 0 Rust spikes + npm-based web-pre
                               (tree-sitter-wasm-spike, git-browser-spike) — see
                               spikes/README.md
 mobile/                      Spartan Mobile IDE — real Expo/React Native companion app
-cloud/                       Spartan Cloud — separate, optional multi-tenant backend;
+cloud/                       Spartan Cloud — separate, optional multi-tenant backend; HTTPS
+                             endpoint QR pairing and operator-controlled update checks
                               its own Cargo workspace, not part of the root one
 site/                        Real GitHub Pages source (no source links, installers served
                               directly, README rendered at deploy time)

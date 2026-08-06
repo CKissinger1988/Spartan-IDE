@@ -96,6 +96,11 @@ an actual successful model response.
 
 ## Screenshots
 
+The captures in this section are historical verification evidence from the pre-emblem visual
+system. They still demonstrate real desktop behavior, but are not current brand references. The
+current, automatically refreshed Web and public-site captures and the desktop recapture procedure
+are in [`../docs/SCREENSHOTS.md`](../docs/SCREENSHOTS.md).
+
 Real, unedited Playwright + Chromium captures of the actual compiled
 production build (`npm run build`), served statically by a real
 `spartan-devserver` process against a real git project fixture — using

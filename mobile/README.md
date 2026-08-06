@@ -158,6 +158,11 @@ QR code. A private-server pairing QR contains an endpoint plus a pairing secret;
 secret in SecureStore, not AsyncStorage or a URL. A cloud pairing QR contains only an HTTPS endpoint
 and never a cloud login token.
 
+The same first-run flow introduces the companion's role, lets a user choose a server mode, and
+offers endpoint paste or QR pairing before entering the main app. It can be completed without a
+server and revisited from Settings later. The update action checks the official GitHub Release and
+opens an explicit release/APK download only; Android never silently replaces an installed app.
+
 For a private Linux workstation reachable on LAN or WAN, bind one explicit address and generate an
 opt-in pairing QR:
 
@@ -187,3 +192,6 @@ spartan-cloud-api --bind:0.0.0.0:8080 --public-origin:https://cloud.example.com 
 
 Cloud QR codes deliberately do not authenticate a user. The cloud API's `GET /api/health` is an
 unauthenticated deployment probe; every tenant operation still requires its existing bearer session.
+
+See [`../docs/DEPLOYMENT_AND_PAIRING.md`](../docs/DEPLOYMENT_AND_PAIRING.md) for the complete LAN,
+WAN, reverse-proxy, SSH-forwarding, key-rotation, and release-check guidance.
