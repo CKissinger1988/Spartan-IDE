@@ -261,6 +261,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Source-location reveal from selected Design nodes into the Editor | Real |
 | Exact selected-element JSX source copy from the Design inspector | Real |
 | Selected-element accessibility audit overlay (alt text, accessible names, target size, contrast) | Real |
+| Role-aware keyboard accessibility findings and decorative-image alt handling | Real |
 | Copyable accessibility audit reports from live rendered inspection | Real |
 | Combined selected-element design handoff export with JSX, bounds, styles, and accessibility | Real |
 | Relative image asset insertion as inline background images across single/multi-selection | Real |

@@ -405,20 +405,39 @@ function accessibilityAudit(node: ComponentNode, inspection: PreviewInspection |
   const tagName = node.tagName.toLowerCase();
   if (tagName === "img") {
     const alt = propSummaryValue(node, "alt");
-    findings.push(alt ? { severity: "pass", message: "Image has an alt value." } : { severity: "error", message: "Image is missing a non-empty alt prop." });
+    findings.push(alt === null
+      ? { severity: "error", message: "Image is missing an alt prop." }
+      : alt === ""
+        ? { severity: "pass", message: "Image is explicitly marked decorative with an empty alt prop." }
+        : { severity: "pass", message: "Image has an alt value." });
   }
-  const interactive = new Set(["a", "button", "input", "select", "textarea"]);
-  if (interactive.has(tagName)) {
-    const accessibleName = propSummaryValue(node, "aria-label") || propSummaryValue(node, "title") || node.textContent?.trim();
+  const interactiveTags = new Set(["a", "button", "input", "select", "textarea"]);
+  const interactiveRoles = new Set(["button", "checkbox", "combobox", "link", "menuitem", "option", "radio", "switch", "tab", "textbox"]);
+  const role = propSummaryValue(node, "role")?.toLowerCase() ?? "";
+  const isInteractive = interactiveTags.has(tagName) || interactiveRoles.has(role);
+  const hasActivationHandler = Boolean(propSummaryValue(node, "onClick") || propSummaryValue(node, "onKeyDown") || propSummaryValue(node, "onKeyUp"));
+  if (isInteractive) {
+    const accessibleName = propSummaryValue(node, "aria-label")
+      || propSummaryValue(node, "aria-labelledby")
+      || propSummaryValue(node, "title")
+      || node.textContent?.trim();
     findings.push(accessibleName
       ? { severity: "pass", message: "Interactive element has a detectable accessible name." }
-      : { severity: "error", message: "Interactive element has no text, aria-label, or title." });
+      : { severity: "error", message: "Interactive element has no text, aria-label, labelled-by reference, or title." });
+    if (interactiveRoles.has(role) && !interactiveTags.has(tagName)) {
+      const tabIndex = propSummaryValue(node, "tabIndex") ?? propSummaryValue(node, "tabindex");
+      findings.push(tabIndex === null || tabIndex === "-1"
+        ? { severity: "warning", message: `Custom role="${role}" should be keyboard focusable with tabIndex="0" or an equivalent focus strategy.` }
+        : { severity: "pass", message: `Custom role="${role}" exposes a keyboard focus target.` });
+    }
     if (inspection) {
       const tooSmall = inspection.rect.width < 44 || inspection.rect.height < 44;
       findings.push(tooSmall
         ? { severity: "warning", message: `Interactive target is ${Math.round(inspection.rect.width)}×${Math.round(inspection.rect.height)}px; aim for at least 44×44px.` }
         : { severity: "pass", message: "Interactive target meets the 44×44px minimum size." });
     }
+  } else if (hasActivationHandler) {
+    findings.push({ severity: "warning", message: "Element has an activation handler but no native interactive tag or ARIA role; prefer a semantic control or add keyboard-accessible role behavior." });
   }
   if (inspection) {
     const foreground = parseCssColor(inspection.styles.color);
