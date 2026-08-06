@@ -80,6 +80,8 @@ try {
   var suppressNextClick = false;
   var hoverEl = null;
   var selectedEls = [];
+  var previewStateEl = null;
+  var previewStateStyle = null;
   var focusedEl = null;
   var focusedHadTabIndex = false;
   var focusedPreviousTabIndex = null;
@@ -108,6 +110,54 @@ try {
       candidate.style.outlineOffset = "2px";
       selectedEls.push(candidate);
     });
+  }
+
+  // Real authored interaction-state previewing. CSS pseudo-classes cannot be
+  // forced by dispatching synthetic mouse events, so the sandbox clones the
+  // user's own rules with :hover/:active replaced by a temporary attribute
+  // selector on the selected element. The temporary sheet and attribute are
+  // always removed before another state is applied or the selection changes.
+  function clearPreviewState() {
+    if (previewStateEl) {
+      previewStateEl.removeAttribute("data-spartan-preview-hover");
+      previewStateEl.removeAttribute("data-spartan-preview-active");
+    }
+    if (previewStateStyle) {
+      previewStateStyle.remove();
+      previewStateStyle = null;
+    }
+    previewStateEl = null;
+  }
+
+  function previewInteractionState(nodeId, state) {
+    clearPreviewState();
+    if (!nodeId || (state !== "hover" && state !== "active")) return;
+    var candidate = document.querySelector('[data-spartan-id="' + nodeId + '"]');
+    if (!candidate) return;
+    var pseudo = state === "hover" ? ":hover" : ":active";
+    var marker = "[data-spartan-preview-" + state + "]";
+    var clonedRules = "";
+    Array.prototype.forEach.call(document.styleSheets, function (sheet) {
+      var rules;
+      try {
+        rules = sheet.cssRules;
+      } catch (error) {
+        return;
+      }
+      if (!rules) return;
+      Array.prototype.forEach.call(rules, function (rule) {
+        var cssText = rule.cssText || "";
+        if (cssText.indexOf(pseudo) !== -1) clonedRules += cssText.split(pseudo).join(marker);
+      });
+    });
+    candidate.setAttribute("data-spartan-preview-" + state, "");
+    if (clonedRules) {
+      previewStateStyle = document.createElement("style");
+      previewStateStyle.setAttribute("data-spartan-preview-state", state);
+      previewStateStyle.textContent = clonedRules;
+      document.head.appendChild(previewStateStyle);
+    }
+    previewStateEl = candidate;
   }
 
   function inspectSelection(nodeId) {
@@ -161,6 +211,8 @@ try {
   window.addEventListener("message", function (event) {
     if (event.data && event.data.type === "spartan-canvas-select") {
       highlightSelection(event.data.nodeIds || event.data.nodeId || null);
+    } else if (event.data && event.data.type === "spartan-canvas-state") {
+      previewInteractionState(event.data.nodeId || null, event.data.state || null);
     } else if (event.data && event.data.type === "spartan-canvas-inspect") {
       inspectSelection(event.data.nodeId || null);
     } else if (event.data && event.data.type === "spartan-canvas-focus") {

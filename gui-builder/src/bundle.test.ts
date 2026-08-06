@@ -134,6 +134,11 @@ test("a real bundle carries real data-spartan-id attributes for click-to-select 
       );
       assert.ok(result.code.includes("spartan-canvas-focus"), "the real bundle should support preview focus state");
       assert.ok(result.code.includes("spartan-canvas-blur"), "the real bundle should support leaving preview focus state");
+      assert.ok(result.code.includes("spartan-canvas-state"), "the real bundle should accept interaction-state preview messages");
+      assert.ok(
+        result.code.includes("data-spartan-preview-hover") && result.code.includes("data-spartan-preview-active"),
+        "the real bundle should clone authored hover and active selectors onto temporary state attributes",
+      );
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

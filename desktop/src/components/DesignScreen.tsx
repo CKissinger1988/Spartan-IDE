@@ -662,6 +662,10 @@ export default function DesignScreen({
       { type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds },
       "*",
     );
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "spartan-canvas-state", nodeId: selectedId, state: null },
+      "*",
+    );
     if (selectedId) {
       iframeRef.current?.contentWindow?.postMessage(
         { type: "spartan-canvas-inspect", nodeId: selectedId },
@@ -1206,6 +1210,14 @@ export default function DesignScreen({
     );
   }, [selectedId, hasSingleSelection]);
 
+  const setPreviewState = useCallback((state: "hover" | "active" | null) => {
+    if (!selectedId || !hasSingleSelection) return;
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "spartan-canvas-state", nodeId: selectedId, state },
+      "*",
+    );
+  }, [selectedId, hasSingleSelection]);
+
   const toggleTokens = useCallback(async () => {
     if (tokensOpen) {
       setTokensOpen(false);
@@ -1590,6 +1602,9 @@ export default function DesignScreen({
                 <div className="design-inspection-actions">
                   <button className="design-secondary-action mono" onClick={() => setPreviewFocus(true)}>Focus preview</button>
                   <button className="design-secondary-action mono" onClick={() => setPreviewFocus(false)}>Blur preview</button>
+                  <button className="design-secondary-action mono" onClick={() => setPreviewState("hover")}>Hover preview</button>
+                  <button className="design-secondary-action mono" onClick={() => setPreviewState("active")}>Active preview</button>
+                  <button className="design-secondary-action mono" onClick={() => setPreviewState(null)}>Clear state</button>
                 </div>
               </div>
             )}
