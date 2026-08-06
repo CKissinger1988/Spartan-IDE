@@ -21,6 +21,11 @@ repository already applies to the desktop shells (no Monaco/CodeMirror
 
 ## Screenshots
 
+`01-initial-empty-state.png` is the current automatically refreshed branded capture. The remaining
+backend-connected feature images below are historical verification evidence; they are not current
+brand references until they are re-captured against a real devserver fixture. See
+[`../docs/SCREENSHOTS.md`](../docs/SCREENSHOTS.md) for the capture inventory and procedure.
+
 Real, unedited Playwright + Chromium captures of the actual compiled
 production build (`npm run build`) served by a real running
 `spartan-devserver` process against a real git project fixture, using the

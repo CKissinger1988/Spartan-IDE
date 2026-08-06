@@ -9446,6 +9446,15 @@ mobile app/adaptive/splash icons. The default palette across desktop, web, mobil
 plugin theme pack, and native renderer selection/caret is now emblem red (`#F03133`), steel
 (`#AC9C9C`), and graphite rather than the former blue/gold theme.
 
+### Documentation and screenshot refresh — current pass
+
+`docs/DEPLOYMENT_AND_PAIRING.md` is the operational source for private LAN/WAN deployment, TLS
+and SSH-forwarding boundaries, cloud QR behavior, vault/bootstrap requirements, and server update
+checks. `docs/SCREENSHOTS.md` distinguishes current branded captures from historical verification
+artifacts. The current Web first-open and public-site images are captured from live served builds by
+`.github/workflows/screenshots.yml`; do not repaint historical desktop/mobile images to imply that
+they were freshly captured. Refresh those only with the real desktop or device surface.
+
 - Don't fork or vendor any VS Code/Monaco/CodeMirror code, ever, for any reason.
 - Don't add a new cloud model provider as a bespoke adapter — it goes through LiteLLM (§44)
   unless there's a specific reason (like Claude's prompt caching) to hand-roll it, as already

@@ -28,6 +28,13 @@ Use `--print-mobile-qr --public-origin:https://cloud.example.com` to render a te
 the companion app. The QR carries only the HTTPS endpoint, never a bearer session, credential, or
 allocation capability token.
 
+Use the public HTTPS origin for both `--public-origin` and the WebAuthn `--rp-origin`; the latter
+must be a real domain name rather than an IP literal. `spartan-cloud-api --check-update` only
+reports whether an official GitHub Release is newer and prints its URL — it never mutates a running
+server. The vault remains locked unless `SPARTAN_CLOUD_VAULT_KEY` is exactly 64 hexadecimal
+characters. The deployment and private-server counterpart are documented in
+[`../docs/DEPLOYMENT_AND_PAIRING.md`](../docs/DEPLOYMENT_AND_PAIRING.md).
+
 ## What's real right now (first increment)
 
 Pure, infra-free **domain logic**, fully unit-tested with no server and no
