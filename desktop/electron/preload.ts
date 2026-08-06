@@ -49,6 +49,7 @@ const ALLOWED_METHODS = new Set([
   "design_token_define",
   "design_token_remove",
   "design_create_component",
+  "design_create_component_set",
   "leo_status",
   "leo_start_task",
   "leo_approve_plan",

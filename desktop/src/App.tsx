@@ -483,13 +483,10 @@ export default function App(): React.ReactElement {
     [files]
   );
 
-  const createDesignComponent = useCallback(async (relativePath: string, source: string) => {
-    const result = (await window.spartan.call("design_create_component", {
-      relativePath,
-      source,
-    })) as { path: string };
-    if (!result.path) throw new Error("The component creation response did not include a path.");
-    await openFile(result.path);
+  const createDesignComponents = useCallback(async (files: Array<{ relativePath: string; source: string }>) => {
+    const result = (await window.spartan.call("design_create_component_set", { files })) as { paths: string[] };
+    if (!Array.isArray(result.paths) || result.paths.length !== files.length) throw new Error("The component creation response did not include all paths.");
+    for (const filePath of result.paths) await openFile(filePath);
   }, [openFile]);
 
   /** Real cross-file go-to-definition landing: opens (or activates, via
@@ -1064,7 +1061,7 @@ export default function App(): React.ReactElement {
                   onOpenFile={openFile}
                   onRevealSource={handleRevealDesignSource}
                   onContentChange={handleContentChange}
-                  onCreateComponent={createDesignComponent}
+                  onCreateComponents={createDesignComponents}
                   projectRoot={ROOT}
                 />
               )}

@@ -443,6 +443,62 @@ app.whenReady().then(() => {
     },
   );
   ipcMain.handle(
+    "spartan:design_create_component_set",
+    async (_event, params: { files: Array<{ relativePath: string; source: string }> }) => {
+      if (!activeProjectRoot) throw new Error("No active project root is available.");
+      const projectRoot = activeProjectRoot;
+      if (!Array.isArray(params.files) || params.files.length < 1 || params.files.length > 8) {
+        throw new Error("A component file set must contain between one and eight files.");
+      }
+      const prepared = params.files.map((file) => {
+        if (!file || typeof file.relativePath !== "string" || typeof file.source !== "string") {
+          throw new Error("Every generated file needs a relative path and source.");
+        }
+        const relativePath = file.relativePath.trim();
+        if (!relativePath || !/\.(jsx|tsx)$/i.test(relativePath)) {
+          throw new Error("Generated component files must use a .jsx or .tsx path.");
+        }
+        if (file.source.length > 1024 * 1024) throw new Error("Generated component source is too large.");
+        const target = path.resolve(projectRoot, relativePath);
+        const relativeTarget = path.relative(projectRoot, target);
+        if (!relativeTarget || relativeTarget.startsWith("..") || path.isAbsolute(relativeTarget)) {
+          throw new Error("Generated component paths must stay inside the active project.");
+        }
+        return { relativePath, target, source: file.source };
+      });
+      const seen = new Set<string>();
+      for (const file of prepared) {
+        if (seen.has(file.target)) throw new Error(`Duplicate generated path ${file.relativePath}.`);
+        seen.add(file.target);
+        if (fs.existsSync(file.target)) throw new Error(`A component already exists at ${file.relativePath}.`);
+      }
+      const tempFiles: string[] = [];
+      const createdFiles: string[] = [];
+      try {
+        for (const [index, file] of prepared.entries()) {
+          await fs.promises.mkdir(path.dirname(file.target), { recursive: true });
+          const temp = `${file.target}.spartan-tmp-${process.pid}-${Date.now()}-${index}`;
+          await fs.promises.writeFile(temp, file.source, { encoding: "utf8", flag: "wx" });
+          tempFiles.push(temp);
+        }
+        for (const [index, file] of prepared.entries()) {
+          if (fs.existsSync(file.target)) throw new Error(`A component already exists at ${file.relativePath}.`);
+          await fs.promises.rename(tempFiles[index], file.target);
+          createdFiles.push(file.target);
+        }
+        return { paths: prepared.map((file) => file.target) };
+      } catch (error) {
+        await Promise.all(tempFiles.map(async (temp) => {
+          try { await fs.promises.unlink(temp); } catch { /* already moved or absent */ }
+        }));
+        await Promise.all(createdFiles.map(async (target) => {
+          try { await fs.promises.unlink(target); } catch { /* best-effort rollback of this new transaction */ }
+        }));
+        throw error;
+      }
+    },
+  );
+  ipcMain.handle(
     "spartan:design_tokens_source",
     async (_event, params: { path: string; rootDir: string; source: string }) => {
       if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");

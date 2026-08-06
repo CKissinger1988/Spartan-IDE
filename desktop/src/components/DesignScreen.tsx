@@ -4,7 +4,7 @@ import { screenReaderPreview as sharedScreenReaderPreview } from "../../../gui-b
 import type { ScreenReaderNode } from "../../../gui-builder/src/accessibility";
 import { designClipboardShortcut } from "../../../gui-builder/src/shortcuts";
 import { buildDesignHandoffMarkdown } from "../../../gui-builder/src/handoff";
-import { buildComponentScaffold } from "../../../gui-builder/src/scaffold";
+import { buildComponentPlaygroundScaffold, buildComponentScaffold } from "../../../gui-builder/src/scaffold";
 import { buildPreviewDocument } from "../../../gui-builder/src/preview";
 import type { ComponentPropDefinition } from "../../../gui-builder/src/scaffold";
 
@@ -172,7 +172,7 @@ interface DesignScreenProps {
   onOpenFile: (path: string) => void;
   onRevealSource: (path: string, line: number, character: number) => void;
   onContentChange: (path: string, content: string, saved?: boolean) => void;
-  onCreateComponent: (relativePath: string, source: string) => Promise<void>;
+  onCreateComponents: (files: Array<{ relativePath: string; source: string }>) => Promise<void>;
   /** Real project root, used to scan for the component palette. Absent
    * means the palette simply isn't offered -- there's nothing honest to
    * scan without it. */
@@ -871,7 +871,7 @@ export default function DesignScreen({
   onOpenFile,
   onRevealSource,
   onContentChange,
-  onCreateComponent,
+  onCreateComponents,
   projectRoot,
 }: DesignScreenProps): React.ReactElement {
   const [roots, setRoots] = useState<ComponentNode[]>([]);
@@ -919,6 +919,7 @@ export default function DesignScreen({
   const [newComponentPath, setNewComponentPath] = useState("");
   const [newComponentProps, setNewComponentProps] = useState("");
   const [newComponentVariant, setNewComponentVariant] = useState("default");
+  const [createPlayground, setCreatePlayground] = useState(true);
   const [creatingComponent, setCreatingComponent] = useState(false);
   const [paletteInsertPlacement, setPaletteInsertPlacement] = useState<ComponentInsertPlacement>("child");
   const [paletteFilter, setPaletteFilter] = useState("");
@@ -1806,19 +1807,35 @@ export default function DesignScreen({
         defaultVariant: newComponentVariant,
       });
       const relativePath = newComponentPath.trim() || `${newComponentName.trim()}.tsx`;
-      await onCreateComponent(relativePath, source);
+      const files = [{ relativePath, source }];
+      if (createPlayground) {
+        const normalizedPath = relativePath.replace(/\\/g, "/");
+        const slash = normalizedPath.lastIndexOf("/");
+        const directory = slash >= 0 ? normalizedPath.slice(0, slash + 1) : "";
+        const filename = (slash >= 0 ? normalizedPath.slice(slash + 1) : normalizedPath).replace(/\.(jsx|tsx)$/i, "");
+        files.push({
+          relativePath: `${directory}${filename}.playground.tsx`,
+          source: buildComponentPlaygroundScaffold({
+            componentName: newComponentName,
+            componentImportPath: `./${filename}`,
+            props,
+          }),
+        });
+      }
+      await onCreateComponents(files);
       setError(null);
       setCreateComponentOpen(false);
       setNewComponentName("");
       setNewComponentPath("");
       setNewComponentProps("");
       setNewComponentVariant("default");
+      setCreatePlayground(true);
     } catch (e) {
       setError(`Could not create component: ${(e as Error).message}`);
     } finally {
       setCreatingComponent(false);
     }
-  }, [newComponentName, newComponentPath, newComponentProps, newComponentVariant, onCreateComponent]);
+  }, [createPlayground, newComponentName, newComponentPath, newComponentProps, newComponentVariant, onCreateComponents]);
 
   /** Inserts a discovered component at the palette's selected child/sibling
    * placement, carrying its import along when it lives in another file -- the whole
@@ -2662,11 +2679,15 @@ export default function DesignScreen({
                   value={newComponentProps}
                   onChange={(event) => setNewComponentProps(event.target.value)}
                 />
+                <label className="design-palette-placement mono">
+                  <input type="checkbox" checked={createPlayground} onChange={(event) => setCreatePlayground(event.target.checked)} />
+                  Create typed playground companion
+                </label>
                 <button className="design-secondary-action mono" onClick={() => void createComponent()} disabled={creatingComponent || !newComponentName.trim()}>
                   {creatingComponent ? "Creating…" : "Create typed component"}
                 </button>
                 <div className="design-palette-empty mono">
-                  Schema lines use name:string, number, boolean, slot, or enum(a|b). The new file opens in the Editor.
+                  Schema lines use name:string, number, boolean, slot, or enum(a|b). The generated component and playground open in the Editor.
                 </div>
               </div>
             )}
