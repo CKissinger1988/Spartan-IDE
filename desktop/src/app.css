@@ -2609,6 +2609,15 @@
   margin-bottom: 10px;
 }
 
+.onboarding-logo {
+  width: 42px;
+  height: 42px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  box-shadow: var(--glow-accent);
+}
+
 .onboarding-tagline {
   color: var(--text-dim);
   font-size: 13px;

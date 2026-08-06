@@ -25,6 +25,7 @@
   "build": {
     "appId": "com.spartan-ide.SpartanIDE",
     "productName": "Spartan IDE",
+    "icon": "build-resources/icon.png",
     "copyright": "Copyright (c) 2026 CKissinger1988. All rights reserved. Proprietary and confidential.",
     "afterSign": "electron/afterSign.js",
     "publish": {

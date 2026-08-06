@@ -1076,7 +1076,7 @@ export default function App(): React.ReactElement {
     <div className="app-root">
       <div className="toolbar">
         <span className="toolbar-brand mono">
-          <span className="toolbar-brand-glyph" />
+          <img className="toolbar-brand-logo" src="/spartan-logo.png" alt="Spartan IDE emblem" />
           SPARTAN
           <span className="toolbar-brand-suffix">web</span>
         </span>

@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from "react";
 import NewProjectWizard from "./NewProjectWizard";
+import spartanLogo from "../assets/spartan-logo.png";
 
 interface OnboardingScreenProps {
   currentRoot: string;
@@ -129,7 +130,7 @@ export default function OnboardingScreen({
     <div className="onboarding-screen">
       <div className="onboarding-panel sf-chamfer">
         <div className="onboarding-brand mono">
-          <span className="nav-brand-glyph" aria-hidden="true" />
+          <img className="onboarding-logo" src={spartanLogo} alt="Spartan IDE emblem" />
           SPARTAN IDE
         </div>
         <div className="onboarding-tagline mono">

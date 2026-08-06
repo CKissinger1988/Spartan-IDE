@@ -159,6 +159,7 @@ Priority key:
 | logcat filtering / search / level coloring | P3 | Raw verbatim stream only. |
 | Signing / release (AAB) tooling | P3 | Debug-APK build only. |
 | GitHub Release update discovery across mobile and server builds | ✅ done | `spartan-updater` now parses the latest official GitHub Release and compares strict semver-style versions; both server CLIs expose `--check-update`, and mobile has the same guarded release client for its Android surface. Installation remains user/operator-confirmed. The release workflow publishes server binaries and `SHA256SUMS.txt` alongside platform artifacts. |
+| Spartan emblem identity across project surfaces | ✅ done | The supplied canonical emblem is now the app/package/web/site/mobile icon asset; the default UI palette is sampled from its red, steel, and graphite treatment across the maintained desktop, web, mobile, plugin, and native-renderer surfaces. |
 
 ## Production, packaging & distribution
 

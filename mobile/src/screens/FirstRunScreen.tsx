@@ -1,10 +1,11 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTheme } from '../ThemeContext';
 
 export function FirstRunScreen({ onContinue }: { onContinue: () => void }) {
   const { colors } = useTheme();
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}> 
+      <Image source={require('../../assets/icon.png')} style={styles.logo} accessibilityLabel="Spartan IDE emblem" />
       <Text style={[styles.brand, { color: colors.accent }]}>SPARTAN MOBILE</Text>
       <Text style={[styles.title, { color: colors.text }]}>Connect, review, and stay in control.</Text>
       <Text style={[styles.body, { color: colors.textMid }]}> 
@@ -24,6 +25,7 @@ export function FirstRunScreen({ onContinue }: { onContinue: () => void }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, justifyContent: 'center', padding: 28 },
+  logo: { width: 112, height: 112, borderRadius: 22, marginBottom: 18 },
   brand: { fontWeight: '800', fontSize: 14, letterSpacing: 2 },
   title: { marginTop: 14, fontWeight: '700', fontSize: 28, lineHeight: 35 },
   body: { marginTop: 18, fontSize: 15, lineHeight: 22 },

@@ -9438,6 +9438,14 @@ Android discovery only leads to an Android-confirmed APK installation. Desktop o
 explains that boundary, mobile has a persistent first-run screen covering pairing/WAN/SSH safety
 and update behavior, and both server binaries print concise first-time deployment/update guidance.
 
+### Spartan emblem brand system — current pass
+
+`file_000000007df481f79ac93786245a0afb.png` is the canonical supplied Spartan emblem. Its full
+mark now ships as the Electron package icon, web/site favicon and visible brand image, and the
+mobile app/adaptive/splash icons. The default palette across desktop, web, mobile, site, terminal,
+plugin theme pack, and native renderer selection/caret is now emblem red (`#F03133`), steel
+(`#AC9C9C`), and graphite rather than the former blue/gold theme.
+
 - Don't fork or vendor any VS Code/Monaco/CodeMirror code, ever, for any reason.
 - Don't add a new cloud model provider as a bespoke adapter — it goes through LiteLLM (§44)
   unless there's a specific reason (like Claude's prompt caching) to hand-roll it, as already
