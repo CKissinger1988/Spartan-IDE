@@ -143,11 +143,13 @@ fn lsp_implementation_reports_a_real_rust_analyzer_impl_target() {
                     std::thread::sleep(Duration::from_secs(3));
                     continue;
                 }
-                target_uri = arr[0]
-                    .get("uri")
-                    .and_then(|u| u.as_str())
-                    .expect("a validated implementation URI")
-                    .to_string();
+                target_uri = Some(
+                    arr[0]
+                        .get("uri")
+                        .and_then(|u| u.as_str())
+                        .expect("a validated implementation URI")
+                        .to_string(),
+                );
                 break;
             }
             // rust-analyzer can report either `[]` or `null` while its

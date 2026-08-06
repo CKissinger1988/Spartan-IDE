@@ -5272,7 +5272,7 @@ dependencies = [
 
 [[package]]
 name = "spartan-devserver"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "qrcode",
  "serde_json",
@@ -5284,7 +5284,7 @@ dependencies = [
 
 [[package]]
 name = "spartan-editor-core"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "accesskit",
  "accesskit_winit",

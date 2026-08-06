@@ -1,6 +1,6 @@
 {
   "name": "spartan-web",
-  "version": "0.2.0-beta.2",
+  "version": "0.2.0-beta.3",
   "private": true,
   "license": "Apache-2.0",
   "description": "Real, vscode.dev-inspired web app for Spartan IDE (§75.85/§75.89, task #81) -- concepts only, zero VS Code/vscode.dev code. Client-side half of the hybrid architecture: real File System Access API file editing backed by the real spartan-buffer engine compiled to WASM (crates/spartan-buffer-wasm). LSP/DAP/Leo connectivity via spartan-backend's real WebSocket transport (§75.88) is not wired yet -- see README.md.",

@@ -99,7 +99,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          VERSION="0.2.0-beta.1"
+          VERSION="${GITHUB_REF_NAME#v}"
           STAGE="spartan-ide-${VERSION}-x86_64-pc-windows-msvc"
           mkdir -p "dist/$STAGE"
           cp target/release/spartan-editor-core.exe "dist/$STAGE/"
