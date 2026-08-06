@@ -239,6 +239,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Typed component creation wizard with safe project-root file creation | Real |
 | Typed component playground companion generation with controlled prop inputs | Real |
 | Searchable image/font asset palette by label or project path | Real |
+| Sanitized inline SVG markup copy from discovered assets | Real |
 | Searchable design-token palette by name, value, or source path | Real |
 | Safe unwrapping of attribute-free direct wrappers | Real |
 | Same-parent sibling reordering with Move up/Move down controls | Real |

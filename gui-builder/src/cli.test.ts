@@ -46,6 +46,17 @@ test("real subprocess: CLI parse-source reads the live source from stdin", () =>
   assert.equal(JSON.parse(stdout).roots[0].tagName, "button");
 });
 
+test("real subprocess: CLI asset-source returns sanitized SVG markup", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gui-builder-cli-svg-test-"));
+  const file = path.join(dir, "icon.svg");
+  writeFileSync(file, `<svg onclick="bad()"><script>bad()</script><path d="M0 0" /></svg>`);
+  const { stdout, status } = runCli(["asset-source", file]);
+  rmSync(dir, { recursive: true, force: true });
+  assert.equal(status, 0);
+  assert.match(JSON.parse(stdout).source, /<path d="M0 0" \/>/);
+  assert.doesNotMatch(JSON.parse(stdout).source, /script|onclick/i);
+});
+
 test("real subprocess: CLI reports a real error (non-zero exit) for a missing file", () => {
   const { status } = runCli(["/nonexistent/path/does/not/exist.jsx"]);
   assert.equal(status, 1);

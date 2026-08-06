@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverAssets, fontFaceSnippet } from "./assets.js";
+import { discoverAssets, fontFaceSnippet, sanitizeSvgMarkup } from "./assets.js";
 
 function fixture(files: string[]): string {
   const root = mkdtempSync(join(tmpdir(), "spartan-assets-"));
@@ -56,4 +56,17 @@ test("derives a usable CSS family name for a discovered font", () => {
 test("never walks dependency or build output", () => {
   const root = fixture(["src/App.tsx", "node_modules/pkg/logo.png", "dist/generated.png", "public/ok.png"]);
   assert.deepEqual(discoverAssets(root).map((asset) => asset.relativePath), ["public/ok.png"]);
+});
+
+test("sanitizes executable and event-handler content from reusable SVG markup", () => {
+  const source = `<svg viewBox="0 0 10 10" onclick="alert(1)"><script>alert(2)</script><a href="javascript:evil()"><path d="M0 0" /></a></svg>`;
+  const safe = sanitizeSvgMarkup(source);
+  assert.match(safe, /^<svg/);
+  assert.doesNotMatch(safe, /script|onclick|javascript:/i);
+  assert.match(safe, /<path d="M0 0" \/>/);
+});
+
+test("rejects incomplete or non-SVG markup", () => {
+  assert.throws(() => sanitizeSvgMarkup("<div>nope</div>"), /complete root SVG/);
+  assert.throws(() => sanitizeSvgMarkup("<svg><path /></div>"), /complete root SVG/);
 });

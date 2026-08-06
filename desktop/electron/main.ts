@@ -415,6 +415,24 @@ app.whenReady().then(() => {
       return guiBuilder.discoverAssets(params.rootDir, params.fromFile);
     }
   );
+  ipcMain.handle(
+    "spartan:design_asset_source",
+    async (_event, params: { path: string }) => {
+      if (!activeProjectRoot) throw new Error("No active project root is available.");
+      if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
+      if (!params || typeof params.path !== "string" || !/\.svg$/i.test(params.path)) {
+        throw new Error("Only SVG assets can be read as reusable markup.");
+      }
+      const target = path.resolve(activeProjectRoot, params.path);
+      const relativeTarget = path.relative(activeProjectRoot, target);
+      if (!relativeTarget || relativeTarget.startsWith("..") || path.isAbsolute(relativeTarget)) {
+        throw new Error("Asset path must stay inside the active project.");
+      }
+      const stat = await fs.promises.stat(target);
+      if (!stat.isFile() || stat.size > 2 * 1024 * 1024) throw new Error("SVG asset is missing, not a file, or larger than 2 MB.");
+      return guiBuilder.readAssetSource(target);
+    },
+  );
   ipcMain.handle("spartan:design_tokens", async (_event, params: { rootDir: string }) => {
     if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
     return guiBuilder.discoverTokens(params.rootDir);

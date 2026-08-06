@@ -116,6 +116,11 @@ export class GuiBuilderClient {
     return JSON.parse(stdout);
   }
 
+  async readAssetSource(path: string): Promise<unknown> {
+    const stdout = await runCli(this.cliPath, ["asset-source", path]);
+    return JSON.parse(stdout);
+  }
+
   async discoverTokens(rootDir: string): Promise<unknown> {
     const stdout = await runCli(this.cliPath, ["tokens", rootDir]);
     return JSON.parse(stdout);

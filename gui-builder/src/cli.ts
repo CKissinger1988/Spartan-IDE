@@ -41,7 +41,7 @@ import { applyCanvasEdit } from "./edit.js";
 import { bundleComponent } from "./bundle.js";
 import { bundleComponentSource } from "./bundle.js";
 import { discoverComponents, discoverComponentsInSource } from "./components.js";
-import { discoverAssets } from "./assets.js";
+import { discoverAssets, sanitizeSvgMarkup } from "./assets.js";
 import { applyTokenValue, defineTokenValue, discoverTokens, discoverTokensInSource, removeTokenValue } from "./tokens.js";
 import type { CanvasEdit } from "./types.js";
 
@@ -169,6 +169,15 @@ function runAssets(rootDir: string | undefined, fromFile: string | undefined): v
   }
 }
 
+function runAssetSource(path: string | undefined): void {
+  if (!path || !/\.svg$/i.test(path)) fail("usage: cli.js asset-source <svg-file>");
+  try {
+    process.stdout.write(JSON.stringify({ source: sanitizeSvgMarkup(readFileSync(path, "utf8")) }));
+  } catch (e) {
+    fail(`failed to read SVG asset ${path}: ${(e as Error).message}`);
+  }
+}
+
 function runTokens(rootDir: string | undefined): void {
   if (!rootDir) fail("usage: cli.js tokens <project-dir>");
   try {
@@ -230,6 +239,8 @@ async function main(): Promise<void> {
     runComponentSource(process.argv[3], process.argv[4]);
   } else if (mode === "assets") {
     runAssets(process.argv[3], process.argv[4]);
+  } else if (mode === "asset-source") {
+    runAssetSource(process.argv[3]);
   } else if (mode === "tokens") {
     runTokens(process.argv[3]);
   } else if (mode === "token-source") {

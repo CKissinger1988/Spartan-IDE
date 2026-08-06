@@ -927,6 +927,7 @@ export default function DesignScreen({
   const [assetsOpen, setAssetsOpen] = useState(false);
   const [assetFilter, setAssetFilter] = useState("");
   const [copiedAsset, setCopiedAsset] = useState<string | null>(null);
+  const [copiedSvg, setCopiedSvg] = useState<string | null>(null);
   const [copiedFontCss, setCopiedFontCss] = useState<string | null>(null);
   const [fontCssFile, setFontCssFile] = useState("");
   const [tokens, setTokens] = useState<DiscoveredToken[]>([]);
@@ -1933,6 +1934,19 @@ export default function DesignScreen({
     }
   }, []);
 
+  const copySvgMarkup = useCallback(async (asset: DiscoveredAsset) => {
+    if (asset.kind !== "image" || !asset.label.toLowerCase().endsWith(".svg")) return;
+    try {
+      const result = await window.spartan.call("design_asset_source", { path: asset.file }) as { source: string };
+      await navigator.clipboard.writeText(result.source);
+      setCopiedSvg(asset.file);
+      setError(null);
+      window.setTimeout(() => setCopiedSvg((current) => current === asset.file ? null : current), 1600);
+    } catch (e) {
+      setError(`Could not copy SVG markup: ${(e as Error).message}`);
+    }
+  }, []);
+
   const copyFontCss = useCallback(async (asset: DiscoveredAsset) => {
     if (!asset.fontFaceSnippet) return;
     try {
@@ -2808,6 +2822,15 @@ export default function DesignScreen({
                         >
                           BG
                         </button>
+                        {asset.label.toLowerCase().endsWith(".svg") && (
+                          <button
+                            className="design-asset-action mono"
+                            title="Copy sanitized inline SVG markup"
+                            onClick={() => void copySvgMarkup(asset)}
+                          >
+                            {copiedSvg === asset.file ? "SVG ✓" : "SVG"}
+                          </button>
+                        )}
                       </div>
                     ))}
                     {filteredAssets.filter((asset) => asset.kind === "font").map((asset) => (

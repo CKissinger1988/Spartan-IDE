@@ -23,6 +23,21 @@ export interface DiscoveredAsset {
   fontFaceSnippet?: string;
 }
 
+/** Returns reusable SVG markup after removing executable or event-handler
+ * content. The Design canvas already runs inside a sandbox, but copied
+ * markup should remain safe when a user pastes it into a normal component. */
+export function sanitizeSvgMarkup(source: string): string {
+  const withoutScripts = source.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "");
+  const withoutHandlers = withoutScripts
+    .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/\s+(?:href|xlink:href)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|\s*javascript:[^\s>]+)/gi, "");
+  const markup = withoutHandlers.trim();
+  if (!/^<svg\b[\s>]/i.test(markup) || !/<\/svg\s*>$/i.test(markup)) {
+    throw new Error("The selected file does not contain a complete root SVG element.");
+  }
+  return markup;
+}
+
 const SKIP_DIRS = new Set([
   "node_modules",
   ".git",
