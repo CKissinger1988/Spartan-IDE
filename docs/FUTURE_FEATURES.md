@@ -229,8 +229,8 @@ palette that applies existing `var(--token)` values to selected style properties
 | Safe unwrapping of attribute-free direct wrappers | Real |
 | Same-parent sibling reordering with Move up/Move down controls | Real |
 | Keyboard canvas shortcuts (Escape clear, Delete remove, Ctrl/Cmd+D duplicate) | Real |
-| Lossless inline-style copy/paste across single or multiple selected nodes | Real |
-| Literal/expression JSX prop copy/paste across selected nodes with cross-file safety | Real |
+| Lossless inline-style copy/paste across single or multiple selected nodes, with literal-only cross-file fallback | Real |
+| Literal/expression JSX prop copy/paste across selected nodes with literal-only cross-file fallback | Real |
 | Collapsible structure-tree navigation with accessible expand state | Real |
 | Searchable structure-tree filtering with ancestor preservation | Real |
 | Keyboard-accessible treeitem selection and Left/Right expansion controls | Real |

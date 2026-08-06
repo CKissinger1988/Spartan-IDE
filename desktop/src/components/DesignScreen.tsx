@@ -1131,11 +1131,14 @@ export default function DesignScreen({
   const pasteStyles = useCallback(async () => {
     if (!styleClipboard || !activeFile || selectedIds.length === 0) return;
     const hasExpressions = Object.values(styleClipboard.entries).some((entry) => entry.kind === "expression");
-    if (styleClipboard.sourcePath !== activeFile.path && hasExpressions) {
-      setError("Expression-valued styles can only be pasted within their source component file; copy literal styles separately for cross-file use.");
+    const entries = styleClipboard.sourcePath === activeFile.path
+      ? Object.entries(styleClipboard.entries)
+      : Object.entries(styleClipboard.entries).filter(([, entry]) => entry.kind === "literal");
+    if (entries.length === 0) {
+      setError("The copied styles contain only expression values, which cannot be pasted into another component file.");
       return;
     }
-    const edits = selectedIds.flatMap((nodeId) => Object.entries(styleClipboard.entries).map(([property, entry]) => ({
+    const edits = selectedIds.flatMap((nodeId) => entries.map(([property, entry]) => ({
       kind: "StyleChange",
       nodeId,
       property,
@@ -1143,16 +1146,22 @@ export default function DesignScreen({
       valueType: entry.kind,
     })));
     await applyEditBatch(edits);
+    if (styleClipboard.sourcePath !== activeFile.path && hasExpressions) {
+      setError("Pasted literal styles; expression-valued styles were skipped because the target file may not share their bindings.");
+    }
   }, [styleClipboard, activeFile, selectedIds, applyEditBatch]);
 
   const pasteProps = useCallback(async () => {
     if (!propClipboard || !activeFile || selectedIds.length === 0) return;
     const hasExpressions = Object.values(propClipboard.entries).some((entry) => entry.kind === "expression");
-    if (propClipboard.sourcePath !== activeFile.path && hasExpressions) {
-      setError("Expression-valued props can only be pasted within their source component file; copy literal props separately for cross-file use.");
+    const entries = propClipboard.sourcePath === activeFile.path
+      ? Object.entries(propClipboard.entries)
+      : Object.entries(propClipboard.entries).filter(([, entry]) => entry.kind === "string");
+    if (entries.length === 0) {
+      setError("The copied props contain only expressions, which cannot be pasted into another component file.");
       return;
     }
-    const edits = selectedIds.flatMap((nodeId) => Object.entries(propClipboard.entries).map(([prop, entry]) => ({
+    const edits = selectedIds.flatMap((nodeId) => entries.map(([prop, entry]) => ({
       kind: "PropChange",
       nodeId,
       prop,
@@ -1160,6 +1169,9 @@ export default function DesignScreen({
       valueType: entry.kind,
     })));
     await applyEditBatch(edits);
+    if (propClipboard.sourcePath !== activeFile.path && hasExpressions) {
+      setError("Pasted literal props; expression-valued props were skipped because the target file may not share their bindings.");
+    }
   }, [propClipboard, activeFile, selectedIds, applyEditBatch]);
 
   // Keep common canvas shortcuts scoped to the Design screen and out of the
