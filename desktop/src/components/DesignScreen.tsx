@@ -815,6 +815,7 @@ export default function DesignScreen({
   const [previewInspection, setPreviewInspection] = useState<PreviewInspection | null>(null);
   const [boxModelVisible, setBoxModelVisible] = useState(false);
   const [copiedInspection, setCopiedInspection] = useState(false);
+  const [copiedAccessibility, setCopiedAccessibility] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [propKey, setPropKey] = useState("");
   const [propValue, setPropValue] = useState("");
@@ -1756,6 +1757,22 @@ export default function DesignScreen({
     }
   }, [previewInspection, selectedNode]);
 
+  const copyAccessibilityReport = useCallback(async () => {
+    if (!selectedNode || !previewInspection) return;
+    const lines = [
+      `Accessibility audit for <${selectedNode.tagName}> (${selectedNode.id})`,
+      `Rendered size: ${Math.round(previewInspection.rect.width)}×${Math.round(previewInspection.rect.height)}px`,
+      ...accessibilityFindings.map((finding) => `${finding.severity.toUpperCase()}: ${finding.message}`),
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setCopiedAccessibility(true);
+      window.setTimeout(() => setCopiedAccessibility(false), 1600);
+    } catch (e) {
+      setError(`Could not copy accessibility report: ${(e as Error).message}`);
+    }
+  }, [selectedNode, previewInspection, accessibilityFindings]);
+
   const copySelectedJsx = useCallback(async () => {
     if (!selectedNode?.sourceText || !hasSingleSelection) return;
     try {
@@ -2490,6 +2507,9 @@ export default function DesignScreen({
                 <div className="design-preview-status mono" aria-label="Accessibility audit">
                   Accessibility audit
                 </div>
+                <button className="design-secondary-action mono design-inspection-copy" onClick={() => void copyAccessibilityReport()}>
+                  {copiedAccessibility ? "Copied accessibility report" : "Copy accessibility report"}
+                </button>
                 {accessibilityFindings.map((finding, index) => (
                   <div className="design-preview-status mono" key={`${finding.severity}-${index}`}>
                     {finding.severity === "pass" ? "✓" : finding.severity === "error" ? "×" : finding.severity === "warning" ? "!" : "·"} {finding.message}
