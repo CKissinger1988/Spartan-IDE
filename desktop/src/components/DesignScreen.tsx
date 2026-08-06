@@ -72,6 +72,7 @@ interface DiscoveredAsset {
   fontFaceSnippet?: string;
   usageCount?: number;
   usageFiles?: string[];
+  usageLocations?: Array<{ file: string; line: number; column: number }>;
 }
 
 interface DiscoveredToken {
@@ -3130,8 +3131,21 @@ export default function DesignScreen({
                       <span>{assetUsageSelection.label} · {assetUsageSelection.usageCount ?? 0} reference{(assetUsageSelection.usageCount ?? 0) === 1 ? "" : "s"}</span>
                       <button className="design-asset-action mono" onClick={() => setAssetUsageSelection(null)}>Close</button>
                     </div>
-                    {(assetUsageSelection.usageFiles ?? []).length === 0 ? (
+                    {(assetUsageSelection.usageLocations ?? []).length === 0 && (assetUsageSelection.usageFiles ?? []).length === 0 ? (
                       <div className="design-palette-empty mono">No direct source references found.</div>
+                    ) : (assetUsageSelection.usageLocations ?? []).length > 0 ? (
+                      <div className="design-palette-usage-files">
+                        {(assetUsageSelection.usageLocations ?? []).map((location) => (
+                          <button
+                            key={`${location.file}:${location.line}:${location.column}`}
+                            className="design-palette-usage-file mono"
+                            title={`Reveal ${location.file} at line ${location.line}`}
+                            onClick={() => onRevealSource(location.file, location.line, location.column)}
+                          >
+                            {displayUsagePath(projectRoot, location.file)}:{location.line}
+                          </button>
+                        ))}
+                      </div>
                     ) : (
                       <div className="design-palette-usage-files">
                         {(assetUsageSelection.usageFiles ?? []).map((file) => (

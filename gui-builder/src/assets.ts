@@ -25,6 +25,8 @@ export interface DiscoveredAsset {
   usageCount?: number;
   /** Absolute source files containing direct references to this asset. */
   usageFiles?: string[];
+  /** Exact one-based line and zero-based column for each direct reference. */
+  usageLocations?: Array<{ file: string; line: number; column: number }>;
 }
 
 /** Returns reusable SVG markup after removing executable or event-handler
@@ -116,7 +118,7 @@ function referenceCandidates(rootDir: string, sourceFile: string, assetFile: str
   return [...candidates].filter((candidate) => candidate.length > 0);
 }
 
-function countLiteralReferences(source: string, candidates: string[]): number {
+function literalReferenceOffsets(source: string, candidates: string[]): number[] {
   const matches: Array<{ start: number; end: number }> = [];
   for (const candidate of candidates.sort((left, right) => right.length - left.length)) {
     let offset = 0;
@@ -133,23 +135,33 @@ function countLiteralReferences(source: string, candidates: string[]): number {
     if (occupied.some((existing) => match.start < existing.end && match.end > existing.start)) continue;
     occupied.push(match);
   }
-  return occupied.length;
+  return occupied.map((match) => match.start);
 }
 
-function collectAssetUsages(rootDir: string, assetFiles: string[]): Map<string, { count: number; files: string[] }> {
+function sourcePosition(source: string, offset: number): { line: number; column: number } {
+  const before = source.slice(0, offset);
+  const lineBreak = before.lastIndexOf("\n");
+  return {
+    line: before.split("\n").length,
+    column: offset - lineBreak - 1,
+  };
+}
+
+function collectAssetUsages(rootDir: string, assetFiles: string[]): Map<string, { count: number; files: string[]; locations: Array<{ file: string; line: number; column: number }> }> {
   const sourceFiles: string[] = [];
   collectSourceFiles(rootDir, 0, sourceFiles);
   sourceFiles.sort();
-  const usages = new Map<string, { count: number; files: string[] }>();
+  const usages = new Map<string, { count: number; files: string[]; locations: Array<{ file: string; line: number; column: number }> }>();
   for (const sourceFile of sourceFiles) {
     let source: string;
     try { source = readFileSync(sourceFile, "utf8"); } catch { continue; }
     for (const assetFile of assetFiles) {
-      const count = countLiteralReferences(source, referenceCandidates(rootDir, sourceFile, assetFile));
-      if (count === 0) continue;
-      const usage = usages.get(assetFile) ?? { count: 0, files: [] };
-      usage.count += count;
+      const offsets = literalReferenceOffsets(source, referenceCandidates(rootDir, sourceFile, assetFile));
+      if (offsets.length === 0) continue;
+      const usage = usages.get(assetFile) ?? { count: 0, files: [], locations: [] };
+      usage.count += offsets.length;
       usage.files.push(sourceFile);
+      usage.locations.push(...offsets.map((offset) => ({ file: sourceFile, ...sourcePosition(source, offset) })));
       usages.set(assetFile, usage);
     }
   }
@@ -195,6 +207,7 @@ export function discoverAssets(rootDir: string, fromFile?: string): DiscoveredAs
       label: file.slice(file.lastIndexOf(sep) + 1),
       usageCount: usages.get(file)?.count ?? 0,
       usageFiles: usages.get(file)?.files ?? [],
+      usageLocations: usages.get(file)?.locations ?? [],
     };
     if (kind === "font") {
       asset.fontFamily = fontFamilyName(asset.label);

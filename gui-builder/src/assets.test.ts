@@ -76,8 +76,16 @@ test("indexes direct image and font references while skipping dependencies and b
   assert.ok(font);
   assert.equal(logo.usageCount, 2);
   assert.deepEqual(logo.usageFiles, [join(root, "src/App.tsx"), join(root, "styles.css")]);
+  assert.deepEqual(logo.usageLocations?.map(({ file, line }) => ({ file, line })), [
+    { file: join(root, "src/App.tsx"), line: 1 },
+    { file: join(root, "styles.css"), line: 1 },
+  ]);
   assert.equal(font.usageCount, 2);
   assert.deepEqual(font.usageFiles, [join(root, "src/App.tsx"), join(root, "styles.css")]);
+  assert.deepEqual(font.usageLocations?.map(({ file, line }) => ({ file, line })), [
+    { file: join(root, "src/App.tsx"), line: 2 },
+    { file: join(root, "styles.css"), line: 1 },
+  ]);
 });
 
 test("sanitizes executable and event-handler content from reusable SVG markup", () => {
