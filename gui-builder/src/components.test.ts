@@ -129,6 +129,19 @@ test("indexes real direct JSX usages and deprecation replacement metadata", () =
   ]);
 });
 
+test("uses unsaved source overrides when indexing component references", () => {
+  const root = fixture({
+    "Button.jsx": "export function Button() { return <button />; }\n",
+    "App.jsx": "import { Button } from './Button';\nexport default function App() { return <main><Button /><Button /></main>; }\n",
+  });
+  const app = join(root, "App.jsx");
+  const found = discoverComponents(root, app, { [app]: "export default function App() { return <main />; }\n" });
+  const button = found.find((component) => component.name === "Button");
+  assert.equal(button?.usageCount, 0);
+  assert.deepEqual(button?.usageFiles, []);
+  assert.deepEqual(button?.usageLocations, []);
+});
+
 test("usage indexing ignores dependency and build output", () => {
   const root = fixture({
     "Card.jsx": "export function Card() { return <div />; }\n",

@@ -13,7 +13,7 @@
  *   node dist/cli.js bundle <path-to-jsx-or-tsx-file> (live visual render, §75.52)
  *   node dist/cli.js parse-source <path-to-jsx-or-tsx-file> (source from stdin)
  *   node dist/cli.js bundle-source <path-to-jsx-or-tsx-file> (source from stdin)
- *   node dist/cli.js components <project-dir> [from-file] (component browser, task #278)
+ *   node dist/cli.js components <project-dir> [from-file] [--source-overrides] (component browser, task #278)
  *   node dist/cli.js assets <project-dir> [from-file] [--source-overrides] (image asset browser)
  *   node dist/cli.js tokens <project-dir> [--source-overrides] (CSS custom-property browser)
  *
@@ -136,12 +136,12 @@ function runParseSource(path: string | undefined): void {
 /** Real component-library discovery (task #278). `fromFile` is optional
  * but strongly wanted by a real caller: with it, each result carries the
  * relative module specifier an import in that file would actually need. */
-function runComponents(rootDir: string | undefined, fromFile: string | undefined): void {
+function runComponents(rootDir: string | undefined, fromFile: string | undefined, readOverrides: boolean): void {
   if (!rootDir) {
     fail("usage: cli.js components <project-dir> [from-file]");
   }
   try {
-    const components = discoverComponents(rootDir, fromFile);
+    const components = discoverComponents(rootDir, fromFile, readOverrides ? sourceOverridesFromStdin() : {});
     process.stdout.write(JSON.stringify({ components }));
   } catch (e) {
     fail(`failed to discover components: ${(e as Error).message}`);
@@ -244,7 +244,7 @@ async function main(): Promise<void> {
   } else if (mode === "parse-source") {
     runParseSource(process.argv[3]);
   } else if (mode === "components") {
-    runComponents(process.argv[3], process.argv[4]);
+    runComponents(process.argv[3], process.argv[4], process.argv[5] === "--source-overrides");
   } else if (mode === "component-source") {
     runComponentSource(process.argv[3], process.argv[4]);
   } else if (mode === "assets") {

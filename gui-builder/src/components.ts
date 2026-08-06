@@ -122,6 +122,12 @@ function collectFiles(dir: string, depth: number, out: string[]): void {
   }
 }
 
+function isProjectSource(rootDir: string, file: string): boolean {
+  const normalizedRoot = rootDir.replace(/[\\/]$/, "").replace(/\\/g, "/");
+  const normalizedFile = file.replace(/\\/g, "/");
+  return normalizedFile.startsWith(`${normalizedRoot}/`) || normalizedFile === normalizedRoot;
+}
+
 /** Pulls every exported, capitalized binding name out of one already-
  * parsed module body, tagging which one (if any) is the default export. */
 function deprecationMetadata(node: Record<string, unknown>): { deprecated?: boolean; replacement?: string } {
@@ -495,18 +501,24 @@ function collectJsxTagNames(ast: unknown): Map<string, JsxUsage> {
  * temporarily invalid would be strictly worse than one that lists
  * everything it could actually read.
  */
-export function discoverComponents(rootDir: string, fromFile?: string): DiscoveredComponent[] {
+export function discoverComponents(rootDir: string, fromFile?: string, sourceOverrides: Record<string, string> = {}): DiscoveredComponent[] {
   const files: string[] = [];
   collectFiles(rootDir, 0, files);
-  files.sort();
+  for (const file of Object.keys(sourceOverrides)) {
+    if (isProjectSource(rootDir, file) && COMPONENT_EXTENSIONS.has(extname(file).toLowerCase())) files.push(file);
+  }
+  const uniqueFiles = [...new Set(files)];
+  uniqueFiles.sort();
 
   const out: DiscoveredComponent[] = [];
   const sources = new Map<string, string>();
-  for (const file of files) {
-    try {
-      const source = readFileSync(file, "utf8");
-      sources.set(file, source);
-    } catch { /* skip unreadable files */ }
+  for (const file of uniqueFiles) {
+    if (Object.prototype.hasOwnProperty.call(sourceOverrides, file)) {
+      sources.set(file, sourceOverrides[file]);
+      continue;
+    }
+    try { sources.set(file, readFileSync(file, "utf8")); }
+    catch { /* skip unreadable files */ }
   }
   const typeCatalog = buildPropTypeCatalog(rootDir, sources);
   for (const [file, source] of sources) {

@@ -1907,6 +1907,7 @@ export default function DesignScreen({
       const result = (await window.spartan.call("design_components", {
         rootDir: projectRoot,
         fromFile: activeFile?.path,
+        sourceOverrides: Object.fromEntries(openFiles.map((file) => [file.path, file.content])),
       })) as { components: DiscoveredComponent[] };
       let components = result.components;
       if (activeFile?.path) {
@@ -1924,7 +1925,7 @@ export default function DesignScreen({
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [paletteOpen, projectRoot, activeFile?.path]);
+  }, [paletteOpen, projectRoot, activeFile?.path, openFiles]);
 
   const createComponent = useCallback(async () => {
     if (!newComponentName.trim()) {

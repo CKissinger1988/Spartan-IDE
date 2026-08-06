@@ -76,6 +76,22 @@ test("real subprocess: CLI usage discovery reads source overrides from stdin", (
   assert.equal(JSON.parse(assets.stdout).assets.find((item: { file: string }) => item.file === asset).usageCount, 1);
 });
 
+test("real subprocess: component discovery reads source overrides from stdin", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gui-builder-cli-components-test-"));
+  const app = path.join(dir, "App.jsx");
+  const button = path.join(dir, "Button.jsx");
+  writeFileSync(app, "import { Button } from './Button';\nexport default function App() { return <Button />; }\n");
+  writeFileSync(button, "export function Button() { return <button />; }\n");
+  const result = runCli(["components", dir, app, "--source-overrides"], JSON.stringify({
+    [app]: "export default function App() { return <main />; }\n",
+  }));
+  rmSync(dir, { recursive: true, force: true });
+
+  assert.equal(result.status, 0);
+  const discovered = JSON.parse(result.stdout).components as Array<{ name: string; usageCount?: number }>;
+  assert.equal(discovered.find((component) => component.name === "Button")?.usageCount, 0);
+});
+
 test("real subprocess: CLI reports a real error (non-zero exit) for a missing file", () => {
   const { status } = runCli(["/nonexistent/path/does/not/exist.jsx"]);
   assert.equal(status, 1);

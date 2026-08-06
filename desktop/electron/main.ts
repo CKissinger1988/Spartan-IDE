@@ -396,9 +396,9 @@ app.whenReady().then(() => {
   );
   ipcMain.handle(
     "spartan:design_components",
-    async (_event, params: { rootDir: string; fromFile?: string }) => {
+    async (_event, params: { rootDir: string; fromFile?: string; sourceOverrides?: Record<string, string> }) => {
       if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
-      return guiBuilder.discoverComponents(params.rootDir, params.fromFile);
+      return guiBuilder.discoverComponents(params.rootDir, params.fromFile, params.sourceOverrides ?? {});
     }
   );
   ipcMain.handle(

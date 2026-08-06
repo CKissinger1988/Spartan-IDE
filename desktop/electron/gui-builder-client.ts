@@ -99,9 +99,11 @@ export class GuiBuilderClient {
    * result carry the relative module specifier an import in that file
    * would actually need, so inserting a component from another file can
    * bring its import with it. */
-  async discoverComponents(rootDir: string, fromFile?: string): Promise<unknown> {
-    const args = fromFile ? ["components", rootDir, fromFile] : ["components", rootDir];
-    const stdout = await runCli(this.cliPath, args);
+  async discoverComponents(rootDir: string, fromFile?: string, sourceOverrides: Record<string, string> = {}): Promise<unknown> {
+    const args = fromFile
+      ? ["components", rootDir, fromFile, "--source-overrides"]
+      : ["components", rootDir, "", "--source-overrides"];
+    const stdout = await runCli(this.cliPath, args, JSON.stringify(sourceOverrides));
     return JSON.parse(stdout);
   }
 
