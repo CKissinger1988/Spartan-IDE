@@ -297,6 +297,87 @@ function inspectionCssSnapshot(inspection: PreviewInspection, tagName: string): 
   return `/* Rendered <${tagName}> ${inspection.nodeId} snapshot */\n${tagName} {\n${lines.join("\n")}\n}`;
 }
 
+type AccessibilitySeverity = "error" | "warning" | "pass" | "info";
+
+interface AccessibilityFinding {
+  severity: AccessibilitySeverity;
+  message: string;
+}
+
+function propSummaryValue(node: ComponentNode, name: string): string | null {
+  const summary = node.props[name];
+  if (!summary) return null;
+  if (summary.kind === "string") return summary.value.trim();
+  if (summary.kind === "expression") return summary.source.trim();
+  return null;
+}
+
+function parseCssColor(value: string): [number, number, number] | null {
+  const normalized = value.trim().toLowerCase();
+  const hex = normalized.match(/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/);
+  if (hex) {
+    const digits = hex[1];
+    const expanded = digits.length <= 4 ? digits.split("").map((digit) => digit + digit).join("") : digits;
+    if (expanded.length === 8 && Number.parseInt(expanded.slice(6), 16) === 0) return null;
+    return [0, 2, 4].map((offset) => Number.parseInt(expanded.slice(offset, offset + 2), 16)) as [number, number, number];
+  }
+  const rgb = normalized.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+%?))?\s*\)$/);
+  if (!rgb) return null;
+  const alpha = rgb[4]?.endsWith("%") ? Number.parseFloat(rgb[4]) / 100 : rgb[4] === undefined ? 1 : Number.parseFloat(rgb[4]);
+  if (!Number.isFinite(alpha) || alpha === 0) return null;
+  return [1, 2, 3].map((index) => Math.max(0, Math.min(255, Number.parseFloat(rgb[index])))) as [number, number, number];
+}
+
+function relativeLuminance(color: [number, number, number]): number {
+  const channels = color.map((channel) => channel / 255).map((channel) => channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+}
+
+function contrastRatio(foreground: [number, number, number], background: [number, number, number]): number {
+  const light = Math.max(relativeLuminance(foreground), relativeLuminance(background));
+  const dark = Math.min(relativeLuminance(foreground), relativeLuminance(background));
+  return (light + 0.05) / (dark + 0.05);
+}
+
+function accessibilityAudit(node: ComponentNode, inspection: PreviewInspection | null): AccessibilityFinding[] {
+  const findings: AccessibilityFinding[] = [];
+  const tagName = node.tagName.toLowerCase();
+  if (tagName === "img") {
+    const alt = propSummaryValue(node, "alt");
+    findings.push(alt ? { severity: "pass", message: "Image has an alt value." } : { severity: "error", message: "Image is missing a non-empty alt prop." });
+  }
+  const interactive = new Set(["a", "button", "input", "select", "textarea"]);
+  if (interactive.has(tagName)) {
+    const accessibleName = propSummaryValue(node, "aria-label") || propSummaryValue(node, "title") || node.textContent?.trim();
+    findings.push(accessibleName
+      ? { severity: "pass", message: "Interactive element has a detectable accessible name." }
+      : { severity: "error", message: "Interactive element has no text, aria-label, or title." });
+    if (inspection) {
+      const tooSmall = inspection.rect.width < 44 || inspection.rect.height < 44;
+      findings.push(tooSmall
+        ? { severity: "warning", message: `Interactive target is ${Math.round(inspection.rect.width)}×${Math.round(inspection.rect.height)}px; aim for at least 44×44px.` }
+        : { severity: "pass", message: "Interactive target meets the 44×44px minimum size." });
+    }
+  }
+  if (inspection) {
+    const foreground = parseCssColor(inspection.styles.color);
+    const background = parseCssColor(inspection.styles.backgroundColor);
+    if (foreground && background) {
+      const ratio = contrastRatio(foreground, background);
+      const fontSize = Number.parseFloat(inspection.styles.fontSize);
+      const fontWeight = Number.parseInt(inspection.styles.fontWeight || "400", 10);
+      const largeText = fontSize >= 18 || (fontSize >= 14 && fontWeight >= 700);
+      const required = largeText ? 3 : 4.5;
+      findings.push(ratio >= required
+        ? { severity: "pass", message: `Text contrast is ${ratio.toFixed(2)}:1 (minimum ${required}:1).` }
+        : { severity: "error", message: `Text contrast is ${ratio.toFixed(2)}:1 (minimum ${required}:1).` });
+    } else {
+      findings.push({ severity: "info", message: "Contrast could not be computed from the selected element's direct colors." });
+    }
+  }
+  return findings;
+}
+
 /** What kind of real input widget a curated style property deserves.
  * `text` is the honest fallback for anything whose real value space is
  * too open to constrain (a shadow, a transform, a font stack). */
@@ -735,6 +816,10 @@ export default function DesignScreen({
   // reads it -- a `const` referenced before its declaration is a real
   // TDZ ReferenceError at first render, not a hoisting no-op.
   const selectedNode = selectedId ? findNode(roots, selectedId) : null;
+  const accessibilityFindings = useMemo(
+    () => selectedNode ? accessibilityAudit(selectedNode, previewInspection?.nodeId === selectedNode.id ? previewInspection : null) : [],
+    [selectedNode, previewInspection]
+  );
   const selectionCount = selectedIds.length;
   const hasSingleSelection = selectionCount === 1;
   const selectedSibling = selectedId && hasSingleSelection ? findParentEntry(roots, selectedId) : null;
@@ -2049,6 +2134,14 @@ export default function DesignScreen({
                 <button className="design-secondary-action mono design-inspection-copy" onClick={() => void copyInspection()}>
                   {copiedInspection ? "Copied CSS snapshot" : "Copy CSS snapshot"}
                 </button>
+                <div className="design-preview-status mono" aria-label="Accessibility audit">
+                  Accessibility audit
+                </div>
+                {accessibilityFindings.map((finding, index) => (
+                  <div className="design-preview-status mono" key={`${finding.severity}-${index}`}>
+                    {finding.severity === "pass" ? "✓" : finding.severity === "error" ? "×" : finding.severity === "warning" ? "!" : "·"} {finding.message}
+                  </div>
+                ))}
                 <div className="design-inspection-actions">
                   <button className="design-secondary-action mono" onClick={() => setPreviewFocus(true)}>Focus preview</button>
                   <button className="design-secondary-action mono" onClick={() => setPreviewFocus(false)}>Blur preview</button>

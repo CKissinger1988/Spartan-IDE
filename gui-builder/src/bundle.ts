@@ -272,6 +272,7 @@ try {
         color: style.color,
         backgroundColor: style.backgroundColor,
         fontSize: style.fontSize,
+        fontWeight: style.fontWeight,
         padding: style.padding,
         margin: style.margin,
         marginTop: style.marginTop,

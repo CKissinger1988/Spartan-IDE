@@ -248,6 +248,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Static hover/active preview controls for authored `:hover`/`:active` styles | Real |
 | Source-location reveal from selected Design nodes into the Editor | Real |
 | Exact selected-element JSX source copy from the Design inspector | Real |
+| Selected-element accessibility audit overlay (alt text, accessible names, target size, contrast) | Real |
 | Relative image asset insertion as inline background images | Real |
 | Configurable string props and initial text for inserted elements | Real |
 | Desktop/Tablet/Mobile viewport presets and zoom | Real |
