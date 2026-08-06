@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All twenty-one members of the `CanvasEdit` union are real and implemented:
+ * Every member of the `CanvasEdit` union is real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -866,6 +866,29 @@ function applyComponentInsertMany(
   }
 }
 
+function parseSubtreeSource(source: string): AnyNode {
+  const trimmed = source.trim();
+  if (!trimmed) throw new Error("SubtreeInsert requires a non-empty JSX element source.");
+  try {
+    const fragment = recast.parse(`const __spartanSubtree = ${trimmed};`, { parser: parserAdapter }) as AnyNode;
+    const declaration = fragment.program.body[0]?.declarations?.[0];
+    const element = declaration?.init;
+    if (!element || element.type !== "JSXElement") {
+      throw new Error("source must contain exactly one JSX element, not a fragment, expression, or multiple roots");
+    }
+    return JSON.parse(JSON.stringify(element)) as AnyNode;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("source must contain")) throw error;
+    throw new Error(`SubtreeInsert source is not valid JSX: ${(error as Error).message}`);
+  }
+}
+
+function applySubtreeInsert(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "SubtreeInsert" }>): void {
+  const parent = nodesById.get(edit.parentId);
+  if (!parent) throw new Error(`No element with id "${edit.parentId}" found in the current source.`);
+  spliceIn(parent, parseSubtreeSource(edit.source), edit.index);
+}
+
 /** Parses `source`, locates the element(s) `edit` refers to (using the
  * exact same id-assignment traversal `parseComponent` uses, run fresh
  * against this parse -- see tree.ts), mutates the AST in place, and
@@ -980,6 +1003,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       if (edit.importFrom) {
         ensureImport(ast, edit.tagName.split(".")[0], edit.importFrom, edit.importIsDefault ?? false);
       }
+      break;
+    case "SubtreeInsert":
+      applySubtreeInsert(nodesById, edit);
       break;
   }
 

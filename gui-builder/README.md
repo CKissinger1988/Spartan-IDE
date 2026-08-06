@@ -16,7 +16,7 @@ summarizes.
   click on.
 - `src/edit.ts` (`applyCanvasEdit`) — real "Canvas → Code": takes a
   structured `CanvasEdit` (`StyleChange`, `StyleRemove`, `StyleClear`, `StyleClearMany`, `PropChange`, `TagChangeMany`, `TextChangeMany`, `Reparent`, `DeleteMany`, `DuplicateMany`, `ReorderMany`, or
-  `ComponentInsert`/`ComponentInsertMany` (including string and typed number/boolean/expression props, optional direct text, dot-separated member-expression tags such as `UI.Button`, and atomic child/sibling placement across selections), `Delete`, `Duplicate`, `TextChange`, and `PropRemove`, matching the shape
+  `ComponentInsert`/`ComponentInsertMany` (including string and typed number/boolean/expression props, optional direct text, dot-separated member-expression tags such as `UI.Button`, and atomic child/sibling placement across selections), `SubtreeInsert` for guarded same-file JSX subtree paste, `Delete`, `Duplicate`, `TextChange`, and `PropRemove`, matching the shape
   §6.2 already sketched in Rust) and mutates the *real AST node* it targets
   directly, then regenerates source via `recast.print`, which reuses the
   original source text for every node the edit didn't touch. This is the
@@ -53,7 +53,7 @@ summarizes.
 - The sandbox inspection relay includes viewport-relative `x`, `y`, `right`,
   and `bottom` bounds alongside width and height, so the desktop inspector and
   copied handoff snapshots describe the element's actual rendered position.
-- `src/*.test.ts` — 139 real tests (Node's built-in `node:test` runner, no
+- `src/*.test.ts` — 141 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.

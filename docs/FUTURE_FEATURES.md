@@ -245,6 +245,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Versioned system-clipboard interoperability for Design styles and props with in-memory fallback | Real |
 | Lossless inline-style copy/paste across single or multiple selected nodes, with literal-only cross-file fallback | Real |
 | Literal/expression JSX prop copy/paste across selected nodes with literal-only cross-file fallback | Real |
+| Versioned same-file JSX subtree copy/paste with guarded AST insertion | Real |
 | Collapsible structure-tree navigation with accessible expand state | Real |
 | Searchable structure-tree filtering with ancestor preservation | Real |
 | Keyboard-accessible treeitem selection and Left/Right expansion controls | Real |

@@ -100,15 +100,23 @@ interface PropClipboard {
   entries: Record<string, PropClipboardEntry>;
 }
 
+interface SubtreeClipboard {
+  sourcePath: string;
+  sourceTagName: string;
+  source: string;
+}
+
 const STYLE_CLIPBOARD_KIND = "spartan.gui-builder.styles";
 const PROP_CLIPBOARD_KIND = "spartan.gui-builder.props";
 const VARIANT_CLIPBOARD_KIND = "spartan.gui-builder.variant";
+const SUBTREE_CLIPBOARD_KIND = "spartan.gui-builder.subtree";
 const CLIPBOARD_VERSION = 1;
 
 function parseDesignClipboard(raw: string, kind: typeof STYLE_CLIPBOARD_KIND): StyleClipboard | null;
 function parseDesignClipboard(raw: string, kind: typeof PROP_CLIPBOARD_KIND): PropClipboard | null;
 function parseDesignClipboard(raw: string, kind: typeof VARIANT_CLIPBOARD_KIND): VariantClipboard | null;
-function parseDesignClipboard(raw: string, kind: string): StyleClipboard | PropClipboard | VariantClipboard | null {
+function parseDesignClipboard(raw: string, kind: typeof SUBTREE_CLIPBOARD_KIND): SubtreeClipboard | null;
+function parseDesignClipboard(raw: string, kind: string): StyleClipboard | PropClipboard | VariantClipboard | SubtreeClipboard | null {
   try {
     const value = JSON.parse(raw) as Record<string, unknown>;
     if (value.kind !== kind || value.version !== CLIPBOARD_VERSION || typeof value.sourcePath !== "string") return null;
@@ -120,6 +128,11 @@ function parseDesignClipboard(raw: string, kind: string): StyleClipboard | PropC
           source: value.source,
           updatedAt: typeof value.updatedAt === "number" && Number.isFinite(value.updatedAt) ? value.updatedAt : Date.now(),
         }
+        : null;
+    }
+    if (kind === SUBTREE_CLIPBOARD_KIND) {
+      return typeof value.sourceTagName === "string" && typeof value.source === "string" && value.source.trim().length > 0
+        ? { sourcePath: value.sourcePath, sourceTagName: value.sourceTagName, source: value.source }
         : null;
     }
     if (typeof value.sourceTagName !== "string" || !value.entries || typeof value.entries !== "object" || Array.isArray(value.entries)) return null;
@@ -852,6 +865,8 @@ export default function DesignScreen({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [styleClipboard, setStyleClipboard] = useState<StyleClipboard | null>(null);
   const [propClipboard, setPropClipboard] = useState<PropClipboard | null>(null);
+  const [subtreeClipboard, setSubtreeClipboard] = useState<SubtreeClipboard | null>(null);
+  const [copiedSubtree, setCopiedSubtree] = useState(false);
   const [variantClipboard, setVariantClipboard] = useState<VariantClipboard | null>(null);
   const [copiedVariant, setCopiedVariant] = useState<string | null>(null);
   const [previewInspection, setPreviewInspection] = useState<PreviewInspection | null>(null);
@@ -1965,6 +1980,46 @@ export default function DesignScreen({
     }
   }, [hasSingleSelection, selectedNode]);
 
+  const copySubtree = useCallback(async () => {
+    if (!selectedNode?.sourceText || !hasSingleSelection) return;
+    const clipboard: SubtreeClipboard = {
+      sourcePath: activeFile?.path ?? "",
+      sourceTagName: selectedNode.tagName,
+      source: selectedNode.sourceText,
+    };
+    setSubtreeClipboard(clipboard);
+    setCopiedSubtree(true);
+    window.setTimeout(() => setCopiedSubtree(false), 1600);
+    try {
+      await navigator.clipboard.writeText(JSON.stringify({ kind: SUBTREE_CLIPBOARD_KIND, version: CLIPBOARD_VERSION, ...clipboard }));
+    } catch {
+      // Keep the in-memory subtree clipboard usable when the host denies permission.
+    }
+  }, [activeFile?.path, hasSingleSelection, selectedNode]);
+
+  const pasteSubtree = useCallback(async () => {
+    if (!activeFile || !hasSingleSelection || selectedIds.length !== 1) return;
+    let clipboard = subtreeClipboard;
+    try {
+      const systemClipboard = parseDesignClipboard(await navigator.clipboard.readText(), SUBTREE_CLIPBOARD_KIND);
+      if (systemClipboard) {
+        clipboard = systemClipboard;
+        setSubtreeClipboard(systemClipboard);
+      }
+    } catch {
+      // Fall back to the session clipboard when system clipboard access is unavailable.
+    }
+    if (!clipboard) {
+      setError("Copy a subtree first, or place a Spartan GUI Builder subtree on the system clipboard.");
+      return;
+    }
+    if (clipboard.sourcePath !== activeFile.path) {
+      setError("Subtree paste is limited to the same component file so imported bindings cannot silently break the preview.");
+      return;
+    }
+    await applyEditObject({ kind: "SubtreeInsert", parentId: selectedIds[0], source: clipboard.source });
+  }, [activeFile, hasSingleSelection, selectedIds, subtreeClipboard, applyEditObject]);
+
   const setPreviewFocus = useCallback((focused: boolean) => {
     if (!selectedId || !hasSingleSelection) return;
     iframeRef.current?.contentWindow?.postMessage(
@@ -2698,14 +2753,31 @@ export default function DesignScreen({
               </button>
             )}
             {hasSingleSelection && selectedNode.sourceText && (
-              <button
-                className="design-secondary-action mono design-reveal-source"
-                title="Copy the selected element's exact JSX source"
-                onClick={() => void copySelectedJsx()}
-              >
-                Copy JSX
-              </button>
+              <>
+                <button
+                  className="design-secondary-action mono design-reveal-source"
+                  title="Copy the selected element's exact JSX source"
+                  onClick={() => void copySelectedJsx()}
+                >
+                  Copy JSX
+                </button>
+                <button
+                  className="design-secondary-action mono design-reveal-source"
+                  title="Copy the selected JSX subtree as a versioned Spartan GUI Builder clipboard item"
+                  onClick={() => void copySubtree()}
+                >
+                  {copiedSubtree ? "Copied subtree" : "Copy subtree"}
+                </button>
+              </>
             )}
+            <button
+              className="design-secondary-action mono design-reveal-source"
+              disabled={!hasSingleSelection}
+              title="Paste a same-file Spartan GUI Builder subtree as a child of the selected element"
+              onClick={() => void pasteSubtree()}
+            >
+              Paste subtree{subtreeClipboard ? ` · <${subtreeClipboard.sourceTagName}>` : ""}
+            </button>
             {hasSingleSelection && previewInspection?.nodeId === selectedNode.id && (
               <div className="design-inspection mono" aria-label="Rendered element inspection">
                 <div className="design-inspection-title">Rendered preview</div>

@@ -517,6 +517,29 @@ test("ComponentInsert creates a new self-closing element as a child of the targe
   assert.match(result, /<div>\s*<span \/>\s*<Button \/>\s*<\/div>/);
 });
 
+test("SubtreeInsert pastes one nested JSX subtree and keeps its children", () => {
+  const source = `const X = () => <main><section /></main>;`;
+  const result = applyCanvasEdit(source, {
+    kind: "SubtreeInsert",
+    parentId: "n0",
+    source: `<Card data-kind="copy"><span>nested</span></Card>`,
+  });
+  assert.match(result, /<Card data-kind="copy">[\s\S]*<span>nested<\/span>[\s\S]*<\/Card>/);
+  assert.doesNotThrow(() => parseComponent(result));
+});
+
+test("SubtreeInsert refuses fragments and multiple roots", () => {
+  const source = `const X = () => <main />;`;
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "SubtreeInsert", parentId: "n0", source: `<> <span /> </>` }),
+    /exactly one JSX element/,
+  );
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "SubtreeInsert", parentId: "n0", source: `<span /><em />` }),
+    /valid JSX/,
+  );
+});
+
 test("Delete removes the selected element and its complete JSX subtree", () => {
   const source = `const X = () => <main><section><span>gone</span></section><aside /></main>;`;
   const result = applyCanvasEdit(source, { kind: "Delete", nodeId: "n1" });

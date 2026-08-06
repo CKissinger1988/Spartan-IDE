@@ -8,7 +8,7 @@
  * real JS/JSX AST work actually happens, per §6.1's own "lightweight
  * dev-server bridge" description).
  *
- * All twenty-eight members of the full spec's `CanvasEdit` union are now real and
+ * All members of the full spec's `CanvasEdit` union are now real and
  * implemented by `applyCanvasEdit`: `StyleChange`/`PropChange` (original
  * v1), and `Reparent`/`ComponentInsert` (closing the gap this file's own
  * doc comment used to name as unattempted -- see edit.ts's doc comment
@@ -214,4 +214,11 @@ export type CanvasEdit =
       childrenText?: string;
       importFrom?: string;
       importIsDefault?: boolean;
-    };
+    }
+  /** Inserts one parsed JSX element subtree as a child of an existing target.
+   * The source must contain exactly one JSX element; expressions, fragments,
+   * and multiple sibling roots are refused so a clipboard paste cannot
+   * silently change surrounding structure. Bindings are intentionally not
+   * imported by this low-level edit -- the Design screen only offers cross-
+   * file paste when the copied source came from the same file. */
+  | { kind: "SubtreeInsert"; parentId: string; source: string; index?: number };
