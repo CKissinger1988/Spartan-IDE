@@ -57,6 +57,19 @@ interface DiscoveredComponent {
   usageFiles?: string[];
   deprecated?: boolean;
   replacement?: string;
+  propHints?: Array<{
+    name: string;
+    type: string;
+    required: boolean;
+    defaultValue?: string;
+  }>;
+}
+
+function componentPropSummary(component: DiscoveredComponent): string {
+  const hints = component.propHints ?? [];
+  if (hints.length === 0) return "";
+  const shown = hints.slice(0, 4).map((prop) => `${prop.name}${prop.required ? "" : "?"}: ${prop.type}`).join(", ");
+  return ` · props ${shown}${hints.length > 4 ? `, +${hints.length - 4}` : ""}`;
 }
 
 interface DiscoveredAsset {
@@ -1128,7 +1141,7 @@ export default function DesignScreen({
   const filteredPalette = useMemo(() => {
     const query = paletteFilter.trim().toLowerCase();
     if (!query) return palette;
-    return palette.filter((component) => `${component.name} ${component.file} ${component.importFrom ?? ""} ${component.replacement ?? ""}`.toLowerCase().includes(query));
+    return palette.filter((component) => `${component.name} ${component.file} ${component.importFrom ?? ""} ${component.replacement ?? ""} ${component.propHints?.map((prop) => `${prop.name} ${prop.type}`).join(" ") ?? ""}`.toLowerCase().includes(query));
   }, [palette, paletteFilter]);
   const filteredAssets = useMemo(() => {
     const query = assetFilter.trim().toLowerCase();
@@ -2979,6 +2992,7 @@ export default function DesignScreen({
                         {c.importFrom ?? "this file"}
                         {typeof c.usageCount === "number" ? ` · ${c.usageCount} usage${c.usageCount === 1 ? "" : "s"}` : ""}
                         {c.deprecated ? ` · deprecated${c.replacement ? ` → ${c.replacement}` : ""}` : ""}
+                        {componentPropSummary(c)}
                       </span>
                     </button>
                   ))

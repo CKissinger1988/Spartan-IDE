@@ -22,6 +22,17 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, dirname, extname, sep } from "node:path";
 import { parserAdapter } from "./parserAdapter.js";
 
+export interface ComponentPropHint {
+  /** Public prop name as it appears in the component's props type/pattern. */
+  name: string;
+  /** Source-level type text when TypeScript declared one, otherwise unknown. */
+  type: string;
+  /** False for an optional field or a destructured field with a default. */
+  required: boolean;
+  /** Verbatim default expression when the parameter destructures one. */
+  defaultValue?: string;
+}
+
 export interface DiscoveredComponent {
   /** The real exported binding name, e.g. `"Card"`. */
   name: string;
@@ -46,6 +57,8 @@ export interface DiscoveredComponent {
   /** Parsed from a real leading `@deprecated` JSDoc tag, when present. */
   deprecated?: boolean;
   replacement?: string;
+  /** Safe, source-level hints for the component's public props API. */
+  propHints?: ComponentPropHint[];
 }
 
 /** Directories never worth walking for a component palette -- build
@@ -163,6 +176,122 @@ function exportedComponentNames(body: unknown[]): { name: string; isDefault: boo
   return found.filter((f) => isComponentName(f.name));
 }
 
+function nodeText(source: string, node: unknown): string {
+  if (!node || typeof node !== "object") return "";
+  const value = node as Record<string, unknown>;
+  return typeof value.start === "number" && typeof value.end === "number"
+    ? source.slice(value.start, value.end).trim()
+    : "";
+}
+
+function identifierName(node: unknown): string | null {
+  if (!node || typeof node !== "object") return null;
+  const value = node as Record<string, unknown>;
+  return value.type === "Identifier" && typeof value.name === "string" ? value.name : null;
+}
+
+function typeName(node: unknown): string | null {
+  if (!node || typeof node !== "object") return null;
+  const value = node as Record<string, unknown>;
+  if (value.type === "TSTypeReference") return identifierName(value.typeName);
+  return null;
+}
+
+function typeMembers(node: unknown): Record<string, Record<string, unknown>> {
+  if (!node || typeof node !== "object") return {};
+  const value = node as Record<string, unknown>;
+  if (value.type === "TSInterfaceDeclaration") {
+    const body = value.body as Record<string, unknown> | undefined;
+    return Object.fromEntries(((body?.body as Record<string, unknown>[]) ?? [])
+      .map((member) => [identifierName(member.key), member] as const)
+      .filter(([name]) => Boolean(name)));
+  }
+  if (value.type === "TSTypeAliasDeclaration") {
+    const annotation = value.typeAnnotation as Record<string, unknown> | undefined;
+    if (annotation?.type === "TSTypeLiteral") {
+      return Object.fromEntries(((annotation.members as Record<string, unknown>[]) ?? [])
+        .map((member) => [identifierName(member.key), member] as const)
+        .filter(([name]) => Boolean(name)));
+    }
+  }
+  return {};
+}
+
+function propTypeText(source: string, member: Record<string, unknown> | undefined): string {
+  const annotation = member?.typeAnnotation as Record<string, unknown> | undefined;
+  return annotation?.typeAnnotation ? nodeText(source, annotation.typeAnnotation) : "unknown";
+}
+
+function parameterPropNames(source: string, parameter: Record<string, unknown>): Map<string, { required: boolean; defaultValue?: string }> {
+  const result = new Map<string, { required: boolean; defaultValue?: string }>();
+  const pattern = parameter.type === "ObjectPattern" ? parameter : null;
+  if (!pattern) {
+    // `function Card(props: CardProps)` exposes the named type's fields, not
+    // a prop literally called `props`; an untyped identifier has no safe
+    // field-level information to offer.
+    return result;
+  }
+  for (const raw of (pattern.properties as Record<string, unknown>[]) ?? []) {
+    if (raw.type !== "ObjectProperty") continue;
+    const name = identifierName(raw.key);
+    if (!name) continue;
+    const value = raw.value as Record<string, unknown> | undefined;
+    if (value?.type === "AssignmentPattern") {
+      result.set(name, { required: false, defaultValue: nodeText(source, value.right) });
+    } else {
+      result.set(name, { required: true });
+    }
+  }
+  return result;
+}
+
+function componentPropHints(source: string, body: unknown[]): Map<string, ComponentPropHint[]> {
+  const declarations = new Map<string, Record<string, unknown>>();
+  const propTypes = new Map<string, Record<string, Record<string, unknown>>>();
+  for (const raw of body) {
+    const node = raw as Record<string, unknown>;
+    if (node.type === "TSInterfaceDeclaration" || node.type === "TSTypeAliasDeclaration") {
+      const name = identifierName(node.id);
+      if (name) propTypes.set(name, typeMembers(node));
+    }
+    const declaration = node.type === "ExportNamedDeclaration" || node.type === "ExportDefaultDeclaration"
+      ? node.declaration as Record<string, unknown> | undefined
+      : node;
+    if (!declaration) continue;
+    const declarationName = identifierName(declaration.id);
+    if (declarationName) declarations.set(declarationName, declaration);
+    if (declaration.type === "VariableDeclaration") {
+      for (const rawDeclarator of (declaration.declarations as Record<string, unknown>[]) ?? []) {
+        const name = identifierName(rawDeclarator.id);
+        if (name) declarations.set(name, rawDeclarator.init as Record<string, unknown>);
+      }
+    }
+  }
+  const result = new Map<string, ComponentPropHint[]>();
+  for (const [name, declaration] of declarations) {
+    const params = (declaration.params as Record<string, unknown>[]) ?? [];
+    if (params.length === 0) continue;
+    const parameter = params[0];
+    const parameterAnnotation = parameter.typeAnnotation as Record<string, unknown> | undefined;
+    const referencedType = typeName(parameterAnnotation?.typeAnnotation);
+    const members = referencedType ? propTypes.get(referencedType) ?? {} : {};
+    const destructured = parameterPropNames(source, parameter);
+    const names = new Set([...Object.keys(members), ...destructured.keys()]);
+    const hints = [...names].map((propName) => {
+      const pattern = destructured.get(propName);
+      const member = members[propName];
+      return {
+        name: propName,
+        type: propTypeText(source, member),
+        required: pattern ? pattern.required && !member?.optional : !member?.optional,
+        ...(pattern?.defaultValue ? { defaultValue: pattern.defaultValue } : {}),
+      };
+    });
+    if (hints.length > 0) result.set(name, hints);
+  }
+  return result;
+}
+
 /** Builds the real relative module specifier a JSX import would use --
  * POSIX-separated (module specifiers always are, even on Windows) and
  * extension-stripped, with a leading `./` when it would otherwise look
@@ -186,8 +315,10 @@ export function discoverComponentsInSource(source: string, file: string, fromFil
   } catch {
     return [];
   }
+  const body = ast.program?.body ?? [];
   const sourceTags = collectJsxTagNames(ast);
-  return exportedComponentNames(ast.program?.body ?? []).map(({ name, isDefault, deprecated, replacement }) => ({
+  const propHints = componentPropHints(source, body);
+  return exportedComponentNames(body).map(({ name, isDefault, deprecated, replacement }) => ({
     name,
     file,
     isDefault,
@@ -196,6 +327,7 @@ export function discoverComponentsInSource(source: string, file: string, fromFil
     usageFiles: sourceTags.has(name) ? [file] : [],
     ...(deprecated ? { deprecated: true } : {}),
     ...(replacement ? { replacement } : {}),
+    ...(propHints.get(name)?.length ? { propHints: propHints.get(name) } : {}),
   }));
 }
 

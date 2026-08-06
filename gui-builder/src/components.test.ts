@@ -136,3 +136,40 @@ test("usage indexing ignores dependency and build output", () => {
   assert.equal(card?.usageCount, 1);
   assert.equal(card?.usageFiles?.length, 1);
 });
+
+test("infers safe public prop hints from TypeScript props and destructured defaults", () => {
+  const root = fixture({
+    "Button.tsx": [
+      "interface ButtonProps {",
+      "  variant?: \"primary\" | \"secondary\";",
+      "  disabled: boolean;",
+      "  label?: string;",
+      "}",
+      "export function Button({ variant = \"primary\", disabled, label }: ButtonProps) {",
+      "  return <button disabled={disabled}>{label ?? variant}</button>;",
+      "}",
+      "",
+    ].join("\n"),
+  });
+  const button = discoverComponents(root).find((component) => component.name === "Button");
+  assert.deepEqual(button?.propHints, [
+    { name: "variant", type: '"primary" | "secondary"', required: false, defaultValue: '"primary"' },
+    { name: "disabled", type: "boolean", required: true },
+    { name: "label", type: "string", required: false },
+  ]);
+});
+
+test("infers props from an exported arrow component and a type alias", () => {
+  const root = fixture({
+    "Card.tsx": [
+      "type CardProps = { title: string; tone?: \"quiet\" | \"loud\" };",
+      "export const Card = ({ title, tone }: CardProps) => <article data-tone={tone}>{title}</article>;",
+      "",
+    ].join("\n"),
+  });
+  const card = discoverComponents(root).find((component) => component.name === "Card");
+  assert.deepEqual(card?.propHints, [
+    { name: "title", type: "string", required: true },
+    { name: "tone", type: '"quiet" | "loud"', required: false },
+  ]);
+});
