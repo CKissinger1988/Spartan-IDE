@@ -17,6 +17,8 @@ import type { TokenTier } from "../../../gui-builder/src/token-model";
 import { suggestAccessibilityFixes } from "../../../gui-builder/src/accessibility-fixes";
 import type { AccessibilityFix } from "../../../gui-builder/src/accessibility-fixes";
 import type { ComponentPropDefinition } from "../../../gui-builder/src/scaffold";
+import { buildComponentPropInput, componentPropControl, missingRequiredComponentProps } from "../../../gui-builder/src/component-insertion";
+import type { DiscoveredComponent } from "../../../gui-builder/src/components";
 
 interface StyleEntryValue {
   kind: "literal" | "expression";
@@ -44,27 +46,8 @@ interface ComponentNode {
   textContent: string | null;
 }
 
-/** One real component discovered in the project by `gui-builder`'s own
- * `discoverComponents` (task #278). `importFrom` is `null` when the
- * component is declared in the currently-open file, so inserting it needs
- * no import at all. */
-interface DiscoveredComponent {
-  name: string;
-  file: string;
-  isDefault: boolean;
-  importFrom: string | null;
-  usageCount?: number;
-  usageFiles?: string[];
-  deprecated?: boolean;
-  replacement?: string;
-  propHints?: Array<{
-    name: string;
-    type: string;
-    required: boolean;
-    defaultValue?: string;
-  }>;
-}
-
+/** Keeps the palette's API summary compact while the full type remains
+ * available in the guided insertion form. */
 function componentPropSummary(component: DiscoveredComponent): string {
   const hints = component.propHints ?? [];
   if (hints.length === 0) return "";
@@ -950,6 +933,8 @@ export default function DesignScreen({
   const [insertText, setInsertText] = useState("");
   const [palette, setPalette] = useState<DiscoveredComponent[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteComponent, setPaletteComponent] = useState<DiscoveredComponent | null>(null);
+  const [palettePropDrafts, setPalettePropDrafts] = useState<Record<string, string>>({});
   const [createComponentOpen, setCreateComponentOpen] = useState(false);
   const [newComponentName, setNewComponentName] = useState("");
   const [newComponentPath, setNewComponentPath] = useState("");
@@ -1739,6 +1724,8 @@ export default function DesignScreen({
       setVariantName("");
       setInteractionPresetName("");
       setPaletteFilter("");
+      setPaletteComponent(null);
+      setPalettePropDrafts({});
       setAssetFilter("");
         setTokenFilter("");
         setTokenTierFilter("all");
@@ -1895,6 +1882,8 @@ export default function DesignScreen({
   const togglePalette = useCallback(async () => {
     if (paletteOpen) {
       setPaletteOpen(false);
+      setPaletteComponent(null);
+      setPalettePropDrafts({});
       return;
     }
     setPaletteOpen(true);
@@ -1972,19 +1961,24 @@ export default function DesignScreen({
    * could only ever produce an undefined binding for a cross-file
    * component. */
   const insertComponent = useCallback(
-    async (component: DiscoveredComponent) => {
+    async (component: DiscoveredComponent, propInput = "") => {
       if (!activeFile || !selectedId || selectedIds.length === 0) return;
+      const parsedProps = propInput ? parseInsertProps(propInput) : { props: {}, propValues: {} };
       const edit: Record<string, unknown> = selectedIds.length === 1
         ? {
             kind: "ComponentInsert",
             parentId: paletteInsertPlacement === "child" ? selectedId : findParentEntry(roots, selectedId)?.parent.id,
             tagName: component.name,
+            ...(Object.keys(parsedProps.props).length > 0 ? { props: parsedProps.props } : {}),
+            ...(Object.keys(parsedProps.propValues).length > 0 ? { propValues: parsedProps.propValues } : {}),
           }
         : {
             kind: "ComponentInsertMany",
             nodeIds: selectedIds,
             placement: paletteInsertPlacement,
             tagName: component.name,
+            ...(Object.keys(parsedProps.props).length > 0 ? { props: parsedProps.props } : {}),
+            ...(Object.keys(parsedProps.propValues).length > 0 ? { propValues: parsedProps.propValues } : {}),
           };
       const sibling = paletteInsertPlacement === "sibling" && selectedIds.length === 1 ? findParentEntry(roots, selectedId) : null;
       if (paletteInsertPlacement === "sibling" && selectedIds.length === 1 && !sibling) return;
@@ -1994,9 +1988,26 @@ export default function DesignScreen({
         edit.importIsDefault = component.isDefault;
       }
       await applyEditObject(edit);
+      setPaletteComponent(null);
+      setPalettePropDrafts({});
     },
     [activeFile, selectedId, selectedIds, paletteInsertPlacement, roots, applyEditObject]
   );
+
+  const configurePaletteComponent = useCallback((component: DiscoveredComponent) => {
+    setPaletteComponent(component);
+    setPalettePropDrafts(Object.fromEntries((component.propHints ?? []).map((hint) => [hint.name, hint.defaultValue ?? ""])));
+  }, []);
+
+  const insertConfiguredPaletteComponent = useCallback(async () => {
+    if (!paletteComponent) return;
+    const missing = missingRequiredComponentProps(paletteComponent.propHints, palettePropDrafts);
+    if (missing.length > 0) {
+      setError(`Enter required props: ${missing.join(", ")}.`);
+      return;
+    }
+    await insertComponent(paletteComponent, buildComponentPropInput(paletteComponent, palettePropDrafts));
+  }, [paletteComponent, palettePropDrafts, insertComponent]);
 
   const toggleAssets = useCallback(async () => {
     if (assetsOpen) {
@@ -2964,6 +2975,59 @@ export default function DesignScreen({
                   value={paletteFilter}
                   onChange={(event) => setPaletteFilter(event.target.value)}
                 />
+                {paletteComponent && (
+                  <div className="design-palette" aria-label={`Configure ${paletteComponent.name} insertion`}>
+                    <div className="design-palette-placement mono">
+                      <span>Configure &lt;{paletteComponent.name} /&gt;</span>
+                      <button className="design-asset-action mono" onClick={() => { setPaletteComponent(null); setPalettePropDrafts({}); }}>
+                        Cancel
+                      </button>
+                    </div>
+                    {(paletteComponent.propHints ?? []).map((hint) => {
+                      const control = componentPropControl(hint.type);
+                      const value = palettePropDrafts[hint.name] ?? "";
+                      const label = `${hint.name}${hint.required ? "" : " (optional)"} · ${hint.type}`;
+                      const update = (next: string) => setPalettePropDrafts((current) => ({ ...current, [hint.name]: next }));
+                      return (
+                        <label className="design-palette-placement mono" key={hint.name}>
+                          <span>{label}</span>
+                          {control.kind === "enum" ? (
+                            <select className="design-input mono" value={value} onChange={(event) => update(event.target.value)}>
+                              {!hint.required && <option value="">(omit)</option>}
+                              {control.options?.map((option) => <option key={option} value={option}>{option}</option>)}
+                            </select>
+                          ) : control.kind === "boolean" ? (
+                            <select className="design-input mono" value={value} onChange={(event) => update(event.target.value)}>
+                              <option value="">{hint.required ? "Choose true or false…" : "(omit)"}</option>
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                          ) : (
+                            <input
+                              className="design-input mono"
+                              type={control.kind === "number" ? "number" : "text"}
+                              placeholder={hint.defaultValue ? `default ${hint.defaultValue}` : hint.required ? "required" : "(omit)"}
+                              value={value}
+                              onChange={(event) => update(event.target.value)}
+                            />
+                          )}
+                        </label>
+                      );
+                    })}
+                    <div className="design-palette-placement mono">
+                      <button
+                        className="design-secondary-action mono"
+                        onClick={() => void insertConfiguredPaletteComponent()}
+                        disabled={!selectedId || selectedIds.length === 0 || missingRequiredComponentProps(paletteComponent.propHints, palettePropDrafts).length > 0}
+                      >
+                        Insert configured
+                      </button>
+                      <button className="design-secondary-action mono" onClick={() => void insertComponent(paletteComponent)} disabled={!selectedId || selectedIds.length === 0}>
+                        Insert without props
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {palette.length === 0 ? (
                   <div className="design-palette-empty mono">
                     No exported components found under the project root.
@@ -2980,12 +3044,12 @@ export default function DesignScreen({
                           disabled={!selectedId || selectedIds.length === 0}
                           title={
                         selectedId && selectedIds.length > 0
-                          ? `Insert <${c.name} /> as a ${paletteInsertPlacement} of ${selectedIds.length > 1 ? `${selectedIds.length} selected elements` : "the selected element"}${
+                          ? `${c.propHints?.length ? "Configure and insert" : "Insert"} <${c.name} /> as a ${paletteInsertPlacement} of ${selectedIds.length > 1 ? `${selectedIds.length} selected elements` : "the selected element"}${
                               c.importFrom ? ` and import it from "${c.importFrom}"` : ""
                             }`
                           : "Select one or more elements in the tree first"
                       }
-                      onClick={() => insertComponent(c)}
+                      onClick={() => c.propHints?.length ? configurePaletteComponent(c) : void insertComponent(c)}
                     >
                       <span className="design-palette-name">{c.deprecated ? "⚠ " : ""}&lt;{c.name} /&gt;</span>
                       <span className="design-palette-from">
