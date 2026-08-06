@@ -34,16 +34,16 @@
   --border-bright: #3a3a40;
   --text: #e9e7e4;
   --text-dim: #84838a;
-  --accent: #2e7dff;
-  --accent-dim: rgba(46, 125, 255, 0.16);
-  --accent-hover: rgba(46, 125, 255, 0.08);
-  --accent-rgb: 46, 125, 255;
+  --accent: #f03133;
+  --accent-dim: rgba(240, 49, 51, 0.16);
+  --accent-hover: rgba(240, 49, 51, 0.08);
+  --accent-rgb: 240, 49, 51;
 
   /* Gold "HUD" accent -- targeting/focus/informational, distinct from
      the primary blue accent used for brand/action color. */
-  --hud: #d4af37;
-  --hud-dim: rgba(212, 175, 55, 0.16);
-  --hud-rgb: 212, 175, 55;
+  --hud: #ac9c9c;
+  --hud-dim: rgba(172, 156, 156, 0.16);
+  --hud-rgb: 172, 156, 156;
 
   --glow-accent: 0 0 1px rgba(var(--accent-rgb), 0.9), 0 0 10px rgba(var(--accent-rgb), 0.45);
   --glow-accent-lg: 0 0 2px rgba(var(--accent-rgb), 0.9), 0 0 22px rgba(var(--accent-rgb), 0.4);
@@ -88,14 +88,14 @@
   --border-bright: #c5c2bc;
   --text: #1b1a19;
   --text-dim: #6b6862;
-  --accent: #1b54c4;
-  --accent-dim: rgba(27, 84, 196, 0.12);
-  --accent-hover: rgba(27, 84, 196, 0.08);
-  --accent-rgb: 27, 84, 196;
+  --accent: #a92327;
+  --accent-dim: rgba(169, 35, 39, 0.12);
+  --accent-hover: rgba(169, 35, 39, 0.08);
+  --accent-rgb: 169, 35, 39;
 
-  --hud: #9c7a1d;
-  --hud-dim: rgba(156, 122, 29, 0.14);
-  --hud-rgb: 156, 122, 29;
+  --hud: #5e5d5d;
+  --hud-dim: rgba(94, 93, 93, 0.14);
+  --hud-rgb: 94, 93, 93;
 }
 
 /*

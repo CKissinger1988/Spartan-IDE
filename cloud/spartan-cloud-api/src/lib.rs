@@ -320,6 +320,7 @@ impl FromRequestParts<AppState> for AuthUser {
 /// it via `tower::ServiceExt::oneshot` with no real socket.
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route("/api/health", get(health))
         .route("/api/signup", post(signup))
         .route("/api/login", post(login))
         .route("/api/me", get(me))
@@ -354,6 +355,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/webauthn/login/finish", post(webauthn_login_finish))
         .route("/admin", get(admin_dashboard))
         .with_state(state)
+}
+
+/// Unauthenticated deployment probe. It deliberately returns no tenant,
+/// runtime, or version-control details, making it safe for WAN load balancers
+/// and mobile endpoint diagnostics.
+async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "service": "spartan-cloud-api", "status": "ok" }))
 }
 
 /// Serve the real, self-contained admin dashboard -- Track C's holographic
@@ -1465,6 +1473,17 @@ mod tests {
         assert!(html.contains("/api/admin/telemetry"));
         assert!(html.contains("/api/admin/audit"));
         assert!(html.contains("/api/login"));
+    }
+
+    #[tokio::test]
+    async fn health_endpoint_is_public_and_returns_only_service_status() {
+        let app = router(AppState::in_memory());
+        let (status, body) = body_json(app.oneshot(get("/api/health", None)).await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            serde_json::json!({ "service": "spartan-cloud-api", "status": "ok" })
+        );
     }
 
     #[tokio::test]

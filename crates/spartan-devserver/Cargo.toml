@@ -15,11 +15,13 @@ license.workspace = true
 
 [dependencies]
 spartan-backend = { path = "../spartan-backend" }
+spartan-updater = { path = "../spartan-updater" }
 serde_json = "1"
 # Sync, tokio-free minimal HTTP server for serving the web/ client and the
 # same-origin /__spartan/session token handoff -- matches this crate's
 # sync-I/O convention (no async runtime pulled in for one static server).
 tiny_http = "0.12"
+qrcode = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 # Test-only: a real WebSocket client to drive the real transport

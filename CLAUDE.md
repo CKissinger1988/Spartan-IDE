@@ -9156,6 +9156,50 @@ first — it's the parity reference until each row there is actually reimplement
   own wire-faithful verification discipline draws. All 55 `spartan-model` tests pass (51 unit +
   4 live integration), `cargo fmt`/`clippy` clean.
 
+- **Real Leo session timestamps (§75.100)**: fixed the session-history/project-session timestamp
+  helpers in `crates/spartan-backend` so they emit the actual current time and convert stored Unix
+  seconds with calendar-correct RFC 3339 UTC formatting. The previous implementation used a fixed
+  date with only the time-of-day fields, which made history entries appear to come from the wrong
+  day and produced incorrect dates for every Unix timestamp after the first day. Added a regression
+  test covering the Unix epoch, a known calendar date, and the current-time round trip through the
+  real RFC 3339 parser. The `time` dependency is limited to formatting/parsing features; no UI
+  behavior or persisted history schema changed. `cargo fmt --all -- --check` passes. The targeted
+  backend test/clippy build could not complete in this Termux session because the workspace's
+  `llama-cpp-sys-2` build script requires an Android NDK (`ANDROID_NDK`/`NDK_ROOT`), which is not
+  configured here.
+
+- **Mobile-safe Git stash restoration (§75.101)**: a real focused verification pass found two
+  `spartan-git` stash regressions that only appeared on this Termux filesystem: same-size edits
+  made immediately after a commit were reported as changed but omitted from libgit2's stash tree
+  because its stat-cache path trusted coarse timestamps, so `stash_pop`/`stash_apply` restored the
+  original content instead of the real edit. `stash_save` now invalidates only index ctime/mtime
+  metadata before handing the repository to libgit2, preserving the real blob/mode/path and never
+  staging the edit; apply/pop use explicit index reinstatement and forced checkout options. The
+  existing two round-trip tests caught the bug and now pass. Full `spartan-git` verification:
+  90 tests pass, doc tests pass, `cargo fmt --all -- --check` and release clippy with `-D warnings`
+  pass. A pre-existing clippy `question_mark` warning in the GitHub remote parser was also fixed.
+
+- **Web WASM-loader type compatibility (§75.102)**: `web/src/buffer.ts` now normalizes the
+  generated wasm-bindgen loader through `Promise.resolve`, so the shared initialization promise
+  remains correctly typed whether generated glue exposes synchronous or asynchronous init. This
+  fixes the real TypeScript error observed on the current generated-loader typings. Web
+  `npm run typecheck` and desktop `npm run typecheck` both pass. The web production build reached
+  its real `build:wasm` step but cannot continue in this Termux session because the
+  `wasm32-unknown-unknown` Rust target is not installed.
+
+- **Linux/Android host verification (§75.103)**: completed the relevant host-side checks after
+  installing Termux's matching `rust-std-wasm32-unknown-unknown` package and `wasm-bindgen-cli
+  0.2.126`. The web shell's real WASM + Vite production build now passes; desktop renderer/
+  Electron TypeScript build passes; web typecheck passes; mobile TypeScript passes; mobile Expo
+  Android export passes with `--no-bytecode` (the normal Hermes bytecode compiler rejects Android
+  as its *host* platform); mobile Jest passes with 114 tests; and `spartan-android` passes 25 tests
+  plus release clippy. The generated WASM module was also executed through its real
+  wasm-bindgen Node target in a document/edit smoke test. A direct `cargo test --target
+  wasm32-unknown-unknown` remains inherently non-runnable here because Cargo tries to execute the
+  `.wasm` test artifact as a native Android process. No physical Android device/emulator is present,
+  so OS-level rendering,
+  permissions, notifications, camera, voice recognition, and ADB installation remain unverified.
+
 
 ## Build & test
 
@@ -9365,6 +9409,42 @@ project has run in so far has had it).
   one-time judgment call for whichever pass introduced it.
 
 ## What NOT to do
+
+### Mobile/Linux and cloud pairing transport — current pass
+
+The mobile companion now stores a configurable private or cloud endpoint, derives its WebSocket
+host from that endpoint instead of incorrectly forcing `127.0.0.1`, and keeps a private-server
+pairing secret in SecureStore. Settings can paste or scan the shared `spartan://pair/v1` QR
+payload. `spartan-devserver` remains loopback-only by default, but can bind one explicit LAN/WAN
+address only when a pairing secret is supplied; non-loopback session handoffs require that secret
+in a header. Both private and cloud server binaries can print a terminal QR code; cloud QR codes
+carry only an HTTPS endpoint, never a bearer token. Spartan Cloud also exposes a minimal public
+`GET /api/health` probe. Focused mobile typecheck/Jest and cloud API tests passed. A verified
+Termux NDK r29 is installed locally, but `llama-cpp-sys-2` currently rejects Android as a build
+host in its own build script, so the private devserver cannot yet be compiled on this Android host.
+`scripts/spartan-ssh-forward` provides a fail-fast, keepalive-backed local forward for SSH-only
+remote access, keeping private RPC off the WAN.
+
+### GitHub Release updates and first-run guidance — current pass
+
+The canonical release source is now `Spartan-Software-Enterprises/Spartan-IDE` across the shared
+Rust updater, backend check, native editor, Electron publisher/menu, mobile release client, and
+server CLIs. `spartan-devserver --check-update` and `spartan-cloud-api --check-update` compare
+their installed version with GitHub's latest release and print only an operator-controlled install
+URL; they never replace a running service. The Release workflow now packages both Linux server
+binaries, publishes SHA-256 checksums for every artifact, and makes those server artifacts
+available from the same GitHub Release. Electron keeps its native signed download/install flow;
+Android discovery only leads to an Android-confirmed APK installation. Desktop onboarding now
+explains that boundary, mobile has a persistent first-run screen covering pairing/WAN/SSH safety
+and update behavior, and both server binaries print concise first-time deployment/update guidance.
+
+### Spartan emblem brand system — current pass
+
+`file_000000007df481f79ac93786245a0afb.png` is the canonical supplied Spartan emblem. Its full
+mark now ships as the Electron package icon, web/site favicon and visible brand image, and the
+mobile app/adaptive/splash icons. The default palette across desktop, web, mobile, site, terminal,
+plugin theme pack, and native renderer selection/caret is now emblem red (`#F03133`), steel
+(`#AC9C9C`), and graphite rather than the former blue/gold theme.
 
 - Don't fork or vendor any VS Code/Monaco/CodeMirror code, ever, for any reason.
 - Don't add a new cloud model provider as a bespoke adapter — it goes through LiteLLM (§44)

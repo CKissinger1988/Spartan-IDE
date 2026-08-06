@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { mockArtifacts } from './src/data/mockData';
@@ -8,6 +8,8 @@ import {
   registerNotificationCategories,
 } from './src/lib/notificationActions';
 import { RootNavigator } from './src/navigation/RootNavigator';
+import { completeFirstRun, hasCompletedFirstRun } from './src/lib/firstRun';
+import { FirstRunScreen } from './src/screens/FirstRunScreen';
 import { ThemeProvider, useTheme } from './src/ThemeContext';
 
 // Real §75.93 status-bar content style, made reactive -- previously
@@ -36,9 +38,23 @@ export default function App() {
       <ThemeProvider>
         <SafeAreaProvider>
           <ThemedStatusBar />
-          <RootNavigator />
+          <MobileFirstRunGate />
         </SafeAreaProvider>
       </ThemeProvider>
     </BackendProvider>
   );
+}
+
+function MobileFirstRunGate() {
+  const [state, setState] = useState<'checking' | 'welcome' | 'ready'>('checking');
+
+  useEffect(() => {
+    hasCompletedFirstRun().then((done) => setState(done ? 'ready' : 'welcome')).catch(() => setState('ready'));
+  }, []);
+
+  if (state === 'checking') return null;
+  if (state === 'welcome') {
+    return <FirstRunScreen onContinue={() => void completeFirstRun().then(() => setState('ready'))} />;
+  }
+  return <RootNavigator />;
 }

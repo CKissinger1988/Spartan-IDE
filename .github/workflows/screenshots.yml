@@ -1,0 +1,77 @@
+name: Refresh branded screenshots
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, agent/linux-mobile-verification]
+    paths:
+      - 'desktop/src/theme.css'
+      - 'web/**'
+      - 'site/**'
+      - 'mobile/assets/**'
+      - 'file_000000007df481f79ac93786245a0afb.png'
+      - 'web/scripts/capture-brand-screenshots.mjs'
+      - '.github/workflows/screenshots.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies and capture browser
+        working-directory: web
+        run: |
+          npm ci
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      - name: Install pinned wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
+
+      - name: Build web app
+        working-directory: web
+        run: npm run build
+
+      - name: Render current branded surfaces
+        run: |
+          (cd web && npm run preview -- --host 127.0.0.1 --port 4173) > /tmp/spartan-web.log 2>&1 &
+          npx --yes serve site --listen 4174 > /tmp/spartan-site.log 2>&1 &
+          ready=false
+          for _ in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4173/ >/dev/null \
+              && curl --fail --silent http://127.0.0.1:4174/ >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != true ]; then
+            cat /tmp/spartan-web.log /tmp/spartan-site.log
+            exit 1
+          fi
+          (cd web && node scripts/capture-brand-screenshots.mjs)
+
+      - name: Commit refreshed screenshots
+        run: |
+          if git diff --quiet -- docs/screenshots; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/screenshots
+          git commit -m "Refresh branded screenshots"
+          git push

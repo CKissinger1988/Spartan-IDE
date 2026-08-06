@@ -24,6 +24,7 @@ portable-pty = "0.9.0"
 similar = "3.1.1"
 tungstenite = "0.30"
 rand = "0.10"
+time = { version = "0.3", features = ["formatting", "parsing"] }
 # Sync HTTP client for polling a spawned LiteLLM proxy's own health
 # endpoint (moved here from spartan-devserver along with litellm_proxy.rs/
 # hf_downloader.rs/lmstudio_downloader.rs/subprocess.rs so desktop/'s

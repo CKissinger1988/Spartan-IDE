@@ -5,6 +5,33 @@ import { getConnectivitySnapshot } from '../../lib/network';
 import { requestNotificationPermission } from '../../lib/notifications';
 import { schedulePreviewNotification } from '../../lib/notificationActions';
 import { clearQueue, getQueuedDecisions, replayQueue } from '../../lib/offlineQueue';
+import { getBackendPairingToken } from '../../lib/backendPairing';
+
+const mockReconnect = jest.fn();
+const mockUpdateEndpoint = jest.fn();
+
+jest.mock('../../lib/backendContext', () => ({
+  useBackendConnection: () => ({
+    connecting: false,
+    endpoint: 'http://192.168.1.20:4400',
+    error: null,
+    reconnect: mockReconnect,
+    updateEndpoint: mockUpdateEndpoint,
+  }),
+}));
+
+jest.mock('../../lib/backendPairing', () => ({
+  getBackendPairingToken: jest.fn(),
+}));
+
+jest.mock('expo-camera', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  return {
+    CameraView: (props: any) => React.createElement(View, props),
+    useCameraPermissions: () => [{ granted: true }, jest.fn()],
+  };
+});
 
 jest.mock('@react-navigation/native', () => ({
   ...jest.requireActual('@react-navigation/native'),
@@ -35,6 +62,7 @@ const mockSchedulePreviewNotification = schedulePreviewNotification as jest.Mock
 const mockGetQueuedDecisions = getQueuedDecisions as jest.Mock;
 const mockReplayQueue = replayQueue as jest.Mock;
 const mockClearQueue = clearQueue as jest.Mock;
+const mockGetBackendPairingToken = getBackendPairingToken as jest.Mock;
 
 async function renderScreen() {
   const navigation = { navigate: jest.fn() };
@@ -50,6 +78,8 @@ describe('SettingsScreen', () => {
     mockSchedulePreviewNotification.mockResolvedValue(undefined);
     mockClearQueue.mockResolvedValue(undefined);
     mockReplayQueue.mockResolvedValue({ attempted: 0, note: 'No sync backend exists yet.' });
+    mockUpdateEndpoint.mockResolvedValue(undefined);
+    mockGetBackendPairingToken.mockResolvedValue(null);
   });
 
   test('renders connected/Wi-Fi connectivity status', async () => {
@@ -136,5 +166,54 @@ describe('SettingsScreen', () => {
     fireEvent.press(getByText('View decision history'));
 
     expect(navigation.navigate).toHaveBeenCalledWith('DecisionHistory');
+  });
+
+  test('saves a configured Linux devserver endpoint and reconnects', async () => {
+    const { findByText, getByTestId, getByText } = await renderScreen();
+    await findByText('Connected to the Spartan devserver.');
+
+    await act(async () => {
+      fireEvent.changeText(getByTestId('backend-endpoint-input'), 'http://192.168.1.33:4400');
+      fireEvent.changeText(getByTestId('backend-pairing-token-input'), 'paired-secret');
+      fireEvent.press(getByText('Save and reconnect'));
+    });
+
+    expect(mockUpdateEndpoint).toHaveBeenCalledWith('http://192.168.1.33:4400', 'paired-secret');
+  });
+
+  test('retries the current Linux devserver connection', async () => {
+    const { findByText, getByText } = await renderScreen();
+    await findByText('Connected to the Spartan devserver.');
+    fireEvent.press(getByText('Retry'));
+    expect(mockReconnect).toHaveBeenCalledTimes(1);
+  });
+
+  test('imports a private-server pairing payload into the connection fields', async () => {
+    const { findByText, getByTestId, getByText } = await renderScreen();
+    await findByText('Connected to the Spartan devserver.');
+    await act(async () => {
+      fireEvent.changeText(
+        getByTestId('pairing-payload-input'),
+        'spartan://pair/v1?kind=private&endpoint=http%3A%2F%2F192.168.1.33%3A4400&pairing=paired'
+      );
+      fireEvent.press(getByText('Import pairing code'));
+    });
+    expect(getByTestId('backend-endpoint-input').props.value).toBe('http://192.168.1.33:4400');
+    expect(getByTestId('backend-pairing-token-input').props.value).toBe('paired');
+  });
+
+  test('opens the QR scanner and imports a scanned private pairing payload', async () => {
+    const { findByText, getByTestId, getByText } = await renderScreen();
+    await findByText('Connected to the Spartan devserver.');
+    await act(async () => {
+      fireEvent.press(getByText('Scan pairing QR'));
+    });
+    await act(async () => {
+      getByTestId('pairing-qr-camera').props.onBarcodeScanned({
+        data: 'spartan://pair/v1?kind=private&endpoint=http%3A%2F%2F10.0.0.5%3A4400&pairing=scan',
+      });
+    });
+    expect(getByTestId('backend-endpoint-input').props.value).toBe('http://10.0.0.5:4400');
+    expect(getByTestId('backend-pairing-token-input').props.value).toBe('scan');
   });
 });

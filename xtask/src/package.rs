@@ -68,12 +68,19 @@ pub fn package_readme_contents(version: &str) -> String {
 pub fn install_sh_contents() -> String {
     format!(
         "#!/bin/sh\n\
-         set -e\n\
+         set -eu\n\
+         umask 077\n\
          SCRIPT_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\n\
          BIN_DIR=\"$HOME/.local/bin\"\n\
          APPS_DIR=\"$HOME/.local/share/applications\"\n\
+         LOG_DIR=\"${{XDG_STATE_HOME:-$HOME/.local/state}}/spartan\"\n\
+         LOG_FILE=\"$LOG_DIR/install-errors.log\"\n\
+         trap 'status=$?; if [ \"$status\" -ne 0 ]; then mkdir -p \"$LOG_DIR\"; printf \"%s install failed (exit %s)\\n\" \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \"$status\" >> \"$LOG_FILE\"; printf \"Spartan installation failed; diagnostic recorded at %s\\n\" \"$LOG_FILE\" >&2; fi' 0\n\
          mkdir -p \"$BIN_DIR\" \"$APPS_DIR\"\n\
-         cp \"$SCRIPT_DIR/{BIN_NAME}\" \"$BIN_DIR/{BIN_NAME}\"\n\
+         TMP_BIN=\"$BIN_DIR/.{BIN_NAME}.new.$$\"\n\
+         cp \"$SCRIPT_DIR/{BIN_NAME}\" \"$TMP_BIN\"\n\
+         chmod +x \"$TMP_BIN\"\n\
+         mv -f \"$TMP_BIN\" \"$BIN_DIR/{BIN_NAME}\"\n\
          chmod +x \"$BIN_DIR/{BIN_NAME}\"\n\
          sed \"s|Exec={BIN_NAME}|Exec=$BIN_DIR/{BIN_NAME}|\" \\\n\
          \u{20}   \"$SCRIPT_DIR/{APP_ID}.desktop\" > \"$APPS_DIR/{APP_ID}.desktop\"\n\
@@ -199,6 +206,8 @@ mod tests {
         assert!(contents.contains(APP_ID));
         assert!(contents.contains("$HOME/.local/bin"));
         assert!(contents.contains("$HOME/.local/share/applications"));
+        assert!(contents.contains("install-errors.log"));
+        assert!(contents.contains(".spartan-editor-core.new"));
     }
 
     #[test]

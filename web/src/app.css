@@ -56,6 +56,15 @@
   clip-path: polygon(50% 0%, 100% 38%, 82% 100%, 50% 76%, 18% 100%, 0% 38%);
 }
 
+.toolbar-brand-logo {
+  width: 24px;
+  height: 24px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  box-shadow: var(--glow-accent);
+}
+
 .toolbar-brand-suffix {
   color: var(--hud);
   text-shadow: var(--glow-hud);

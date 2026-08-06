@@ -37,6 +37,11 @@ use tiny_http::{Header, Response, Server};
 /// coordinates. Everything else is a static file request.
 pub const SESSION_PATH: &str = "/__spartan/session";
 
+/// Header a native mobile companion must present when requesting a session
+/// handoff from a non-loopback address. It deliberately stays out of URLs so
+/// pairing material is not copied into browser history or routine logs.
+pub const MOBILE_PAIRING_HEADER: &str = "X-Spartan-Mobile-Pairing";
+
 /// Coordinates advertised by `SESSION_PATH`, plus the real directory of
 /// static files to serve. `ws_token`/`ws_port` are the live values from the
 /// WebSocket server this devserver started -- never a persisted default.
@@ -56,6 +61,42 @@ pub struct StaticServeConfig {
     pub ws_port: u16,
     pub ws_token: String,
     pub project_root: Option<String>,
+    /// Manual pairing secret for native companions on a trusted LAN. Remote
+    /// handoffs are refused when this is absent, even if a caller binds this
+    /// server to a non-loopback interface.
+    pub mobile_pairing_token: Option<String>,
+}
+
+fn tokens_match(expected: &str, provided: &str) -> bool {
+    let expected = expected.as_bytes();
+    let provided = provided.as_bytes();
+    if expected.len() != provided.len() {
+        return false;
+    }
+    expected
+        .iter()
+        .zip(provided)
+        .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+        == 0
+}
+
+fn session_handoff_allowed(request: &tiny_http::Request, pairing_token: Option<&str>) -> bool {
+    if request
+        .remote_addr()
+        .is_some_and(|addr| addr.ip().is_loopback())
+    {
+        return true;
+    }
+    let Some(expected) = pairing_token else {
+        return false;
+    };
+    let provided = request
+        .headers()
+        .iter()
+        .find(|header| header.field.equiv(MOBILE_PAIRING_HEADER))
+        .map(|header| header.value.as_str())
+        .unwrap_or("");
+    tokens_match(expected, provided)
 }
 
 /// Path-jail: resolve a request URL path (e.g. `/assets/index.js`, or `/`
@@ -148,6 +189,12 @@ pub fn serve(server: Server, config: StaticServeConfig) -> io::Result<()> {
         let path = url.split('?').next().unwrap_or("");
 
         if path == SESSION_PATH {
+            if !session_handoff_allowed(&request, config.mobile_pairing_token.as_deref()) {
+                let _ = request.respond(
+                    Response::from_string("mobile pairing required").with_status_code(403),
+                );
+                continue;
+            }
             let body = serde_json::json!({
                 "wsPort": config.ws_port,
                 "wsToken": config.ws_token,
@@ -291,6 +338,7 @@ mod tests {
             ws_port: 54321,
             ws_token: "a-real-live-token".to_string(),
             project_root: Some("/real/project/root".to_string()),
+            mobile_pairing_token: None,
         };
         thread::spawn(move || {
             let _ = serve(server, config);
@@ -337,6 +385,7 @@ mod tests {
             ws_port: 1,
             ws_token: "t".to_string(),
             project_root: None,
+            mobile_pairing_token: None,
         };
         thread::spawn(move || {
             let _ = serve(server, config);
@@ -387,6 +436,7 @@ mod tests {
                     ws_port,
                     ws_token: token,
                     project_root: Some("/orchestrated/project".to_string()),
+                    mobile_pairing_token: None,
                 },
             );
         });

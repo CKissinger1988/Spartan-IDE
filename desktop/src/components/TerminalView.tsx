@@ -52,7 +52,7 @@ export default function TerminalView({
       theme: {
         background: "#09090b",
         foreground: "#e9e7e4",
-        cursor: "#2e7dff",
+        cursor: "#f03133",
       },
       convertEol: true,
     });

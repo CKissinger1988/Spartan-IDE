@@ -50,6 +50,14 @@
         }
       ],
       [
+        "expo-camera",
+        {
+          "cameraPermission": "Scan a Spartan server pairing QR code or capture session context.",
+          "barcodeScannerEnabled": true,
+          "recordAudioAndroid": false
+        }
+      ],
+      [
         "expo-speech-recognition",
         {
           "microphonePermission": "Dictate a new task into the Inbox using on-device speech recognition.",

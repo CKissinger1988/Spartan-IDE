@@ -18,6 +18,16 @@ cd cloud && cargo test          # runs the pure-domain unit tests
 cd cloud && cargo clippy --all-targets && cargo fmt -- --check
 ```
 
+## WAN/LAN deployment and mobile pairing
+
+`spartan-cloud-api` already accepts `--bind:<address>`, so it can bind a LAN or WAN-facing
+interface behind a TLS reverse proxy. Its public `GET /api/health` endpoint returns only service
+status for load balancers and mobile diagnostics; tenant endpoints retain bearer-token authentication.
+
+Use `--print-mobile-qr --public-origin:https://cloud.example.com` to render a terminal QR code for
+the companion app. The QR carries only the HTTPS endpoint, never a bearer session, credential, or
+allocation capability token.
+
 ## What's real right now (first increment)
 
 Pure, infra-free **domain logic**, fully unit-tested with no server and no

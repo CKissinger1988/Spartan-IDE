@@ -25,9 +25,11 @@ spartan-cloud-protocol = { path = "../spartan-cloud-protocol" }
 spartan-cloud-tenant = { path = "../spartan-cloud-tenant" }
 spartan-cloud-data = { path = "../spartan-cloud-data" }
 spartan-cloud-runtime = { path = "../spartan-cloud-runtime" }
+spartan-updater = { path = "../../crates/spartan-updater" }
 # "ws": the per-container interactive exec session is a real axum WebSocket
 # upgrade -- not in axum's default feature set, so named explicitly.
 axum = { version = "0.7", features = ["ws"] }
+qrcode = { version = "0.14", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

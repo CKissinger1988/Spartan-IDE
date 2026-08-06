@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from "react";
 import NewProjectWizard from "./NewProjectWizard";
+import spartanLogo from "../assets/spartan-logo.png";
 
 interface OnboardingScreenProps {
   currentRoot: string;
@@ -30,6 +31,10 @@ const FEATURES: FeatureHighlight[] = [
   {
     title: "Workflows",
     body: "A real node-graph canvas for launching and monitoring external coding CLIs (Claude, Codex, Gemini) side by side.",
+  },
+  {
+    title: "Updates",
+    body: "Spartan checks its official GitHub Releases. The desktop installer uses the platform updater; downloads and restarts require your explicit approval, and Settings always shows the current update state.",
   },
 ];
 
@@ -125,7 +130,7 @@ export default function OnboardingScreen({
     <div className="onboarding-screen">
       <div className="onboarding-panel sf-chamfer">
         <div className="onboarding-brand mono">
-          <span className="nav-brand-glyph" aria-hidden="true" />
+          <img className="onboarding-logo" src={spartanLogo} alt="Spartan IDE emblem" />
           SPARTAN IDE
         </div>
         <div className="onboarding-tagline mono">

@@ -1,0 +1,31 @@
+#!/bin/sh
+# Forward a remote loopback-only spartan-devserver securely to this device.
+set -eu
+
+usage() {
+  echo "usage: spartan-ssh-forward --host HOST --user USER [--remote-port 4400] [--local-port 4400] [--identity FILE]" >&2
+  exit 2
+}
+
+host=''; user=''; remote_port=4400; local_port=4400; identity=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --host) host=${2-}; shift 2 ;;
+    --user) user=${2-}; shift 2 ;;
+    --remote-port) remote_port=${2-}; shift 2 ;;
+    --local-port) local_port=${2-}; shift 2 ;;
+    --identity) identity=${2-}; shift 2 ;;
+    *) usage ;;
+  esac
+done
+case "$host" in ''|*[!A-Za-z0-9._:-]*) usage ;; esac
+case "$user" in ''|*[!A-Za-z0-9._-]*) usage ;; esac
+case "$remote_port" in ''|*[!0-9]*) usage ;; esac
+case "$local_port" in ''|*[!0-9]*) usage ;; esac
+if [ "$remote_port" -gt 65535 ] || [ "$local_port" -gt 65535 ]; then usage; fi
+
+if [ -n "$identity" ]; then
+  set -- -i "$identity" "$@"
+fi
+exec ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+  "$@" -L "127.0.0.1:${local_port}:127.0.0.1:${remote_port}" "${user}@${host}"
