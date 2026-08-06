@@ -302,6 +302,23 @@ test("TextChange appends text to a childless element and refuses ambiguous fragm
   );
 });
 
+test("TextChangeMany replaces existing text and appends to childless selections", () => {
+  const source = `const X = () => <main><button>Old</button><div /><span>Other</span></main>;`;
+  const result = applyCanvasEdit(source, { kind: "TextChangeMany", nodeIds: ["n1", "n2", "n3"], text: "New" });
+  assert.match(result, /<button>New<\/button>/);
+  assert.match(result, /<div>New<\/div>/);
+  assert.match(result, /<span>New<\/span>/);
+});
+
+test("TextChangeMany refuses an ambiguous fragment before partially changing other nodes", () => {
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <main><button>Old</button><p>Hello {name} world</p></main>;`, {
+      kind: "TextChangeMany", nodeIds: ["n1", "n2"], text: "New",
+    }),
+    /refusing a partial multi-node edit/,
+  );
+});
+
 test("Reparent moves an element from one parent to another, appended at the end by default", () => {
   const source = `const X = () => (<div><section id="a"><span id="s" /></section><section id="b" /></div>);`;
   const roots = parseComponent(source);

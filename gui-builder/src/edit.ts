@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All nineteen members of the `CanvasEdit` union are real and implemented:
+ * All twenty members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -222,6 +222,34 @@ function applyTextChange(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEd
   }
   ensureOpenForChildren(element);
   (element.children as AnyNode[]).push(b.jsxText(edit.text));
+}
+
+function applyTextChangeMany(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "TextChangeMany" }>): void {
+  const ids = [...new Set(edit.nodeIds)];
+  if (ids.length === 0) throw new Error("TextChangeMany requires at least one selected element.");
+  const elements = ids.map((id) => {
+    const element = nodesById.get(id);
+    if (!element) throw new Error(`No element with id "${id}" found in the current source.`);
+    const textChildren = (element.children as AnyNode[]).filter((child) => child?.type === "JSXText");
+    return { id, element, textChildren };
+  });
+  for (const { id, textChildren } of elements) {
+    if (textChildren.length > 1) {
+      throw new Error(`TextChangeMany found multiple direct text fragments in element "${id}" -- refusing a partial multi-node edit.`);
+    }
+  }
+  for (const { element, textChildren } of elements) {
+    if (textChildren.length === 1) {
+      textChildren[0].value = edit.text;
+      if (textChildren[0].extra) {
+        delete textChildren[0].extra.raw;
+        delete textChildren[0].extra.rawValue;
+      }
+    } else {
+      ensureOpenForChildren(element);
+      (element.children as AnyNode[]).push(b.jsxText(edit.text));
+    }
+  }
 }
 
 function applyTagChange(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "TagChange" }>): void {
@@ -669,6 +697,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       break;
     case "TextChange":
       applyTextChange(nodesById, edit);
+      break;
+    case "TextChangeMany":
+      applyTextChangeMany(nodesById, edit);
       break;
     case "TagChange":
       applyTagChange(nodesById, edit);

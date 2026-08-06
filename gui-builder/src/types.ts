@@ -8,7 +8,7 @@
  * real JS/JSX AST work actually happens, per §6.1's own "lightweight
  * dev-server bridge" description).
  *
- * All nineteen members of the full spec's `CanvasEdit` union are now real and
+ * All twenty members of the full spec's `CanvasEdit` union are now real and
  * implemented by `applyCanvasEdit`: `StyleChange`/`PropChange` (original
  * v1), and `Reparent`/`ComponentInsert` (closing the gap this file's own
  * doc comment used to name as unattempted -- see edit.ts's doc comment
@@ -94,6 +94,8 @@ export type CanvasEdit =
   /** Replaces the direct JSX text content of an element. If the element has
    * no direct text child, a new text child is appended. */
   | { kind: "TextChange"; nodeId: string; text: string }
+  /** Replaces direct JSX text across multiple elements atomically. */
+  | { kind: "TextChangeMany"; nodeIds: string[]; text: string }
   /** Renames a JSX element while keeping opening/closing tags paired. */
   | { kind: "TagChange"; nodeId: string; tagName: string }
   /** Renames multiple JSX elements atomically while keeping pairs intact. */

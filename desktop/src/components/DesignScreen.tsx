@@ -626,7 +626,7 @@ function StyleValueControl({
  * the exact same `edit` IPC call typing already uses, so a canvas edit
  * gets the same undo/dirty tracking as any other edit.
  *
- * All nineteen real `CanvasEdit` kinds `gui-builder` itself supports are now
+ * All twenty real `CanvasEdit` kinds `gui-builder` itself supports are now
  * wired here: `PropChange`/`StyleChange` (mutate the selected node) and
  * `Reparent`/`ComponentInsert` (structural edits, closing the gap this
  * screen's own edit form used to leave unreachable even after
@@ -1216,7 +1216,7 @@ export default function DesignScreen({
       : editKind === "StyleClear"
         ? canClearSelectionStyles
       : editKind === "TextChange"
-        ? hasSingleSelection
+        ? selectionCount > 0
         : editKind === "TagChange"
           ? selectionCount > 0 && isValidTagName(tagName)
         : editKind === "Wrap"
@@ -1531,7 +1531,9 @@ export default function DesignScreen({
         ? { kind: "StyleClearMany", nodeIds: selectedIds }
         : { kind: "StyleClear", nodeId: selectedId };
     } else if (editKind === "TextChange") {
-      edit = { kind: "TextChange", nodeId: selectedId, text: textValue };
+      edit = selectedIds.length > 1
+        ? { kind: "TextChangeMany", nodeIds: selectedIds, text: textValue }
+        : { kind: "TextChange", nodeId: selectedId, text: textValue };
     } else if (editKind === "TagChange") {
       if (!isValidTagName(tagName)) return;
       edit = selectedIds.length > 1
