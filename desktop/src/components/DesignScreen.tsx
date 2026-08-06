@@ -528,6 +528,24 @@ export default function DesignScreen({
     [activeFile, onContentChange, refresh]
   );
 
+  const undoRedo = useCallback(
+    async (direction: "undo" | "redo") => {
+      if (!activeFile) return;
+      try {
+        const result = (await window.spartan.call(direction, { doc_id: activeFile.docId })) as {
+          changed: boolean;
+          content: string;
+        };
+        if (!result.changed) return;
+        onContentChange(activeFile.path, result.content);
+        await refresh(activeFile.path);
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [activeFile, onContentChange, refresh]
+  );
+
   /** Real drag-to-reparent (task #279), shared by the canvas drop relay
    * and the "Move into" form. `gui-builder`'s own `Reparent` already
    * refuses a root move, a self-move, and a move into a descendant with
@@ -767,6 +785,13 @@ export default function DesignScreen({
           ))}
         </select>
         <span className="design-file-path" title={activeFile.path}>{activeFile.path}</span>
+        <span className="design-file-spacer" />
+        <button className="design-toolbar-button mono" title="Undo last visual or editor edit" onClick={() => void undoRedo("undo")}>
+          Undo
+        </button>
+        <button className="design-toolbar-button mono" title="Redo the last undone edit" onClick={() => void undoRedo("redo")}>
+          Redo
+        </button>
       </div>
       <div className="design-tree-panel">
         <div className="design-panel-label">Structure</div>

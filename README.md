@@ -264,7 +264,7 @@ touching security, sandboxing, or approval flows (§9, §36).
   responsive viewport presets and zoom, component-library discovery/imports, image asset
   discovery/insertion, CSS design-token discovery/application, component insertion, reparenting,
   deletion, duplication, typed string/number/boolean prop editing, open-tab component file switching,
-  and two-way AST edits. The standalone `gui-builder/` package has 73 focused and
+  visual undo/redo controls, and two-way AST edits. The standalone `gui-builder/` package has 73 focused and
   end-to-end tests and is built separately from the
   Rust workspace.
 - **Mobile companion**: Expo/React Native onboarding, private and cloud QR pairing,

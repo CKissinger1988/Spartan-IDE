@@ -3101,6 +3101,23 @@
   white-space: nowrap;
 }
 
+.design-file-spacer {
+  flex: 1;
+}
+
+.design-toolbar-button {
+  padding: 4px 8px;
+  border: 1px solid var(--border, #454545);
+  background: transparent;
+  color: var(--text, #d8d8d8);
+  cursor: pointer;
+  font: inherit;
+}
+
+.design-toolbar-button:hover {
+  background: var(--accent-hover, #2b2530);
+}
+
 .design-tree-panel {
   grid-column: 1;
   grid-row: 2;
