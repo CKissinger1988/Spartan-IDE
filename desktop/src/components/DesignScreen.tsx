@@ -111,6 +111,12 @@ const DESIGN_VIEWPORTS = [
 type DesignViewportId = (typeof DESIGN_VIEWPORTS)[number]["id"] | "custom";
 type ComponentInsertPlacement = "child" | "sibling";
 
+interface ViewportPreset {
+  name: string;
+  width: number;
+  height: number;
+}
+
 function isComponentFile(path: string): boolean {
   return path.endsWith(".jsx") || path.endsWith(".tsx");
 }
@@ -804,9 +810,12 @@ export default function DesignScreen({
   const [viewportId, setViewportId] = useState<DesignViewportId>("desktop");
   const [customViewportWidth, setCustomViewportWidth] = useState(1024);
   const [customViewportHeight, setCustomViewportHeight] = useState(768);
+  const [viewportPresetName, setViewportPresetName] = useState("");
+  const [viewportPresets, setViewportPresets] = useState<ViewportPreset[]>([]);
   const [previewZoom, setPreviewZoom] = useState(75);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const refreshGenerationRef = useRef(0);
+  const viewportStorageKey = projectRoot ? `spartan.gui-builder.viewports:${projectRoot}` : null;
   const viewport = viewportId === "custom"
     ? { id: "custom", label: "Custom", width: customViewportWidth, height: customViewportHeight }
     : DESIGN_VIEWPORTS.find((item) => item.id === viewportId) ?? DESIGN_VIEWPORTS[0];
@@ -820,6 +829,40 @@ export default function DesignScreen({
     () => selectedNode ? accessibilityAudit(selectedNode, previewInspection?.nodeId === selectedNode.id ? previewInspection : null) : [],
     [selectedNode, previewInspection]
   );
+
+  const saveViewportPreset = useCallback(() => {
+    if (!viewportStorageKey || !viewportPresetName.trim()) return;
+    const preset: ViewportPreset = {
+      name: viewportPresetName.trim(),
+      width: customViewportWidth,
+      height: customViewportHeight,
+    };
+    const next = [preset, ...viewportPresets.filter((item) => item.name !== preset.name)];
+    setViewportPresets(next);
+    setViewportPresetName("");
+    try {
+      window.localStorage.setItem(viewportStorageKey, JSON.stringify(next));
+    } catch (e) {
+      setError(`Could not save viewport preset: ${(e as Error).message}`);
+    }
+  }, [viewportStorageKey, viewportPresetName, customViewportWidth, customViewportHeight, viewportPresets]);
+
+  const applyViewportPreset = useCallback((preset: ViewportPreset) => {
+    setViewportId("custom");
+    setCustomViewportWidth(preset.width);
+    setCustomViewportHeight(preset.height);
+  }, []);
+
+  const deleteViewportPreset = useCallback((name: string) => {
+    if (!viewportStorageKey) return;
+    const next = viewportPresets.filter((preset) => preset.name !== name);
+    setViewportPresets(next);
+    try {
+      window.localStorage.setItem(viewportStorageKey, JSON.stringify(next));
+    } catch (e) {
+      setError(`Could not delete viewport preset: ${(e as Error).message}`);
+    }
+  }, [viewportStorageKey, viewportPresets]);
   const selectionCount = selectedIds.length;
   const hasSingleSelection = selectionCount === 1;
   const selectedSibling = selectedId && hasSingleSelection ? findParentEntry(roots, selectedId) : null;
@@ -1324,6 +1367,22 @@ export default function DesignScreen({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [selectionCount, deleteSelected, duplicateSelected, undoRedo]);
+
+  useEffect(() => {
+    if (!viewportStorageKey) {
+      setViewportPresets([]);
+      return;
+    }
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(viewportStorageKey) ?? "[]") as ViewportPreset[];
+      setViewportPresets(Array.isArray(saved)
+        ? saved.filter((preset) => preset && typeof preset.name === "string" && Number.isFinite(preset.width) && Number.isFinite(preset.height)
+          && preset.width >= 200 && preset.width <= 3000 && preset.height >= 200 && preset.height <= 3000)
+        : []);
+    } catch {
+      setViewportPresets([]);
+    }
+  }, [viewportStorageKey]);
 
   useEffect(() => {
     // Invalidate any parse/bundle already in flight when switching files or
@@ -1866,6 +1925,37 @@ export default function DesignScreen({
             <span className="design-custom-viewport">
               <label>W <input type="number" min={200} max={3000} value={customViewportWidth} onChange={(event) => setCustomViewportWidth(Math.max(200, Math.min(3000, Number(event.target.value) || 200)))} /></label>
               <label>H <input type="number" min={200} max={3000} value={customViewportHeight} onChange={(event) => setCustomViewportHeight(Math.max(200, Math.min(3000, Number(event.target.value) || 200)))} /></label>
+              <input
+                className="design-input mono"
+                aria-label="Viewport preset name"
+                placeholder="preset name"
+                value={viewportPresetName}
+                onChange={(event) => setViewportPresetName(event.target.value)}
+              />
+              <button className="design-secondary-action mono" onClick={saveViewportPreset} disabled={!viewportPresetName.trim() || !viewportStorageKey}>
+                Save viewport
+              </button>
+            </span>
+          )}
+          {viewportPresets.length > 0 && (
+            <span className="design-custom-viewport">
+              <select
+                className="design-input mono"
+                aria-label="Saved viewport presets"
+                value=""
+                onChange={(event) => {
+                  const preset = viewportPresets.find((item) => item.name === event.target.value);
+                  if (preset) applyViewportPreset(preset);
+                }}
+              >
+                <option value="">Saved viewports…</option>
+                {viewportPresets.map((preset) => <option key={preset.name} value={preset.name}>{preset.name} · {preset.width}×{preset.height}</option>)}
+              </select>
+              {viewportPresets.map((preset) => (
+                <button key={`delete-${preset.name}`} className="design-asset-action mono" title={`Delete viewport preset ${preset.name}`} onClick={() => deleteViewportPreset(preset.name)}>
+                  ×
+                </button>
+              ))}
             </span>
           )}
           <label>
