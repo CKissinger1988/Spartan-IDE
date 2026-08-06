@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All thirteen members of the `CanvasEdit` union are real and implemented:
+ * All fourteen members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -105,6 +105,19 @@ function applyStyleRemove(element: AnyNode, property: string): void {
     const attributes = element.openingElement.attributes as AnyNode[];
     attributes.splice(attributes.indexOf(styleAttr), 1);
   }
+}
+
+function applyStyleClear(element: AnyNode): void {
+  const styleAttr = findAttribute(element, "style");
+  if (!styleAttr) throw new Error(`StyleClear could not find a style attribute on the selected element.`);
+  const container = styleAttr.value;
+  if (!container || container.type !== "JSXExpressionContainer" || container.expression.type !== "ObjectExpression") {
+    throw new Error(
+      `StyleClear targets an element whose "style" attribute isn't a plain object expression this package can safely edit -- refusing to overwrite a variable/expression reference.`,
+    );
+  }
+  const attributes = element.openingElement.attributes as AnyNode[];
+  attributes.splice(attributes.indexOf(styleAttr), 1);
 }
 
 function parsePropExpression(value: string): AnyNode {
@@ -460,6 +473,12 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       const element = nodesById.get(edit.nodeId);
       if (!element) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
       applyStyleRemove(element, edit.property);
+      break;
+    }
+    case "StyleClear": {
+      const element = nodesById.get(edit.nodeId);
+      if (!element) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
+      applyStyleClear(element);
       break;
     }
     case "PropChange": {

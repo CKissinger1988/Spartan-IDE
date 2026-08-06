@@ -15,7 +15,7 @@ summarizes.
   nested children — the shape a real canvas UI would render and let a user
   click on.
 - `src/edit.ts` (`applyCanvasEdit`) — real "Canvas → Code": takes a
-  structured `CanvasEdit` (`StyleChange`, `StyleRemove`, `PropChange`, `Reparent`, or
+  structured `CanvasEdit` (`StyleChange`, `StyleRemove`, `StyleClear`, `PropChange`, `Reparent`, or
   `ComponentInsert` (including string props and optional direct text), `Delete`, `Duplicate`, `TextChange`, and `PropRemove`, matching the shape
   §6.2 already sketched in Rust) and mutates the *real AST node* it targets
   directly, then regenerates source via `recast.print`, which reuses the

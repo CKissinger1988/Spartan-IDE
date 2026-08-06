@@ -90,6 +90,20 @@ test("StyleRemove refuses missing properties and non-object style expressions", 
   );
 });
 
+test("StyleClear removes all plain inline styles and preserves other props", () => {
+  const result = applyCanvasEdit(`const X = () => <div className="card" style={{ color: "red", padding: 4 }} />;`, {
+    kind: "StyleClear", nodeId: "n0",
+  });
+  assert.equal(result, `const X = () => <div className="card" />;`);
+});
+
+test("StyleClear refuses dynamic style expressions", () => {
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <div style={styles.card} />;`, { kind: "StyleClear", nodeId: "n0" }),
+    /isn't a plain object expression/,
+  );
+});
+
 test("PropChange updates an existing string prop", () => {
   const source = `const X = () => <button className="btn">Go</button>;`;
   const result = applyCanvasEdit(source, { kind: "PropChange", nodeId: "n0", prop: "className", value: "btn-primary" });
