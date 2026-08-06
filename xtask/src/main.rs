@@ -20,7 +20,7 @@ fn main() -> Result<()> {
         Some("package") => {
             let root = workspace_root();
             let dist_dir = root.join("dist");
-            let version = "0.2.0-beta.3";
+            let version = "0.2.0-beta.4";
             let target_triple = "x86_64-unknown-linux-gnu";
             let archive = package::package(&root, &dist_dir, version, target_triple)?;
             println!("Packaged: {}", archive.display());
