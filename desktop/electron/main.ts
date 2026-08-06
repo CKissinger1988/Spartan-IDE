@@ -12,6 +12,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { BackendClient } from "./backend-client.js";
+import { GuiBuilderClient } from "./gui-builder-client.js";
 import { buildApplicationMenu, REPO_URL } from "./menu.js";
 import { setupAutoUpdate, checkAndDownloadUpdate, installUpdateAndRestart } from "./auto-update.js";
 
@@ -59,7 +60,17 @@ function resolveBackendBinaryPath(): string {
   );
 }
 
+function resolveGuiBuilderCliPath(): string {
+  return resolveResourcePath(
+    "GUI Builder CLI",
+    ["gui-builder", "cli.js"],
+    ["gui-builder", "dist", "cli.js"],
+    'run "npm run build" inside gui-builder/ first.'
+  );
+}
+
 let backend: BackendClient | null = null;
+let guiBuilder: GuiBuilderClient | null = null;
 // The one real main window. Tracked so a second launch attempt (see the
 // single-instance lock below) can focus/restore it rather than spawning a
 // second full instance (a second `spartan-backend` subprocess + a second
@@ -206,6 +217,11 @@ app.whenReady().then(() => {
     return;
   }
   backend = new BackendClient(backendPath);
+  try {
+    guiBuilder = new GuiBuilderClient(resolveGuiBuilderCliPath());
+  } catch (e) {
+    console.error("[spartan] GUI Builder unavailable:", e);
+  }
 
   // Real, narrow set of IPC methods the renderer can invoke via
   // `preload.ts`'s `contextBridge` -- a 1:1 passthrough to the real
@@ -346,6 +362,29 @@ app.whenReady().then(() => {
       return backend.call(method, params);
     });
   }
+
+  ipcMain.handle("spartan:design_parse", async (_event, params: { path: string }) => {
+    if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
+    return guiBuilder.parseComponent(params.path);
+  });
+  ipcMain.handle("spartan:design_bundle", async (_event, params: { path: string }) => {
+    if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
+    return guiBuilder.bundleComponent(params.path);
+  });
+  ipcMain.handle(
+    "spartan:design_apply_edit",
+    async (_event, params: { edit: unknown; source: string }) => {
+      if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
+      return guiBuilder.applyEdit(JSON.stringify(params.edit), params.source);
+    }
+  );
+  ipcMain.handle(
+    "spartan:design_components",
+    async (_event, params: { rootDir: string; fromFile?: string }) => {
+      if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
+      return guiBuilder.discoverComponents(params.rootDir, params.fromFile);
+    }
+  );
 
   // Two real, deliberately narrow main-process-only conveniences for the
   // new Settings "Diagnostics"/"About" section (§75.76) -- neither routes

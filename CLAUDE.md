@@ -9329,9 +9329,12 @@ cargo test --workspace --release   # 746 tests: 7 spikes + 18 real crates + xtas
 # (crates/plugins/Cargo.toml), excluded from the main workspace on purpose -- `cargo build
 # --workspace`/`cargo test --workspace` from the repo root never touch them; build them with
 # `cargo component build` from inside crates/plugins/<name> instead.
-# gui-builder/ is GONE -- the GUI Builder was removed from Spartan IDE at the user's explicit
-# request. There is no `gui-builder/` npm project, no Design screen in `desktop/`, no `design_*`
-# IPC method, and no `AppMode::Design`/`webview_bridge`/`gui_bridge` in the wgpu reference shell.
+# gui-builder/ was reintroduced at the user's explicit request. The standalone npm project,
+# desktop Design screen, `design_*` IPC methods, sandboxed live preview, AST edits, component
+# palette, drag-to-reparent, and responsive viewport controls are real again. This is a desktop
+# feature; the web and mobile shells do not expose Design mode. The old wgpu reference shell's
+# `AppMode::Design`/`webview_bridge`/`gui_bridge` remain removed, while the current implementation
+# uses Electron's narrow preload allowlist plus the dedicated `GuiBuilderClient` subprocess.
 # `spartan-editor-core` consequently no longer depends on `wry`/`gtk`/`windows`/`raw-window-handle`
 # and has no `build.rs`, so the old `GSETTINGS_BACKEND=memory` requirement for live `cargo run`
 # on a headless Linux box (§75.39) no longer applies either. Every §75.x bullet below that

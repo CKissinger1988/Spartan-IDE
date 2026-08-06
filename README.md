@@ -122,6 +122,7 @@ web/                        Real, separate Vite+React npm project — a vscode.d
                              (File System Access API + a real WASM-compiled spartan-buffer,
                              no backend needed) and backend-connected (a real spartan-devserver
                              over WebSocket, adding real LSP/DAP/git and Leo chat)
+gui-builder/                 Real TypeScript AST-sync and esbuild engine used by desktop's GUI Builder
 mobile/                     Real Expo/React Native companion app — first-run onboarding, private
                              and cloud QR pairing, secure private-token storage, release checks
 spikes/                     Real Tier 0 risk-gate spikes (rope perf, LSP/DAP clients, GPU
@@ -258,6 +259,11 @@ touching security, sandboxing, or approval flows (§9, §36).
   viewport/device emulation, portrait/landscape switching, zoom, console capture, local
   persistence, standalone HTML export, and complete `index.html`/`style.css`/`script.js`
   project export.
+- **GUI Builder**: desktop-only visual JSX/TSX design mode with a structural component tree,
+  sandboxed live React preview, click-to-select and drag-to-reparent, prop/style controls,
+  responsive viewport presets and zoom, component-library discovery/imports, component
+  insertion, reparenting, and two-way AST edits. The standalone `gui-builder/` package has
+  61 focused and end-to-end tests and is built separately from the Rust workspace.
 - **Mobile companion**: Expo/React Native onboarding, private and cloud QR pairing,
   configurable endpoints, SecureStore pairing secrets, backend connectivity, session/inbox
   views, release discovery, Android packaging, and safe first-run guidance for WAN and SSH

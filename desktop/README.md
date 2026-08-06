@@ -40,10 +40,11 @@ deleted).
   (fixed sibling of `.main-column`, not a nav screen) wired to Leo's real
   `plan`/`approve`/`reject` loop -- see §75.61.
 
-  A "Design" nav screen used to sit here too, hosting the GUI Builder and
-  its live preview. The GUI Builder was removed from Spartan IDE at the
-  user's explicit request -- the screen, its Electron-side client, and the
-  `design_*` IPC methods are all gone, recoverable only from git history.
+  The "GUI Builder" Design screen is real again: its standalone `gui-builder/`
+  AST/esbuild engine is called through a narrow Electron-side client and
+  `design_*` IPC methods. It provides a structure tree, sandboxed live React
+  preview, click selection, drag-to-reparent, component discovery/imports,
+  prop/style editing, and Desktop/Tablet/Mobile viewport presets with zoom.
 
   `Web Studio` is the desktop web-development suite: edit HTML, CSS, and
   JavaScript in separate source tabs; start from responsive templates; run the

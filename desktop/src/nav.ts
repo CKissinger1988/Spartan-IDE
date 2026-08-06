@@ -8,10 +8,8 @@
 // "with all of our features, functions, additions, and integrations
 // added" instruction.
 //
-// The "Design" screen (the GUI Builder) was removed at the user's
-// explicit request -- see CLAUDE.md's own entry for the full account of
-// what was deleted. It is not a placeholder or a deferred item; the
-// feature is gone, recoverable only from git history.
+// Design is the visual GUI Builder: real JSX/TSX AST edits plus a sandboxed
+// live preview, kept behind the same explicit desktop-only boundary.
 
 export type ScreenId =
   | "editor"
@@ -25,6 +23,7 @@ export type ScreenId =
   | "agents"
   | "containers"
   | "workflows"
+  | "design"
   | "skills"
   | "commands"
   | "hooks"
@@ -65,6 +64,7 @@ export const NAV: NavGroup[] = [
       { id: "agents", label: "Agents" },
       { id: "containers", label: "Dev Containers" },
       { id: "workflows", label: "Workflows" },
+      { id: "design", label: "GUI Builder" },
       { id: "skills", label: "Skills" },
       { id: "commands", label: "Commands" },
       { id: "hooks", label: "Hooks" },

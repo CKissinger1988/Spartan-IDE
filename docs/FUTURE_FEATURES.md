@@ -173,19 +173,21 @@ Priority key:
 | Renderer bundle code-splitting | P3 | Desktop renderer is a single >500 KB chunk. |
 | macOS / iOS builds | P3 | No Apple-platform build in project history. |
 
-## GUI Builder — removed
+## GUI Builder
 
-The GUI Builder (the Design screen, its live esbuild-bundled canvas, and the
-whole `gui-builder/` npm project behind it) was **removed from Spartan IDE**
-at the user's explicit request. Everything it did — JSX/TSX AST parsing,
-`StyleChange`/`PropChange`/`Reparent`/`ComponentInsert` edits, the live
-sandboxed-iframe preview, click-to-select, the component palette, and
-drag-to-reparent — is gone from the shipped product, not deferred or
-placeholdered.
+The GUI Builder has been reintroduced at the user's explicit request. The AST-sync,
+esbuild preview, component palette, click-to-select, drag-to-reparent, prop/style controls,
+and structural edit operations are wired back into the desktop shell. The first new increment
+adds responsive viewport preview with Desktop/Tablet/Mobile presets and zoom control.
 
-The code remains recoverable from git history (see the commits immediately
-preceding the removal); nothing here is a planned feature any more, so this
-table is intentionally empty rather than repopulated with the removed rows.
+| Feature | Status |
+|---|---|
+| JSX/TSX AST parsing and source-preserving edits | Real |
+| Sandboxed live React preview | Real |
+| Structure tree, click selection, and drag-to-reparent | Real |
+| Prop/style controls and component-library discovery/imports | Real |
+| Desktop/Tablet/Mobile viewport presets and zoom | Real |
+| Asset management, design-token editor, component variants, and multi-file visual workspace | Planned |
 
 ## Model management
 

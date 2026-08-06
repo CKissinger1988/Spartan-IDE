@@ -233,6 +233,10 @@ jobs:
         working-directory: desktop
         run: npm ci
 
+      - name: npm ci and build (gui-builder/)
+        working-directory: gui-builder
+        run: npm ci && npm run build
+
       - name: Package (electron-builder --linux)
         # This exact step was never verified from within the sandboxed
         # session that originally wrote this workflow (CLAUDE.md
@@ -284,6 +288,10 @@ jobs:
         working-directory: desktop
         run: npm ci
 
+      - name: npm ci and build (gui-builder/)
+        working-directory: gui-builder
+        run: npm ci && npm run build
+
       - name: Package (electron-builder --win)
         # Same real, first-attempt caveat as the Linux job above -- never
         # verified from within this project's own sandboxed dev session.
@@ -331,6 +339,10 @@ jobs:
       - name: npm ci (desktop/)
         working-directory: desktop
         run: npm ci
+
+      - name: npm ci and build (gui-builder/)
+        working-directory: gui-builder
+        run: npm ci && npm run build
 
       - name: Package (electron-builder --mac)
         # Real, unsigned/unnotarized .dmg -- no Apple Developer ID

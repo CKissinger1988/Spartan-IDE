@@ -284,6 +284,34 @@ jobs:
         working-directory: desktop
         run: npm run build:electron
 
+  gui-builder:
+    name: gui-builder/ (AST sync + live preview engine)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: gui-builder/package-lock.json
+
+      - name: npm ci
+        working-directory: gui-builder
+        run: npm ci
+
+      - name: Build
+        working-directory: gui-builder
+        run: npm run build
+
+      - name: Test
+        working-directory: gui-builder
+        run: npm test
+
   mobile:
     name: mobile/ (Expo/React Native IDE)
     runs-on: ubuntu-latest
