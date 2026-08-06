@@ -70,6 +70,8 @@ interface DiscoveredAsset {
   label: string;
   fontFamily?: string;
   fontFaceSnippet?: string;
+  usageCount?: number;
+  usageFiles?: string[];
 }
 
 interface DiscoveredToken {
@@ -955,6 +957,7 @@ export default function DesignScreen({
   const [paletteFilter, setPaletteFilter] = useState("");
   const [assets, setAssets] = useState<DiscoveredAsset[]>([]);
   const [assetsOpen, setAssetsOpen] = useState(false);
+  const [assetUsageSelection, setAssetUsageSelection] = useState<DiscoveredAsset | null>(null);
   const [assetFilter, setAssetFilter] = useState("");
   const [copiedAsset, setCopiedAsset] = useState<string | null>(null);
   const [copiedSvg, setCopiedSvg] = useState<string | null>(null);
@@ -1141,7 +1144,7 @@ export default function DesignScreen({
   const filteredAssets = useMemo(() => {
     const query = assetFilter.trim().toLowerCase();
     if (!query) return assets;
-    return assets.filter((asset) => `${asset.label} ${asset.file} ${asset.relativePath} ${asset.referencePath}`.toLowerCase().includes(query));
+    return assets.filter((asset) => `${asset.label} ${asset.file} ${asset.relativePath} ${asset.referencePath} ${(asset.usageFiles ?? []).join(" ")}`.toLowerCase().includes(query));
   }, [assets, assetFilter]);
   const filteredTokens = useMemo(() => {
     const query = tokenFilter.trim().toLowerCase();
@@ -3121,6 +3124,25 @@ export default function DesignScreen({
                     </select>
                   </div>
                 )}
+                {assetUsageSelection && (
+                  <div className="design-palette-usage" aria-label={`Usage locations for ${assetUsageSelection.label}`}>
+                    <div className="design-palette-usage-header mono">
+                      <span>{assetUsageSelection.label} · {assetUsageSelection.usageCount ?? 0} reference{(assetUsageSelection.usageCount ?? 0) === 1 ? "" : "s"}</span>
+                      <button className="design-asset-action mono" onClick={() => setAssetUsageSelection(null)}>Close</button>
+                    </div>
+                    {(assetUsageSelection.usageFiles ?? []).length === 0 ? (
+                      <div className="design-palette-empty mono">No direct source references found.</div>
+                    ) : (
+                      <div className="design-palette-usage-files">
+                        {(assetUsageSelection.usageFiles ?? []).map((file) => (
+                          <button key={file} className="design-palette-usage-file mono" onClick={() => onOpenFile(file)}>
+                            {displayUsagePath(projectRoot, file)}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {assets.length === 0 ? (
                   <div className="design-palette-empty mono">
                     No image or font assets found under the project root.
@@ -3140,7 +3162,7 @@ export default function DesignScreen({
                           onClick={() => insertAsset(asset)}
                         >
                           <span className="design-palette-name">▧ {asset.label}</span>
-                          <span className="design-palette-from">{asset.relativePath}</span>
+                          <span className="design-palette-from">{asset.relativePath} · {asset.usageCount ?? 0} use{(asset.usageCount ?? 0) === 1 ? "" : "s"}</span>
                         </button>
                         <button
                           className="design-asset-action mono"
@@ -3159,6 +3181,13 @@ export default function DesignScreen({
                             {copiedSvg === asset.file ? "SVG ✓" : "SVG"}
                           </button>
                         )}
+                        <button
+                          className="design-asset-action mono"
+                          title={`Inspect ${asset.label} usage locations`}
+                          onClick={() => setAssetUsageSelection(asset)}
+                        >
+                          Info
+                        </button>
                       </div>
                     ))}
                     {filteredAssets.filter((asset) => asset.kind === "font").map((asset) => (
@@ -3169,7 +3198,7 @@ export default function DesignScreen({
                           onClick={() => void copyAssetPath(asset)}
                         >
                           <span className="design-palette-name">Aa {asset.label}</span>
-                          <span className="design-palette-from">{copiedAsset === asset.file ? "Copied · " : "Copy · "}{asset.referencePath}</span>
+                          <span className="design-palette-from">{copiedAsset === asset.file ? "Copied · " : "Copy · "}{asset.referencePath} · {asset.usageCount ?? 0} use{(asset.usageCount ?? 0) === 1 ? "" : "s"}</span>
                         </button>
                         <button
                           className="design-asset-action mono"
@@ -3194,6 +3223,13 @@ export default function DesignScreen({
                           onClick={() => void addFontFace(asset)}
                         >
                           CSS +
+                        </button>
+                        <button
+                          className="design-asset-action mono"
+                          title={`Inspect ${asset.label} usage locations`}
+                          onClick={() => setAssetUsageSelection(asset)}
+                        >
+                          Info
                         </button>
                       </div>
                     ))}

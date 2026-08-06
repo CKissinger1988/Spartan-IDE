@@ -58,6 +58,28 @@ test("never walks dependency or build output", () => {
   assert.deepEqual(discoverAssets(root).map((asset) => asset.relativePath), ["public/ok.png"]);
 });
 
+test("indexes direct image and font references while skipping dependencies and builds", () => {
+  const root = fixture([
+    "src/App.tsx",
+    "src/assets/logo.svg",
+    "src/fonts/Inter.woff2",
+    "styles.css",
+    "node_modules/pkg/ignored.svg",
+    "dist/ignored.woff2",
+  ]);
+  writeFileSync(join(root, "src/App.tsx"), "import logo from './assets/logo.svg';\nconst font = './fonts/Inter.woff2';\nexport const view = <img src={logo} />;\n");
+  writeFileSync(join(root, "styles.css"), "@font-face { src: url('./src/fonts/Inter.woff2'); } .logo { background: url('./src/assets/logo.svg'); }");
+  const assets = discoverAssets(root);
+  const logo = assets.find((asset) => asset.relativePath === "src/assets/logo.svg");
+  const font = assets.find((asset) => asset.relativePath === "src/fonts/Inter.woff2");
+  assert.ok(logo);
+  assert.ok(font);
+  assert.equal(logo.usageCount, 2);
+  assert.deepEqual(logo.usageFiles, [join(root, "src/App.tsx"), join(root, "styles.css")]);
+  assert.equal(font.usageCount, 2);
+  assert.deepEqual(font.usageFiles, [join(root, "src/App.tsx"), join(root, "styles.css")]);
+});
+
 test("sanitizes executable and event-handler content from reusable SVG markup", () => {
   const source = `<svg viewBox="0 0 10 10" onclick="alert(1)"><script>alert(2)</script><a href="javascript:evil()"><path d="M0 0" /></a></svg>`;
   const safe = sanitizeSvgMarkup(source);
