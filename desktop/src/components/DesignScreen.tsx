@@ -1052,6 +1052,20 @@ export default function DesignScreen({
     [activeFile, selectedId, applyEditObject]
   );
 
+  const applyAssetBackground = useCallback(
+    async (asset: DiscoveredAsset) => {
+      if (!activeFile || !selectedId) return;
+      const safeReference = asset.referencePath.replace(/["\\]/g, "\\$&");
+      await applyEditObject({
+        kind: "StyleChange",
+        nodeId: selectedId,
+        property: "backgroundImage",
+        value: `url("${safeReference}")`,
+      });
+    },
+    [activeFile, selectedId, applyEditObject]
+  );
+
   const copyAssetPath = useCallback(async (asset: DiscoveredAsset) => {
     try {
       await navigator.clipboard.writeText(asset.referencePath);
@@ -1342,16 +1356,25 @@ export default function DesignScreen({
                 ) : (
                   <>
                     {assets.filter((asset) => asset.kind === "image").map((asset) => (
-                      <button
-                        key={asset.file}
-                        className="design-palette-item mono"
-                        disabled={!selectedId}
-                        title={selectedId ? `Insert ${asset.label} into the selected element` : "Select an element in the tree first"}
-                        onClick={() => insertAsset(asset)}
-                      >
-                        <span className="design-palette-name">▧ {asset.label}</span>
-                        <span className="design-palette-from">{asset.relativePath}</span>
-                      </button>
+                      <div key={asset.file} className="design-asset-row">
+                        <button
+                          className="design-palette-item mono"
+                          disabled={!selectedId}
+                          title={selectedId ? `Insert ${asset.label} into the selected element` : "Select an element in the tree first"}
+                          onClick={() => insertAsset(asset)}
+                        >
+                          <span className="design-palette-name">▧ {asset.label}</span>
+                          <span className="design-palette-from">{asset.relativePath}</span>
+                        </button>
+                        <button
+                          className="design-asset-action mono"
+                          disabled={!selectedId}
+                          title={selectedId ? `Use ${asset.label} as the selected element's background image` : "Select an element in the tree first"}
+                          onClick={() => void applyAssetBackground(asset)}
+                        >
+                          BG
+                        </button>
+                      </div>
                     ))}
                     {assets.filter((asset) => asset.kind === "font").map((asset) => (
                       <button

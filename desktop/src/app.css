@@ -3503,6 +3503,38 @@
   white-space: nowrap;
 }
 
+.design-asset-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.design-asset-row .design-palette-item {
+  min-width: 0;
+  flex: 1;
+}
+
+.design-asset-action {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0 5px;
+}
+
+.design-asset-action:not(:disabled):hover {
+  border-color: var(--border);
+  background: var(--accent-hover);
+  color: var(--accent);
+}
+
+.design-asset-action:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .design-danger-action {
   width: 100%;
   margin: 6px 0 10px;
