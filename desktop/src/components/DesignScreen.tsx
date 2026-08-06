@@ -14,6 +14,8 @@ import type { ResponsiveBreakpoint } from "../../../gui-builder/src/breakpoints"
 import { describeResponsiveDiff } from "../../../gui-builder/src/responsive-diff";
 import { describeToken } from "../../../gui-builder/src/token-model";
 import type { TokenTier } from "../../../gui-builder/src/token-model";
+import { suggestAccessibilityFixes } from "../../../gui-builder/src/accessibility-fixes";
+import type { AccessibilityFix } from "../../../gui-builder/src/accessibility-fixes";
 import type { ComponentPropDefinition } from "../../../gui-builder/src/scaffold";
 
 interface StyleEntryValue {
@@ -1017,6 +1019,18 @@ export default function DesignScreen({
     () => selectedNode ? sharedScreenReaderPreview(selectedNode as ScreenReaderNode) : null,
     [selectedNode]
   );
+  const accessibilityFixes = useMemo<AccessibilityFix[]>(() => {
+    if (!selectedNode || selectedIds.length !== 1) return [];
+    return suggestAccessibilityFixes({
+      nodeId: selectedNode.id,
+      tagName: selectedNode.tagName,
+      props: Object.fromEntries(Object.keys(selectedNode.props).map((name) => [name, propSummaryValue(selectedNode, name)])),
+      inspection: previewInspection?.nodeId === selectedNode.id ? {
+        width: previewInspection.rect.width,
+        height: previewInspection.rect.height,
+      } : null,
+    });
+  }, [selectedNode, selectedIds.length, previewInspection]);
 
   const saveViewportPreset = useCallback(() => {
     if (!viewportStorageKey || !viewportPresetName.trim()) return;
@@ -2137,6 +2151,10 @@ export default function DesignScreen({
       setError(`Could not copy accessibility report: ${(e as Error).message}`);
     }
   }, [selectedNode, previewInspection, screenReaderEstimate, accessibilityFindings]);
+
+  const applyAccessibilityFix = useCallback(async (fix: AccessibilityFix) => {
+    await applyEditObject(fix.edit as Record<string, unknown>);
+  }, [applyEditObject]);
 
   const copyDesignHandoff = useCallback(async () => {
     if (!selectedNode || !previewInspection) return;
@@ -3341,6 +3359,21 @@ export default function DesignScreen({
                     {finding.severity === "pass" ? "✓" : finding.severity === "error" ? "×" : finding.severity === "warning" ? "!" : "·"} {finding.message}
                   </div>
                 ))}
+                {accessibilityFixes.length > 0 && (
+                  <div className="design-interaction-presets" aria-label="Suggested accessibility fixes">
+                    <div className="design-preview-status mono">Suggested fixes · each applies a normal AST edit</div>
+                    {accessibilityFixes.map((fix) => (
+                      <button
+                        className="design-secondary-action mono"
+                        key={fix.id}
+                        title={fix.label}
+                        onClick={() => void applyAccessibilityFix(fix)}
+                      >
+                        {fix.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <div className="design-inspection-actions">
                   <button className="design-secondary-action mono" onClick={() => setPreviewFocus(true)}>Focus preview</button>
                   <button className="design-secondary-action mono" onClick={() => setPreviewFocus(false)}>Blur preview</button>

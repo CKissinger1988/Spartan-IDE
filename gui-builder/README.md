@@ -72,7 +72,7 @@ summarizes.
   variant, and line-based prop schema (`string`, `number`, `boolean`, `enum`, or
   `slot`); the desktop shell creates the file only inside the active project and
   opens it in the Editor.
-- `src/*.test.ts` — 176 real tests (Node's built-in `node:test` runner, no
+- `src/*.test.ts` — 179 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.
