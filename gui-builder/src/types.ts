@@ -64,6 +64,9 @@ export type CanvasEdit =
       value: string;
       valueType?: "string" | "number" | "boolean";
     }
+  /** Replaces the direct JSX text content of an element. If the element has
+   * no direct text child, a new text child is appended. */
+  | { kind: "TextChange"; nodeId: string; text: string }
   /** Removes an existing non-root element and its complete JSX subtree. */
   | { kind: "Delete"; nodeId: string }
   /** Clones an existing non-root element, including its JSX subtree, and

@@ -433,7 +433,7 @@ function StyleValueControl({
  * the exact same `edit` IPC call typing already uses, so a canvas edit
  * gets the same undo/dirty tracking as any other edit.
  *
- * All six real `CanvasEdit` kinds `gui-builder` itself supports are now
+ * All seven real `CanvasEdit` kinds `gui-builder` itself supports are now
  * wired here: `PropChange`/`StyleChange` (mutate the selected node) and
  * `Reparent`/`ComponentInsert` (structural edits, closing the gap this
  * screen's own edit form used to leave unreachable even after
@@ -459,8 +459,9 @@ export default function DesignScreen({
   const [error, setError] = useState<string | null>(null);
   const [propKey, setPropKey] = useState("");
   const [propValue, setPropValue] = useState("");
+  const [textValue, setTextValue] = useState("");
   const [propValueType, setPropValueType] = useState<"string" | "number" | "boolean">("string");
-  const [editKind, setEditKind] = useState<"PropChange" | "StyleChange" | "Reparent" | "ComponentInsert">(
+  const [editKind, setEditKind] = useState<"PropChange" | "StyleChange" | "TextChange" | "Reparent" | "ComponentInsert">(
     "PropChange"
   );
   const [reparentTargetId, setReparentTargetId] = useState("");
@@ -481,6 +482,10 @@ export default function DesignScreen({
   // reads it -- a `const` referenced before its declaration is a real
   // TDZ ReferenceError at first render, not a hoisting no-op.
   const selectedNode = selectedId ? findNode(roots, selectedId) : null;
+
+  useEffect(() => {
+    setTextValue(selectedNode?.textContent ?? "");
+  }, [selectedId, selectedNode?.textContent]);
 
   // The curated definition for whatever style property is currently
   // named, or `undefined` for the Custom… path -- derived from `propKey`
@@ -573,8 +578,11 @@ export default function DesignScreen({
       if (!propKey.trim()) return null;
       return { kind: "StyleChange", nodeId: selectedId, property: propKey, value: propValue };
     }
+    if (editKind === "TextChange") {
+      return { kind: "TextChange", nodeId: selectedId, text: textValue };
+    }
     return null;
-  }, [selectedId, editKind, propKey, propValue, propValueType]);
+  }, [selectedId, editKind, propKey, propValue, propValueType, textValue]);
 
   const previewFormEdit = useCallback(async () => {
     if (!activeFile) return;
@@ -701,15 +709,17 @@ export default function DesignScreen({
   // Real, per-kind readiness check -- each structural kind names a
   // different second operand (`reparentTargetId` vs. `insertTagName`)
   // beyond the shared `selectedId`, so "can Apply be pressed" isn't one
-  // single condition across all four real edit kinds.
+  // single condition across all five inspector edit kinds.
   const canApply =
     !!activeFile &&
     !!selectedId &&
     (editKind === "PropChange" || editKind === "StyleChange"
       ? !!propKey.trim()
-      : editKind === "Reparent"
-        ? !!reparentTargetId && reparentTargetId !== selectedId
-        : !!insertTagName.trim());
+      : editKind === "TextChange"
+        ? true
+        : editKind === "Reparent"
+          ? !!reparentTargetId && reparentTargetId !== selectedId
+          : !!insertTagName.trim());
 
   /** Picking a curated property seeds the value control from the node's
    * own real current style entry, so the form opens showing what's
@@ -844,6 +854,8 @@ export default function DesignScreen({
     } else if (editKind === "StyleChange") {
       if (!propKey.trim()) return;
       edit = { kind: "StyleChange", nodeId: selectedId, property: propKey, value: propValue };
+    } else if (editKind === "TextChange") {
+      edit = { kind: "TextChange", nodeId: selectedId, text: textValue };
     } else if (editKind === "Reparent") {
       if (!reparentTargetId || reparentTargetId === selectedId) return;
       edit = { kind: "Reparent", nodeId: selectedId, newParentId: reparentTargetId };
@@ -854,10 +866,11 @@ export default function DesignScreen({
     await applyEditObject(edit);
     setPropKey("");
     setPropValue("");
+    setTextValue("");
     setPropValueType("string");
     setReparentTargetId("");
     setInsertTagName("");
-  }, [activeFile, selectedId, propKey, propValue, propValueType, editKind, reparentTargetId, insertTagName, applyEditObject]);
+  }, [activeFile, selectedId, propKey, propValue, propValueType, textValue, editKind, reparentTargetId, insertTagName, applyEditObject]);
 
   if (!activeFile || !isComponentFile(activeFile.path)) {
     return (
@@ -1041,6 +1054,14 @@ export default function DesignScreen({
               <label>
                 <input
                   type="radio"
+                  checked={editKind === "TextChange"}
+                  onChange={() => setEditKind("TextChange")}
+                />
+                Text
+              </label>
+              <label>
+                <input
+                  type="radio"
                   checked={editKind === "PropChange"}
                   onChange={() => setEditKind("PropChange")}
                 />
@@ -1141,6 +1162,15 @@ export default function DesignScreen({
                 )}
               </>
             )}
+            {editKind === "TextChange" && (
+              <textarea
+                className="design-input mono design-text-input"
+                aria-label="Element text"
+                placeholder="direct text content"
+                value={textValue}
+                onChange={(event) => setTextValue(event.target.value)}
+              />
+            )}
             {editKind === "Reparent" && (
               <select
                 className="design-input mono"
@@ -1168,7 +1198,7 @@ export default function DesignScreen({
             <button className="leo-btn leo-btn-approve" onClick={applyEdit} disabled={!canApply}>
               Apply
             </button>
-            {(editKind === "PropChange" || editKind === "StyleChange") && (
+            {(editKind === "PropChange" || editKind === "StyleChange" || editKind === "TextChange") && (
               <button className="design-secondary-action mono" onClick={() => void previewFormEdit()} disabled={!canApply}>
                 Preview variant
               </button>

@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All six members of the `CanvasEdit` union are real and implemented:
+ * All seven members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -110,6 +110,27 @@ function applyPropChange(
       ),
     );
   }
+}
+
+function applyTextChange(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "TextChange" }>): void {
+  const element = nodesById.get(edit.nodeId);
+  if (!element) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
+  const textChildren = (element.children as AnyNode[]).filter((child) => child?.type === "JSXText");
+  if (textChildren.length > 1) {
+    throw new Error(
+      `TextChange found multiple direct text fragments in element "${edit.nodeId}" -- refusing to merge text around nested expressions.`,
+    );
+  }
+  if (textChildren.length === 1) {
+    textChildren[0].value = edit.text;
+    if (textChildren[0].extra) {
+      delete textChildren[0].extra.raw;
+      delete textChildren[0].extra.rawValue;
+    }
+    return;
+  }
+  ensureOpenForChildren(element);
+  (element.children as AnyNode[]).push(b.jsxText(edit.text));
 }
 
 /** True if `target` is `ancestor` itself or lives anywhere in its real
@@ -275,6 +296,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       applyPropChange(element, edit.prop, edit.value, edit.valueType);
       break;
     }
+    case "TextChange":
+      applyTextChange(nodesById, edit);
+      break;
     case "Delete":
       applyDelete(nodesById, parentOf, edit);
       break;

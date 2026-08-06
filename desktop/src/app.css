@@ -3252,6 +3252,11 @@
   font-size: 12px;
 }
 
+.design-text-input {
+  min-height: 58px;
+  resize: vertical;
+}
+
 /* Real typed style controls (task #277). A control row lays a widget
    pair (swatch+text, number+unit) on one line; the children carry no
    margin of their own since the row owns the panel's 12px gutter. */

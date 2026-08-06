@@ -16,7 +16,7 @@ summarizes.
   click on.
 - `src/edit.ts` (`applyCanvasEdit`) — real "Canvas → Code": takes a
   structured `CanvasEdit` (`StyleChange`, `PropChange`, `Reparent`, or
-  `ComponentInsert`, `Delete`, and `Duplicate`, matching the shape
+  `ComponentInsert`, `Delete`, `Duplicate`, and `TextChange`, matching the shape
   §6.2 already sketched in Rust) and mutates the *real AST node* it targets
   directly, then regenerates source via `recast.print`, which reuses the
   original source text for every node the edit didn't touch. This is the
@@ -37,7 +37,7 @@ summarizes.
 - `src/bundle.ts` — real esbuild bundling with `data-spartan-id` annotation and
   sandboxed-preview click/drag relays, including an in-memory source path for
   previews of unsaved editor changes.
-- `src/*.test.ts` — 75 real tests (Node's built-in `node:test` runner, no
+- `src/*.test.ts` — 77 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.

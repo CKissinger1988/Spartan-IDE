@@ -199,6 +199,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Unsaved-buffer-aware Design tree and live preview | Real |
 | Preview-only prop/style variant controls with reset/apply workflow | Real |
 | Named per-file variant preset save/load/delete | Real |
+| Direct JSX text-content editing | Real |
 | Desktop/Tablet/Mobile viewport presets and zoom | Real |
 | Font asset management, token definition editing, component state machines, and multi-file visual workspace | Planned |
 

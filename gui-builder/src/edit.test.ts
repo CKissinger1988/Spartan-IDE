@@ -81,6 +81,21 @@ test("PropChange rejects malformed typed values instead of emitting broken JSX",
   );
 });
 
+test("TextChange updates direct JSX text and preserves the surrounding element", () => {
+  const source = `const X = () => <button className="cta">Before</button>;`;
+  const result = applyCanvasEdit(source, { kind: "TextChange", nodeId: "n0", text: "After" });
+  assert.match(result, /<button className="cta">After<\/button>/);
+});
+
+test("TextChange appends text to a childless element and refuses ambiguous fragments", () => {
+  const empty = applyCanvasEdit(`const X = () => <div />;`, { kind: "TextChange", nodeId: "n0", text: "Added" });
+  assert.match(empty, /<div>Added<\/div>/);
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <p>Hello {name} world</p>;`, { kind: "TextChange", nodeId: "n0", text: "Nope" }),
+    /multiple direct text fragments/,
+  );
+});
+
 test("Reparent moves an element from one parent to another, appended at the end by default", () => {
   const source = `const X = () => (<div><section id="a"><span id="s" /></section><section id="b" /></div>);`;
   const roots = parseComponent(source);
