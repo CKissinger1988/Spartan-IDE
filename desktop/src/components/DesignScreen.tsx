@@ -724,6 +724,7 @@ export default function DesignScreen({
   const [customViewportHeight, setCustomViewportHeight] = useState(768);
   const [previewZoom, setPreviewZoom] = useState(75);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const refreshGenerationRef = useRef(0);
   const viewport = viewportId === "custom"
     ? { id: "custom", label: "Custom", width: customViewportWidth, height: customViewportHeight }
     : DESIGN_VIEWPORTS.find((item) => item.id === viewportId) ?? DESIGN_VIEWPORTS[0];
@@ -824,6 +825,7 @@ export default function DesignScreen({
   const styleDef = STYLE_PROPERTIES.find((d) => d.name === propKey);
 
   const refresh = useCallback(async (path: string, source?: string) => {
+    const generation = ++refreshGenerationRef.current;
     setError(null);
     try {
       const parseResult = (await window.spartan.call(
@@ -832,10 +834,13 @@ export default function DesignScreen({
       )) as {
         roots: ComponentNode[];
       };
+      if (generation !== refreshGenerationRef.current) return;
       setRoots(parseResult.roots);
     } catch (e) {
+      if (generation !== refreshGenerationRef.current) return;
       setError((e as Error).message);
     }
+    if (generation !== refreshGenerationRef.current) return;
     try {
       const bundleResult = (await window.spartan.call(
         source === undefined ? "design_bundle" : "design_bundle_source",
@@ -843,8 +848,10 @@ export default function DesignScreen({
       )) as {
         code: string;
       };
+      if (generation !== refreshGenerationRef.current) return;
       setBundleCode(bundleResult.code);
     } catch (e) {
+      if (generation !== refreshGenerationRef.current) return;
       setError((e as Error).message);
     }
   }, []);
@@ -1233,6 +1240,9 @@ export default function DesignScreen({
   }, [selectionCount, deleteSelected, duplicateSelected, undoRedo]);
 
   useEffect(() => {
+    // Invalidate any parse/bundle already in flight when switching files or
+    // leaving Design mode, so an older response cannot repaint the new file.
+    refreshGenerationRef.current += 1;
     setSelectedId(null);
     setSelectedIds([]);
     if (activeFile && isComponentFile(activeFile.path)) {
