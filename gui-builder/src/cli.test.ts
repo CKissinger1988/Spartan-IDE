@@ -57,6 +57,25 @@ test("real subprocess: CLI asset-source returns sanitized SVG markup", () => {
   assert.doesNotMatch(JSON.parse(stdout).source, /script|onclick/i);
 });
 
+test("real subprocess: CLI usage discovery reads source overrides from stdin", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gui-builder-cli-usage-test-"));
+  const app = path.join(dir, "App.tsx");
+  const asset = path.join(dir, "logo.svg");
+  const stylesheet = path.join(dir, "theme.css");
+  writeFileSync(app, "const view = 'var(--accent)';\nconst logo = './logo.svg';\n");
+  writeFileSync(asset, "<svg />");
+  writeFileSync(stylesheet, ":root { --accent: red; } .logo { background: url('./logo.svg'); }");
+  const overrides = JSON.stringify({ [app]: "const view = 'live';\n" });
+  const tokens = runCli(["tokens", dir, "--source-overrides"], overrides);
+  const assets = runCli(["assets", dir, "", "--source-overrides"], overrides);
+  rmSync(dir, { recursive: true, force: true });
+
+  assert.equal(tokens.status, 0);
+  assert.equal(JSON.parse(tokens.stdout).tokens[0].usageCount, 0);
+  assert.equal(assets.status, 0);
+  assert.equal(JSON.parse(assets.stdout).assets.find((item: { file: string }) => item.file === asset).usageCount, 1);
+});
+
 test("real subprocess: CLI reports a real error (non-zero exit) for a missing file", () => {
   const { status } = runCli(["/nonexistent/path/does/not/exist.jsx"]);
   assert.equal(status, 1);

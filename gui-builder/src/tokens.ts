@@ -34,15 +34,31 @@ function collectFiles(dir: string, depth: number, out: string[], extensions: Set
   }
 }
 
-function collectTokenUsages(rootDir: string): Map<string, { count: number; files: string[]; locations: Array<{ file: string; line: number; column: number }> }> {
+function isProjectSource(rootDir: string, file: string): boolean {
+  const resolvedRoot = rootDir.replace(/[\\/]$/, "");
+  const normalizedFile = file.replace(/\\/g, "/");
+  const normalizedRoot = resolvedRoot.replace(/\\/g, "/");
+  return normalizedFile.startsWith(`${normalizedRoot}/`) || normalizedFile === normalizedRoot;
+}
+
+function readSource(file: string, sourceOverrides: Record<string, string>): string | null {
+  if (Object.prototype.hasOwnProperty.call(sourceOverrides, file)) return sourceOverrides[file];
+  try { return readFileSync(file, "utf8"); } catch { return null; }
+}
+
+function collectTokenUsages(rootDir: string, sourceOverrides: Record<string, string>): Map<string, { count: number; files: string[]; locations: Array<{ file: string; line: number; column: number }> }> {
   const files: string[] = [];
   collectFiles(rootDir, 0, files, SOURCE_EXTENSIONS);
-  files.sort();
+  for (const file of Object.keys(sourceOverrides)) {
+    if (isProjectSource(rootDir, file) && SOURCE_EXTENSIONS.has(extname(file).toLowerCase())) files.push(file);
+  }
+  const uniqueFiles = [...new Set(files)];
+  uniqueFiles.sort();
   const usages = new Map<string, { count: number; files: string[]; locations: Array<{ file: string; line: number; column: number }> }>();
   const reference = /var\(\s*(--[a-zA-Z0-9_-]+)\b/g;
-  for (const file of files) {
-    let source: string;
-    try { source = readFileSync(file, "utf8"); } catch { continue; }
+  for (const file of uniqueFiles) {
+    const source = readSource(file, sourceOverrides);
+    if (source === null) continue;
     const locations = new Map<string, Array<{ line: number; column: number }>>();
     for (const match of source.matchAll(reference)) {
       const before = source.slice(0, match.index ?? 0);
@@ -140,15 +156,19 @@ export function discoverTokensInSource(source: string, file: string, rootDir: st
 }
 
 /** Finds declarations such as `--color-accent: #e33;` without executing CSS. */
-export function discoverTokens(rootDir: string): DiscoveredToken[] {
+export function discoverTokens(rootDir: string, sourceOverrides: Record<string, string> = {}): DiscoveredToken[] {
   const files: string[] = [];
   collectFiles(rootDir, 0, files, CSS_EXTENSIONS);
-  files.sort();
-  const usages = collectTokenUsages(rootDir);
+  for (const file of Object.keys(sourceOverrides)) {
+    if (isProjectSource(rootDir, file) && CSS_EXTENSIONS.has(extname(file).toLowerCase())) files.push(file);
+  }
+  const uniqueFiles = [...new Set(files)];
+  uniqueFiles.sort();
+  const usages = collectTokenUsages(rootDir, sourceOverrides);
   const result: DiscoveredToken[] = [];
-  for (const file of files) {
-    let source: string;
-    try { source = readFileSync(file, "utf8"); } catch { continue; }
+  for (const file of uniqueFiles) {
+    const source = readSource(file, sourceOverrides);
+    if (source === null) continue;
     result.push(...discoverTokensInSource(source, file, rootDir).map((token) => {
       const usage = usages.get(token.name);
       return { ...token, usageCount: usage?.count ?? 0, usageFiles: usage?.files ?? [], usageLocations: usage?.locations ?? [] };

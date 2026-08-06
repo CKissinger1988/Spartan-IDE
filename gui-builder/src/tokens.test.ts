@@ -63,6 +63,17 @@ test("indexes token references across project source files while skipping depend
   ]);
 });
 
+test("uses unsaved source overrides when indexing token references", () => {
+  const root = mkdtempSync(join(tmpdir(), "spartan-tokens-"));
+  mkdirSync(join(root, "src"), { recursive: true });
+  const sourceFile = join(root, "src/Button.tsx");
+  writeFileSync(join(root, "theme.css"), ":root { --accent: #d33; } .button { color: var(--accent); background: var(--accent); }");
+  writeFileSync(sourceFile, "export const Button = () => <div style={{ color: 'var(--accent)' }} />;\n");
+  const [token] = discoverTokens(root, { [sourceFile]: "export const Button = () => <div />;\n" });
+  assert.equal(token.usageCount, 2);
+  assert.deepEqual(token.usageFiles, [join(root, "theme.css")]);
+});
+
 test("applies one token value while preserving neighboring CSS source", () => {
   const source = ":root {\n  --brand: #d33;\n  --gap: 8px;\n}\n.button { color: var(--brand); }\n";
   const result = applyTokenValue(source, "--brand", "#246");

@@ -14,8 +14,8 @@
  *   node dist/cli.js parse-source <path-to-jsx-or-tsx-file> (source from stdin)
  *   node dist/cli.js bundle-source <path-to-jsx-or-tsx-file> (source from stdin)
  *   node dist/cli.js components <project-dir> [from-file] (component browser, task #278)
- *   node dist/cli.js assets <project-dir> [from-file] (image asset browser)
- *   node dist/cli.js tokens <project-dir> (CSS custom-property browser)
+ *   node dist/cli.js assets <project-dir> [from-file] [--source-overrides] (image asset browser)
+ *   node dist/cli.js tokens <project-dir> [--source-overrides] (CSS custom-property browser)
  *
  * "parse" mode reads the file at `<path>` from disk (§6.2 step 1 -- there is
  * no live buffer on this side, so it always reflects what's actually on
@@ -157,12 +157,22 @@ function runComponentSource(path: string | undefined, fromFile: string | undefin
   }
 }
 
-function runAssets(rootDir: string | undefined, fromFile: string | undefined): void {
+function sourceOverridesFromStdin(): Record<string, string> {
+  try {
+    const value = JSON.parse(readStdin()) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("source overrides must be an object");
+    return Object.fromEntries(Object.entries(value).filter(([, source]) => typeof source === "string")) as Record<string, string>;
+  } catch (e) {
+    fail(`invalid source overrides JSON: ${(e as Error).message}`);
+  }
+}
+
+function runAssets(rootDir: string | undefined, fromFile: string | undefined, readOverrides: boolean): void {
   if (!rootDir) {
     fail("usage: cli.js assets <project-dir> [from-file]");
   }
   try {
-    const assets = discoverAssets(rootDir, fromFile);
+    const assets = discoverAssets(rootDir, fromFile, readOverrides ? sourceOverridesFromStdin() : {});
     process.stdout.write(JSON.stringify({ assets }));
   } catch (e) {
     fail(`failed to discover assets: ${(e as Error).message}`);
@@ -178,10 +188,10 @@ function runAssetSource(path: string | undefined): void {
   }
 }
 
-function runTokens(rootDir: string | undefined): void {
+function runTokens(rootDir: string | undefined, readOverrides: boolean): void {
   if (!rootDir) fail("usage: cli.js tokens <project-dir>");
   try {
-    process.stdout.write(JSON.stringify({ tokens: discoverTokens(rootDir) }));
+    process.stdout.write(JSON.stringify({ tokens: discoverTokens(rootDir, readOverrides ? sourceOverridesFromStdin() : {}) }));
   } catch (e) {
     fail(`failed to discover tokens: ${(e as Error).message}`);
   }
@@ -238,11 +248,11 @@ async function main(): Promise<void> {
   } else if (mode === "component-source") {
     runComponentSource(process.argv[3], process.argv[4]);
   } else if (mode === "assets") {
-    runAssets(process.argv[3], process.argv[4]);
+    runAssets(process.argv[3], process.argv[4], process.argv[5] === "--source-overrides");
   } else if (mode === "asset-source") {
     runAssetSource(process.argv[3]);
   } else if (mode === "tokens") {
-    runTokens(process.argv[3]);
+    runTokens(process.argv[3], process.argv[4] === "--source-overrides");
   } else if (mode === "token-source") {
     runTokenSource(process.argv[3], process.argv[4]);
   } else if (mode === "token-apply") {

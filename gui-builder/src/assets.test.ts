@@ -88,6 +88,18 @@ test("indexes direct image and font references while skipping dependencies and b
   ]);
 });
 
+test("uses unsaved source overrides when indexing asset references", () => {
+  const root = fixture(["src/App.tsx", "src/assets/logo.svg", "styles.css"]);
+  const app = join(root, "src/App.tsx");
+  writeFileSync(app, "import logo from './assets/logo.svg';\nexport const view = <img src={logo} />;\n");
+  writeFileSync(join(root, "styles.css"), ".logo { background: url('./src/assets/logo.svg'); }");
+  const assets = discoverAssets(root, undefined, { [app]: "export const view = <div />;\n" });
+  const logo = assets.find((asset) => asset.relativePath === "src/assets/logo.svg");
+  assert.ok(logo);
+  assert.equal(logo.usageCount, 1);
+  assert.deepEqual(logo.usageFiles, [join(root, "styles.css")]);
+});
+
 test("sanitizes executable and event-handler content from reusable SVG markup", () => {
   const source = `<svg viewBox="0 0 10 10" onclick="alert(1)"><script>alert(2)</script><a href="javascript:evil()"><path d="M0 0" /></a></svg>`;
   const safe = sanitizeSvgMarkup(source);

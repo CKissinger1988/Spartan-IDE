@@ -110,9 +110,9 @@ export class GuiBuilderClient {
     return JSON.parse(stdout);
   }
 
-  async discoverAssets(rootDir: string, fromFile?: string): Promise<unknown> {
-    const args = fromFile ? ["assets", rootDir, fromFile] : ["assets", rootDir];
-    const stdout = await runCli(this.cliPath, args);
+  async discoverAssets(rootDir: string, fromFile?: string, sourceOverrides: Record<string, string> = {}): Promise<unknown> {
+    const args = fromFile ? ["assets", rootDir, fromFile, "--source-overrides"] : ["assets", rootDir, "", "--source-overrides"];
+    const stdout = await runCli(this.cliPath, args, JSON.stringify(sourceOverrides));
     return JSON.parse(stdout);
   }
 
@@ -121,8 +121,8 @@ export class GuiBuilderClient {
     return JSON.parse(stdout);
   }
 
-  async discoverTokens(rootDir: string): Promise<unknown> {
-    const stdout = await runCli(this.cliPath, ["tokens", rootDir]);
+  async discoverTokens(rootDir: string, sourceOverrides: Record<string, string> = {}): Promise<unknown> {
+    const stdout = await runCli(this.cliPath, ["tokens", rootDir, "--source-overrides"], JSON.stringify(sourceOverrides));
     return JSON.parse(stdout);
   }
 

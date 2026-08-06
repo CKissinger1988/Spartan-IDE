@@ -252,6 +252,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Typed component playground companion generation with controlled prop inputs | Real |
 | Searchable image/font asset palette by label or project path | Real |
 | Project-wide image/font asset usage counts and line-level source navigation | Real |
+| Unsaved Editor-buffer-aware token and asset usage indexing | Real |
 | Sanitized inline SVG markup copy from discovered assets | Real |
 | Searchable design-token palette by name, value, or source path | Real |
 | Safe unwrapping of attribute-free direct wrappers | Real |

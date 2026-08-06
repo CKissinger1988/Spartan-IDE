@@ -147,14 +147,29 @@ function sourcePosition(source: string, offset: number): { line: number; column:
   };
 }
 
-function collectAssetUsages(rootDir: string, assetFiles: string[]): Map<string, { count: number; files: string[]; locations: Array<{ file: string; line: number; column: number }> }> {
+function isProjectSource(rootDir: string, file: string): boolean {
+  const normalizedRoot = rootDir.replace(/[\\/]$/, "").replace(/\\/g, "/");
+  const normalizedFile = file.replace(/\\/g, "/");
+  return normalizedFile.startsWith(`${normalizedRoot}/`) || normalizedFile === normalizedRoot;
+}
+
+function readSource(file: string, sourceOverrides: Record<string, string>): string | null {
+  if (Object.prototype.hasOwnProperty.call(sourceOverrides, file)) return sourceOverrides[file];
+  try { return readFileSync(file, "utf8"); } catch { return null; }
+}
+
+function collectAssetUsages(rootDir: string, assetFiles: string[], sourceOverrides: Record<string, string>): Map<string, { count: number; files: string[]; locations: Array<{ file: string; line: number; column: number }> }> {
   const sourceFiles: string[] = [];
   collectSourceFiles(rootDir, 0, sourceFiles);
-  sourceFiles.sort();
+  for (const file of Object.keys(sourceOverrides)) {
+    if (isProjectSource(rootDir, file) && SOURCE_EXTENSIONS.has(extname(file).toLowerCase())) sourceFiles.push(file);
+  }
+  const uniqueSourceFiles = [...new Set(sourceFiles)];
+  uniqueSourceFiles.sort();
   const usages = new Map<string, { count: number; files: string[]; locations: Array<{ file: string; line: number; column: number }> }>();
-  for (const sourceFile of sourceFiles) {
-    let source: string;
-    try { source = readFileSync(sourceFile, "utf8"); } catch { continue; }
+  for (const sourceFile of uniqueSourceFiles) {
+    const source = readSource(sourceFile, sourceOverrides);
+    if (source === null) continue;
     for (const assetFile of assetFiles) {
       const offsets = literalReferenceOffsets(source, referenceCandidates(rootDir, sourceFile, assetFile));
       if (offsets.length === 0) continue;
@@ -192,11 +207,11 @@ export function fontFaceSnippet(asset: Pick<DiscoveredAsset, "kind" | "label" | 
 }
 
 /** Discovers image and font assets under `rootDir`, ignoring dependency/build trees. */
-export function discoverAssets(rootDir: string, fromFile?: string): DiscoveredAsset[] {
+export function discoverAssets(rootDir: string, fromFile?: string, sourceOverrides: Record<string, string> = {}): DiscoveredAsset[] {
   const files: string[] = [];
   collectFiles(rootDir, 0, files);
   files.sort();
-  const usages = collectAssetUsages(rootDir, files);
+  const usages = collectAssetUsages(rootDir, files, sourceOverrides);
   return files.map((file) => {
     const kind = IMAGE_EXTENSIONS.has(extname(file).toLowerCase()) ? "image" as const : "font" as const;
     const asset: DiscoveredAsset = {

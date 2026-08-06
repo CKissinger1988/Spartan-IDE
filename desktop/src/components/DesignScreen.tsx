@@ -2035,12 +2035,13 @@ export default function DesignScreen({
       const result = (await window.spartan.call("design_assets", {
         rootDir: projectRoot,
         fromFile: activeFile?.path,
+        sourceOverrides: Object.fromEntries(openFiles.map((file) => [file.path, file.content])),
       })) as { assets: DiscoveredAsset[] };
       setAssets(result.assets);
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [assetsOpen, projectRoot, activeFile?.path]);
+  }, [assetsOpen, projectRoot, activeFile?.path, openFiles]);
 
   const insertAsset = useCallback(
     async (asset: DiscoveredAsset) => {
@@ -2383,7 +2384,10 @@ export default function DesignScreen({
     setTokensOpen(true);
     if (!projectRoot) return;
     try {
-      const result = (await window.spartan.call("design_tokens", { rootDir: projectRoot })) as {
+      const result = (await window.spartan.call("design_tokens", {
+        rootDir: projectRoot,
+        sourceOverrides: Object.fromEntries(openFiles.map((file) => [file.path, file.content])),
+      })) as {
         tokens: DiscoveredToken[];
       };
       const liveResults = await Promise.all(openCssFiles.map(async (file) => (
@@ -2395,7 +2399,17 @@ export default function DesignScreen({
       )));
       const merged = new Map(result.tokens.map((token) => [`${token.file}:${token.name}`, token]));
       for (const liveResult of liveResults) {
-        for (const token of liveResult.tokens) merged.set(`${token.file}:${token.name}`, token);
+        for (const token of liveResult.tokens) {
+          const key = `${token.file}:${token.name}`;
+          const existing = merged.get(key);
+          merged.set(key, {
+            ...existing,
+            ...token,
+            ...(existing?.usageCount !== undefined && token.usageCount === undefined ? { usageCount: existing.usageCount } : {}),
+            ...(existing?.usageFiles && token.usageFiles === undefined ? { usageFiles: existing.usageFiles } : {}),
+            ...(existing?.usageLocations && token.usageLocations === undefined ? { usageLocations: existing.usageLocations } : {}),
+          });
+        }
       }
       const nextTokens = [...merged.values()];
       setTokens(nextTokens);
@@ -2403,7 +2417,7 @@ export default function DesignScreen({
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [tokensOpen, projectRoot, openCssFiles]);
+  }, [tokensOpen, projectRoot, openCssFiles, openFiles]);
 
   const applyPreviewTheme = useCallback((theme: PreviewTheme | null) => {
     setActivePreviewTheme(theme?.name ?? null);

@@ -410,9 +410,9 @@ app.whenReady().then(() => {
   );
   ipcMain.handle(
     "spartan:design_assets",
-    async (_event, params: { rootDir: string; fromFile?: string }) => {
+    async (_event, params: { rootDir: string; fromFile?: string; sourceOverrides?: Record<string, string> }) => {
       if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
-      return guiBuilder.discoverAssets(params.rootDir, params.fromFile);
+      return guiBuilder.discoverAssets(params.rootDir, params.fromFile, params.sourceOverrides ?? {});
     }
   );
   ipcMain.handle(
@@ -433,9 +433,9 @@ app.whenReady().then(() => {
       return guiBuilder.readAssetSource(target);
     },
   );
-  ipcMain.handle("spartan:design_tokens", async (_event, params: { rootDir: string }) => {
+  ipcMain.handle("spartan:design_tokens", async (_event, params: { rootDir: string; sourceOverrides?: Record<string, string> }) => {
     if (!guiBuilder) throw new Error("GUI Builder is unavailable; build gui-builder first");
-    return guiBuilder.discoverTokens(params.rootDir);
+    return guiBuilder.discoverTokens(params.rootDir, params.sourceOverrides ?? {});
   });
   ipcMain.handle(
     "spartan:design_create_component",
