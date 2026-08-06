@@ -625,7 +625,7 @@ function StyleValueControl({
  * the exact same `edit` IPC call typing already uses, so a canvas edit
  * gets the same undo/dirty tracking as any other edit.
  *
- * All fifteen real `CanvasEdit` kinds `gui-builder` itself supports are now
+ * All sixteen real `CanvasEdit` kinds `gui-builder` itself supports are now
  * wired here: `PropChange`/`StyleChange` (mutate the selected node) and
  * `Reparent`/`ComponentInsert` (structural edits, closing the gap this
  * screen's own edit form used to leave unreachable even after
@@ -1007,9 +1007,11 @@ export default function DesignScreen({
   }, [activeFile, selectedIds, selectedNode?.tagName, applyEditObject]);
 
   const duplicateSelected = useCallback(async () => {
-    if (!activeFile || !selectedId || !hasSingleSelection) return;
-    await applyEditObject({ kind: "Duplicate", nodeId: selectedId });
-  }, [activeFile, selectedId, hasSingleSelection, applyEditObject]);
+    if (!activeFile || selectedIds.length === 0) return;
+    await applyEditObject(selectedIds.length === 1
+      ? { kind: "Duplicate", nodeId: selectedIds[0] }
+      : { kind: "DuplicateMany", nodeIds: selectedIds });
+  }, [activeFile, selectedIds, applyEditObject]);
 
   const moveSelected = useCallback(async (direction: -1 | 1) => {
     if (!activeFile || !selectedId || !hasSingleSelection) return;
@@ -1085,7 +1087,7 @@ export default function DesignScreen({
         void deleteSelected();
         return;
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d" && hasSingleSelection) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d" && selectionCount > 0) {
         event.preventDefault();
         void duplicateSelected();
       }
@@ -1870,8 +1872,8 @@ export default function DesignScreen({
             <button className="design-danger-action mono" onClick={deleteSelected} disabled={selectionCount === 0}>
               {selectionCount > 1 ? `Delete ${selectionCount} selected elements` : "Delete selected element"}
             </button>
-            <button className="design-secondary-action mono" onClick={duplicateSelected} disabled={!hasSingleSelection}>
-              Duplicate selected element
+            <button className="design-secondary-action mono" onClick={duplicateSelected} disabled={selectionCount === 0}>
+              {selectionCount > 1 ? `Duplicate ${selectionCount} selected elements` : "Duplicate selected element"}
             </button>
             <div className="design-inspection-actions">
               <button

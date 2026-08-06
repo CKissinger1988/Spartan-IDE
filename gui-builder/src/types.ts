@@ -8,7 +8,7 @@
  * real JS/JSX AST work actually happens, per §6.1's own "lightweight
  * dev-server bridge" description).
  *
- * All fifteen members of the full spec's `CanvasEdit` union are now real and
+ * All sixteen members of the full spec's `CanvasEdit` union are now real and
  * implemented by `applyCanvasEdit`: `StyleChange`/`PropChange` (original
  * v1), and `Reparent`/`ComponentInsert` (closing the gap this file's own
  * doc comment used to name as unattempted -- see edit.ts's doc comment
@@ -107,6 +107,8 @@ export type CanvasEdit =
   /** Clones an existing non-root element, including its JSX subtree, and
    * inserts the clone immediately after the original among its siblings. */
   | { kind: "Duplicate"; nodeId: string }
+  /** Clones multiple independent non-root elements in one structural edit. */
+  | { kind: "DuplicateMany"; nodeIds: string[] }
   /** Moves an existing element to become a child of a different (or the
    * same, for reordering) parent element. `index` is the position within
    * the *target* parent's children array after the move (default:

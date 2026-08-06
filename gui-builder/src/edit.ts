@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All fifteen members of the `CanvasEdit` union are real and implemented:
+ * All sixteen members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -468,6 +468,54 @@ function applyDuplicate(
   spliceIn(parent, clone, index + 1);
 }
 
+function applyDuplicateMany(
+  nodesById: Map<string, AnyNode>,
+  parentOf: Map<string, AnyNode | null>,
+  edit: Extract<CanvasEdit, { kind: "DuplicateMany" }>,
+): void {
+  const ids = [...new Set(edit.nodeIds)];
+  if (ids.length === 0) throw new Error("DuplicateMany requires at least one selected element.");
+  const nodes = ids.map((id) => {
+    const node = nodesById.get(id);
+    if (!node) throw new Error(`No element with id "${id}" found in the current source.`);
+    return { id, node };
+  });
+  for (const entry of nodes) {
+    const parent = parentOf.get(entry.id);
+    if (parent === undefined) throw new Error(`Internal error: no parent entry tracked for id "${entry.id}".`);
+    if (parent === null) {
+      throw new Error(`Element "${entry.id}" is a top-level component root -- duplicate a child element instead.`);
+    }
+  }
+  for (let i = 0; i < nodes.length; i += 1) {
+    for (let j = i + 1; j < nodes.length; j += 1) {
+      if (isDescendant(nodes[i].node, nodes[j].node) || isDescendant(nodes[j].node, nodes[i].node)) {
+        throw new Error("DuplicateMany refuses selections where one element contains another; select only independent subtrees.");
+      }
+    }
+  }
+  const byParent = new Map<AnyNode, AnyNode[]>();
+  for (const entry of nodes) {
+    const parent = parentOf.get(entry.id) as AnyNode;
+    const siblings = byParent.get(parent) ?? [];
+    siblings.push(entry.node);
+    byParent.set(parent, siblings);
+  }
+  for (const [parent, selectedChildren] of byParent) {
+    const children = parent.children as AnyNode[];
+    const ordered = selectedChildren
+      .map((node) => ({ node, index: children.indexOf(node) }))
+      .sort((a, b) => b.index - a.index);
+    if (ordered.some((entry) => entry.index === -1)) {
+      throw new Error("DuplicateMany only supports direct JSX children, not elements nested inside expressions.");
+    }
+    for (const entry of ordered) {
+      const clone = JSON.parse(JSON.stringify(entry.node)) as AnyNode;
+      spliceIn(parent, clone, entry.index + 1);
+    }
+  }
+}
+
 function applyComponentInsert(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "ComponentInsert" }>): void {
   const parent = nodesById.get(edit.parentId);
   if (!parent) {
@@ -556,6 +604,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       break;
     case "Duplicate":
       applyDuplicate(nodesById, parentOf, edit);
+      break;
+    case "DuplicateMany":
+      applyDuplicateMany(nodesById, parentOf, edit);
       break;
     case "Reparent":
       applyReparent(nodesById, parentOf, edit);

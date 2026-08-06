@@ -423,6 +423,36 @@ test("Duplicate clones an element and its nested subtree immediately after the o
   assert.notEqual(roots[0].children[1].id, roots[0].children[2].id);
 });
 
+test("DuplicateMany clones independent siblings after each original and preserves nested content", () => {
+  const source = `const X = () => <main><article data-kind="a"><span>A</span></article><aside /><article data-kind="b"><b>B</b></article></main>;`;
+  const roots = parseComponent(source);
+  const children = roots[0].children;
+  const result = applyCanvasEdit(source, {
+    kind: "DuplicateMany",
+    nodeIds: [children[2].id, children[0].id],
+  });
+  const after = parseComponent(result)[0].children;
+  assert.deepEqual(after.map((node) => node.tagName), ["article", "article", "aside", "article", "article"]);
+  assert.deepEqual(after.map((node) => node.props["data-kind"]?.kind === "string" ? node.props["data-kind"].value : null), ["a", "a", null, "b", "b"]);
+  assert.equal(after[1].children[0].textContent, "A");
+  assert.equal(after[4].children[0].textContent, "B");
+});
+
+test("DuplicateMany refuses roots and overlapping ancestor/descendant selections", () => {
+  const source = `function A() { return <div><section><b /></section></div>; } function B() { return <aside />; }`;
+  const roots = parseComponent(source);
+  const section = roots[0].children[0];
+  const bold = section.children[0];
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "DuplicateMany", nodeIds: [roots[0].id, roots[1].id] }),
+    /top-level component root/,
+  );
+  assert.throws(
+    () => applyCanvasEdit(source, { kind: "DuplicateMany", nodeIds: [section.id, bold.id] }),
+    /one element contains another/,
+  );
+});
+
 test("Duplicate refuses to clone a top-level component root", () => {
   const source = `const X = () => <main><span /></main>;`;
   assert.throws(
