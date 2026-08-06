@@ -82,6 +82,8 @@ try {
   var selectedEls = [];
   var previewStateEl = null;
   var previewStateStyle = null;
+  var boxModelOverlay = null;
+  var boxModelNode = null;
   var focusedEl = null;
   var focusedHadTabIndex = false;
   var focusedPreviousTabIndex = null;
@@ -99,6 +101,7 @@ try {
   }
 
   function highlightSelection(nodeIds) {
+    clearBoxModel();
     clearSelection();
     var ids = Array.isArray(nodeIds) ? nodeIds : nodeIds ? [nodeIds] : [];
     ids.forEach(function (nodeId) {
@@ -111,6 +114,98 @@ try {
       selectedEls.push(candidate);
     });
   }
+
+  function clearBoxModel() {
+    if (boxModelOverlay) boxModelOverlay.remove();
+    boxModelOverlay = null;
+    boxModelNode = null;
+  }
+
+  function boxNumber(value) {
+    var parsed = parseFloat(value);
+    return isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  function boxPart(parent, left, top, width, height, color, label) {
+    if (width <= 0 || height <= 0) return;
+    var part = document.createElement("div");
+    part.style.position = "absolute";
+    part.style.left = left + "px";
+    part.style.top = top + "px";
+    part.style.width = width + "px";
+    part.style.height = height + "px";
+    part.style.boxSizing = "border-box";
+    part.style.background = color;
+    part.style.border = "1px solid rgba(20, 30, 45, 0.35)";
+    part.style.color = "#17202f";
+    part.style.font = "10px monospace";
+    part.style.overflow = "hidden";
+    part.style.pointerEvents = "none";
+    if (label && width >= 28 && height >= 14) {
+      part.textContent = label;
+      part.style.padding = "1px 3px";
+      part.style.whiteSpace = "nowrap";
+    }
+    parent.appendChild(part);
+  }
+
+  function renderBoxModel(nodeId) {
+    clearBoxModel();
+    var candidate = nodeId
+      ? document.querySelector('[data-spartan-id="' + nodeId + '"]')
+      : null;
+    if (!candidate) return;
+    boxModelNode = candidate;
+    var style = window.getComputedStyle(candidate);
+    var rect = candidate.getBoundingClientRect();
+    var mt = boxNumber(style.marginTop);
+    var mr = boxNumber(style.marginRight);
+    var mb = boxNumber(style.marginBottom);
+    var ml = boxNumber(style.marginLeft);
+    var bt = boxNumber(style.borderTopWidth);
+    var br = boxNumber(style.borderRightWidth);
+    var bb = boxNumber(style.borderBottomWidth);
+    var bl = boxNumber(style.borderLeftWidth);
+    var pt = boxNumber(style.paddingTop);
+    var pr = boxNumber(style.paddingRight);
+    var pb = boxNumber(style.paddingBottom);
+    var pl = boxNumber(style.paddingLeft);
+    var outerWidth = rect.width + ml + mr;
+    var outerHeight = rect.height + mt + mb;
+    var contentWidth = Math.max(0, rect.width - bl - br - pl - pr);
+    var contentHeight = Math.max(0, rect.height - bt - bb - pt - pb);
+    var root = document.createElement("div");
+    root.style.position = "fixed";
+    root.style.left = (rect.left - ml) + "px";
+    root.style.top = (rect.top - mt) + "px";
+    root.style.width = outerWidth + "px";
+    root.style.height = outerHeight + "px";
+    root.style.zIndex = "2147483647";
+    root.style.pointerEvents = "none";
+    root.setAttribute("data-spartan-box-model-overlay", "");
+    boxPart(root, 0, 0, outerWidth, mt, "rgba(245, 190, 70, 0.35)", "M " + mt + "px");
+    boxPart(root, 0, mt, ml, rect.height, "rgba(245, 190, 70, 0.35)", "M " + ml + "px");
+    boxPart(root, outerWidth - mr, mt, mr, rect.height, "rgba(245, 190, 70, 0.35)", "M " + mr + "px");
+    boxPart(root, 0, outerHeight - mb, outerWidth, mb, "rgba(245, 190, 70, 0.35)", "M " + mb + "px");
+    boxPart(root, ml, mt, rect.width, bt, "rgba(245, 105, 105, 0.45)", "B " + bt + "px");
+    boxPart(root, ml, mt + bt, bl, Math.max(0, rect.height - bt - bb), "rgba(245, 105, 105, 0.45)", "B " + bl + "px");
+    boxPart(root, ml + rect.width - br, mt + bt, br, Math.max(0, rect.height - bt - bb), "rgba(245, 105, 105, 0.45)", "B " + br + "px");
+    boxPart(root, ml, mt + rect.height - bb, rect.width, bb, "rgba(245, 105, 105, 0.45)", "B " + bb + "px");
+    boxPart(root, ml + bl, mt + bt, Math.max(0, rect.width - bl - br), pt, "rgba(100, 190, 255, 0.38)", "P " + pt + "px");
+    boxPart(root, ml + bl, mt + rect.height - bb - pb, Math.max(0, rect.width - bl - br), pb, "rgba(100, 190, 255, 0.38)", "P " + pb + "px");
+    boxPart(root, ml + bl, mt + bt + pt, pl, contentHeight, "rgba(100, 190, 255, 0.38)", "P " + pl + "px");
+    boxPart(root, ml + rect.width - br - pr, mt + bt + pt, pr, contentHeight, "rgba(100, 190, 255, 0.38)", "P " + pr + "px");
+    boxPart(root, ml + bl + pl, mt + bt + pt, contentWidth, contentHeight, "rgba(120, 235, 160, 0.22)", "content");
+    document.body.appendChild(root);
+    boxModelOverlay = root;
+  }
+
+  function refreshBoxModel() {
+    if (boxModelNode) renderBoxModel(boxModelNode.getAttribute("data-spartan-id"));
+  }
+
+  window.addEventListener("scroll", refreshBoxModel, true);
+  window.addEventListener("resize", refreshBoxModel);
 
   // Real authored interaction-state previewing. CSS pseudo-classes cannot be
   // forced by dispatching synthetic mouse events, so the sandbox clones the
@@ -235,6 +330,9 @@ try {
       highlightSelection(event.data.nodeIds || event.data.nodeId || null);
     } else if (event.data && event.data.type === "spartan-canvas-state") {
       previewInteractionState(event.data.nodeId || null, event.data.state || null);
+    } else if (event.data && event.data.type === "spartan-canvas-box-model") {
+      if (event.data.visible) renderBoxModel(event.data.nodeId || null);
+      else clearBoxModel();
     } else if (event.data && event.data.type === "spartan-canvas-inspect") {
       inspectSelection(event.data.nodeId || null);
     } else if (event.data && event.data.type === "spartan-canvas-focus") {

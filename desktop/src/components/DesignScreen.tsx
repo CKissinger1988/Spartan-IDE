@@ -611,6 +611,7 @@ export default function DesignScreen({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [styleClipboard, setStyleClipboard] = useState<StyleClipboard | null>(null);
   const [previewInspection, setPreviewInspection] = useState<PreviewInspection | null>(null);
+  const [boxModelVisible, setBoxModelVisible] = useState(false);
   const [copiedInspection, setCopiedInspection] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [propKey, setPropKey] = useState("");
@@ -658,12 +659,17 @@ export default function DesignScreen({
   // tree selects a node, and when a fresh bundle replaces the iframe DOM.
   useEffect(() => {
     setPreviewInspection(null);
+    setBoxModelVisible(false);
     iframeRef.current?.contentWindow?.postMessage(
       { type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds },
       "*",
     );
     iframeRef.current?.contentWindow?.postMessage(
       { type: "spartan-canvas-state", nodeId: selectedId, state: null },
+      "*",
+    );
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "spartan-canvas-box-model", nodeId: selectedId, visible: false },
       "*",
     );
     if (selectedId) {
@@ -1218,6 +1224,15 @@ export default function DesignScreen({
     );
   }, [selectedId, hasSingleSelection]);
 
+  const setBoxModel = useCallback((visible: boolean) => {
+    if (!selectedId || !hasSingleSelection) return;
+    setBoxModelVisible(visible);
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "spartan-canvas-box-model", nodeId: selectedId, visible },
+      "*",
+    );
+  }, [selectedId, hasSingleSelection]);
+
   const toggleTokens = useCallback(async () => {
     if (tokensOpen) {
       setTokensOpen(false);
@@ -1422,6 +1437,10 @@ export default function DesignScreen({
                   { type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds },
                   "*",
                 );
+                iframeRef.current?.contentWindow?.postMessage(
+                  { type: "spartan-canvas-box-model", nodeId: selectedId, visible: boxModelVisible },
+                  "*",
+                );
                 if (selectedId) {
                   iframeRef.current?.contentWindow?.postMessage(
                     { type: "spartan-canvas-inspect", nodeId: selectedId },
@@ -1611,6 +1630,9 @@ export default function DesignScreen({
                   <button className="design-secondary-action mono" onClick={() => setPreviewState("hover")}>Hover preview</button>
                   <button className="design-secondary-action mono" onClick={() => setPreviewState("active")}>Active preview</button>
                   <button className="design-secondary-action mono" onClick={() => setPreviewState(null)}>Clear state</button>
+                  <button className="design-secondary-action mono" onClick={() => setBoxModel(!boxModelVisible)}>
+                    {boxModelVisible ? "Hide box model" : "Show box model"}
+                  </button>
                 </div>
               </div>
             )}
