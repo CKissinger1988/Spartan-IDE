@@ -82,6 +82,10 @@ function standaloneHtml(html: string, css: string, js: string): string {
   return `<!doctype html>\n<html lang="en">\n<head>\n  <meta charset="utf-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1">\n  <style>${css}</style>\n</head>\n<body>\n${html}\n<script>${js.replace(/<\/script/gi, "<\\/script")}<\/script>\n</body>\n</html>\n`;
 }
 
+function projectHtml(html: string): string {
+  return `<!doctype html>\n<html lang="en">\n<head>\n  <meta charset="utf-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1">\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n${html}\n<script src="script.js"><\/script>\n</body>\n</html>\n`;
+}
+
 function orientedSize(profile: DeviceProfile, landscape: boolean): [number, number] {
   return landscape ? [profile.height, profile.width] : [profile.width, profile.height];
 }
@@ -153,6 +157,6 @@ export default function WebDevelopmentSuite(): React.ReactElement {
         <div className="web-suite-console"><div className="web-suite-console-header"><span>Console</span><button className="toolbar-btn" onClick={() => setConsoleLines([])}>Clear</button></div><pre className="mono">{consoleLines.length ? consoleLines.join("\n") : "Run preview to see console output."}</pre></div>
       </div>
     </div>
-    <div className="web-suite-footer"><span>Sandboxed live preview · no project files are changed by templates</span><button className="toolbar-btn" onClick={() => { downloadFile("style.css", css, "text/css"); downloadFile("script.js", js, "text/javascript"); }}>Export source files</button></div>
+    <div className="web-suite-footer"><span>Sandboxed live preview · no project files are changed by templates</span><button className="toolbar-btn" onClick={() => { downloadFile("index.html", projectHtml(html), "text/html"); downloadFile("style.css", css, "text/css"); downloadFile("script.js", js, "text/javascript"); }}>Export source files</button></div>
   </section>;
 }
