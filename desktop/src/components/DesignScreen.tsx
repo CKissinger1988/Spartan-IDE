@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { OpenFile } from "./Editor";
 import { screenReaderPreview as sharedScreenReaderPreview } from "../../../gui-builder/src/accessibility";
 import type { ScreenReaderNode } from "../../../gui-builder/src/accessibility";
+import { designClipboardShortcut } from "../../../gui-builder/src/shortcuts";
 
 interface StyleEntryValue {
   kind: "literal" | "expression";
@@ -2054,6 +2055,27 @@ export default function DesignScreen({
     }
   }, [activeFile, selectedIds, subtreeClipboard, subtreePastePlacement, roots, applyEditObject]);
 
+  // Keep subtree clipboard shortcuts separate from the existing style/prop
+  // clipboard pair: Alt+B/P is the explicit subtree chord, so the common
+  // Ctrl/Cmd+Shift+C/V style pair and Ctrl/Cmd+Alt+Shift+C/V prop pair retain
+  // their established meanings.
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable=\"true\"]")) return;
+      const shortcut = designClipboardShortcut(event.key, event.ctrlKey || event.metaKey, event.shiftKey, event.altKey);
+      if (shortcut === "copySubtree") {
+        event.preventDefault();
+        void copySubtree();
+      } else if (shortcut === "pasteSubtree") {
+        event.preventDefault();
+        void pasteSubtree();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [copySubtree, pasteSubtree]);
+
   const setPreviewFocus = useCallback((focused: boolean) => {
     if (!selectedId || !hasSingleSelection) return;
     iframeRef.current?.contentWindow?.postMessage(
@@ -2797,7 +2819,8 @@ export default function DesignScreen({
                 </button>
                 <button
                   className="design-secondary-action mono design-reveal-source"
-                  title="Copy the selected JSX subtree as a versioned Spartan GUI Builder clipboard item"
+                  aria-keyshortcuts="Control+Alt+B Meta+Alt+B"
+                  title="Copy the selected JSX subtree as a versioned Spartan GUI Builder clipboard item (Ctrl/Cmd+Alt+B)"
                   onClick={() => void copySubtree()}
                 >
                   {copiedSubtree ? "Copied subtree" : "Copy subtree"}
@@ -2828,8 +2851,9 @@ export default function DesignScreen({
             )}
             <button
               className="design-secondary-action mono design-reveal-source"
+              aria-keyshortcuts="Control+Alt+P Meta+Alt+P"
               disabled={selectionCount === 0}
-              title="Paste a same-file Spartan GUI Builder subtree using the selected child or sibling placement"
+              title="Paste a same-file Spartan GUI Builder subtree using the selected child or sibling placement (Ctrl/Cmd+Alt+P)"
               onClick={() => void pasteSubtree()}
             >
               Paste subtree{subtreeClipboard ? ` · <${subtreeClipboard.sourceTagName}>` : ""}

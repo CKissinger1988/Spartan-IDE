@@ -242,6 +242,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Same-parent sibling reordering with Move up/Move down controls | Real |
 | Keyboard canvas shortcuts (Escape clear, Delete remove, Ctrl/Cmd+D duplicate) | Real |
 | Keyboard style/prop clipboard shortcuts with accessible shortcut metadata | Real |
+| Dedicated Ctrl/Cmd+Alt+B/P subtree clipboard shortcuts with accessible shortcut metadata | Real |
 | Versioned system-clipboard interoperability for Design styles and props with in-memory fallback | Real |
 | Lossless inline-style copy/paste across single or multiple selected nodes, with literal-only cross-file fallback | Real |
 | Literal/expression JSX prop copy/paste across selected nodes with literal-only cross-file fallback | Real |

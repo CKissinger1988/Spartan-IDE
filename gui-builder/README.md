@@ -61,7 +61,11 @@ summarizes.
   heading level, and parsed ARIA state. It is included in copied accessibility
   reports and design handoffs; dynamic labelled-by resolution remains clearly
   identified as an estimate.
-- `src/*.test.ts` — 150 real tests (Node's built-in `node:test` runner, no
+- The Design screen supports dedicated subtree clipboard chords:
+  `Ctrl/Cmd+Alt+B` copies the selected subtree and
+  `Ctrl/Cmd+Alt+P` pastes it using the selected child/sibling placement;
+  the established style and prop clipboard chords remain unchanged.
+- `src/*.test.ts` — 153 real tests (Node's built-in `node:test` runner, no
   extra test-framework dependency), including several that run directly
   against this repo's own real `prototypes/*.jsx` files (5,480 real lines
   combined) — not just synthetic snippets.
