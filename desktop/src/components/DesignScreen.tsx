@@ -940,7 +940,9 @@ export default function DesignScreen({
   const [viewportPresetName, setViewportPresetName] = useState("");
   const [viewportPresets, setViewportPresets] = useState<ViewportPreset[]>([]);
   const [previewZoom, setPreviewZoom] = useState(75);
+  const [previewMatrix, setPreviewMatrix] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const previewMatrixRefs = useRef<Record<string, HTMLIFrameElement | null>>({});
   const refreshGenerationRef = useRef(0);
   const viewportStorageKey = projectRoot ? `spartan.gui-builder.viewports:${projectRoot}` : null;
   const baseViewport = DESIGN_VIEWPORTS.find((item) => item.id === viewportId) ?? DESIGN_VIEWPORTS[0];
@@ -956,6 +958,17 @@ export default function DesignScreen({
         height: swap ? baseViewport.width : baseViewport.height,
       };
     })();
+
+  const postPreviewMessage = useCallback((message: Record<string, unknown>) => {
+    const frames = [iframeRef.current, ...Object.values(previewMatrixRefs.current)];
+    const windows = new Set<Window>();
+    for (const frame of frames) {
+      if (frame?.contentWindow && !windows.has(frame.contentWindow)) {
+        windows.add(frame.contentWindow);
+        frame.contentWindow.postMessage(message, "*");
+      }
+    }
+  }, []);
 
   // Declared up here, not down beside the other render-time derivations,
   // because `selectStyleProperty`'s own `useCallback` dependency array
@@ -1058,25 +1071,13 @@ export default function DesignScreen({
     setPreviewInspection(null);
     setBoxModelVisible(false);
     setPreviewInteractionState("normal");
-    iframeRef.current?.contentWindow?.postMessage(
-      { type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds },
-      "*",
-    );
-    iframeRef.current?.contentWindow?.postMessage(
-      { type: "spartan-canvas-state", nodeId: selectedId, state: null },
-      "*",
-    );
-    iframeRef.current?.contentWindow?.postMessage(
-      { type: "spartan-canvas-box-model", nodeId: selectedId, visible: false },
-      "*",
-    );
+    postPreviewMessage({ type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds });
+    postPreviewMessage({ type: "spartan-canvas-state", nodeId: selectedId, state: null });
+    postPreviewMessage({ type: "spartan-canvas-box-model", nodeId: selectedId, visible: false });
     if (selectedId) {
-      iframeRef.current?.contentWindow?.postMessage(
-        { type: "spartan-canvas-inspect", nodeId: selectedId },
-        "*",
-      );
+      postPreviewMessage({ type: "spartan-canvas-inspect", nodeId: selectedId });
     }
-  }, [selectedId, selectedIds, bundleCode]);
+  }, [postPreviewMessage, selectedId, selectedIds, bundleCode]);
 
   const selectNodes = useCallback((id: string, additive: boolean) => {
     if (!additive) {
@@ -1651,7 +1652,9 @@ export default function DesignScreen({
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
-      if (event.source && iframeRef.current?.contentWindow && event.source !== iframeRef.current.contentWindow) return;
+      const isPreviewFrame = !event.source || [iframeRef.current, ...Object.values(previewMatrixRefs.current)]
+        .some((frame) => frame?.contentWindow === event.source);
+      if (!isPreviewFrame) return;
       if (event.data?.type === "spartan-canvas-click") {
         selectNodes(event.data.nodeId, Boolean(event.data.shiftKey));
       } else if (event.data?.type === "spartan-canvas-drop") {
@@ -2141,51 +2144,30 @@ export default function DesignScreen({
 
   const setPreviewFocus = useCallback((focused: boolean) => {
     if (!selectedId || !hasSingleSelection) return;
-    iframeRef.current?.contentWindow?.postMessage(
-      { type: focused ? "spartan-canvas-focus" : "spartan-canvas-blur", nodeId: selectedId },
-      "*",
-    );
-    iframeRef.current?.contentWindow?.postMessage(
-      { type: "spartan-canvas-state", nodeId: selectedId, state: null },
-      "*",
-    );
+    postPreviewMessage({ type: focused ? "spartan-canvas-focus" : "spartan-canvas-blur", nodeId: selectedId });
+    postPreviewMessage({ type: "spartan-canvas-state", nodeId: selectedId, state: null });
     setPreviewInteractionState(focused ? "focus" : "normal");
-  }, [selectedId, hasSingleSelection]);
+  }, [postPreviewMessage, selectedId, hasSingleSelection]);
 
   const setPreviewState = useCallback((state: "hover" | "active" | null) => {
     if (!selectedId || !hasSingleSelection) return;
-    iframeRef.current?.contentWindow?.postMessage(
-      { type: "spartan-canvas-blur", nodeId: selectedId },
-      "*",
-    );
-    iframeRef.current?.contentWindow?.postMessage(
-      { type: "spartan-canvas-state", nodeId: selectedId, state },
-      "*",
-    );
+    postPreviewMessage({ type: "spartan-canvas-blur", nodeId: selectedId });
+    postPreviewMessage({ type: "spartan-canvas-state", nodeId: selectedId, state });
     setPreviewInteractionState(state ?? "normal");
-  }, [selectedId, hasSingleSelection]);
+  }, [postPreviewMessage, selectedId, hasSingleSelection]);
 
   const applyInteractionPreset = useCallback((preset: InteractionPreset) => {
     if (!selectedId || !hasSingleSelection) return;
-    iframeRef.current?.contentWindow?.postMessage(
-      { type: preset.state === "focus" ? "spartan-canvas-focus" : "spartan-canvas-blur", nodeId: selectedId },
-      "*",
-    );
-    iframeRef.current?.contentWindow?.postMessage(
-      { type: "spartan-canvas-state", nodeId: selectedId, state: preset.state === "hover" || preset.state === "active" ? preset.state : null },
-      "*",
-    );
+    postPreviewMessage({ type: preset.state === "focus" ? "spartan-canvas-focus" : "spartan-canvas-blur", nodeId: selectedId });
+    postPreviewMessage({ type: "spartan-canvas-state", nodeId: selectedId, state: preset.state === "hover" || preset.state === "active" ? preset.state : null });
     setPreviewInteractionState(preset.state);
-  }, [selectedId, hasSingleSelection]);
+  }, [postPreviewMessage, selectedId, hasSingleSelection]);
 
   const setBoxModel = useCallback((visible: boolean) => {
     if (!selectedId || !hasSingleSelection) return;
     setBoxModelVisible(visible);
-    iframeRef.current?.contentWindow?.postMessage(
-      { type: "spartan-canvas-box-model", nodeId: selectedId, visible },
-      "*",
-    );
-  }, [selectedId, hasSingleSelection]);
+    postPreviewMessage({ type: "spartan-canvas-box-model", nodeId: selectedId, visible });
+  }, [postPreviewMessage, selectedId, hasSingleSelection]);
 
   const toggleTokens = useCallback(async () => {
     if (tokensOpen) {
@@ -2550,37 +2532,62 @@ export default function DesignScreen({
           )}
           <label>
             Zoom {previewZoom}%
-            <input type="range" min={25} max={100} step={5} value={previewZoom} onChange={(event) => setPreviewZoom(Number(event.target.value))} />
+            <input type="range" min={25} max={100} step={5} value={previewZoom} disabled={previewMatrix} onChange={(event) => setPreviewZoom(Number(event.target.value))} />
           </label>
-          <span>{viewport.width} × {viewport.height}</span>
+          <span>{previewMatrix ? "1280×800 · 768×1024 · 390×844" : `${viewport.width} × ${viewport.height}`}</span>
+          <button
+            className={`design-toolbar-button mono${previewMatrix ? " active" : ""}`}
+            aria-pressed={previewMatrix}
+            title="Compare the standard Desktop, Tablet, and Mobile breakpoints"
+            onClick={() => setPreviewMatrix((open) => !open)}
+          >
+            {previewMatrix ? "Single viewport" : "Compare viewports"}
+          </button>
         </div>
         {bundleCode ? (
-          <div className="design-preview-stage">
-            <iframe
-              ref={iframeRef}
-              className="design-iframe"
-              style={{ width: viewport.width, height: viewport.height, transform: `scale(${previewZoom / 100})` }}
-              sandbox="allow-scripts"
-              srcDoc={srcDoc}
-              title="Live preview"
-              onLoad={() => {
-                iframeRef.current?.contentWindow?.postMessage(
-                  { type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds },
-                  "*",
+          previewMatrix ? (
+            <div className="design-preview-stage design-preview-matrix" aria-label="Responsive viewport comparison">
+              {DESIGN_VIEWPORTS.map((item) => {
+                const matrixScale = Math.min(0.32, Math.max(0.2, (window.innerWidth - 620) / 3 / item.width));
+                return (
+                  <div className="design-preview-tile" key={item.id}>
+                    <div className="design-preview-tile-label mono">{item.label} · {item.width}×{item.height}</div>
+                    <div className="design-preview-frame" style={{ width: item.width * matrixScale, height: item.height * matrixScale }}>
+                      <iframe
+                        ref={(frame) => { previewMatrixRefs.current[item.id] = frame; }}
+                        className="design-iframe"
+                        style={{ width: item.width, height: item.height, transform: `scale(${matrixScale})` }}
+                        sandbox="allow-scripts"
+                        srcDoc={srcDoc}
+                        title={`${item.label} live preview`}
+                        onLoad={() => {
+                          postPreviewMessage({ type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds });
+                          postPreviewMessage({ type: "spartan-canvas-box-model", nodeId: selectedId, visible: boxModelVisible });
+                          if (selectedId) postPreviewMessage({ type: "spartan-canvas-inspect", nodeId: selectedId });
+                        }}
+                      />
+                    </div>
+                  </div>
                 );
-                iframeRef.current?.contentWindow?.postMessage(
-                  { type: "spartan-canvas-box-model", nodeId: selectedId, visible: boxModelVisible },
-                  "*",
-                );
-                if (selectedId) {
-                  iframeRef.current?.contentWindow?.postMessage(
-                    { type: "spartan-canvas-inspect", nodeId: selectedId },
-                    "*",
-                  );
-                }
-              }}
-            />
-          </div>
+              })}
+            </div>
+          ) : (
+            <div className="design-preview-stage">
+              <iframe
+                ref={iframeRef}
+                className="design-iframe"
+                style={{ width: viewport.width, height: viewport.height, transform: `scale(${previewZoom / 100})` }}
+                sandbox="allow-scripts"
+                srcDoc={srcDoc}
+                title="Live preview"
+                onLoad={() => {
+                  postPreviewMessage({ type: "spartan-canvas-select", nodeId: selectedId, nodeIds: selectedIds });
+                  postPreviewMessage({ type: "spartan-canvas-box-model", nodeId: selectedId, visible: boxModelVisible });
+                  if (selectedId) postPreviewMessage({ type: "spartan-canvas-inspect", nodeId: selectedId });
+                }}
+              />
+            </div>
+          )
         ) : (
           <div className="empty-state mono">{error ?? "Bundling..."}</div>
         )}

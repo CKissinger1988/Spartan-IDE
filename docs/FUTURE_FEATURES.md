@@ -272,6 +272,7 @@ palette that applies existing `var(--token)` values to selected style properties
 | Relative image asset insertion as inline background images across single/multi-selection | Real |
 | Configurable string props and initial text for inserted elements | Real |
 | Desktop/Tablet/Mobile viewport presets and zoom | Real |
+| Synchronized Desktop/Tablet/Mobile responsive comparison matrix | Real |
 | Preset preview orientation switching between Auto, Portrait, and Landscape | Real |
 | Reusable per-file interaction-state presets and preview controls | Real |
 
