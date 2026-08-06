@@ -7,7 +7,7 @@
  * `docs/architecture-spec.md` §6.2's own "preserves formatting, comments,
  * and existing code structure the user wrote by hand" requirement.
  *
- * All nine members of the `CanvasEdit` union are real and implemented:
+ * All ten members of the `CanvasEdit` union are real and implemented:
  * `StyleChange`/`PropChange` (mutate an existing element in place) and
  * `Reparent`/`ComponentInsert` (structural edits, added after an earlier
  * pass's own doc comment here named a concern that turned out not to be a
@@ -185,6 +185,17 @@ function applyTextChange(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEd
   }
   ensureOpenForChildren(element);
   (element.children as AnyNode[]).push(b.jsxText(edit.text));
+}
+
+function applyTagChange(nodesById: Map<string, AnyNode>, edit: Extract<CanvasEdit, { kind: "TagChange" }>): void {
+  if (!isValidIdentifierName(edit.tagName)) {
+    throw new Error(`TagChange tag name "${edit.tagName}" must be a single valid JSX identifier.`);
+  }
+  const element = nodesById.get(edit.nodeId);
+  if (!element) throw new Error(`No element with id "${edit.nodeId}" found in the current source.`);
+  const nextName = b.jsxIdentifier(edit.tagName);
+  element.openingElement.name = nextName;
+  if (element.closingElement) element.closingElement.name = b.jsxIdentifier(edit.tagName);
 }
 
 /** True if `target` is `ancestor` itself or lives anywhere in its real
@@ -369,6 +380,9 @@ export function applyCanvasEdit(source: string, edit: CanvasEdit): string {
       break;
     case "TextChange":
       applyTextChange(nodesById, edit);
+      break;
+    case "TagChange":
+      applyTagChange(nodesById, edit);
       break;
     case "Delete":
       applyDelete(nodesById, parentOf, edit);

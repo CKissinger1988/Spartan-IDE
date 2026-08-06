@@ -165,6 +165,25 @@ test("TextChange updates direct JSX text and preserves the surrounding element",
   assert.match(result, /<button className="cta">After<\/button>/);
 });
 
+test("TagChange renames paired opening and closing JSX tags", () => {
+  const source = `const X = () => <div className="card"><span>Hi</span></div>;`;
+  const result = applyCanvasEdit(source, { kind: "TagChange", nodeId: "n0", tagName: "section" });
+  assert.match(result, /<section className="card">/);
+  assert.match(result, /<\/section>/);
+  assert.match(result, /<span>Hi<\/span>/);
+});
+
+test("TagChange renames self-closing JSX tags and rejects unsafe names", () => {
+  const result = applyCanvasEdit(`const X = () => <div><Icon /></div>;`, {
+    kind: "TagChange", nodeId: "n1", tagName: "Button",
+  });
+  assert.match(result, /<Button \/>/);
+  assert.throws(
+    () => applyCanvasEdit(`const X = () => <div />;`, { kind: "TagChange", nodeId: "n0", tagName: "Foo.Bar" }),
+    /single valid JSX identifier/,
+  );
+});
+
 test("TextChange appends text to a childless element and refuses ambiguous fragments", () => {
   const empty = applyCanvasEdit(`const X = () => <div />;`, { kind: "TextChange", nodeId: "n0", text: "Added" });
   assert.match(empty, /<div>Added<\/div>/);

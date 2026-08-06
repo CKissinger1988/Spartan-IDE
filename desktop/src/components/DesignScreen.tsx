@@ -93,6 +93,10 @@ function isComponentFile(path: string): boolean {
   return path.endsWith(".jsx") || path.endsWith(".tsx");
 }
 
+function isValidTagName(name: string): boolean {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name.trim());
+}
+
 function searchableNodeText(node: ComponentNode): string {
   const propText = Object.entries(node.props).flatMap(([name, summary]) => {
     if (summary.kind === "string") return [name, summary.value];
@@ -603,7 +607,7 @@ function StyleValueControl({
  * the exact same `edit` IPC call typing already uses, so a canvas edit
  * gets the same undo/dirty tracking as any other edit.
  *
- * All nine real `CanvasEdit` kinds `gui-builder` itself supports are now
+ * All ten real `CanvasEdit` kinds `gui-builder` itself supports are now
  * wired here: `PropChange`/`StyleChange` (mutate the selected node) and
  * `Reparent`/`ComponentInsert` (structural edits, closing the gap this
  * screen's own edit form used to leave unreachable even after
@@ -638,9 +642,10 @@ export default function DesignScreen({
   const [propValue, setPropValue] = useState("");
   const [textValue, setTextValue] = useState("");
   const [propValueType, setPropValueType] = useState<"string" | "number" | "boolean" | "expression">("string");
-  const [editKind, setEditKind] = useState<"PropChange" | "PropRemove" | "StyleChange" | "StyleRemove" | "TextChange" | "Reparent" | "ComponentInsert">(
+  const [editKind, setEditKind] = useState<"PropChange" | "PropRemove" | "StyleChange" | "StyleRemove" | "TextChange" | "TagChange" | "Reparent" | "ComponentInsert">(
     "PropChange"
   );
+  const [tagName, setTagName] = useState("");
   const [reparentTargetId, setReparentTargetId] = useState("");
   const [insertTagName, setInsertTagName] = useState("");
   const [insertProps, setInsertProps] = useState("");
@@ -842,8 +847,12 @@ export default function DesignScreen({
     if (editKind === "TextChange") {
       return { kind: "TextChange", nodeId: selectedId, text: textValue };
     }
+    if (editKind === "TagChange") {
+      if (!isValidTagName(tagName)) return null;
+      return { kind: "TagChange", nodeId: selectedId, tagName: tagName.trim() };
+    }
     return null;
-  }, [selectedId, editKind, propKey, propValue, propValueType, textValue]);
+  }, [selectedId, editKind, propKey, propValue, propValueType, textValue, tagName]);
 
   const previewFormEdit = useCallback(async () => {
     if (!activeFile) return;
@@ -1050,7 +1059,7 @@ export default function DesignScreen({
   // Real, per-kind readiness check -- each structural kind names a
   // different second operand (`reparentTargetId` vs. `insertTagName`)
   // beyond the shared `selectedId`, so "can Apply be pressed" isn't one
-  // single condition across all five inspector edit kinds.
+  // single condition across all inspector edit kinds.
   const canApply =
     !!activeFile &&
     selectionCount > 0 &&
@@ -1058,6 +1067,8 @@ export default function DesignScreen({
       ? !!propKey.trim()
       : editKind === "TextChange"
         ? hasSingleSelection
+        : editKind === "TagChange"
+          ? hasSingleSelection && isValidTagName(tagName)
         : editKind === "Reparent"
           ? hasSingleSelection && !!reparentTargetId && reparentTargetId !== selectedId
           : hasSingleSelection && !!insertTagName.trim());
@@ -1333,6 +1344,9 @@ export default function DesignScreen({
       edit = { kind: "StyleRemove", nodeId: selectedId, property: propKey };
     } else if (editKind === "TextChange") {
       edit = { kind: "TextChange", nodeId: selectedId, text: textValue };
+    } else if (editKind === "TagChange") {
+      if (!isValidTagName(tagName)) return;
+      edit = { kind: "TagChange", nodeId: selectedId, tagName: tagName.trim() };
     } else if (editKind === "Reparent") {
       if (!reparentTargetId || reparentTargetId === selectedId) return;
       edit = { kind: "Reparent", nodeId: selectedId, newParentId: reparentTargetId };
@@ -1357,12 +1371,13 @@ export default function DesignScreen({
     setPropKey("");
     setPropValue("");
     setTextValue("");
+    setTagName("");
     setPropValueType("string");
     setReparentTargetId("");
     setInsertTagName("");
     setInsertProps("");
     setInsertText("");
-  }, [activeFile, selectedId, selectedIds, propKey, propValue, propValueType, textValue, editKind, reparentTargetId, insertTagName, insertProps, insertText, applyEditObject, applyEditBatch]);
+  }, [activeFile, selectedId, selectedIds, propKey, propValue, propValueType, textValue, tagName, editKind, reparentTargetId, insertTagName, insertProps, insertText, applyEditObject, applyEditBatch]);
 
   if (!activeFile || !isComponentFile(activeFile.path)) {
     return (
@@ -1699,6 +1714,14 @@ export default function DesignScreen({
               <label>
                 <input
                   type="radio"
+                  checked={editKind === "TagChange"}
+                  onChange={() => setEditKind("TagChange")}
+                />
+                Tag
+              </label>
+              <label>
+                <input
+                  type="radio"
                   checked={editKind === "PropChange"}
                   onChange={() => setEditKind("PropChange")}
                 />
@@ -1864,6 +1887,15 @@ export default function DesignScreen({
                 placeholder="direct text content"
                 value={textValue}
                 onChange={(event) => setTextValue(event.target.value)}
+              />
+            )}
+            {editKind === "TagChange" && (
+              <input
+                className="design-input mono"
+                aria-label="New JSX tag name"
+                placeholder={`new tag name (current: ${selectedNode.tagName})`}
+                value={tagName}
+                onChange={(event) => setTagName(event.target.value)}
               />
             )}
             {editKind === "Reparent" && (
