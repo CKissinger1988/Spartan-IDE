@@ -37,6 +37,8 @@ export type ScreenId =
 export interface NavItem {
   id: ScreenId;
   label: string;
+  /** Compact monochrome glyph shown when the navigation rail is collapsed. */
+  icon: string;
 }
 
 export interface NavGroup {
@@ -48,44 +50,44 @@ export const NAV: NavGroup[] = [
   {
     label: "Workspace",
     items: [
-      { id: "editor", label: "Editor" },
-      { id: "device-preview", label: "Device Preview" },
-      { id: "web-suite", label: "Web Studio" },
-      { id: "console", label: "Console" },
-      { id: "sessions", label: "Sessions" },
-      { id: "review", label: "Review" },
-      { id: "analytics", label: "Analytics" },
-      { id: "usage", label: "Usage" },
+      { id: "editor", label: "Editor", icon: "⌘" },
+      { id: "device-preview", label: "Device Preview", icon: "▣" },
+      { id: "web-suite", label: "Web Studio", icon: "◇" },
+      { id: "console", label: "Console", icon: ">_" },
+      { id: "sessions", label: "Sessions", icon: "◷" },
+      { id: "review", label: "Review", icon: "✓" },
+      { id: "analytics", label: "Analytics", icon: "▥" },
+      { id: "usage", label: "Usage", icon: "◉" },
     ],
   },
   {
     label: "Build",
     items: [
-      { id: "agents", label: "Agents" },
-      { id: "containers", label: "Dev Containers" },
-      { id: "workflows", label: "Workflows" },
-      { id: "design", label: "GUI Builder" },
-      { id: "skills", label: "Skills" },
-      { id: "commands", label: "Commands" },
-      { id: "hooks", label: "Hooks" },
-      { id: "mcp", label: "MCP" },
-      { id: "routing", label: "Routing" },
+      { id: "agents", label: "Agents", icon: "✦" },
+      { id: "containers", label: "Dev Containers", icon: "□" },
+      { id: "workflows", label: "Workflows", icon: "⌘" },
+      { id: "design", label: "GUI Builder", icon: "✥" },
+      { id: "skills", label: "Skills", icon: "✧" },
+      { id: "commands", label: "Commands", icon: "⚑" },
+      { id: "hooks", label: "Hooks", icon: "⌁" },
+      { id: "mcp", label: "MCP", icon: "⬡" },
+      { id: "routing", label: "Routing", icon: "↗" },
     ],
   },
   {
     label: "Platform",
     items: [
-      { id: "models", label: "Models" },
-      { id: "plugins", label: "Plugins" },
-      { id: "marketplace", label: "Marketplace" },
-      { id: "settings", label: "Settings" },
+      { id: "models", label: "Models", icon: "◎" },
+      { id: "plugins", label: "Plugins", icon: "⚙" },
+      { id: "marketplace", label: "Marketplace", icon: "◇" },
+      { id: "settings", label: "Settings", icon: "⚙" },
     ],
   },
 ];
 
 /** Real, honest per-screen descriptions of what's real vs. not-yet-wired
- * -- shown by `Placeholder.tsx` for every screen that isn't `editor` or
- * `workflows` yet. Named specifically, not a generic "coming soon", so
+ * -- used as contextual metadata by workspace-backed destinations. Named
+ * specifically, not as generic "coming soon" text, so
  * each gap is traceable to real, scoped future work. */
 export const SCREEN_NOTES: Partial<Record<ScreenId, string>> = {
   review: "Session comparison view -- depends on Sessions existing first.",
@@ -94,11 +96,6 @@ export const SCREEN_NOTES: Partial<Record<ScreenId, string>> = {
   agents:
     "Leo's real chat/plan/approve loop now lives in the persistent right-docked panel (LeoChatPanel.tsx, always visible, not this nav screen) -- see §75.61. This screen is reserved for real future agent *configuration* (approval mode, model selection per task) once that's built, not chat.",
   workflows: "A real, working node-graph canvas -- see WorkflowsScreen.tsx.",
-  skills: "Not yet designed for this shell.",
-  commands: "Not yet designed for this shell.",
-  hooks: "Not yet designed for this shell.",
-  mcp: "Not yet designed for this shell.",
   routing: "Depends on Sessions/Agents existing first to have real routing decisions to visualize.",
-  plugins: "Real WASM plugin host (spartan-plugin-host) exists. Not yet exposed to this shell.",
-  marketplace: "Not yet designed for this shell.",
+  plugins: "Project plugin resources and the WASM plugin host are available from this workspace tool.",
 };

@@ -187,6 +187,8 @@ palette that applies existing `var(--token)` values to selected style properties
 |---|---|
 | JSX/TSX AST parsing and source-preserving edits | Real |
 | Sandboxed live React preview | Real |
+| Unified GUI Builder entry point for JSX/TSX components and HTML/XHTML web pages | Real |
+| Web-page visual inspector edits written back to the active HTML document | Real |
 | Structure tree, click selection, and drag-to-reparent | Real |
 | Prop/style controls and component-library discovery/imports | Real |
 | Image asset discovery and atomic single/multi-selection insertion with relative JSX references | Real |
@@ -267,8 +269,13 @@ palette that applies existing `var(--token)` values to selected style properties
 | Literal/expression JSX prop copy/paste across selected nodes with literal-only cross-file fallback | Real |
 | Versioned same-file JSX subtree copy/paste with guarded child/sibling AST insertion across multi-selection | Real |
 | Collapsible structure-tree navigation with accessible expand state | Real |
+| Expand-all and collapse-all structure-tree controls | Real |
+| Per-file persisted structure-tree expansion state | Real |
+| Per-file persisted structure-tree filter | Real |
+| Select-all and clear-selection structure-tree controls and Ctrl/Cmd+A/Escape shortcuts, including filtered results | Real |
 | Searchable structure-tree filtering with ancestor preservation | Real |
 | Keyboard-accessible treeitem selection and Left/Right expansion controls | Real |
+| Display-aware Electron window sizing and responsive desktop-shell breakpoints | Real |
 | Guided layout, positioning, grid, overflow, and visual-effects style controls | Real |
 | One-click atomic Stack/Row/Grid/Center auto-layout presets | Real |
 | Debounced live editor-buffer parsing and visual preview refresh | Real |
@@ -297,6 +304,24 @@ palette that applies existing `var(--token)` values to selected style properties
 | Reusable per-file interaction-state presets and preview controls | Real |
 | Portable interaction/data-state preset clipboard sharing with in-memory fallback | Real |
 | Preview-only loading, empty, error, populated, and long-content data states | Real |
+
+## Web Builder
+
+The Web Studio provides a WYSIWYG-oriented HTML/CSS/JavaScript workflow alongside
+the source editor: templates, isolated live preview, responsive device sizing,
+console capture, export, reusable content blocks, and click-to-inspect edits.
+
+| Feature | Status |
+|---|---|
+| HTML/CSS/JavaScript source editing with local persistence | Real |
+| Sandboxed live preview with runtime console and error capture | Real |
+| Desktop/tablet/mobile viewport presets, orientation, and zoom | Real |
+| Standalone HTML and separated project-file export | Real |
+| Reusable hero, cards, and form block insertion | Real |
+| Click-to-select preview elements with computed style inspection | Real |
+| Inspector text, color, background, and font-size edits written back to source | Real |
+| Responsive layout authoring with CSS media-query support | Real |
+| Full WYSIWYG parity with commercial builders, including publishing, CMS, ecommerce, and extension marketplace | Planned |
 
 ## Model management
 

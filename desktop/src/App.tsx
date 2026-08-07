@@ -25,7 +25,7 @@ import DebugPanel, {
   type WatchEntry,
 } from "./components/DebugPanel";
 import LogcatPanel from "./components/LogcatPanel";
-import Placeholder from "./components/Placeholder";
+import WorkspaceToolScreen from "./components/WorkspaceToolScreen";
 import WorkflowsScreen from "./components/WorkflowsScreen";
 import DesignScreen from "./components/DesignScreen";
 import ConsoleScreen from "./components/ConsoleScreen";
@@ -38,7 +38,7 @@ import NewProjectWizard from "./components/NewProjectWizard";
 import UnsavedChangesModal from "./components/UnsavedChangesModal";
 import OnboardingScreen from "./components/OnboardingScreen";
 import DevicePreview from "./components/DevicePreview";
-import WebDevelopmentSuite from "./components/WebDevelopmentSuite";
+import WebDevelopmentSuite, { type WebSources } from "./components/WebDevelopmentSuite";
 import { applyReduceMotion } from "./reduceMotion";
 import { applyTheme, type ThemeName } from "./applyTheme";
 import { applyFontFamily } from "./applyFontFamily";
@@ -46,6 +46,25 @@ import { NAV, type ScreenId } from "./nav";
 import "./app.css";
 
 const ROOT = new URLSearchParams(window.location.search).get("root") ?? "/";
+
+function isWebPageFile(path: string): boolean {
+  return /\.(html?|xhtml)$/i.test(path);
+}
+
+function extractWebSources(source: string): WebSources {
+  const parsed = new DOMParser().parseFromString(source, "text/html");
+  const hasDocumentShell = /<\s*(html|body|head)\b/i.test(source);
+  if (!hasDocumentShell) return { html: source, css: "", js: "" };
+  return {
+    html: parsed.body.innerHTML,
+    css: Array.from(parsed.querySelectorAll("style")).map((node) => node.textContent ?? "").join("\n\n"),
+    js: Array.from(parsed.querySelectorAll("script:not([src])")).map((node) => node.textContent ?? "").join("\n\n"),
+  };
+}
+
+function composeWebDocument(sources: WebSources): string {
+  return `<!doctype html>\n<html lang="en">\n<head>\n  <meta charset="utf-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1">\n  <style>${sources.css}</style>\n</head>\n<body>\n${sources.html}\n<script>${sources.js.replace(/<\/script/gi, "<\\/script")}<\/script>\n</body>\n</html>\n`;
+}
 
 /** Converts a real 0-indexed LSP line/character into a real absolute char
  * offset into `content` -- the same real math `Editor.tsx`'s own
@@ -120,6 +139,16 @@ export default function App(): React.ReactElement {
   // wgpu shell -- one left-rail region, not a second pane, shared between
   // the file tree and the real Source Control panel added in §75.65).
   const [sidebarView, setSidebarView] = useState<"files" | "git" | "search">("files");
+  const [navCollapsed, setNavCollapsed] = useState(() => {
+    const saved = window.localStorage.getItem("spartan.nav-collapsed-v2");
+    return saved === null || saved === "true";
+  });
+  const [fileTreeHidden, setFileTreeHidden] = useState(() => window.localStorage.getItem("spartan.file-tree-hidden") === "true");
+  const [debugHidden, setDebugHidden] = useState(() => window.localStorage.getItem("spartan.debug-hidden") === "true");
+  const [leoHidden, setLeoHidden] = useState(() => window.localStorage.getItem("spartan.leo-hidden") === "true");
+  const [fileTreeWidth, setFileTreeWidth] = useState(220);
+  const [leoWidth, setLeoWidth] = useState(300);
+  const [debugHeight, setDebugHeight] = useState(52);
   const [showNewProjectWizard, setShowNewProjectWizard] = useState(false);
   const [onboardingState, setOnboardingState] = useState<"checking" | "show" | "done">(
     "checking"
@@ -667,6 +696,38 @@ export default function App(): React.ReactElement {
 
   const activeFile = files[activeIndex] ?? null;
 
+  useEffect(() => {
+    window.localStorage.setItem("spartan.nav-collapsed-v2", String(navCollapsed));
+    window.localStorage.setItem("spartan.file-tree-hidden", String(fileTreeHidden));
+    window.localStorage.setItem("spartan.debug-hidden", String(debugHidden));
+    window.localStorage.setItem("spartan.leo-hidden", String(leoHidden));
+  }, [debugHidden, fileTreeHidden, leoHidden, navCollapsed]);
+
+  const startResize = useCallback((kind: "file-tree" | "leo" | "debug", event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const initial = kind === "file-tree" ? fileTreeWidth : kind === "leo" ? leoWidth : debugHeight;
+    const move = (moveEvent: PointerEvent) => {
+      if (kind === "file-tree") setFileTreeWidth(Math.max(160, Math.min(420, initial + moveEvent.clientX - startX)));
+      else if (kind === "leo") setLeoWidth(Math.max(240, Math.min(520, initial - moveEvent.clientX + startX)));
+      else setDebugHeight(Math.max(36, Math.min(320, initial + moveEvent.clientY - startY)));
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = kind === "debug" ? "ns-resize" : "ew-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end, { once: true });
+  }, [debugHeight, fileTreeWidth, leoWidth]);
+  const updateWebSources = useCallback((sources: WebSources) => {
+    if (activeFile) handleContentChange(activeFile.path, composeWebDocument(sources));
+  }, [activeFile, handleContentChange]);
+
   /** Real unsaved-changes-on-close gate for a single tab: a dirty file's
    * × raises the confirmation modal instead of silently discarding; a
    * clean file closes immediately, exactly as before. `closeFile` itself
@@ -925,7 +986,7 @@ export default function App(): React.ReactElement {
 
   return (
     <div className="app-root">
-      <Sidebar active={screen} onSelect={setScreen} />
+      <Sidebar active={screen} onSelect={setScreen} collapsed={navCollapsed} onToggle={() => setNavCollapsed((value) => !value)} />
       <div className="main-column">
         {screen === "editor" ? (
           <>
@@ -938,7 +999,7 @@ export default function App(): React.ReactElement {
               />
             </div>
             <div className="editor-body">
-              <div className="file-tree-panel">
+              {!fileTreeHidden && <div className="file-tree-panel" style={{ width: fileTreeWidth }}>
                 <div className="sidebar-toggle-row">
                   <button
                     className={`sidebar-toggle-btn ${sidebarView === "files" ? "sidebar-toggle-active" : ""}`}
@@ -965,6 +1026,7 @@ export default function App(): React.ReactElement {
                   >
                     + New
                   </button>
+                  <button className="sidebar-toggle-btn sidebar-hide-btn" title="Hide file panel" onClick={() => setFileTreeHidden(true)}>×</button>
                 </div>
                 {sidebarView === "files" ? (
                   <FileTree root={ROOT} onOpenFile={openFile} />
@@ -977,10 +1039,12 @@ export default function App(): React.ReactElement {
                     onReplaceAll={applyReplaceInFiles}
                   />
                 )}
-              </div>
+              </div>}
+              {!fileTreeHidden && <div className="panel-resize-handle panel-resize-horizontal" onPointerDown={(event) => startResize("file-tree", event)} title="Resize file panel" />}
               <div className="editor-and-debug">
-                <DebugPanel
+                {!debugHidden && <div className="debug-dock" style={{ height: debugHeight }}><DebugPanel
                   hasFile={activeFile !== null}
+                  onToggle={() => setDebugHidden(true)}
                   session={activeFile ? (dapSessionByDoc[activeFile.docId] ?? null) : null}
                   onLaunch={dapLaunch}
                   onContinue={() => dapSendCommand("dap_continue")}
@@ -994,7 +1058,9 @@ export default function App(): React.ReactElement {
                   outputLog={activeFile ? dapOutputByDoc[activeFile.docId] : undefined}
                   programPath={programPath}
                   onProgramPathChange={setProgramPath}
-                />
+                /></div>}
+                {debugHidden && <button className="panel-restore-button panel-restore-debug" type="button" onClick={() => setDebugHidden(false)}>Show Debug</button>}
+                {!debugHidden && <div className="panel-resize-handle panel-resize-vertical" onPointerDown={(event) => startResize("debug", event)} title="Resize debug panel" />}
                 <LogcatPanel
                   visible={logcatOpen}
                   running={logcatSessionId !== null}
@@ -1054,7 +1120,14 @@ export default function App(): React.ReactElement {
             </div>
             <div className="content-area">
               {screen === "workflows" && <WorkflowsScreen />}
-              {screen === "design" && (
+              {screen === "design" && activeFile && isWebPageFile(activeFile.path) ? (
+                <WebDevelopmentSuite
+                  key={activeFile.path}
+                  initialSources={extractWebSources(activeFile.content)}
+                  persistSources={false}
+                  onSourcesChange={updateWebSources}
+                />
+              ) : screen === "design" ? (
                 <DesignScreen
                   activeFile={activeFile}
                   openFiles={files}
@@ -1064,7 +1137,8 @@ export default function App(): React.ReactElement {
                   onCreateComponents={createDesignComponents}
                   projectRoot={ROOT}
                 />
-              )}
+              ) : null}
+              {screen === "review" && <GitPanel root={ROOT} />}
               {screen === "console" && <ConsoleScreen root={ROOT} />}
               {screen === "sessions" && <SessionsScreen root={ROOT} />}
               {screen === "settings" && <SettingsScreen />}
@@ -1074,18 +1148,21 @@ export default function App(): React.ReactElement {
               {screen === "web-suite" && <WebDevelopmentSuite />}
               {screen !== "workflows" &&
                 screen !== "design" &&
+                screen !== "review" &&
                 screen !== "console" &&
                 screen !== "sessions" &&
                 screen !== "settings" &&
                 screen !== "containers" &&
                 screen !== "models" &&
                 screen !== "device-preview" &&
-                screen !== "web-suite" && <Placeholder screen={screen} />}
+                screen !== "web-suite" && <WorkspaceToolScreen screen={screen} root={ROOT} onOpenFile={openFile} />}
             </div>
           </>
         )}
       </div>
-      <LeoChatPanel projectRoot={ROOT} />
+      {fileTreeHidden && screen === "editor" && <button className="panel-restore-button panel-restore-file-tree" type="button" onClick={() => setFileTreeHidden(false)}>Show Files</button>}
+      {!leoHidden && <div className="leo-dock" style={{ width: leoWidth }}><div className="panel-resize-handle panel-resize-horizontal" onPointerDown={(event) => startResize("leo", event)} title="Resize Leo panel" /><LeoChatPanel projectRoot={ROOT} onToggle={() => setLeoHidden(true)} /></div>}
+      {leoHidden && <button className="panel-restore-button panel-restore-leo" type="button" onClick={() => setLeoHidden(false)}>Show Leo</button>}
       {showNewProjectWizard && (
         <NewProjectWizard
           defaultParentDir={ROOT}

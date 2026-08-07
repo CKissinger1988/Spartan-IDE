@@ -221,6 +221,7 @@ const DESIGN_VIEWPORTS = [
 type DesignViewportId = (typeof DESIGN_VIEWPORTS)[number]["id"] | "custom";
 type DesignOrientation = "auto" | "portrait" | "landscape";
 type ComponentInsertPlacement = "child" | "sibling";
+type NewDesignTemplate = "blank" | "card" | "dashboard";
 
 interface ViewportPreset {
   name: string;
@@ -249,6 +250,51 @@ function parseComponentPropSchema(input: string): ComponentPropDefinition[] {
   });
 }
 
+function buildNewDesignSource(componentName: string, template: NewDesignTemplate): string {
+  const safeName = componentName.trim();
+  if (template === "card") {
+    return `import React from "react";
+
+export default function ${safeName}() {
+  return (
+    <main data-spartan-component="${safeName}" style={{ display: "grid", gap: 16, maxWidth: 420, padding: 24, border: "1px solid #d0d7de", borderRadius: 16, fontFamily: "sans-serif" }}>
+      <span style={{ fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase", color: "#667085" }}>New component</span>
+      <h1 style={{ margin: 0 }}>Start designing</h1>
+      <p style={{ margin: 0, color: "#475467" }}>Select this element in the structure tree to edit its text, props, styles, and children.</p>
+      <button type="button">Continue</button>
+    </main>
+  );
+}
+`;
+  }
+  if (template === "dashboard") {
+    return `import React from "react";
+
+export default function ${safeName}() {
+  return (
+    <main data-spartan-component="${safeName}" style={{ display: "grid", gap: 20, padding: 28, fontFamily: "sans-serif", background: "#f8fafc" }}>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div><span style={{ color: "#667085", fontSize: 12 }}>WORKSPACE</span><h1 style={{ margin: "6px 0 0" }}>Dashboard</h1></div>
+        <button type="button">New item</button>
+      </header>
+      <section style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+        <article><strong>128</strong><div>Projects</div></article>
+        <article><strong>84%</strong><div>Progress</div></article>
+        <article><strong>12</strong><div>Tasks due</div></article>
+      </section>
+    </main>
+  );
+}
+`;
+  }
+  return `import React from "react";
+
+export default function ${safeName}() {
+  return <main data-spartan-component="${safeName}" />;
+}
+`;
+}
+
 function searchableNodeText(node: ComponentNode): string {
   const propText = Object.entries(node.props).flatMap(([name, summary]) => {
     if (summary.kind === "string") return [name, summary.value];
@@ -272,22 +318,32 @@ function filterTree(nodes: ComponentNode[], query: string): ComponentNode[] {
   });
 }
 
+function expandableNodeIds(nodes: ComponentNode[]): string[] {
+  return nodes.flatMap((node) => [
+    ...(node.children.length > 0 ? [node.id] : []),
+    ...expandableNodeIds(node.children),
+  ]);
+}
+
 function TreeNode({
   node,
   depth,
   selectedIds,
   onSelect,
   filterActive,
+  collapsedIds,
+  onToggle,
 }: {
   node: ComponentNode;
   depth: number;
   selectedIds: string[];
   onSelect: (id: string, additive: boolean) => void;
   filterActive: boolean;
+  collapsedIds: ReadonlySet<string>;
+  onToggle: (id: string) => void;
 }): React.ReactElement {
-  const [expanded, setExpanded] = useState(true);
   const hasChildren = node.children.length > 0;
-  const visibleExpanded = filterActive || expanded;
+  const visibleExpanded = filterActive || !collapsedIds.has(node.id);
   return (
     <div>
       <div
@@ -303,10 +359,10 @@ function TreeNode({
             onSelect(node.id, event.shiftKey);
           } else if (event.key === "ArrowRight" && hasChildren) {
             event.preventDefault();
-            if (!visibleExpanded && !filterActive) setExpanded(true);
+            if (!visibleExpanded && !filterActive) onToggle(node.id);
           } else if (event.key === "ArrowLeft" && hasChildren) {
             event.preventDefault();
-            if (visibleExpanded && !filterActive) setExpanded(false);
+            if (visibleExpanded && !filterActive) onToggle(node.id);
           }
         }}
         onClick={(event) => onSelect(node.id, event.shiftKey)}
@@ -319,7 +375,7 @@ function TreeNode({
           disabled={!hasChildren || filterActive}
           onClick={(event) => {
             event.stopPropagation();
-            if (hasChildren) setExpanded((value) => !value);
+            if (hasChildren) onToggle(node.id);
           }}
         >
           {hasChildren ? (visibleExpanded ? "▾" : "▸") : "·"}
@@ -331,7 +387,7 @@ function TreeNode({
       {visibleExpanded && node.children.length > 0 && (
         <div role="group">
           {node.children.map((child) => (
-            <TreeNode key={child.id} node={child} depth={depth + 1} selectedIds={selectedIds} onSelect={onSelect} filterActive={filterActive} />
+            <TreeNode key={child.id} node={child} depth={depth + 1} selectedIds={selectedIds} onSelect={onSelect} filterActive={filterActive} collapsedIds={collapsedIds} onToggle={onToggle} />
           ))}
         </div>
       )}
@@ -910,6 +966,7 @@ export default function DesignScreen({
 }: DesignScreenProps): React.ReactElement {
   const [roots, setRoots] = useState<ComponentNode[]>([]);
   const [treeFilter, setTreeFilter] = useState("");
+  const [collapsedTreeIds, setCollapsedTreeIds] = useState<Set<string>>(() => new Set());
   const [bundleCode, setBundleCode] = useState<string | null>(null);
   const [previewSource, setPreviewSource] = useState<string | null>(null);
   const [variantName, setVariantName] = useState("");
@@ -959,6 +1016,7 @@ export default function DesignScreen({
   const [newComponentVariant, setNewComponentVariant] = useState("default");
   const [createPlayground, setCreatePlayground] = useState(true);
   const [creatingComponent, setCreatingComponent] = useState(false);
+  const [newDesignTemplate, setNewDesignTemplate] = useState<NewDesignTemplate>("blank");
   const [paletteInsertPlacement, setPaletteInsertPlacement] = useState<ComponentInsertPlacement>("child");
   const [paletteFilter, setPaletteFilter] = useState("");
   const [assets, setAssets] = useState<DiscoveredAsset[]>([]);
@@ -992,12 +1050,46 @@ export default function DesignScreen({
   const [breakpoints, setBreakpoints] = useState<ResponsiveBreakpoint[]>([]);
   const [previewZoom, setPreviewZoom] = useState(75);
   const [previewMatrix, setPreviewMatrix] = useState(false);
+  const [treePanelHidden, setTreePanelHidden] = useState(() => window.localStorage.getItem("spartan.design-tree-hidden") === "true");
+  const [editPanelHidden, setEditPanelHidden] = useState(() => window.localStorage.getItem("spartan.design-edit-hidden") === "true");
+  const [treePanelWidth, setTreePanelWidth] = useState(240);
+  const [editPanelWidth, setEditPanelWidth] = useState(280);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const previewMatrixRefs = useRef<Record<string, HTMLIFrameElement | null>>({});
   const refreshGenerationRef = useRef(0);
   const viewportStorageKey = projectRoot ? `spartan.gui-builder.viewports:${projectRoot}` : null;
   const breakpointStorageKey = projectRoot ? `spartan.gui-builder.breakpoints:${projectRoot}` : null;
   const themeStorageKey = projectRoot ? `spartan.gui-builder.themes:${projectRoot}` : null;
+  const treeExpansionStorageKey = projectRoot && activeFile
+    ? `spartan.gui-builder.tree-expansion:${projectRoot}:${activeFile.path}`
+    : null;
+  const treeFilterStorageKey = projectRoot && activeFile
+    ? `spartan.gui-builder.tree-filter:${projectRoot}:${activeFile.path}`
+    : null;
+  useEffect(() => {
+    window.localStorage.setItem("spartan.design-tree-hidden", String(treePanelHidden));
+    window.localStorage.setItem("spartan.design-edit-hidden", String(editPanelHidden));
+  }, [editPanelHidden, treePanelHidden]);
+  const startPanelResize = useCallback((kind: "tree" | "edit", event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const initial = kind === "tree" ? treePanelWidth : editPanelWidth;
+    const move = (moveEvent: PointerEvent) => {
+      const delta = moveEvent.clientX - startX;
+      if (kind === "tree") setTreePanelWidth(Math.max(170, Math.min(420, initial + delta)));
+      else setEditPanelWidth(Math.max(220, Math.min(520, initial - delta)));
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = "ew-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end, { once: true });
+  }, [editPanelWidth, treePanelWidth]);
   const baseViewport = DESIGN_VIEWPORTS.find((item) => item.id === viewportId) ?? DESIGN_VIEWPORTS[0];
   const viewport = viewportId === "custom"
     ? { id: "custom", label: "Custom", width: customViewportWidth, height: customViewportHeight }
@@ -1142,6 +1234,75 @@ export default function DesignScreen({
   const canClearSelectionStyles = selectedStyleNodes.length > 0
     && selectedStyleNodes.every((node) => node?.props.style?.kind === "style");
   const filteredRoots = useMemo(() => filterTree(roots, treeFilter), [roots, treeFilter]);
+  useEffect(() => {
+    if (!treeExpansionStorageKey) {
+      setCollapsedTreeIds(new Set());
+      return;
+    }
+    try {
+      const stored = window.localStorage.getItem(treeExpansionStorageKey);
+      if (!stored) {
+        setCollapsedTreeIds(new Set());
+        return;
+      }
+      const parsed: unknown = JSON.parse(stored);
+      if (!Array.isArray(parsed) || !parsed.every((id): id is string => typeof id === "string")) {
+        setCollapsedTreeIds(new Set());
+        return;
+      }
+      setCollapsedTreeIds(new Set(parsed));
+    } catch {
+      setCollapsedTreeIds(new Set());
+    }
+  }, [treeExpansionStorageKey]);
+  useEffect(() => {
+    if (!treeFilterStorageKey) {
+      setTreeFilter("");
+      return;
+    }
+    try {
+      setTreeFilter(window.localStorage.getItem(treeFilterStorageKey) ?? "");
+    } catch {
+      setTreeFilter("");
+    }
+  }, [treeFilterStorageKey]);
+  const updateTreeFilter = useCallback((value: string) => {
+    setTreeFilter(value);
+    if (!treeFilterStorageKey) return;
+    try {
+      if (value) window.localStorage.setItem(treeFilterStorageKey, value);
+      else window.localStorage.removeItem(treeFilterStorageKey);
+    } catch (e) {
+      setError(`Could not save structure tree filter: ${(e as Error).message}`);
+    }
+  }, [treeFilterStorageKey]);
+  const persistCollapsedTreeIds = useCallback((ids: Set<string>) => {
+    if (!treeExpansionStorageKey) return;
+    try {
+      window.localStorage.setItem(treeExpansionStorageKey, JSON.stringify([...ids]));
+    } catch (e) {
+      setError(`Could not save structure tree state: ${(e as Error).message}`);
+    }
+  }, [treeExpansionStorageKey]);
+  const toggleTreeNode = useCallback((id: string) => {
+    setCollapsedTreeIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      persistCollapsedTreeIds(next);
+      return next;
+    });
+  }, [persistCollapsedTreeIds]);
+  const expandAllTreeNodes = useCallback(() => {
+    const next = new Set<string>();
+    setCollapsedTreeIds(next);
+    persistCollapsedTreeIds(next);
+  }, [persistCollapsedTreeIds]);
+  const collapseAllTreeNodes = useCallback(() => {
+    const next = new Set(expandableNodeIds(roots));
+    setCollapsedTreeIds(next);
+    persistCollapsedTreeIds(next);
+  }, [persistCollapsedTreeIds, roots]);
   const filteredPalette = useMemo(() => {
     const query = paletteFilter.trim().toLowerCase();
     if (!query) return palette;
@@ -1997,11 +2158,13 @@ export default function DesignScreen({
     setCreatingComponent(true);
     try {
       const props = parseComponentPropSchema(newComponentProps);
-      const source = buildComponentScaffold({
-        componentName: newComponentName,
-        props,
-        defaultVariant: newComponentVariant,
-      });
+      const source = newDesignTemplate === "blank"
+        ? buildComponentScaffold({
+          componentName: newComponentName,
+          props: newDesignTemplate === "blank" ? props : [],
+          defaultVariant: newComponentVariant,
+        })
+        : buildNewDesignSource(newComponentName, newDesignTemplate);
       const relativePath = newComponentPath.trim() || `${newComponentName.trim()}.tsx`;
       const files = [{ relativePath, source }];
       if (createPlayground) {
@@ -2014,7 +2177,7 @@ export default function DesignScreen({
           source: buildComponentPlaygroundScaffold({
             componentName: newComponentName,
             componentImportPath: `./${filename}`,
-            props,
+            props: newDesignTemplate === "blank" ? props : [],
           }),
         });
       }
@@ -2025,13 +2188,14 @@ export default function DesignScreen({
       setNewComponentPath("");
       setNewComponentProps("");
       setNewComponentVariant("default");
+      setNewDesignTemplate("blank");
       setCreatePlayground(true);
     } catch (e) {
       setError(`Could not create component: ${(e as Error).message}`);
     } finally {
       setCreatingComponent(false);
     }
-  }, [createPlayground, newComponentName, newComponentPath, newComponentProps, newComponentVariant, onCreateComponents]);
+  }, [createPlayground, newComponentName, newComponentPath, newComponentProps, newComponentVariant, newDesignTemplate, onCreateComponents]);
 
   /** Inserts a discovered component at the palette's selected child/sibling
    * placement, carrying its import along when it lives in another file -- the whole
@@ -2749,7 +2913,37 @@ export default function DesignScreen({
     setInsertText("");
   }, [activeFile, selectedId, selectedIds, selectedSibling, canClearSelectionStyles, hasSingleSelection, propKey, propValue, propValueType, textValue, tagName, wrapTagName, editKind, reparentTargetId, insertTagName, insertProps, insertText, applyEditObject]);
 
-  if (!activeFile || !isComponentFile(activeFile.path)) {
+  if (!activeFile) {
+    return (
+      <div className="design-start-screen mono">
+        <div className="design-start-card">
+          <div className="design-panel-label">GUI Builder</div>
+          <h2>Start a new GUI</h2>
+          <p>Build a component from a blank canvas or a working starter layout. The result opens in the visual editor automatically.</p>
+          <div className="design-start-grid">
+            <label>Component name
+              <input className="design-input" placeholder="Dashboard" value={newComponentName} onChange={(event) => setNewComponentName(event.target.value)} />
+            </label>
+            <label>File path
+              <input className="design-input" placeholder="components/Dashboard.tsx" value={newComponentPath} onChange={(event) => setNewComponentPath(event.target.value)} />
+            </label>
+          </div>
+          <label>Starting layout
+            <select className="design-input" value={newDesignTemplate} onChange={(event) => setNewDesignTemplate(event.target.value as NewDesignTemplate)}>
+              <option value="blank">Blank canvas</option>
+              <option value="card">Card starter</option>
+              <option value="dashboard">Dashboard starter</option>
+            </select>
+          </label>
+          {newDesignTemplate === "blank" && <label>Typed props <textarea className="design-input" rows={4} placeholder={"title:string\ncount:number\nchildren:slot"} value={newComponentProps} onChange={(event) => setNewComponentProps(event.target.value)} /></label>}
+          <label className="design-start-check"><input type="checkbox" checked={createPlayground} disabled={newDesignTemplate !== "blank"} onChange={(event) => setCreatePlayground(event.target.checked)} /> Create a playground companion</label>
+          <button className="design-secondary-action" onClick={() => void createComponent()} disabled={creatingComponent || !newComponentName.trim()}>{creatingComponent ? "Creating…" : "Create and open in Builder"}</button>
+          {error && <div className="design-start-error">{error}</div>}
+        </div>
+      </div>
+    );
+  }
+  if (!isComponentFile(activeFile.path)) {
     return (
       <div className="empty-state mono">
         Open a .jsx or .tsx file in the Editor to see its live preview here.
@@ -2773,7 +2967,7 @@ export default function DesignScreen({
   };
 
   return (
-    <div className="design-screen">
+    <div className="design-screen" style={{ gridTemplateColumns: `${treePanelHidden ? 0 : treePanelWidth}px 5px minmax(0, 1fr) 5px ${editPanelHidden ? 0 : editPanelWidth}px` }}>
       <div className="design-file-toolbar mono">
         <label htmlFor="design-file-select">Component file</label>
         <select
@@ -2800,26 +2994,84 @@ export default function DesignScreen({
             Reset preview
           </button>
         )}
+        {treePanelHidden && <button className="design-toolbar-button mono" onClick={() => setTreePanelHidden(false)}>Show structure</button>}
+        {editPanelHidden && <button className="design-toolbar-button mono" onClick={() => setEditPanelHidden(false)}>Show inspector</button>}
       </div>
-      <div className="design-tree-panel">
+      <div className={`design-tree-panel${treePanelHidden ? " design-panel-hidden" : ""}`}>
         <div className="design-tree-header">
-          <div className="design-panel-label">Structure</div>
+          <div className="design-panel-label">Structure <button className="design-panel-hide-button" type="button" onClick={() => setTreePanelHidden(true)} title="Hide structure panel">×</button></div>
+          <div className="design-tree-actions">
+            <button
+              type="button"
+              className="design-asset-action mono"
+              title={treeFilter.trim() ? "Select every matching element in the filtered tree" : "Select every element in the structure tree"}
+              onClick={() => {
+                const ids = flattenNodes(filteredRoots).map((node) => node.id);
+                setSelectedIds(ids);
+              }}
+              disabled={filteredRoots.length === 0}
+            >
+              Select all
+            </button>
+            <button
+              type="button"
+              className="design-asset-action mono"
+              title="Clear the current structure-tree selection"
+              onClick={() => setSelectedIds([])}
+              disabled={selectedIds.length === 0}
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              className="design-asset-action mono"
+              title="Expand every expandable node in the structure tree"
+              onClick={expandAllTreeNodes}
+              disabled={roots.length === 0 || collapsedTreeIds.size === 0}
+            >
+              Expand all
+            </button>
+            <button
+              type="button"
+              className="design-asset-action mono"
+              title="Collapse every expandable node in the structure tree"
+              onClick={collapseAllTreeNodes}
+              disabled={roots.length === 0 || expandableNodeIds(roots).length === 0}
+            >
+              Collapse all
+            </button>
           <input
             className="design-tree-filter mono"
             aria-label="Filter structure tree"
             placeholder="Filter…"
             value={treeFilter}
-            onChange={(event) => setTreeFilter(event.target.value)}
+            onChange={(event) => updateTreeFilter(event.target.value)}
           />
+          </div>
         </div>
-        <div role="tree" aria-label="Structure tree">
+        <div
+          role="tree"
+          aria-label="Structure tree"
+          onKeyDown={(event) => {
+            const target = event.target;
+            if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable=\"true\"]")) return;
+            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+              event.preventDefault();
+              setSelectedIds(flattenNodes(filteredRoots).map((node) => node.id));
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              setSelectedIds([]);
+            }
+          }}
+        >
           {filteredRoots.length > 0 ? filteredRoots.map((root) => (
-            <TreeNode key={root.id} node={root} depth={0} selectedIds={selectedIds} onSelect={selectNodes} filterActive={treeFilter.trim().length > 0} />
+            <TreeNode key={root.id} node={root} depth={0} selectedIds={selectedIds} onSelect={selectNodes} filterActive={treeFilter.trim().length > 0} collapsedIds={collapsedTreeIds} onToggle={toggleTreeNode} />
           )) : (
             <div className="design-tree-empty mono">No matching elements.</div>
           )}
         </div>
       </div>
+      <div className="design-panel-resize design-panel-resize-tree" onPointerDown={(event) => startPanelResize("tree", event)} title="Resize structure panel" />
       <div className="design-preview">
         <div className="design-preview-toolbar mono">
           <label>
@@ -2991,8 +3243,9 @@ export default function DesignScreen({
           <div className="empty-state mono">{error ?? "Bundling..."}</div>
         )}
       </div>
-      <div className="design-edit-panel">
-        <div className="design-panel-label">Edit</div>
+      <div className="design-panel-resize design-panel-resize-edit" onPointerDown={(event) => startPanelResize("edit", event)} title="Resize inspector panel" />
+      <div className={`design-edit-panel${editPanelHidden ? " design-panel-hidden" : ""}`}>
+        <div className="design-panel-label">Edit <button className="design-panel-hide-button" type="button" onClick={() => setEditPanelHidden(true)} title="Hide inspector panel">×</button></div>
         {projectRoot && (
           <>
             <button className="design-palette-toggle mono" onClick={() => setCreateComponentOpen((open) => !open)}>
