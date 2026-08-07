@@ -1,7 +1,12 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DEVICE_PROFILES, type DeviceProfile } from "./DevicePreview";
 
 type SourceTab = "html" | "css" | "js";
+const RESPONSIVE_BREAKPOINTS = [
+  { id: "mobile", label: "Mobile ≤ 600px", maxWidth: 600 },
+  { id: "tablet", label: "Tablet ≤ 900px", maxWidth: 900 },
+  { id: "desktop", label: "Desktop ≥ 901px", maxWidth: 99999 },
+] as const;
 
 interface WebTemplate {
   id: string;
@@ -63,7 +68,23 @@ console.log("Dashboard template loaded");`,
   },
 ];
 
-interface SavedSources { html: string; css: string; js: string; templateId: string }
+export interface WebSources { html: string; css: string; js: string }
+interface SavedSources extends WebSources { templateId: string }
+
+interface WebDevelopmentSuiteProps {
+  initialSources?: WebSources;
+  onSourcesChange?: (sources: WebSources) => void;
+  persistSources?: boolean;
+}
+
+interface SelectedElement {
+  selector: string;
+  tagName: string;
+  text: string;
+  color: string;
+  backgroundColor: string;
+  fontSize: string;
+}
 
 function savedSources(): SavedSources | null {
   try {
@@ -90,9 +111,9 @@ function orientedSize(profile: DeviceProfile, landscape: boolean): [number, numb
   return landscape ? [profile.height, profile.width] : [profile.width, profile.height];
 }
 
-export default function WebDevelopmentSuite(): React.ReactElement {
-  const saved = savedSources();
-  const initial = saved ?? WEB_TEMPLATES[0];
+export default function WebDevelopmentSuite({ initialSources, onSourcesChange, persistSources = true }: WebDevelopmentSuiteProps = {}): React.ReactElement {
+  const saved = persistSources ? savedSources() : null;
+  const initial = initialSources ?? saved ?? WEB_TEMPLATES[0];
   const [templateId, setTemplateId] = useState(saved?.templateId ?? WEB_TEMPLATES[0].id);
   const [html, setHtml] = useState(initial.html);
   const [css, setCss] = useState(initial.css);
@@ -103,24 +124,49 @@ export default function WebDevelopmentSuite(): React.ReactElement {
   const [zoom, setZoom] = useState(65);
   const [consoleLines, setConsoleLines] = useState<string[]>([]);
   const [previewVersion, setPreviewVersion] = useState(0);
+  const sourcesInitialized = useRef(false);
+  const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null);
+  const [textDraft, setTextDraft] = useState("");
+  const [styleDraft, setStyleDraft] = useState({ color: "", backgroundColor: "", fontSize: "" });
+  const [responsiveBreakpoint, setResponsiveBreakpoint] = useState<(typeof RESPONSIVE_BREAKPOINTS)[number]["id"]>("mobile");
+  const [responsiveDraft, setResponsiveDraft] = useState({ fontSize: "", padding: "", display: "" });
+  const [draggedBlock, setDraggedBlock] = useState<"hero" | "cards" | "form" | null>(null);
   const profile = DEVICE_PROFILES.find((item) => item.id === profileId) ?? DEVICE_PROFILES[0];
   const [width, height] = orientedSize(profile, landscape);
   const source = sourceTab === "html" ? html : sourceTab === "css" ? css : js;
   const setSource = sourceTab === "html" ? setHtml : sourceTab === "css" ? setCss : setJs;
   const template = WEB_TEMPLATES.find((item) => item.id === templateId) ?? WEB_TEMPLATES[0];
   const previewDocument = useMemo(() => {
-    const bridge = `<script>(function(){function send(level,args){parent.postMessage({source:"spartan-web-suite",level:level,args:Array.from(args).map(function(item){try{return typeof item === "string" ? item : JSON.stringify(item)}catch(_){return String(item)}})},"*")} ["log","info","warn","error"].forEach(function(level){var original=console[level];console[level]=function(){original.apply(console,arguments);send(level,arguments)}});window.addEventListener("error",function(event){send("error",[event.message])});window.addEventListener("unhandledrejection",function(event){send("error",[String(event.reason)])})})()<\/script>`;
+    const bridge = `<script>(function(){function send(level,args){parent.postMessage({source:"spartan-web-suite",level:level,args:Array.from(args).map(function(item){try{return typeof item === "string" ? item : JSON.stringify(item)}catch(_){return String(item)}})},"*")}function selector(el){if(el.id)return "#"+CSS.escape(el.id);var path=[];while(el&&el.nodeType===1&&el!==document.body){var part=el.tagName.toLowerCase();if(el.classList.length)part+="."+CSS.escape(el.classList[0]);var siblings=el.parentElement?Array.from(el.parentElement.children).filter(function(item){return item.tagName===el.tagName}):[];if(siblings.length>1)part+=":nth-of-type("+(siblings.indexOf(el)+1)+")";path.unshift(part);el=el.parentElement}return path.join(" ")}document.addEventListener("click",function(event){var el=event.target.closest("body *");if(!el)return;event.preventDefault();event.stopPropagation();document.querySelectorAll(".spartan-selected").forEach(function(item){item.classList.remove("spartan-selected")});el.classList.add("spartan-selected");var style=getComputedStyle(el);parent.postMessage({source:"spartan-web-suite",type:"select",selector:selector(el),tagName:el.tagName.toLowerCase(),text:(el.innerText||"").slice(0,500),color:style.color,backgroundColor:style.backgroundColor,fontSize:style.fontSize},"*")},true);var style=document.createElement("style");style.textContent=".spartan-selected{outline:2px solid #58d6a4!important;outline-offset:3px!important;cursor:crosshair!important}";document.head.appendChild(style);["log","info","warn","error"].forEach(function(level){var original=console[level];console[level]=function(){original.apply(console,arguments);send(level,arguments)}});window.addEventListener("error",function(event){send("error",[event.message])});window.addEventListener("unhandledrejection",function(event){send("error",[String(event.reason)])})})()<\/script>`;
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style></head><body>${html}${bridge}<script>${js.replace(/<\/script/gi, "<\\/script")}<\/script></body></html>`;
   }, [css, html, js]);
   const frameStyle = useMemo(() => ({ "--web-width": `${width}px`, "--web-height": `${height}px`, "--web-zoom": zoom / 100 } as React.CSSProperties), [height, width, zoom]);
 
   useEffect(() => {
-    localStorage.setItem("spartan.web-suite.sources", JSON.stringify({ html, css, js, templateId }));
-  }, [css, html, js, templateId]);
+    const sources = { html, css, js };
+    if (persistSources) localStorage.setItem("spartan.web-suite.sources", JSON.stringify({ ...sources, templateId }));
+    if (sourcesInitialized.current) onSourcesChange?.(sources);
+    sourcesInitialized.current = true;
+  }, [css, html, js, onSourcesChange, persistSources, templateId]);
 
   useEffect(() => {
     const receive = (event: MessageEvent) => {
       if (event.data?.source !== "spartan-web-suite") return;
+      if (event.data.type === "select") {
+        const next: SelectedElement = {
+          selector: String(event.data.selector ?? ""),
+          tagName: String(event.data.tagName ?? "element"),
+          text: String(event.data.text ?? ""),
+          color: String(event.data.color ?? ""),
+          backgroundColor: String(event.data.backgroundColor ?? ""),
+          fontSize: String(event.data.fontSize ?? ""),
+        };
+        setSelectedElement(next);
+        setTextDraft(next.text);
+        setStyleDraft({ color: next.color, backgroundColor: next.backgroundColor, fontSize: next.fontSize });
+        setResponsiveDraft({ fontSize: "", padding: "", display: "" });
+        return;
+      }
       const args = Array.isArray(event.data.args) ? event.data.args : [];
       setConsoleLines((lines) => [...lines, `[${event.data.level}] ${args.join(" ")}`].slice(-200));
     };
@@ -129,7 +175,71 @@ export default function WebDevelopmentSuite(): React.ReactElement {
   }, []);
 
   const applyTemplate = () => {
-    setHtml(template.html); setCss(template.css); setJs(template.js); setConsoleLines([]); setPreviewVersion((value) => value + 1);
+    setHtml(template.html); setCss(template.css); setJs(template.js); setSelectedElement(null); setConsoleLines([]); setPreviewVersion((value) => value + 1);
+  };
+
+  const updateSelectedText = () => {
+    if (!selectedElement) return;
+    const parser = new DOMParser();
+    const documentFragment = parser.parseFromString(`<body>${html}</body>`, "text/html");
+    const target = documentFragment.body.querySelector(selectedElement.selector);
+    if (!target) return;
+    target.textContent = textDraft;
+    setHtml(documentFragment.body.innerHTML);
+    setPreviewVersion((value) => value + 1);
+  };
+
+  const updateSelectedStyles = () => {
+    if (!selectedElement) return;
+    const declarations = [
+      ["color", styleDraft.color],
+      ["background-color", styleDraft.backgroundColor],
+      ["font-size", styleDraft.fontSize],
+    ].filter(([, value]) => value.trim());
+    if (!declarations.length) return;
+    const rule = `${selectedElement.selector} { ${declarations.map(([property, value]) => `${property}: ${value}`).join("; ")} }`;
+    setCss((value) => `${value}\n\n/* Spartan Web Studio inspector */\n${rule}`);
+    setPreviewVersion((value) => value + 1);
+  };
+
+  const updateResponsiveStyles = () => {
+    if (!selectedElement) return;
+    const breakpoint = RESPONSIVE_BREAKPOINTS.find((item) => item.id === responsiveBreakpoint) ?? RESPONSIVE_BREAKPOINTS[0];
+    const declarations = [
+      ["font-size", responsiveDraft.fontSize],
+      ["padding", responsiveDraft.padding],
+      ["display", responsiveDraft.display],
+    ].filter(([, value]) => value.trim());
+    if (!declarations.length) return;
+    const rule = `${selectedElement.selector} { ${declarations.map(([property, value]) => `${property}: ${value}`).join("; ")} }`;
+    const media = breakpoint.id === "desktop"
+      ? `@media (min-width: 901px) { ${rule} }`
+      : `@media (max-width: ${breakpoint.maxWidth}px) { ${rule} }`;
+    setCss((value) => `${value}\n\n/* Spartan responsive element override · ${breakpoint.label} */\n${media}`);
+    setPreviewVersion((value) => value + 1);
+  };
+
+  const exportWebsitePackage = () => {
+    downloadFile("index.html", projectHtml(html), "text/html");
+    downloadFile("style.css", css, "text/css");
+    downloadFile("script.js", js, "text/javascript");
+    downloadFile("spartan-site.json", JSON.stringify({ format: "spartan-web-site", version: 1, html, css, js }, null, 2), "application/json");
+  };
+
+  const insertBlock = (kind: "hero" | "cards" | "form") => {
+    const blocks = {
+      hero: `<section class="spartan-block hero-block"><p class="eyebrow">New section</p><h2>Make your next idea visible.</h2><p>Replace this copy with your own message and style it from the inspector.</p><a class="cta" href="#">Learn more</a></section>`,
+      cards: `<section class="spartan-block card-block"><article><h3>Feature one</h3><p>Explain the first benefit.</p></article><article><h3>Feature two</h3><p>Explain the second benefit.</p></article><article><h3>Feature three</h3><p>Explain the third benefit.</p></article></section>`,
+      form: `<form class="spartan-block form-block"><label>Name<input name="name" placeholder="Your name"></label><label>Email<input name="email" type="email" placeholder="you@example.com"></label><button type="submit">Send message</button></form>`,
+    }[kind];
+    setHtml((value) => `${value}\n${blocks}`);
+    setPreviewVersion((value) => value + 1);
+  };
+
+  const handleBlockDrop = (event: React.DragEvent) => {
+    event.preventDefault();
+    if (draggedBlock) insertBlock(draggedBlock);
+    setDraggedBlock(null);
   };
 
   return <section className="web-suite" aria-label="Web development suite">
@@ -138,6 +248,9 @@ export default function WebDevelopmentSuite(): React.ReactElement {
       <span className="web-suite-template-note">{template.description}</span>
       <button className="toolbar-btn" onClick={applyTemplate}>Apply template</button>
       <button className="toolbar-btn toolbar-btn-primary" onClick={() => { setConsoleLines([]); setPreviewVersion((value) => value + 1); }}>Run preview</button>
+      <button className="toolbar-btn" draggable onDragStart={() => setDraggedBlock("hero")} onDragEnd={() => setDraggedBlock(null)} onClick={() => insertBlock("hero")}>+ Hero block</button>
+      <button className="toolbar-btn" draggable onDragStart={() => setDraggedBlock("cards")} onDragEnd={() => setDraggedBlock(null)} onClick={() => insertBlock("cards")}>+ Cards block</button>
+      <button className="toolbar-btn" draggable onDragStart={() => setDraggedBlock("form")} onDragEnd={() => setDraggedBlock(null)} onClick={() => insertBlock("form")}>+ Form block</button>
       <button className="toolbar-btn" onClick={() => downloadFile("index.html", standaloneHtml(html, css, js), "text/html")}>Export HTML</button>
     </div>
     <div className="web-suite-body">
@@ -153,10 +266,30 @@ export default function WebDevelopmentSuite(): React.ReactElement {
           <label className="web-suite-zoom">Zoom {zoom}%<input type="range" min="25" max="100" step="5" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} /></label>
           <span className="web-suite-dimensions mono">{width} × {height} · DPR {profile.pixelRatio}</span>
         </div>
-        <div className="web-suite-stage"><div className={`web-suite-frame web-suite-frame-${profile.platform}`} style={frameStyle}><iframe key={previewVersion} title="Web Studio live preview" srcDoc={previewDocument} sandbox="allow-forms allow-modals allow-popups allow-scripts" /></div></div>
+        <div className={`web-suite-stage ${draggedBlock ? "web-suite-stage-drop-active" : ""}`} onDragOver={(event) => event.preventDefault()} onDrop={handleBlockDrop}>
+          <div className={`web-suite-frame web-suite-frame-${profile.platform}`} style={frameStyle}>
+            <iframe key={previewVersion} title="Web Studio live preview" srcDoc={previewDocument} sandbox="allow-forms allow-modals allow-popups allow-scripts" />
+          </div>
+          {draggedBlock && <div className="web-suite-drop-hint mono">Drop to insert {draggedBlock} block</div>}
+        </div>
+        <div className="web-suite-inspector">
+          <div className="web-suite-console-header"><span>Inspector</span><span className="mono">{selectedElement ? `${selectedElement.tagName} · ${selectedElement.selector}` : "Click an element in the preview"}</span></div>
+          {selectedElement && <>
+            <label>Text<input value={textDraft} onChange={(event) => setTextDraft(event.target.value)} /></label>
+            <label>Text color<input value={styleDraft.color} onChange={(event) => setStyleDraft((value) => ({ ...value, color: event.target.value }))} /></label>
+            <label>Background<input value={styleDraft.backgroundColor} onChange={(event) => setStyleDraft((value) => ({ ...value, backgroundColor: event.target.value }))} /></label>
+            <label>Font size<input value={styleDraft.fontSize} onChange={(event) => setStyleDraft((value) => ({ ...value, fontSize: event.target.value }))} /></label>
+            <button className="toolbar-btn toolbar-btn-primary" onClick={() => { updateSelectedText(); updateSelectedStyles(); }}>Apply inspector changes</button>
+            <label>Breakpoint<select value={responsiveBreakpoint} onChange={(event) => setResponsiveBreakpoint(event.target.value as typeof responsiveBreakpoint)}>{RESPONSIVE_BREAKPOINTS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+            <label>Responsive font<input value={responsiveDraft.fontSize} placeholder="e.g. 2rem" onChange={(event) => setResponsiveDraft((value) => ({ ...value, fontSize: event.target.value }))} /></label>
+            <label>Responsive padding<input value={responsiveDraft.padding} placeholder="e.g. 1rem" onChange={(event) => setResponsiveDraft((value) => ({ ...value, padding: event.target.value }))} /></label>
+            <label>Responsive display<input value={responsiveDraft.display} placeholder="e.g. none" onChange={(event) => setResponsiveDraft((value) => ({ ...value, display: event.target.value }))} /></label>
+            <button className="toolbar-btn" onClick={updateResponsiveStyles}>Apply responsive override</button>
+          </>}
+        </div>
         <div className="web-suite-console"><div className="web-suite-console-header"><span>Console</span><button className="toolbar-btn" onClick={() => setConsoleLines([])}>Clear</button></div><pre className="mono">{consoleLines.length ? consoleLines.join("\n") : "Run preview to see console output."}</pre></div>
       </div>
     </div>
-    <div className="web-suite-footer"><span>Sandboxed live preview · no project files are changed by templates</span><button className="toolbar-btn" onClick={() => { downloadFile("index.html", projectHtml(html), "text/html"); downloadFile("style.css", css, "text/css"); downloadFile("script.js", js, "text/javascript"); }}>Export source files</button></div>
+    <div className="web-suite-footer"><span>Sandboxed live preview · source changes are saved locally</span><button className="toolbar-btn" onClick={exportWebsitePackage}>Export website package</button></div>
   </section>;
 }

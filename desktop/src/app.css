@@ -1,19 +1,28 @@
 .app-root {
+  position: relative;
   display: flex;
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* Real, persistent 3-tier nav sidebar (Workspace/Build/Platform), replacing
  * the old top mode-toggle -- matches the IA researched from
  * OptimiLabs/velocity (concepts only, see App.tsx's own doc comment). */
 .nav-sidebar {
-  width: 200px;
+  width: clamp(160px, 15vw, 220px);
   background: var(--surface);
   border-right: 1px solid var(--border);
   overflow-y: auto;
   flex-shrink: 0;
   padding-bottom: 16px;
+}
+
+.nav-sidebar-collapsed {
+  width: 58px;
 }
 
 .nav-brand {
@@ -29,6 +38,37 @@
   border-bottom: 1px solid var(--border);
   border-image: linear-gradient(90deg, var(--accent), transparent 70%) 1;
   margin-bottom: 8px;
+}
+
+.nav-collapse-button {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  padding: 3px 5px;
+}
+
+.nav-collapse-button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.nav-sidebar-collapsed .nav-brand {
+  justify-content: center;
+  padding: 14px 8px;
+}
+
+.nav-sidebar-collapsed .nav-brand-text,
+.nav-sidebar-collapsed .nav-group-label {
+  display: none;
+}
+
+.nav-sidebar-collapsed .nav-collapse-button {
+  margin-left: 0;
 }
 
 /* A small, hand-drawn angular emblem (no external image asset) --
@@ -70,6 +110,27 @@
     color var(--transition-fast);
 }
 
+.nav-item-icon {
+  display: none;
+}
+
+.nav-sidebar-collapsed .nav-item {
+  padding: 8px 4px;
+  text-align: center;
+  font-size: 0;
+}
+
+.nav-sidebar-collapsed .nav-item::after {
+  display: none;
+}
+
+.nav-sidebar-collapsed .nav-item-icon {
+  display: block;
+  font-size: 16px;
+  line-height: 1;
+  color: inherit;
+}
+
 .nav-item:hover {
   background: var(--accent-hover);
   color: var(--text);
@@ -100,6 +161,8 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .top-row {
@@ -166,6 +229,7 @@
   flex: 1;
   min-height: 0;
   display: flex;
+  overflow: hidden;
 }
 
 /* Real DAP debug panel wrapper (§132) -- stacks the debug toolbar above
@@ -177,10 +241,11 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .file-tree-panel {
-  width: 220px;
+  width: clamp(180px, 18vw, 260px);
   background: var(--surface);
   border-right: 1px solid var(--border);
   flex-shrink: 0;
@@ -218,6 +283,77 @@
   box-shadow:
     inset 0 -2px 0 var(--accent),
     inset 0 -2px 6px rgba(var(--accent-rgb), 0.3);
+}
+
+.sidebar-hide-btn {
+  flex: 0 0 24px;
+}
+
+.panel-resize-handle {
+  flex: 0 0 5px;
+  z-index: 12;
+  background: transparent;
+  transition: background var(--transition-fast);
+}
+
+.panel-resize-handle:hover {
+  background: var(--accent);
+  box-shadow: var(--glow-accent);
+}
+
+.panel-resize-horizontal {
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.panel-resize-vertical {
+  cursor: ns-resize;
+}
+
+.debug-dock {
+  flex: 0 0 auto;
+  min-height: 36px;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.debug-dock .debug-panel {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+.panel-restore-button {
+  position: fixed;
+  z-index: 30;
+  border: 1px solid var(--border-bright);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--accent);
+  padding: 6px 9px;
+  cursor: pointer;
+  font: inherit;
+  box-shadow: var(--glow-accent);
+}
+
+.panel-restore-button:hover {
+  background: var(--accent-dim);
+}
+
+.panel-restore-file-tree {
+  left: 66px;
+  bottom: 34px;
+}
+
+.panel-restore-debug {
+  align-self: flex-start;
+  margin: 2px 8px;
+}
+
+.panel-restore-leo {
+  right: 8px;
+  top: 42px;
 }
 
 .file-tree {
@@ -446,6 +582,7 @@
   flex: 1;
   min-height: 0;
   position: relative;
+  overflow: hidden;
   background: var(--bg);
 }
 
@@ -460,17 +597,133 @@
   text-align: center;
 }
 
-.placeholder-screen {
-  height: 100%;
-  padding: 32px;
-  color: var(--text-dim);
-}
-
 .settings-screen {
   height: 100%;
-  padding: 24px 32px 48px;
-  max-width: 560px;
-  overflow-y: auto;
+  min-height: 0;
+  padding: 20px 24px 24px;
+  max-width: none;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex: 0 0 auto;
+}
+
+.settings-title {
+  color: var(--accent);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.settings-subtitle,
+.settings-save-status {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.settings-save-status {
+  margin-top: 2px;
+}
+
+.settings-layout {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(190px, 230px) minmax(0, 1fr);
+  gap: 24px;
+}
+
+.settings-category-nav {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow: auto;
+}
+
+.settings-category-button {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px 11px;
+  text-align: left;
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.settings-category-button strong {
+  color: inherit;
+  font-size: 12px;
+}
+
+.settings-category-button small {
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.settings-category-button:hover,
+.settings-category-button.active {
+  background: var(--accent-dim);
+  border-color: var(--border-bright);
+  color: var(--accent);
+}
+
+.settings-category-button.active small {
+  color: var(--text);
+}
+
+.settings-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 8px;
+}
+
+.settings-category {
+  max-width: 720px;
+}
+
+.settings-category-heading {
+  color: var(--accent);
+  font-size: 15px;
+  margin: 0 0 20px;
+}
+
+@media (max-width: 760px) {
+  .settings-screen {
+    padding: 16px;
+  }
+
+  .settings-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .settings-category-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .settings-category-button {
+    min-width: 150px;
+  }
 }
 
 .settings-section-label {
@@ -557,16 +810,194 @@
   text-align: right;
 }
 
-.placeholder-screen h2 {
+.workspace-tool-screen {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 28px;
   color: var(--text);
-  font-size: 15px;
-  margin: 0 0 8px 0;
 }
 
-.placeholder-screen p {
-  font-size: 13px;
+.workspace-tool-screen h2 {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.workspace-tool-summary,
+.workspace-tool-count,
+.workspace-tool-empty {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.workspace-tool-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0 12px;
+}
+
+.workspace-tool-output {
+  min-height: 120px;
+  max-width: 1000px;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.resource-screen {
+  min-width: 0;
+}
+
+.resource-help {
+  max-width: 900px;
+  margin: 0 0 12px;
+  color: var(--text-dim);
+  font-size: 11px;
   line-height: 1.6;
-  max-width: 640px;
+}
+
+.resource-install-bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 160px 150px auto;
+  gap: 8px;
+  align-items: center;
+  margin: 16px 0;
+}
+
+.resource-input,
+.resource-target {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--border-bright);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+}
+
+.resource-catalog {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.resource-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+}
+
+.resource-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--accent);
+}
+
+.resource-card p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.resource-card-source {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-badge {
+  padding: 2px 5px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  color: var(--accent);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.resource-installed {
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+}
+
+.resource-installed .design-panel-label {
+  border-bottom: 1px solid var(--border);
+}
+
+.resource-installed-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.resource-installed-row:last-child {
+  border-bottom: 0;
+}
+
+.resource-installed-target {
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+.resource-installed-row small {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-size: 9px;
+}
+
+.resource-valid { color: #6ee7a8 !important; }
+.resource-invalid { color: #e0af68 !important; }
+
+.workspace-tool-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 1000px;
+  margin-top: 18px;
+}
+
+.workspace-tool-files-title {
+  width: 100%;
+  margin-bottom: 2px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.workspace-tool-file {
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.workspace-tool-file:hover {
+  border-color: var(--accent);
+  background: var(--accent-hover);
 }
 
 .workflows-screen {
@@ -1763,7 +2194,9 @@
  * visible regardless of which nav screen is active, closing a direct
  * user objection to Leo being missing from the new Electron shell. */
 .leo-panel {
-  width: 300px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   /* Track C: glassmorphic "hologram" treatment -- a translucent surface
      with a real backdrop blur over the app's body gradient, replacing the
      flat opaque fill. The blue left-edge glow reads as a live HUD panel. */
@@ -1774,7 +2207,32 @@
   box-shadow: -1px 0 0 rgba(var(--accent-rgb), 0.2);
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.leo-dock {
+  position: relative;
+  align-self: flex-end;
+  margin-top: auto;
+  height: 50vh;
+  flex: 0 0 auto;
+  display: flex;
+  min-width: 0;
+  max-width: none;
+  min-height: 0;
+  overflow: hidden;
+  z-index: 2;
+  box-shadow: -8px -8px 28px rgba(0, 0, 0, 0.28);
+}
+
+.leo-dock > .panel-resize-handle {
+  order: -1;
+}
+
+.leo-panel-toggle {
+  margin-left: auto;
 }
 
 .leo-header {
@@ -2785,8 +3243,9 @@
   place-items: center;
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding: 36px;
+  overflow: hidden;
+  padding: 16px;
+  box-sizing: border-box;
 }
 
 .device-frame {
@@ -2980,6 +3439,7 @@
 }
 
 .web-suite-stage {
+  position: relative;
   display: grid;
   flex: 1;
   min-height: 300px;
@@ -2987,6 +3447,26 @@
   place-items: center;
   padding: 28px;
   background: var(--app-bg);
+}
+
+.web-suite-stage-drop-active {
+  outline: 1px dashed var(--accent);
+  outline-offset: -8px;
+  background: rgba(var(--accent-rgb), 0.05);
+}
+
+.web-suite-drop-hint {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 11px;
+  pointer-events: none;
 }
 
 .web-suite-frame {
@@ -3043,6 +3523,49 @@
   font-weight: 700;
 }
 
+.web-suite-inspector {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding: 7px 10px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.web-suite-inspector .web-suite-console-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.web-suite-inspector label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.web-suite-inspector input {
+  width: 110px;
+  min-width: 0;
+  padding: 4px 5px;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--panel-2);
+  font: inherit;
+}
+
+.web-suite-inspector .toolbar-btn {
+  margin-left: auto;
+}
+
 .web-suite-console pre {
   min-height: 25px;
   max-height: 108px;
@@ -3065,13 +3588,216 @@
   .web-suite-source { border-right: 0; border-bottom: 1px solid var(--border); }
 }
 
+/* Responsive desktop shell sizing. The Electron window starts from the
+ * primary display's work area, while these breakpoints keep the persistent
+ * navigation, editor tree, Leo panel, and Design canvas usable when the user
+ * resizes the window or works on a small Linux display. */
+@media (max-width: 980px) {
+  .nav-sidebar {
+    width: 58px;
+  }
+
+  .nav-sidebar:not(.nav-sidebar-collapsed) {
+    width: clamp(160px, 72vw, 220px);
+  }
+
+  .nav-sidebar:not(.nav-sidebar-collapsed) .nav-brand {
+    justify-content: flex-start;
+    padding: 14px 16px;
+    font-size: 13px;
+  }
+
+  .nav-sidebar:not(.nav-sidebar-collapsed) .nav-brand-text,
+  .nav-sidebar:not(.nav-sidebar-collapsed) .nav-group-label {
+    display: block;
+  }
+
+  .nav-sidebar:not(.nav-sidebar-collapsed) .nav-collapse-button {
+    margin-left: auto;
+  }
+
+  .nav-brand {
+    justify-content: center;
+    padding: 14px 8px;
+    font-size: 0;
+  }
+
+  .nav-collapse-button {
+    font-size: 12px;
+  }
+
+  .nav-group-label {
+    padding: 4px 6px;
+    text-align: center;
+    font-size: 9px;
+  }
+
+  .nav-item {
+    margin: 0 4px;
+    padding: 7px 4px;
+    overflow: hidden;
+    text-align: center;
+    text-overflow: clip;
+    white-space: nowrap;
+    font-size: 0;
+  }
+
+  .nav-sidebar:not(.nav-sidebar-collapsed) .nav-item {
+    padding: 5px 16px 5px 19px;
+    text-align: left;
+    font-size: 12.5px;
+  }
+
+  .nav-item::after {
+    content: attr(data-short-label);
+    font-size: 12px;
+    color: inherit;
+  }
+
+  .nav-item-active::before {
+    left: 2px;
+  }
+
+  .file-tree-panel {
+    width: clamp(160px, 24vw, 210px);
+  }
+
+  .leo-panel {
+    width: min(320px, 38vw);
+  }
+
+  .design-screen {
+    grid-template-columns: clamp(150px, 22vw, 210px) minmax(0, 1fr) clamp(210px, 28vw, 300px);
+  }
+
+  .design-file-toolbar,
+  .design-preview-toolbar {
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+}
+
+@media (max-width: 720px) {
+  .top-row {
+    overflow-x: auto;
+  }
+
+  .file-tree-panel {
+    width: 168px;
+  }
+
+  .leo-panel {
+    position: absolute;
+    z-index: 20;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(320px, 88vw);
+    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.45);
+  }
+
+  .resource-install-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .resource-catalog {
+    grid-template-columns: 1fr;
+  }
+
+  .leo-dock {
+    position: relative;
+    align-self: flex-end;
+    margin-top: auto;
+    z-index: 20;
+    top: auto;
+    right: 0;
+    bottom: auto;
+    width: min(88vw, 360px);
+    height: 50vh;
+    max-width: none;
+    background: var(--surface);
+    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.45);
+  }
+
+  .design-screen {
+    grid-template-columns: minmax(140px, 34vw) minmax(0, 1fr) minmax(200px, 42vw);
+  }
+
+  .design-edit-panel {
+    overflow-x: hidden;
+  }
+}
+
 /* Real GUI Builder + live preview screen (§75.62) -- a 3-column layout:
  * structural tree, live sandboxed iframe preview, edit panel. */
 .design-screen {
   height: 100%;
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) 260px;
+  grid-template-columns: 240px 5px minmax(0, 1fr) 5px 280px;
   grid-template-rows: auto minmax(0, 1fr);
+}
+
+.design-start-screen {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: 32px;
+  box-sizing: border-box;
+}
+
+.design-start-card {
+  width: min(680px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22);
+}
+
+.design-start-card h2 {
+  margin: 0;
+  color: var(--accent);
+  font-size: 18px;
+}
+
+.design-start-card p {
+  margin: 0;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+.design-start-card label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.design-start-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.design-start-card .design-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.design-start-check {
+  display: flex !important;
+  align-items: center;
+  grid-template-columns: auto 1fr;
+}
+
+.design-start-error {
+  color: #e05a4a;
+  font-size: 11px;
+  white-space: pre-wrap;
 }
 
 .design-file-toolbar {
@@ -3121,10 +3847,42 @@
 .design-tree-panel {
   grid-column: 1;
   grid-row: 2;
-  width: 220px;
+  width: auto;
   border-right: 1px solid var(--border);
   overflow-y: auto;
   flex-shrink: 0;
+}
+
+.design-panel-hidden {
+  display: none;
+}
+
+.design-panel-resize {
+  grid-row: 2;
+  z-index: 3;
+  cursor: ew-resize;
+  transition: background var(--transition-fast);
+}
+
+.design-panel-resize:hover {
+  background: var(--accent);
+  box-shadow: var(--glow-accent);
+}
+
+.design-panel-resize-tree { grid-column: 2; }
+.design-panel-resize-edit { grid-column: 4; }
+
+.design-panel-hide-button {
+  float: right;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+}
+
+.design-panel-hide-button:hover {
+  color: var(--accent);
 }
 
 .design-panel-label {
@@ -3142,6 +3900,19 @@
 
 .design-tree-header .design-panel-label {
   border-bottom: 0;
+}
+
+.design-tree-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 6px;
+}
+
+.design-tree-actions .design-tree-filter {
+  flex: 1;
+  width: auto;
+  margin: 0;
 }
 
 .design-tree-filter {
@@ -3268,7 +4039,7 @@
 }
 
 .design-preview {
-  grid-column: 2;
+  grid-column: 3;
   grid-row: 2;
   min-width: 0;
   min-height: 0;
@@ -3378,7 +4149,7 @@
 }
 
 .design-edit-panel {
-  grid-column: 3;
+  grid-column: 5;
   grid-row: 2;
   width: 260px;
   border-left: 1px solid var(--border);
@@ -3867,6 +4638,50 @@
 .design-edit-panel .leo-btn {
   margin: 10px 12px 0;
   align-self: flex-start;
+}
+
+/* The shell is intentionally scrollbar-free. Content remains bounded by its
+ * panel and can still be scrolled with a wheel, trackpad, keyboard, or touch;
+ * Leo is the only surface that keeps a visible scrollbar for chat history. */
+html,
+body,
+#root,
+.app-root {
+  overflow: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+#root::-webkit-scrollbar,
+.app-root::-webkit-scrollbar,
+*::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.leo-panel,
+.leo-panel * {
+  scrollbar-width: auto;
+  -ms-overflow-style: auto;
+}
+
+.leo-panel *::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.leo-panel *::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: var(--border-bright);
 }
 
 /* Real, hand-written highlight.js token theme (§75.63) -- deliberately

@@ -170,6 +170,7 @@ type LeoState =
 
 interface LeoChatPanelProps {
   projectRoot: string;
+  onToggle: () => void;
 }
 
 /**
@@ -288,7 +289,7 @@ function DiffView({ diff }: { diff: string }): React.ReactElement {
  * `ApprovalMode::ManualEveryStep`, §9's own non-negotiable default, so
  * there is no auto-run path to skip here).
  */
-export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.ReactElement {
+export default function LeoChatPanel({ projectRoot, onToggle }: LeoChatPanelProps): React.ReactElement {
   const [agentState, setAgentState] = useState<LeoState>("Idle");
   const [plan, setPlan] = useState<LeoPlan | null>(null);
   const [task, setTask] = useState("");
@@ -701,6 +702,7 @@ export default function LeoChatPanel({ projectRoot }: LeoChatPanelProps): React.
     <div className="leo-panel">
       <div className="leo-header mono">
         <span className="leo-title">LEO</span>
+        <button className="leo-btn leo-panel-toggle" type="button" onClick={onToggle} title="Hide Leo panel" aria-label="Hide Leo panel">×</button>
         {voiceOutputSupported && (
           <button
             className={`leo-btn leo-btn-voice-toggle${voiceOutputEnabled ? " leo-btn-voice-on" : ""}`}

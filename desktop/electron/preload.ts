@@ -149,6 +149,8 @@ const ALLOWED_METHODS = new Set([
   "devcontainer_exec_input",
   "devcontainer_exec_resize",
   "devcontainer_exec_close",
+  "resource_install",
+  "resource_list",
   "download_update",
   "install_update",
 ]);
@@ -187,6 +189,7 @@ contextBridge.exposeInMainWorld("spartan", {
   openCrashReportsFolder: (): Promise<unknown> =>
     ipcRenderer.invoke("spartan:open_crash_reports_folder"),
   openRepositoryPage: (): Promise<unknown> => ipcRenderer.invoke("spartan:open_repository_page"),
+  githubAuthCheck: (token: string): Promise<unknown> => ipcRenderer.invoke("spartan:github_auth_check", { token }),
   openPullRequestUrl: (url: string): Promise<unknown> =>
     ipcRenderer.invoke("spartan:open_pull_request_url", { url }),
   openProject: (root: string): Promise<unknown> =>

@@ -67,6 +67,18 @@ type UploadStatus =
   | { kind: "done"; status: number }
   | { kind: "failed"; error: string };
 
+type SettingsCategory = "editor" | "appearance" | "leo" | "workspace" | "updates" | "privacy" | "system";
+
+const SETTINGS_CATEGORIES: Array<{ id: SettingsCategory; label: string; description: string }> = [
+  { id: "editor", label: "Editor", description: "Typography and editing behavior" },
+  { id: "appearance", label: "Appearance", description: "Theme and motion" },
+  { id: "leo", label: "Leo & Models", description: "Providers, approvals, GPU, and snippets" },
+  { id: "workspace", label: "Workspace & Git", description: "GitHub credentials and project behavior" },
+  { id: "updates", label: "Updates", description: "Check, download, and install updates" },
+  { id: "privacy", label: "Privacy & Diagnostics", description: "Crash reports and upload controls" },
+  { id: "system", label: "Shortcuts & About", description: "Keyboard reference and version information" },
+];
+
 /** Real, sensible default model per provider kind -- shown the moment the
  * user switches kind in the UI, before they've typed anything of their
  * own; matches each provider's own already-established test/default
@@ -83,6 +95,40 @@ const DEFAULT_MODEL_FOR_KIND: Record<LeoProviderKind, string> = {
   // path this could point at; the user must Browse to (or type) a real
   // local file.
   LlamaCpp: "",
+};
+
+interface ModelChoice {
+  value: string;
+  label: string;
+}
+
+const MODEL_CHOICES: Record<LeoProviderKind, ModelChoice[]> = {
+  Ollama: [
+    { value: "llama3.1:8b", label: "Llama 3.1 8B" },
+    { value: "llama3.2:3b", label: "Llama 3.2 3B" },
+    { value: "qwen2.5-coder:7b", label: "Qwen 2.5 Coder 7B" },
+    { value: "qwen2.5-coder:14b", label: "Qwen 2.5 Coder 14B" },
+    { value: "mistral:7b", label: "Mistral 7B" },
+    { value: "phi3.5:3.8b", label: "Phi 3.5 Mini" },
+  ],
+  Claude: [
+    { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
+    { value: "claude-3-7-sonnet-latest", label: "Claude 3.7 Sonnet" },
+    { value: "claude-3-5-sonnet-latest", label: "Claude 3.5 Sonnet" },
+    { value: "claude-3-5-haiku-latest", label: "Claude 3.5 Haiku" },
+  ],
+  LiteLLM: [
+    { value: "gpt-4o", label: "GPT-4o" },
+    { value: "claude-3-5-sonnet-latest", label: "Claude 3.5 Sonnet" },
+    { value: "gemini/gemini-2.0-flash", label: "Gemini 2.0 Flash" },
+    { value: "ollama/llama3.1:8b", label: "Ollama · Llama 3.1 8B" },
+  ],
+  // LM Studio exposes the exact loaded model identifier through its local
+  // server. Keep the field selectable while retaining a custom entry for
+  // that server-provided identifier.
+  LmStudio: [],
+  // llama.cpp selections are real local GGUF paths, handled by Browse below.
+  LlamaCpp: [],
 };
 
 interface UpdateCheckCategories {
@@ -118,6 +164,13 @@ interface ModelStatusResult {
   health?: string;
   fallback_count?: number;
   error?: string;
+}
+
+interface GithubAccount {
+  login: string;
+  name: string | null;
+  html_url: string;
+  scopes: string;
 }
 
 function shortCommit(commit: string): string {
@@ -193,6 +246,12 @@ export default function SettingsScreen(): React.ReactElement {
   const [uploadStatus, setUploadStatus] = useState<Record<string, UploadStatus>>({});
   const [snippetDraft, setSnippetDraft] = useState<UserSnippet[]>([]);
   const [snippetError, setSnippetError] = useState<string | null>(null);
+  const [category, setCategory] = useState<SettingsCategory>("editor");
+  const [customModelSelected, setCustomModelSelected] = useState(false);
+  const [githubTokenDraft, setGithubTokenDraft] = useState("");
+  const [githubAccount, setGithubAccount] = useState<GithubAccount | null>(null);
+  const [githubAuthChecking, setGithubAuthChecking] = useState(false);
+  const [githubAuthError, setGithubAuthError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     window.spartan
@@ -426,6 +485,26 @@ export default function SettingsScreen(): React.ReactElement {
     window.spartan.openRepositoryPage?.().catch((e: Error) => setError(e.message));
   }, []);
 
+  const connectGithub = useCallback(() => {
+    const token = githubTokenDraft.trim();
+    if (!token) {
+      setGithubAuthError("Enter a GitHub personal access token first.");
+      return;
+    }
+    setGithubAuthChecking(true);
+    setGithubAuthError(null);
+    window.spartan
+      .githubAuthCheck(token)
+      .then((result) => {
+        const account = result as GithubAccount;
+        setGithubAccount(account);
+        save({ github_token: token });
+        setGithubTokenDraft("");
+      })
+      .catch((e: Error) => setGithubAuthError(e.message))
+      .finally(() => setGithubAuthChecking(false));
+  }, [githubTokenDraft, save]);
+
   if (error) {
     return <div className="settings-screen mono">{error}</div>;
   }
@@ -434,9 +513,37 @@ export default function SettingsScreen(): React.ReactElement {
   }
 
   const { enabled, layers } = settings.gpu_offload;
+  const modelChoices = MODEL_CHOICES[settings.leo_provider.kind];
+  const modelIsListed = modelChoices.some((choice) => choice.value === settings.leo_provider.model);
+  const modelSelectValue = modelIsListed ? settings.leo_provider.model : "__custom__";
 
   return (
     <div className="settings-screen">
+      <div className="settings-header">
+        <div>
+          <div className="settings-title mono">Settings</div>
+          <div className="settings-subtitle mono">Configure Spartan by area</div>
+        </div>
+        <span className="settings-save-status mono">{saving ? "Saving…" : "Saved"}</span>
+      </div>
+      <div className="settings-layout">
+        <nav className="settings-category-nav" aria-label="Settings categories">
+          {SETTINGS_CATEGORIES.map((item) => (
+            <button
+              className={`settings-category-button mono${category === item.id ? " active" : ""}`}
+              type="button"
+              key={item.id}
+              aria-current={category === item.id ? "page" : undefined}
+              onClick={() => setCategory(item.id)}
+            >
+              <strong>{item.label}</strong>
+              <small>{item.description}</small>
+            </button>
+          ))}
+        </nav>
+        <div className="settings-content">
+      {category === "editor" && <section className="settings-category" aria-labelledby="settings-editor-heading">
+      <h2 id="settings-editor-heading" className="settings-category-heading mono">Editor</h2>
       <div className="settings-section-label mono">Editor</div>
       <div className="settings-row">
         <label className="settings-label mono">Font size</label>
@@ -535,7 +642,10 @@ export default function SettingsScreen(): React.ReactElement {
         bundled JetBrains Mono; a name here must already be installed on this machine (or resolve
         via a real system font-fallback) to actually take visible effect.
       </div>
+      </section>}
 
+      {category === "workspace" && <section className="settings-category" aria-labelledby="settings-workspace-heading">
+      <h2 id="settings-workspace-heading" className="settings-category-heading mono">Workspace &amp; Git</h2>
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>
         Git — GitHub credentials
       </div>
@@ -547,24 +657,38 @@ export default function SettingsScreen(): React.ReactElement {
           autoComplete="off"
           placeholder={settings.github_token ? "Token saved — enter to replace" : "ghp_…"}
           disabled={saving}
-          defaultValue=""
-          onBlur={(e) => {
-            const token = e.target.value.trim();
-            if (token) save({ github_token: token });
+          value={githubTokenDraft}
+          onChange={(e) => {
+            setGithubTokenDraft(e.target.value);
+            setGithubAuthError(null);
           }}
           style={{ width: 260 }}
         />
+        <button className="settings-button settings-button-primary mono" disabled={saving || githubAuthChecking || !githubTokenDraft.trim()} onClick={connectGithub}>
+          {githubAuthChecking ? "Connecting…" : "Connect GitHub"}
+        </button>
         {settings.github_token && (
-          <button className="settings-button mono" disabled={saving} onClick={() => save({ github_token: null })}>
-            Clear
+          <button className="settings-button mono" disabled={saving} onClick={() => { setGithubAccount(null); setGithubAuthError(null); save({ github_token: null }); }}>
+            Sign out
           </button>
         )}
       </div>
+      {(githubAccount || settings.github_token) && !githubAuthError && (
+        <div className="settings-update-status mono">
+          {githubAccount ? `Connected as @${githubAccount.login}` : "GitHub token saved — enter a new token to reconnect."}
+        </div>
+      )}
+      {githubAuthError && <div className="leo-error mono settings-inline-error">{githubAuthError}</div>}
       <div className="settings-note mono">
-        Used for HTTPS GitHub clone, fetch, pull, and push. The token is stored in the shared
-        settings file and is never returned to the renderer; it is never sent to non-GitHub remotes.
+        Paste a GitHub personal access token, then click Connect GitHub to verify it against
+        GitHub over HTTPS before saving it. The token is used for HTTPS clone, fetch, pull, and
+        push, stored in the shared settings file, redacted from the renderer, and never sent to
+        non-GitHub remotes. Create one at GitHub → Settings → Developer settings → Personal access tokens.
       </div>
+      </section>}
 
+      {category === "appearance" && <section className="settings-category" aria-labelledby="settings-appearance-heading">
+      <h2 id="settings-appearance-heading" className="settings-category-heading mono">Appearance</h2>
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>
         Appearance
       </div>
@@ -607,7 +731,10 @@ export default function SettingsScreen(): React.ReactElement {
         indicators (Leo's state badge, the running Dev Containers badge, the sidebar brand). This
         turns all of it off instantly, everywhere, without changing color or layout.
       </div>
+      </section>}
 
+      {category === "leo" && <section className="settings-category" aria-labelledby="settings-leo-heading">
+      <h2 id="settings-leo-heading" className="settings-category-heading mono">Leo &amp; Models</h2>
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>
         Local Model — GPU Offload
       </div>
@@ -702,6 +829,7 @@ export default function SettingsScreen(): React.ReactElement {
           value={settings.leo_provider.kind}
           onChange={(e) => {
             const kind = e.target.value as LeoProviderKind;
+            setCustomModelSelected(false);
             save({ leo_provider: { kind, model: DEFAULT_MODEL_FOR_KIND[kind] } });
           }}
         >
@@ -716,23 +844,49 @@ export default function SettingsScreen(): React.ReactElement {
         <label className="settings-label mono">
           {settings.leo_provider.kind === "LlamaCpp" ? "Model file (.gguf)" : "Model"}
         </label>
-        <input
+        <select
           className="settings-select mono"
-          type="text"
-          placeholder={
-            settings.leo_provider.kind === "LlamaCpp" ? "/path/to/model.gguf" : undefined
-          }
           disabled={saving}
-          defaultValue={settings.leo_provider.model}
-          key={`${settings.leo_provider.kind}-${settings.leo_provider.model}`}
-          onBlur={(e) => {
-            const model = e.target.value.trim();
-            if (model && model !== settings.leo_provider.model) {
-              save({ leo_provider: { kind: settings.leo_provider.kind, model } });
+          value={modelSelectValue}
+          onChange={(e) => {
+            if (e.target.value !== "__custom__") {
+              setCustomModelSelected(false);
+              save({ leo_provider: { kind: settings.leo_provider.kind, model: e.target.value } });
+            } else {
+              setCustomModelSelected(true);
             }
           }}
-          style={{ width: settings.leo_provider.kind === "LlamaCpp" ? 320 : undefined }}
-        />
+          style={{ width: 260 }}
+        >
+          {modelChoices.map((choice) => (
+            <option key={choice.value} value={choice.value}>{choice.label}</option>
+          ))}
+          {modelIsListed === false && settings.leo_provider.model && (
+            <option value="__custom__">Current: {settings.leo_provider.model}</option>
+          )}
+          <option value="__custom__">Custom model…</option>
+        </select>
+        {(!modelIsListed || modelChoices.length === 0 || customModelSelected) && (
+          <input
+            className="settings-select mono"
+            type="text"
+            placeholder={
+              settings.leo_provider.kind === "LlamaCpp" ? "/path/to/model.gguf" :
+                settings.leo_provider.kind === "LmStudio" ? "Exact model ID loaded in LM Studio" :
+                  "Provider model ID"
+            }
+            disabled={saving}
+            defaultValue={settings.leo_provider.model}
+            key={`${settings.leo_provider.kind}-${settings.leo_provider.model}`}
+            onBlur={(e) => {
+              const model = e.target.value.trim();
+              if (model && model !== settings.leo_provider.model) {
+                save({ leo_provider: { kind: settings.leo_provider.kind, model } });
+              }
+            }}
+            style={{ width: settings.leo_provider.kind === "LlamaCpp" ? 320 : 260 }}
+          />
+        )}
         {settings.leo_provider.kind === "LlamaCpp" && (
           <button
             className="settings-button mono"
@@ -878,7 +1032,10 @@ export default function SettingsScreen(): React.ReactElement {
           Save snippets
         </button>
       </div>
+      </section>}
 
+      {category === "updates" && <section className="settings-category" aria-labelledby="settings-updates-heading">
+      <h2 id="settings-updates-heading" className="settings-category-heading mono">Updates</h2>
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>
         Updates
       </div>
@@ -919,7 +1076,10 @@ export default function SettingsScreen(): React.ReactElement {
           Update error: {updateError}
         </div>
       )}
+      </section>}
 
+      {category === "privacy" && <section className="settings-category" aria-labelledby="settings-privacy-heading">
+      <h2 id="settings-privacy-heading" className="settings-category-heading mono">Privacy &amp; Diagnostics</h2>
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>
         Privacy &amp; Diagnostics
       </div>
@@ -988,7 +1148,10 @@ export default function SettingsScreen(): React.ReactElement {
           </button>
         </div>
       </div>
+      </section>}
 
+      {category === "system" && <section className="settings-category" aria-labelledby="settings-system-heading">
+      <h2 id="settings-system-heading" className="settings-category-heading mono">Shortcuts &amp; About</h2>
       <div className="settings-section-label mono" style={{ marginTop: 28 }}>
         Keyboard Shortcuts
       </div>
@@ -1011,6 +1174,9 @@ export default function SettingsScreen(): React.ReactElement {
         <button className="settings-button mono" onClick={openRepositoryPage}>
           View on GitHub
         </button>
+      </div>
+      </section>}
+        </div>
       </div>
     </div>
   );

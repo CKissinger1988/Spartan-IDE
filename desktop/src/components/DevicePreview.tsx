@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 export interface DeviceProfile {
   id: string;
@@ -32,9 +32,23 @@ export default function DevicePreview(): React.ReactElement {
   const [url, setUrl] = useState("http://localhost:5173");
   const [source, setSource] = useState(url);
   const [showSafeArea, setShowSafeArea] = useState(true);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const profile = DEVICE_PROFILES.find((item) => item.id === profileId) ?? DEVICE_PROFILES[0];
   const [width, height] = orientedSize(profile, landscape);
-  const scale = zoom / 100;
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const update = () => setStageSize({ width: stage.clientWidth, height: stage.clientHeight });
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, []);
+  const fitScale = stageSize.width > 0 && stageSize.height > 0
+    ? Math.min(1, Math.max(0.1, (stageSize.width - 32) / width), Math.max(0.1, (stageSize.height - 32) / height))
+    : 0.75;
+  const scale = Math.min(zoom / 100, fitScale);
   const frameStyle = useMemo(
     () => ({ "--device-width": `${width}px`, "--device-height": `${height}px`, "--device-scale": scale } as React.CSSProperties),
     [width, height, scale]
@@ -71,7 +85,7 @@ export default function DevicePreview(): React.ReactElement {
         <button className="toolbar-btn toolbar-btn-primary" type="submit">Load</button>
         <span className="device-preview-platform mono">{profile.platform.toUpperCase()}</span>
       </form>
-      <div className="device-preview-stage">
+      <div className="device-preview-stage" ref={stageRef}>
         <div className={`device-frame device-frame-${profile.platform} ${showSafeArea ? "device-frame-safe" : ""}`} style={frameStyle}>
           <div className="device-frame-top" aria-hidden="true" />
           <iframe title={`${profile.label} preview`} src={source} sandbox="allow-forms allow-modals allow-popups allow-scripts" />

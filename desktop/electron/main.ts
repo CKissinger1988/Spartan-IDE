@@ -7,16 +7,33 @@
 // this workspace's own §9 "least privilege" posture even though this is
 // a new UI stack.
 
-import { app, BrowserWindow, ipcMain, shell, dialog, Menu } from "electron";
+import { app, BrowserWindow, ipcMain, shell, dialog, Menu, screen } from "electron";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { BackendClient } from "./backend-client.js";
 import { GuiBuilderClient } from "./gui-builder-client.js";
 import { buildApplicationMenu, REPO_URL } from "./menu.js";
 import { setupAutoUpdate, checkAndDownloadUpdate, installUpdateAndRestart } from "./auto-update.js";
 
-const isDev = !app.isPackaged;
+const execFileAsync = promisify(execFile);
+
+// Some Linux desktops expose a GPU device that Chromium can detect but not
+// actually initialize. Disable hardware acceleration before Electron becomes
+// ready so the editor still opens reliably on those systems; normal desktop
+// compositing remains available through software rendering.
+app.disableHardwareAcceleration();
+
+// A user-local Linux bundle can contain the complete `resources/app` tree
+// while still using the downloaded Electron executable directly. Detect that
+// real renderer payload so it behaves like a packaged build instead of
+// trying to connect to a developer-only Vite server.
+const hasBundledRenderer = fs.existsSync(
+  path.join(process.resourcesPath, "app", "dist", "index.html")
+);
+const isDev = !app.isPackaged && !hasBundledRenderer;
 
 /**
  * Real, shared packaged-vs-dev resource resolver, used by
@@ -37,12 +54,16 @@ function resolveResourcePath(
   packagedSegments: string[],
   devHint: string
 ): string {
-  const candidate = app.isPackaged
-    ? path.join(process.resourcesPath, ...packagedSegments)
-    : path.resolve(import.meta.dirname, "..", "..", ...devSegments);
+  // Prefer a real resources-directory asset whenever it exists. This covers
+  // electron-builder installs and user-local Linux bundles assembled from the
+  // same compiled artifacts, where a raw Electron binary may report
+  // `app.isPackaged === false` even though `resources/app` is present.
+  const packagedCandidate = path.join(process.resourcesPath, ...packagedSegments);
+  const devCandidate = path.resolve(import.meta.dirname, "..", "..", ...devSegments);
+  const candidate = fs.existsSync(packagedCandidate) ? packagedCandidate : devCandidate;
   if (!fs.existsSync(candidate)) {
     throw new Error(
-      app.isPackaged
+      candidate === packagedCandidate
         ? `${label} not found in the packaged app at ${candidate}`
         : `${label} not found at ${candidate} -- ${devHint}`
     );
@@ -104,9 +125,14 @@ function loadRootIntoWindow(win: BrowserWindow, rootDir: string): void {
 }
 
 function createWindow(): void {
+  const workArea = screen.getPrimaryDisplay().workAreaSize;
+  const initialWidth = Math.min(1600, Math.max(640, Math.round(workArea.width * 0.92)));
+  const initialHeight = Math.min(1000, Math.max(480, Math.round(workArea.height * 0.92)));
   const win = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: initialWidth,
+    height: initialHeight,
+    minWidth: 640,
+    minHeight: 480,
     backgroundColor: "#09090b",
     webPreferences: {
       preload: path.join(import.meta.dirname, "preload.js"),
@@ -564,6 +590,32 @@ app.whenReady().then(() => {
     await shell.openExternal(REPO_URL);
     return { ok: true };
   });
+  // Real HTTPS GitHub sign-in validation. The token is accepted only in the
+  // main process, used for GitHub's authenticated /user request, and never
+  // echoed into renderer events or logs. Persistence still goes through the
+  // existing backend settings_set path after the account is verified.
+  ipcMain.handle("spartan:github_auth_check", async (_event, params: { token: string }) => {
+    const token = typeof params?.token === "string" ? params.token.trim() : "";
+    if (!token) throw new Error("A GitHub personal access token is required.");
+    const response = await fetch("https://api.github.com/user", {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "Spartan-IDE",
+      },
+    });
+    if (response.status === 401) throw new Error("GitHub rejected this token. Check that it is valid and has not expired.");
+    if (!response.ok) throw new Error(`GitHub sign-in failed (HTTP ${response.status}).`);
+    const user = await response.json() as { login?: string; name?: string | null; html_url?: string };
+    if (!user.login) throw new Error("GitHub returned an invalid account response.");
+    return {
+      login: user.login,
+      name: user.name ?? null,
+      html_url: user.html_url ?? `https://github.com/${user.login}`,
+      scopes: response.headers.get("x-oauth-scopes") ?? "",
+    };
+  });
   // Real GitHub layer, first increment (task #284): opens a real pull
   // request's `html_url` (renderer-supplied this time, unlike the two
   // hardcoded targets above -- it comes from GitHub's own live API
@@ -616,6 +668,97 @@ app.whenReady().then(() => {
       : await dialog.showOpenDialog(options);
     return { canceled: result.canceled, path: result.filePaths[0] ?? null };
   });
+  // Real Skills/MCP resource installation. Sources may be a GitHub
+  // repository/tree URL, a direct HTTPS file, or an existing local file or
+  // directory. Installs are kept either in the active project or in the
+  // user's interoperable home directory, never in the application bundle.
+  ipcMain.handle(
+    "spartan:resource_install",
+    async (_event, params: { kind: "skill" | "mcp" | "plugin"; name: string; source: string; target: "project" | "user" }) => {
+      if (!activeProjectRoot) throw new Error("No active project root is available.");
+      if (!["skill", "mcp", "plugin"].includes(params.kind)) throw new Error("Resource kind must be skill, mcp, or plugin.");
+      const name = params.name.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+      if (!name) throw new Error("A resource name is required.");
+      const source = params.source.trim();
+      if (!source) throw new Error("A GitHub, HTTPS, or local source is required.");
+      const home = os.homedir();
+      const userBase = params.kind === "skill" ? path.join(home, ".codex", "skills") : params.kind === "plugin" ? path.join(home, ".codex", "plugins") : path.join(home, ".spartan", "mcp");
+      const projectBase = path.join(activeProjectRoot, ".spartan", params.kind === "skill" ? "skills" : params.kind === "plugin" ? "plugins" : "mcp");
+      const base = params.target === "user" ? userBase : projectBase;
+      const destination = path.join(base, name);
+      const relativeDestination = path.relative(params.target === "user" ? home : activeProjectRoot, destination);
+      if (!relativeDestination || relativeDestination.startsWith("..") || path.isAbsolute(relativeDestination)) {
+        throw new Error("Install destination is outside the allowed resource directory.");
+      }
+      if (fs.existsSync(destination)) throw new Error(`A ${params.kind} named ${name} is already installed there.`);
+      await fs.promises.mkdir(base, { recursive: true });
+      const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "spartan-resource-"));
+      try {
+        let sourcePath = source;
+        if (/^https:\/\/(?:www\.)?github\.com\//i.test(source)) {
+          const parsed = new URL(source);
+          const segments = parsed.pathname.split("/").filter(Boolean);
+          if (segments.length < 2) throw new Error("GitHub source must include an owner and repository.");
+          const repoUrl = `https://github.com/${segments[0]}/${segments[1]}.git`;
+          const checkout = path.join(tempRoot, "repo");
+          await execFileAsync("git", ["clone", "--depth", "1", repoUrl, checkout], { timeout: 120000, maxBuffer: 2 * 1024 * 1024 });
+          sourcePath = checkout;
+          const treeIndex = segments.indexOf("tree");
+          if (treeIndex >= 0 && segments.length > treeIndex + 2) {
+            sourcePath = path.join(checkout, ...segments.slice(treeIndex + 2));
+          }
+        } else if (/^https:\/\//i.test(source)) {
+          const response = await fetch(source);
+          if (!response.ok) throw new Error(`Download failed with HTTP ${response.status}.`);
+          const bytes = Buffer.from(await response.arrayBuffer());
+          const filename = path.basename(new URL(source).pathname) || (params.kind === "skill" ? "SKILL.md" : "server.json");
+          await fs.promises.mkdir(destination, { recursive: true });
+          await fs.promises.writeFile(path.join(destination, filename), bytes, { flag: "wx" });
+          return { ok: true, path: destination, source };
+        }
+        const sourceStat = await fs.promises.stat(sourcePath);
+        if (!sourceStat.isFile() && !sourceStat.isDirectory()) throw new Error("Resource source is not a file or directory.");
+        await fs.promises.cp(sourcePath, destination, { recursive: true, errorOnExist: true, force: false });
+        return { ok: true, path: destination, source };
+      } finally {
+        await fs.promises.rm(tempRoot, { recursive: true, force: true });
+      }
+    },
+  );
+  ipcMain.handle(
+    "spartan:resource_list",
+    async (_event, params: { kind: "skill" | "mcp" | "plugin" }) => {
+      if (!activeProjectRoot) throw new Error("No active project root is available.");
+      if (!["skill", "mcp", "plugin"].includes(params.kind)) throw new Error("Resource kind must be skill, mcp, or plugin.");
+      const relative = [".spartan", params.kind === "skill" ? "skills" : params.kind === "plugin" ? "plugins" : "mcp"];
+      const roots = [
+        { target: "project", root: path.join(activeProjectRoot, ...relative) },
+        { target: "user", root: path.join(os.homedir(), params.kind === "skill" ? ".codex" : params.kind === "plugin" ? ".codex" : ".spartan", params.kind === "skill" ? "skills" : params.kind === "plugin" ? "plugins" : "mcp") },
+      ] as const;
+      const installed: Array<{ name: string; path: string; target: "project" | "user"; valid: boolean; detail: string }> = [];
+      for (const item of roots) {
+        let entries: fs.Dirent[] = [];
+        try { entries = await fs.promises.readdir(item.root, { withFileTypes: true }); } catch { continue; }
+        for (const entry of entries) if (!entry.name.startsWith(".")) {
+          const resourcePath = path.join(item.root, entry.name);
+          let names: string[] = [];
+          try { names = await fs.promises.readdir(resourcePath); } catch { /* a direct file install is still inspectable */ }
+          const markers = params.kind === "skill"
+            ? ["SKILL.md", ".codex-plugin"]
+            : params.kind === "plugin" ? [".codex-plugin", "plugin.json"] : ["package.json", ".mcp.json", "server.json", "README.md"];
+          const marker = markers.find((candidate) => names.includes(candidate) || entry.name === candidate);
+          installed.push({
+            name: entry.name,
+            path: resourcePath,
+            target: item.target,
+            valid: Boolean(marker),
+            detail: marker ? `Detected ${marker}` : `No ${params.kind === "skill" ? "SKILL.md or plugin manifest" : params.kind === "plugin" ? "plugin manifest" : "MCP manifest"} detected`,
+          });
+        }
+      }
+      return { installed };
+    },
+  );
 
   // Real native "choose a file" dialog -- a sibling of `pick_folder` above,
   // added for the llama.cpp Settings row (user-requested: "Integrate

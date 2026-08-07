@@ -46,6 +46,7 @@ export interface DapSessionState {
 
 interface DebugPanelProps {
   hasFile: boolean;
+  onToggle: () => void;
   session: DapSessionState | null;
   onLaunch: () => void;
   onContinue: () => void;
@@ -97,6 +98,7 @@ interface DebugPanelProps {
  */
 export default function DebugPanel({
   hasFile,
+  onToggle,
   session,
   onLaunch,
   onContinue,
@@ -143,6 +145,7 @@ export default function DebugPanel({
   return (
     <div className="debug-panel mono">
       <div className="debug-toolbar">
+        <button className="debug-btn" type="button" onClick={onToggle} title="Hide debug panel" aria-label="Hide debug panel">×</button>
         {!isLive ? (
           <button className="debug-btn debug-btn-primary" onClick={onLaunch} title="Start Debugging">
             ▶ Debug

@@ -7,6 +7,7 @@ declare global {
       onEvent: (listener: (event: string, data: unknown) => void) => () => void;
       openCrashReportsFolder: () => Promise<unknown>;
       openRepositoryPage: () => Promise<unknown>;
+      githubAuthCheck: (token: string) => Promise<unknown>;
       openPullRequestUrl: (url: string) => Promise<unknown>;
       openProject: (root: string) => Promise<unknown>;
       pickFolder: () => Promise<unknown>;
